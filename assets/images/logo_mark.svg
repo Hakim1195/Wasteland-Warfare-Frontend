@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- =========================================================
+       Marque « Wasteland Warfare » — BIOHAZARD tactique (charte
+       Warzone Command §2). 3 lobes/crescents cyan aux cornes
+       affûtées + 3 nœuds hexagonaux (territoires / Risk) logés dans
+       les lobes + anneau-triquetra interne autour du noyau central.
+       Sert de petit glyphe dans le logo (ww_logo) ET d'icône d'app
+       (project.godot config/icon + logo.ico régénéré depuis ce SVG).
+       100% formes (path/polygon/circle + transform rotate) → rendu
+       ThorVG OK (validé via Image.load_svg_from_string, le MÊME moteur
+       que l'importeur). Symétrie 3× : rotation de 120° autour de (60,60).
+       ========================================================= -->
+  <!-- Les 3 lobes (crescent biseauté + nœud hexagonal). -->
+  <g transform="rotate(0 60 60)">
+    <path d="M 45.03 47.70 A 19 19 0 1 1 74.97 47.70 L 69.85 37.74 A 10 10 0 1 0 50.15 37.74 Z" fill="#36C5D9"/>
+    <polygon points="60,30 65.196,33 65.196,39 60,42 54.804,39 54.804,33" fill="#0F1318" stroke="#36C5D9" stroke-width="2.2" stroke-linejoin="miter"/>
+  </g>
+  <g transform="rotate(120 60 60)">
+    <path d="M 45.03 47.70 A 19 19 0 1 1 74.97 47.70 L 69.85 37.74 A 10 10 0 1 0 50.15 37.74 Z" fill="#36C5D9"/>
+    <polygon points="60,30 65.196,33 65.196,39 60,42 54.804,39 54.804,33" fill="#0F1318" stroke="#36C5D9" stroke-width="2.2" stroke-linejoin="miter"/>
+  </g>
+  <g transform="rotate(240 60 60)">
+    <path d="M 45.03 47.70 A 19 19 0 1 1 74.97 47.70 L 69.85 37.74 A 10 10 0 1 0 50.15 37.74 Z" fill="#36C5D9"/>
+    <polygon points="60,30 65.196,33 65.196,39 60,42 54.804,39 54.804,33" fill="#0F1318" stroke="#36C5D9" stroke-width="2.2" stroke-linejoin="miter"/>
+  </g>
+  <!-- Anneau-triquetra interne (3 arcs fins) autour du noyau. -->
+  <g fill="none" stroke="#36C5D9" stroke-width="2.2" stroke-linecap="round">
+    <path d="M 51.57 52.93 A 11 11 0 0 1 68.43 52.93" transform="rotate(0 60 60)"/>
+    <path d="M 51.57 52.93 A 11 11 0 0 1 68.43 52.93" transform="rotate(120 60 60)"/>
+    <path d="M 51.57 52.93 A 11 11 0 0 1 68.43 52.93" transform="rotate(240 60 60)"/>
+  </g>
+  <!-- Noyau central. -->
+  <circle cx="60" cy="60" r="2.6" fill="#36C5D9"/>
+</svg>

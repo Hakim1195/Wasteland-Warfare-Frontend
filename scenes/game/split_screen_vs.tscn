@@ -1,0 +1,193 @@
+[gd_scene load_steps=4 format=3 uid="uid://vs_split_screen"]
+
+[ext_resource type="Script" path="res://scripts/game/split_screen_vs.gd" id="1_vs"]
+
+[sub_resource type="SystemFont" id="SystemFont_vs"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="Theme" id="Theme_vs"]
+default_font = SubResource("SystemFont_vs")
+default_font_size = 18
+
+[node name="SplitScreenVS" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+theme = SubResource("Theme_vs")
+script = ExtResource("1_vs")
+
+[node name="Dim" type="ColorRect" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.8)
+
+[node name="Halves" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="LeftHalf" type="Control" parent="Halves"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="LeftBackground" type="TextureRect" parent="Halves/LeftHalf"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="LeftVBox" type="VBoxContainer" parent="Halves/LeftHalf"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 48.0
+offset_top = 48.0
+offset_right = -48.0
+offset_bottom = -48.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+theme_override_constants/separation = 24
+
+[node name="LeftRole" type="Label" parent="Halves/LeftHalf/LeftVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.7, 1)
+theme_override_font_sizes/font_size = 22
+text = "⚔ ATTAQUANT"
+
+[node name="LeftName" type="Label" parent="Halves/LeftHalf/LeftVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 42
+text = "FACTION"
+
+[node name="LeftPortraitFrame" type="PanelContainer" parent="Halves/LeftHalf/LeftVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 0
+custom_minimum_size = Vector2(300, 340)
+
+[node name="LeftPortrait" type="TextureRect" parent="Halves/LeftHalf/LeftVBox/LeftPortraitFrame"]
+unique_name_in_owner = true
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="LeftPlaceholder" type="ColorRect" parent="Halves/LeftHalf/LeftVBox/LeftPortraitFrame"]
+unique_name_in_owner = true
+layout_mode = 2
+color = Color(0.17, 0.2, 0.12, 1)
+
+[node name="LeftDice" type="HBoxContainer" parent="Halves/LeftHalf/LeftVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(0, 130)
+alignment = 0
+theme_override_constants/separation = 16
+
+[node name="RightHalf" type="Control" parent="Halves"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RightBackground" type="TextureRect" parent="Halves/RightHalf"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="RightVBox" type="VBoxContainer" parent="Halves/RightHalf"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 48.0
+offset_top = 48.0
+offset_right = -48.0
+offset_bottom = -48.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+theme_override_constants/separation = 24
+
+[node name="RightRole" type="Label" parent="Halves/RightHalf/RightVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.7, 1)
+theme_override_font_sizes/font_size = 22
+horizontal_alignment = 2
+text = "🛡 DÉFENSEUR"
+
+[node name="RightName" type="Label" parent="Halves/RightHalf/RightVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 42
+horizontal_alignment = 2
+text = "FACTION"
+
+[node name="RightPortraitFrame" type="PanelContainer" parent="Halves/RightHalf/RightVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 8
+custom_minimum_size = Vector2(300, 340)
+
+[node name="RightPortrait" type="TextureRect" parent="Halves/RightHalf/RightVBox/RightPortraitFrame"]
+unique_name_in_owner = true
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RightPlaceholder" type="ColorRect" parent="Halves/RightHalf/RightVBox/RightPortraitFrame"]
+unique_name_in_owner = true
+layout_mode = 2
+color = Color(0.17, 0.2, 0.12, 1)
+
+[node name="RightDice" type="HBoxContainer" parent="Halves/RightHalf/RightVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(0, 130)
+alignment = 2
+theme_override_constants/separation = 16
+
+[node name="VSLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -90.0
+offset_top = -75.0
+offset_right = 90.0
+offset_bottom = 75.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 110
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "VS"

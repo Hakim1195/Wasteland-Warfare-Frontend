@@ -1,0 +1,12 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://bdkk4w7rh2hdj"]
+
+[ext_resource type="Shader" path="res://shaders/crt_board.gdshader" id="1_05vhh"]
+
+[resource]
+shader = ExtResource("1_05vhh")
+shader_parameter/scanline_intensity = 0.08
+shader_parameter/scanline_count = 650.0
+shader_parameter/scanline_scroll = 2.0
+shader_parameter/vignette_strength = 0.18
+shader_parameter/aberration = 0.0006
+shader_parameter/curvature = 0.02

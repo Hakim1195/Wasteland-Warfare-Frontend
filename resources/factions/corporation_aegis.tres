@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" format=3]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "corporation_aegis"
+name = "La Corporation Aegis"
+description = "Conglomérat militaro-industriel retranché derrière des boucliers énergétiques de récupération. Toute attaque mal préparée se brise sur leurs défenses automatisées.
+
+[b]Pouvoir :[/b] un double aux dés de défense élimine d'office 1 unité attaquante."
+modifiers = {
+"defense_double_extra_kill": true
+}
+hero_path = "res://assets/images/heroes/corporation_aegis.png"
+hero_model_path = "res://assets/models/corporation_aegis.glb"
+accent_color = Color(0.27451, 0.509804, 0.705882, 1)

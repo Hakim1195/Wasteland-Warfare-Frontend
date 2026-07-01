@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" format=3]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "eveilles_ruche"
+name = "Les Éveillés de la Ruche"
+description = "Conscience collective mutante reliée par un réseau de spores souterraines. Leurs troupes se déplacent comme une seule pensée à travers les terres qu'elles contrôlent.
+
+[b]Pouvoir :[/b] mouvement stratégique à longue distance via une chaîne de territoires alliés."
+modifiers = {
+"long_range_movement": true
+}
+hero_path = "res://assets/images/heroes/eveilles_ruche.png"
+hero_model_path = "res://assets/models/eveilles_ruche.glb"
+accent_color = Color(0.85098, 0.647059, 0.12549, 1)

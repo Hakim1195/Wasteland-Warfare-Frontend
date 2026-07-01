@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" load_steps=2 format=3 uid="uid://fact_rad_hunters"]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "culte_isotope"
+name = "Les Rad-Hunters"
+description = "Fanatiques de l'isotope qui ont appris à respirer la mort lente. Le rayonnement qui décime les armées n'est pour eux qu'une bénédiction à orienter sur leurs propres bastions.
+
+[b]Pouvoir :[/b] immunise 1 territoire allié de son choix contre la zone radioactive à chaque tour."
+modifiers = {
+"free_contamination_immunity": 1
+}
+logo_path = ""
+hero_path = "res://assets/images/heroes/rad_hunters.png"
+accent_color = Color(0.345098, 0.658824, 0.262745, 1)

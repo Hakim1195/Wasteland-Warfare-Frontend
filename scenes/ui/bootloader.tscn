@@ -1,0 +1,80 @@
+[gd_scene load_steps=6 format=3 uid="uid://bwl0adboot01"]
+
+[ext_resource type="Texture2D" uid="uid://dl6ps8pllyfe" path="res://assets/images/bg_wasteland.png" id="1_bg"]
+[ext_resource type="PackedScene" uid="uid://cwwlog0emblem1" path="res://scenes/ui/ww_logo.tscn" id="2_logo"]
+[ext_resource type="Script" uid="uid://20oycsay6002" path="res://scripts/ui/bootloader.gd" id="3_script"]
+
+[sub_resource type="SystemFont" id="font_cond"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="StyleBoxFlat" id="panel_gunmetal"]
+content_margin_left = 50.0
+content_margin_top = 40.0
+content_margin_right = 50.0
+content_margin_bottom = 40.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.92)
+border_width_left = 3
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[node name="Bootloader" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("3_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("1_bg")
+expand_mode = 2
+
+[node name="Dim" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.058824, 0.07451, 0.094118, 0.55)
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="CenterContainer"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("panel_gunmetal")
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Logo" parent="CenterContainer/Panel/VBox" instance=ExtResource("2_logo")]
+custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
+title_size = 36
+mark_size = 58.0
+show_brackets = false
+
+[node name="StatusLabel" type="Label" parent="CenterContainer/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_cond")
+theme_override_font_sizes/font_size = 20
+text = "BOOT_LOADING"
+horizontal_alignment = 1

@@ -1,0 +1,538 @@
+# 📡 CONTRAT RÉSEAU — Wasteland Warfare
+
+> **Rôle de ce fichier :** Architecture de l'**API (FastAPI)**, schémas de données, gestion des **WebSockets**, payloads du **Chat**, et logique de **« State Redaction » par destinataire**. C'est la source de vérité du contrat client↔serveur (REST + temps réel).
+>
+> **Index / Routeur :** [`CONTEXTE.md`](CONTEXTE.md) — **Voir aussi :** [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md) · [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md) · [`PIPELINE_ET_BOOTLOADER.md`](PIPELINE_ET_BOOTLOADER.md)
+>
+> **DIRECTIVE IA :** La **numérotation d'origine** (`§5`, `§8.x`…) est **CONSERVÉE** pour préserver les renvois croisés. Ce fichier contient la section **§5** et les entrées du journal **§8** réseau/backend-serveur : **§8.9, §8.12, §8.20, §8.26, §8.28, §8.31, §8.33, §8.34, §8.35, §8.46, §8.47, §8.48, §8.61**. **Rappel critique :** un correctif **backend nécessite push + redéploiement VPS** pour être actif (voir §1 dans [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md) et §8.7 dans [`PIPELINE_ET_BOOTLOADER.md`](PIPELINE_ET_BOOTLOADER.md)). Si tu modifies un **endpoint**, un **message WS**, un **schéma** ou un **payload**, mets à jour CE fichier.
+
+---
+
+# 📡 PROTOCOLE DE SYNCHRONISATION INTER-IA
+
+> **🤖 À L'ATTENTION DE L'AGENT IA FRONTEND.** Ce document est la **SOURCE DE VÉRITÉ UNIQUE ET
+> NORMATIVE** de tous les formats de données échangés entre le client Godot et le serveur FastAPI :
+> **payloads JSON REST**, **messages WebSocket**, **schémas d'état** et **payloads de Chat**. Il est
+> rédigé et maintenu par l'agent IA **Backend** ; il fait foi.
+>
+> **RÈGLE ABSOLUE — INTERDICTION DE DEVINER.** Tu n'as **PAS** le droit d'inventer, de supposer ou de
+> « deviner » une structure réseau (nom de clé, type, enveloppe de message, forme d'un dictionnaire
+> imbriqué) qui ne serait **pas explicitement documentée ici**. Si une donnée dont tu as besoin
+> **n'apparaît pas** dans ce contrat : **ne code pas un parseur spéculatif** — signale-le dans ta
+> réponse pour que l'agent Backend ajoute le champ au schéma ET à ce fichier. Tout champ lu côté
+> client DOIT correspondre, **au nom et au type près**, à une entrée de ce document.
+>
+> **PROCÉDURE DE MODIFICATION.** Tout ajout/changement de clé, de type, d'endpoint, de message WS ou
+> de payload se fait **d'abord ici** (côté Backend), puis est consommé côté client. Un correctif
+> backend n'est **actif** qu'après **push + redéploiement VPS** (§1 dans [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md)) :
+> tant que le VPS n'est pas à jour, le client doit lire les nouveaux champs **défensivement** (valeur
+> par défaut si absent).
+
+### ⚠️ RÈGLE DE TYPAGE N°1 — Le « Piège JSON float » (Godot)
+
+`JSON.parse_string` (Godot) **convertit TOUS les nombres JSON en `float`**, et les **clés d'objet JSON
+sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
+
+- Un `id` (joueur, salle, territoire numérique…) lu du réseau arrive en `float` → `11.0`. **Toujours
+  appliquer `int(...)` AVANT de l'utiliser** comme entier, comme clé, ou dans une URL.
+- ⚠️ **`str(11.0)` produit `"11.0"` en Godot, PAS `"11"`.** Pour indexer un dictionnaire dont les clés
+  sont des `player_id`/`territory_id` (`players`, `objectives`, `initiative_rolls`,
+  `statistics.zone_kills_by_player`…), il faut **`str(int(pid))`** — jamais `str(pid)` sur un float
+  (sinon la clé `"11"` n'est jamais trouvée). *(Cf. régression historique « salle 11.0 » §8.9.)*
+- Un `bool` JSON (`true`/`false`) → `bool` Godot ; lire avec un défaut (`bool(d.get("is_active", true))`).
+
+### 🧩 SCHÉMAS DE RÉFÉRENCE TYPÉS (annotés)
+
+> Les blocs ci-dessous sont des **schémas annotés** (commentaires `// <type>`), **pas du JSON strict**.
+> Les `int`/`float` transitent en nombres JSON (donc `float` côté Godot, cf. règle ci-dessus). Les
+> **clés de dictionnaire indexées par id sont des `string`** dans le JSON.
+
+**A. REST — `GET /lobby/rooms` → `Array<GameRoomResponse>` ; `POST /lobby/rooms` → `GameRoomResponse`** (cf. `models/schemas.py`)
+```jsonc
+{
+  "id": 11,                 // int  — id de salle (⚠️ int() avant str()/URL)
+  "status": "waiting",      // string — "waiting" | "playing" | ...
+  "max_players": 6,         // int  — borné serveur à [3..6]
+  "is_private": false,      // bool — les salles privées sont masquées de la liste publique
+  "secret_code": null,      // string | null
+  "current_players": 3,     // int  — OCCUPATION COURANTE (§8.34). Défaut 0 si VPS pas redéployé.
+  "created_at": null        // string (ISO-8601) | null
+}
+```
+
+**F. REST — `GET /api/v1/leaderboard?limit=N&offset=0` → `LeaderboardResponse`** (PUBLIC ; bloc `me` ajouté si un token Bearer est joint ; tri `stats_victoires` desc, départage `niveau` desc puis `points_classement` desc ; cf. `models/schemas.py`, §9.2/§8.46)
+```jsonc
+{
+  "entries": [
+    {
+      "rank": 1,                    // int  — rang GLOBAL 1-based (offset inclus)
+      "username": "Hakim",          // string — pseudo du joueur
+      "level": 4,                   // int  — alias canonique de "niveau" (§9.2)
+      "wins": 12,                   // int  — alias canonique de "stats_victoires" (clé de tri, desc)
+      "niveau": 4,                  // int  — alias historique (= level)
+      "stats_victoires": 12,        // int  — alias historique (= wins)
+      "stats_parties_jouees": 30,   // int  — parties jouées
+      "points_classement": 1530     // int  — points de classement (départage)
+    }
+  ],
+  "me": {                           // null si la requête n'est PAS authentifiée
+    "rank": 137,                    // int  — rang GLOBAL de l'opérateur courant (même hors page)
+    "username": "Hakim", "level": 4, "wins": 12
+  }
+}
+```
+
+**B. WebSocket — enveloppes serveur → client** (champ discriminant : `type`)
+```jsonc
+{ "type": "action_result", "event": { /* Event, voir §D */ }, "state": { /* GameState, voir §C */ } }
+{ "type": "game_started",  "state": { /* GameState */ } }
+{ "type": "player_abandoned", "player_id": 11, "state": { /* GameState */ } }   // player_id: int
+{ "type": "error",   "message": "Ce n'est pas votre tour." }                     // message: string
+{ "type": "player_disconnected", "player_id": 11 }                              // player_id: int
+{ "type": "lobby_state", "players": [11, 12], "ready": [11],                    // players/ready: Array<int>
+  "usernames": { "11": "Hakim", "12": "Bot" } }                                 // usernames: { "<player_id:str>": string }
+{ "type": "faction_locked", "player_id": 11, "faction_id": "culte_isotope" }    // player_id: int, faction_id: string
+{ "type": "game_over", "winner_id": 11, "match_type": "objective", "rankings": [11, 12, 13], // rankings: Array<int> (1er d'abord ; départage 2e place serveur, §8.47)
+  "match_rewards": { "11": { "match_points": 74, "xp_earned": 372, "coins_earned": 100,        // { "<player_id:str>": MatchRewards } — détail des gains (§8.47)
+    "level_up_triggered": true, "new_level": 12, "current_xp": 300, "xp_to_next_level": 100, "levels_gained": 2 } } } // ⚠️ toutes valeurs ENTIÈRES (piège float §5)
+{ "type": "spy_result", "target_player_id": 12, "description": "Conquérir l'Asie" } // PRIVÉ (espion seul)
+{ "type": "chat_message", "tab": "general", "sender_id": 11, "sender_name": "Hakim",
+  "text": "gg", "target_id": 12 }   // tab: "general"|"private" ; target_id: int (privé uniquement)
+```
+
+**C. `GameState` (objet `state` diffusé)** (cf. `state_schemas.py` ; **rédigé par destinataire** : `objectives` des autres = marqueur générique)
+```jsonc
+{
+  "room_id": 11,                  // int
+  "current_turn": 4,              // int
+  "current_player_id": 11,        // int (⚠️ str(int()) pour indexer players)
+  "phase": 3,                     // int — 0..5
+  "stage": "playing",             // string — "initiative" | "placement" | "playing"
+  "turn_order": [11, 12, 13],     // Array<int>
+  "setup_index": 0,               // int
+  "initiative_rolls": { "11": [6, 4, 2] },     // { "<player_id:str>": Array<int> }
+  "winner_id": null,              // int | null  (null tant que la partie continue)
+  "objectives": { "11": { "type": "string", "params": {}, "description": "string" } }, // { "<pid:str>": {...} }
+  "players": {                    // { "<player_id:str>": PlayerState }
+    "11": {
+      "player_id": 11,            // int
+      "username": "Hakim",        // string  ("" si non résolu)
+      "faction": "culte_isotope", // string  (id de faction, miroir factions.py)
+      "units_in_stock": 5,        // int
+      "status": "alive",          // string — "alive" | "eliminated"
+      "is_active": true,          // bool — false = a abandonné (Fallen Empire §8.20)
+      "cards_in_hand": [3, 7],    // Array<int> (valeurs de troupes)
+      "pending_eclipse_choice": [4, 9],   // Array<int> (vide = pas de choix Éclipse en cours)
+      "pending_spy_choice": false,        // bool
+      "pending_blind_deploy": {}          // { "<territory_id:str>": int } — ⚠️ MASQUÉ ({}) en stage "placement"
+    }
+  },
+  "territories": {                // { "<territory_id:str>": TerritoryState }
+    "alaska": {
+      "territory_id": "alaska",   // string (id Risk snake_case = nom de nœud)
+      "owner_id": 11,             // int | null (null = neutre)
+      "garrison": 3               // int
+    }
+  },
+  "contamination_zone": {         // dictionnaire imbriqué (§8.27)
+    "territories": ["alaska", "kamchatka"], // Array<string> (ids de territoires contaminés)
+    "probability": 1.0            // float
+  },
+  "statistics": {                 // « Mémoire Tactique » (§8.35) — PUBLIC, JAMAIS rédigé
+    "zone_kills_by_player": { "11": 15, "12": 3 }, // { "<player_id:str>": int } (⚠️ clés str, valeurs float→int())
+    "zone_stagnation_turns": 2,   // int — rounds globaux consécutifs sans déplacement de zone
+    // --- Compteurs d'ÉCONOMIE (§8.47) — alimentent points & XP de fin de partie ET l'Intel ---
+    "combat_kills_by_player": { "11": 120 },         // { "<pid:str>": int } — unités tuées AU COMBAT (≠ zone)
+    "conquests_by_player": { "11": 18 },             // { "<pid:str>": int } — territoires conquis (cumul partie)
+    "eliminations_by_player": { "11": 2 },           // { "<pid:str>": int } — joueurs éliminés par lui
+    "continents_conquered_by_player": { "11": ["asia", "oceania"] } // { "<pid:str>": Array<string> } — continents pris ≥1 fois (count = .size())
+  }
+}
+```
+
+**D. `event` (clé discriminante : `event_type` — string)** — exemples des types les plus consommés
+```jsonc
+{ "event_type": "attack_result", "attacker_territory_id": "alaska", "defender_territory_id": "kamchatka",
+  "attacker_rolls": [6,4], "defender_rolls": [5], "attacker_losses": 0, "defender_losses": 1, // Array<int>/int
+  "conquered": true, "conquer_pending": true, "conquer_from": "alaska", "conquer_to": "kamchatka",
+  "conquer_min": 1, "conquer_max": 2, "time_bank_bonus_seconds": 10 }   // ints / bools / strings
+{ "event_type": "blind_deploy_submitted", "ready_count": 2, "expected_count": 3, "setup_complete": false }
+{ "event_type": "blind_deploy_resolved", "forced": false }
+{ "event_type": "turn_timeout", "player_id": 11 }     // player_id: int
+{ "event_type": "units_deployed", "amount": 5, "deployments": { "alaska": 3, "brazil": 2 } } // deployments: { "<tid:str>": int }
+{ "event_type": "card_played", "card_value": 7 }      // int
+```
+
+**E. WebSocket — actions client → serveur** (enveloppe standard `{ "action": string, "payload": object }`)
+```jsonc
+{ "action": "deploy_units", "payload": { "deployments": { "alaska": 2, "brazil": 1 } } } // { "<tid:str>": int }
+{ "action": "attack_territory", "payload": { "attacker_territory_id": "alaska",
+    "defender_territory_id": "kamchatka", "attacker_dice": 3 } }   // strings + int
+{ "action": "move_units", "payload": { "source_territory_id": "alaska",
+    "target_territory_id": "brazil", "amount": 2 } }
+{ "action": "conquer_move", "payload": { "from_tid": "alaska", "to_tid": "kamchatka", "troops": 2 } }
+{ "action": "play_card",   "payload": { "card_index": 0 } }       // int
+{ "action": "keep_card",   "payload": { "card_index": 1 } }       // int (Ordre de l'Éclipse §8.24)
+{ "action": "spy_objective", "payload": { "target_player_id": 12 } } // int (Chasseurs d'Ombres §8.24)
+{ "action": "faction_choice", "payload": { "faction_id": "culte_isotope" } } // string
+{ "action": "abandon", "payload": {} }                            // payload vide
+{ "action": "pass_turn", "payload": {} }
+// Lobby : { "action": "ready" | "unready" | "get_lobby", "payload": {} }
+// CHAT (§8.33) — forme À PLAT acceptée (contrat principal) OU enveloppe standard :
+{ "type": "send_chat_message", "tab": "general", "text": "gg", "target_id": 12 } // tab: "general"|"private"; target_id requis si "private"
+```
+
+---
+
+## 📡 5. ARCHITECTURE RÉSEAU (Backend / Frontend)
+
+- **Authentification :** `AuthManager.gd` gère le HTTP `POST /auth/login`. Stocke `jwt_token`. **(§8.46)** (a) la **durée de vie du JWT** est désormais lue depuis la config (`settings.ACCESS_TOKEN_EXPIRE_MINUTES`, champ ajouté à `core/config.py`, défaut **1440** surchargeable via `.env`) — fin du plafond figé à 30 min codé en dur dans `auth.py` ; (b) le **login encode désormais ses valeurs** (`.uri_encode()` sur `username`/`password` avant le corps `x-www-form-urlencoded`) → un `&`, `=`, `+` ou espace ne casse plus la requête ; (c) l'**hôte des URL** (HTTP et WS) provient DÉSORMAIS de l'autoload **`ApiConfig`** (`api_config.gd`, source unique `http_host`/`ws_host`, bascule dev/prod sans recompiler) — voir §8.46.
+- **Déconnexion (client, §8.52 frontend) :** l'action **« DÉCONNEXION »** vit DÉSORMAIS dans l'écran **Paramètres** (`settings.gd`) et non plus dans le lobby. Elle (1) ferme le WebSocket s'il est ouvert (`socket.close()` + `connected=false` + `current_room_id=""`), (2) **purge la session** via `AuthManager.clear_session()` (`jwt_token`/`user_id`/`username` en mémoire **+** le fichier `user://session.dat` de la persistance §P1), puis (3) renvoie à `auth_screen`. **Aucun impact protocole** : pas de nouvel endpoint ni message WS — c'est une fermeture WS côté client + purge locale du JWT. Le lobby ne propose plus qu'un **« ❮ RETOUR »** vers `main_menu` (cf. [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md) §8.52).
+- **Erreurs REST (enveloppe standard) :** toute réponse d'erreur HTTP renvoie un **JSON** `{"detail": <string>}` — **jamais** de texte brut. Les `HTTPException` métier le font nativement : login **401** `{"detail":"Incorrect username or password"}` ; **`register`** **400** `{"detail":"Username already registered"}` **OU** `{"detail":"Email already registered"}` (unicité **username ET email** contrôlée + garde `IntegrityError`/`rollback`) ; lobby **400** `{"detail":"Room is full"}`. **Depuis l'ajout d'un handler global** (`main.py`, `@app.exception_handler(Exception)`), même une exception serveur **non gérée** renvoie un **`500 {"detail":"Internal server error"}` JSON** (et logue la stack côté serveur) — fin de l'« Internal Server Error » en **texte brut** qui faisait échouer `JSON.parse` côté Godot (« got 'Internal' », cf. §8.47). **Côté client :** lire `data.get("detail")` pour le message ; ne **jamais** supposer qu'un corps 4xx/5xx est non-JSON.
+- **Classement mondial (public) :** `GET /api/v1/leaderboard?limit=N` (`leaderboard.py`, §8.46) — **aucune authentification** requise (cohérent avec `GET /lobby/rooms`). Tri par `points_classement` **décroissant**, départage par `stats_victoires` **décroissant**. Réponse = `List[LeaderboardEntry]` (schéma annoté en §F ci-dessus). Côté client : `NetworkManager.fetch_leaderboard()` + signal `leaderboard_loaded(entries)` ; `leaderboard.gd` consomme les vraies données (repli mock gracieux si le serveur répond 404 tant que le VPS n'est pas redéployé). ⚠️ **Forme livrée ≠ contrat §9.2** (qui demande un tri par victoires, une enveloppe `{entries, me}` et un `offset`) — **à réconcilier** (cf. §9.2).
+- **Matchmaking :** Requêtes HTTP REST sur `/lobby/rooms` (préfixe `/api/v1/lobby`) pour lister/créer/rejoindre.
+  - `GET /lobby/rooms` : liste les salles **réellement joignables** = `status == "waiting"` **ET non pleines** (joueurs actuels `<` `max_players`, filtré serveur §8.31). Chaque salle expose désormais **`current_players: int`** (occupation courante, §8.34) → la jauge « joueurs/max » du radar affiche un vrai compteur (fin du repli `—/max`). Le client (`fetch_rooms`) envoie un header **`Cache-Control: no-cache`** pour que le bouton « Actualiser » ne serve jamais une liste périmée.
+    - **🖥️ Note FRONTEND (§8.57) :** depuis que le **mode de jeu est choisi au Menu Principal** (autoload `MatchConfig`, effectif 3-6), le client **filtre le radar CÔTÉ CLIENT** pour n'afficher que les salles dont `max_players` **==** l'effectif du mode (la création de salle utilise le même effectif hérité). **Aucun paramètre de requête de capacité n'existe** dans ce contrat — et il n'en est **pas inventé** (règle « interdiction de deviner »). *Piste backend optionnelle (différée) : exposer un `GET /lobby/rooms?max_players=N` permettrait un **filtrage serveur** (moins de trafic, salles plus fraîches) ; à ajouter **Backend-first ici** puis à consommer côté client (`fetch_rooms`).*
+  - `POST /lobby/rooms` : crée une salle. Le serveur **borne `max_players` entre 3 et 6** (`max(3, min(6, ...))`) et auto-inscrit le créateur via un `GameRoomPlayer`.
+  - `POST /lobby/rooms/{room_id}/join` : refuse si la salle n'est pas `waiting` (404), si le joueur y est déjà (400), ou **si la salle est pleine** (400 « Room is full », via comparaison `count(GameRoomPlayer) >= room.max_players`).
+  - `DELETE /lobby/rooms/{room_id}/leave` : retire le joueur ; supprime la salle si elle devient vide.
+  - ⚠️ **PIÈGE GODOT (IDs) :** `JSON.parse_string` convertit **tous les nombres en `float`**. Un `id` de salle lu d'une réponse REST vaut donc `11.0`, et `str(11.0)` produit `"11.0"`. Comme `ConnectionManager` indexe les salles WebSocket par cette **chaîne**, ouvrir `"11.0"` crée une salle DISTINCTE de `"11"` (créateur isolé des autres joueurs). **Règle :** toujours convertir un id JSON via `int(...)` avant de le `str()`/l'utiliser dans une URL WS (appliqué dans `lobby_screen.gd` et `network_manager.gd`).
+- **Temps Réel (Arène) :** Géré par `NetworkManager.gd`. Connexion au `ConnectionManager` Python en WebSocket (`wss://.../ws/{room_id}/{player_id}?client_version=<v>`, où `player_id` = `User.id` récupéré via `/auth/me`) avec envoi du Token JWT dans le header. L'état du jeu est synchronisé via JSON.
+  - ⚠️ **Validation de version stricte (auto-updater §9) :** la query string `client_version` (= `GameState.client_version`, posé par le bootloader) est comparée par le serveur à `version.json`. Si elle **diffère**, le WS **rejette** la connexion : `accept()` puis `close(code=4000, reason="Version obsolete …")`. Le client lit `socket.get_close_code() == 4000` et émet un `game_error`/`lobby_error` clair. *(Détails bootloader/patchs : voir [`PIPELINE_ET_BOOTLOADER.md`](PIPELINE_ET_BOOTLOADER.md) §9.)*
+  - **Messages serveur→client :** `{"type":"action_result","event":...,"state":...}`, `{"type":"error","message":...}`, `{"type":"player_disconnected","player_id":...}`, `{"type":"lobby_state","players":[...],"ready":[...]}`, `{"type":"game_started","state":...}`, `{"type":"game_over","winner_id":...,"match_type":...,"rankings":[...]}`, `{"type":"player_abandoned","player_id":...,"state":...}` (Fallen Empire §8.20 — l'état diffusé porte le `is_active=false` du joueur), `{"type":"spy_result","target_player_id":...,"description":...}` (Chasseurs d'Ombres §8.24 — message **PRIVÉ**, envoyé uniquement à l'espion, jamais diffusé). **Chat (§8.33) :** `{"type":"chat_message","tab":"general"|"private","sender_id":...,"sender_name":...,"text":...,"target_id":... (privé uniquement)}` — relais serveur **estampillé** (id + pseudo réel de l'expéditeur, pas d'usurpation) ; en **général** diffusé à toute la salle (écho compris), en **privé** envoyé **uniquement à la cible + écho à l'expéditeur**. Le client les route via les signaux `game_state_updated` / `game_event` / `game_error` / `lobby_state_updated` / `game_started_signal` / `player_abandoned` / `spy_result`. La victoire est aussi portée par `GameState.winner_id` dans l'état diffusé ; `game_over` déclenche en plus l'enregistrement des résultats (`process_match_results`). NB : certains évènements portent un champ `system_messages: [str]` (lignes de journal diffusées en BBCode — ex. immunité du Culte de l'Isotope §8.24).
+  - **Confidentialité des objectifs secrets — State Redaction par destinataire (§4.4 / §8.6 résolu).** L'état complet n'est **JAMAIS** diffusé tel quel : chaque message porteur d'un `state` (`game_started`, `action_result`, `player_abandoned`) passe par **`ConnectionManager.broadcast_state_to_room`**, qui **itère sur `manager.players[room_id]`** (`{ player_id: websocket }`) et envoie à CHAQUE joueur une copie **personnalisée** via `connection.send_json(...)`. La redaction (`connection_manager._redact_state_for_player`, **deepcopy** → l'état Redis source et les autres copies ne sont jamais mutés) **conserve uniquement `state.objectives[player_id]`** (l'objectif du destinataire) et **écrase ceux de tous les autres** par un marqueur générique `{"type":"hidden","description":"Objectif classifié"}`. L'état initial envoyé à un joueur qui (re)joint (`router._send_current_state`) est redacted **de la même façon**. ⚠️ **Inconditionnel, même après un espionnage** : les Chasseurs d'Ombres (§8.24) reçoivent l'objectif d'une cible via le message **PRIVÉ** `spy_result`, mais l'état global **ne re-divulgue jamais** ce secret (l'espion l'a déjà mémorisé côté client). Les messages **sans état sensible** (`lobby_state`, `faction_locked`, `game_over`, `player_disconnected`) restent en diffusion identique (`broadcast_to_room`). Test : `backend/test_state_redaction.py`. (À ne pas confondre avec le masquage de `pending_blind_deploy` en Phase 0, qui est global et géré par `router._state_payload`, §8.31.)
+  - **Actions client→serveur :** `{"action": <type>, "payload": {...}}`. Lobby : `ready`, `unready`, `get_lobby`. Draft : `faction_choice` (`payload.faction_id`). Jeu : `place_initial` (pré-game), `deploy_units`, `attack_territory`, `move_units`, `play_card` (`payload.card_index` — la valeur de la carte est créditée au stock à déployer, §8.4/§8.22), `conquer_move` (`payload = {from_tid, to_tid, troops}` — répartition des troupes après une conquête, §8.23), `keep_card` (`payload.card_index` — Ordre de l'Éclipse §8.24 : conserve l'une des 2 cartes proposées, état bloquant `pending_eclipse_choice`), `pass_turn`. Hors-tour : `abandon` (payload vide — Fallen Empire, traité par `router.py` AVANT le moteur car autorisé même quand ce n'est pas son tour, voir §8.20 ; côté client, l'abandon **quitte immédiatement l'arène** vers `main_menu.tscn`, §8.23), `spy_objective` (`payload.target_player_id` — Chasseurs d'Ombres §8.24 : traité par `router.py`, renvoie un message **privé** `spy_result` à l'espion). **Chat (§8.33) :** `send_chat_message` — accepté **à plat** (`{"type":"send_chat_message","tab","text","target_id"}`, contrat principal) **OU** dans l'enveloppe standard (`{"action":"send_chat_message","payload":{...}}`). Traité par `router.py` **HORS verrou d'état** (ne mute aucun état de jeu). `tab` ∈ {`general`, `private`} — l'onglet « Alliés » est **abandonné** (jeu chacun-pour-soi) ; `target_id` **requis** si `tab == "private"`. Debug : `init_game`.
+  - **Draft / sélection de faction (frontend + backend câblés) :** après `game_started`, chaque client est sur `faction_selection`. La confirmation appelle `NetworkManager.send_faction_choice(faction_id)` → message `{"action":"faction_choice","payload":{"faction_id":...}}`. Le serveur (`router.py:_handle_faction_choice`) applique la faction au `PlayerState` dans l'état Redis (source de vérité des modificateurs) puis **rediffuse** `{"type":"faction_locked","player_id":...,"faction_id":...}` à toute la salle. Le client route ce message via le signal `faction_locked(player_id, faction_id)` ; quand le nombre de joueurs verrouillés atteint `GameState.players.size()`, il charge `main.tscn`. Le client local s'auto-enregistre de façon optimiste (pas de blocage en solo). ⚠️ **Backend → nécessite push + redéploiement VPS** pour être actif (§1). Voir §8.13 (dans [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)).
+  - **Salle d'attente & démarrage (Lot 2) :** le `ConnectionManager` suit l'identité des joueurs par salle et leurs états "prêt". Quand tous les joueurs connectés sont prêts (3-6), le routeur WS appelle automatiquement `GameEngine.create_initial_state` et diffuse `game_started` avec l'état initial → tous les clients basculent vers l'arène. L'endpoint REST `POST /game/rooms/{id}/start` existe aussi (chemin alternatif). L'état passe par les stages `placement` puis `playing` (`GameState.stage`).
+  - **Destruction d'une salle vidée (déconnexion WS) :** `ConnectionManager.disconnect()` renvoie `True` quand la **dernière** connexion d'une salle se ferme. Le routeur appelle alors `_destroy_room()` qui supprime l'état de partie en Redis (`delete_game_state`) **et** la ligne `GameRoom` + ses `GameRoomPlayer` en base → une salle abandonnée ne pollue plus `GET /lobby/rooms`. (Symétrique du `DELETE /lobby/rooms/{id}/leave` REST qui détruit déjà une salle devenue vide.)
+
+---
+
+## 🧭 8. ÉTAT D'AVANCEMENT (MVP) & POINT DE REPRISE — *Journal : réseau & backend serveur*
+
+> **DIRECTIVE IA :** Le journal §8 est **réparti par thème** entre les 4 fichiers (index dans [`CONTEXTE.md`](CONTEXTE.md)) ; **numéros d'origine conservés**. Vue d'ensemble du MVP : voir §8.1 dans [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md).
+>
+> **Entrées présentes dans CE fichier :** §8.9 (matchmaking), §8.12 (destruction salle vidée), §8.20 (Fallen Empire / abandon), §8.26 (déploiement en masse), §8.28 (pseudos réels), §8.31 (sprint matchmaking/déploiement aveugle/zone/timers), §8.33 (Time Bank + Chat), §8.34 (`current_players` dans le lobby), §8.35 (`GameState.statistics` / Mémoire Tactique — prép. Intel), §8.46 (liaison frontend↔backend : `ApiConfig` + session persistante + classement réel `/leaderboard`), §8.47 (**Économie globale : Points de Match, XP, Niveaux infinis, Coins**).
+
+### 8.9. Correctifs Matchmaking (post-MVP)
+> Bugs critiques du lobby diagnostiqués et corrigés. Détail des causes pour éviter les régressions.
+
+1. **Limite de salle figée à 3 joueurs.**
+   - *Cause A (frontend) :* `NetworkManager.create_room()` avait `max_players` codé en dur à `3` par défaut, et les boutons de création n'envoyaient aucune taille → toutes les salles naissaient à 3 places. *Fix :* défaut porté à `6` **et** sélecteur `SpinBox` (3-6) câblé dans `lobby_screen.gd` (la valeur choisie est transmise).
+   - *Cause B (backend) :* la route `join` **ne vérifiait jamais la capacité** → `max_players` non respecté. *Fix :* ajout du contrôle `count(GameRoomPlayer) >= room.max_players` → 400 « Room is full ».
+2. **Créateur isolé dans une salle « 11.0 ».** *Cause :* float JSON → `str(11.0) = "11.0"`, clé WebSocket distincte de `"11"` (voir piège §5). *Fix :* coercition `int()` de tous les ids de salle dans `lobby_screen.gd` (`_on_lobby_success`, liste publique) et `network_manager.gd` (`join_room`).
+3. **Bouton « Actualiser » sans effet visuel.**
+   - *Cause A :* `queue_free()` est différé (fin de frame) → anciens nœuds encore présents pendant le redessin (doublons/affichage figé). *Fix :* `remove_child()` immédiat avant `queue_free()` dans `_on_rooms_loaded`.
+   - *Cause B :* réponse `GET /lobby/rooms` potentiellement mise en cache. *Fix :* header `Cache-Control: no-cache` (voir §5).
+4. **Liste des salles figée pour les autres joueurs (pas de rafraîchissement « temps réel »).**
+   - *Symptôme :* quand un joueur crée/quitte une salle, les autres joueurs déjà sur l'écran Lobby ne voyaient pas le changement tant qu'ils ne recliquaient pas « Actualiser ».
+   - *Cause racine (architecturale, PAS un bug de code) :* le lobby est **100 % REST**. Le backend n'émet **aucun** push WebSocket à la création/jointure d'une salle, et un joueur qui parcourt le lobby **n'est connecté à aucun WebSocket** (la connexion WS `/ws/{room_id}/{player_id}` n'a lieu qu'*après* avoir rejoint une salle, dans `waiting_room`). La liste ne se redéclenchait donc que sur clic manuel ou à l'ouverture de l'écran (`_on_refresh_pressed` dans `_ready`). Le maillon rompu était **l'absence de tout redéclencheur automatique**, pas la réception/l'affichage (signal `rooms_loaded` + nettoyage `remove_child`/`queue_free` déjà corrects).
+   - *Fix (frontend exclusif, `lobby_screen.gd`) :* ajout d'un `Timer` d'auto-rafraîchissement (`AUTO_REFRESH_INTERVAL = 3.0 s`, `autostart`) créé dans `_ready()` qui repolle `NetworkManager.fetch_rooms()` en silence (sans écraser le `status_label` du clic manuel ; `_on_rooms_loaded` met à jour le compteur). Le timer étant enfant de l'écran, il est **détruit automatiquement au changement de scène** → le polling s'arrête seul en quittant le lobby. **Backend non modifié** (un vrai push nécessiterait un canal WS lobby côté serveur — voir piste hors-MVP ci-dessous).
+   - *Piste future (si push temps réel souhaité) :* ouvrir un WebSocket « lobby » global côté backend qui broadcast un message `rooms_update` à chaque create/join/leave, puis émettre un signal `rooms_updated` dans `network_manager.gd` — remplacerait le polling par du vrai push. **Nécessite une modification backend**, donc différé.
+
+### 8.12. Destruction automatique d'une salle vidée (déconnexion WS)
+> Besoin : quand **tous** les joueurs quittent une salle (fermeture du client / WebSocket), la salle doit être détruite et ne plus apparaître dans la liste publique.
+
+- *Avant :* une déconnexion WS ne nettoyait que les structures in-memory du `ConnectionManager`. La ligne `GameRoom` en base (et l'état Redis si la partie avait démarré) **survivaient** → salle fantôme listée dans `GET /lobby/rooms`.
+- *Fix (backend, 2 fichiers) :*
+  - `connection_manager.py` : `disconnect()` renvoie désormais `bool` (`True` si la salle vient d'être entièrement vidée).
+  - `sockets/router.py` : nouveau helper `_destroy_room(room_id)` (Redis `delete_game_state` + suppression `GameRoomPlayer`/`GameRoom` via `SessionLocal`, mêmes patterns que `_finalize_if_over`). Le handler `WebSocketDisconnect` appelle `_destroy_room` si `disconnect()` a renvoyé `True`, sinon diffuse `player_disconnected` + `lobby_state` comme avant.
+- *Robustesse :* suppressions encapsulées dans des `try/except` (un échec Redis ou DB ne casse pas la fermeture du socket). ⚠️ **Backend → nécessite push + redéploiement VPS** pour être actif (§1).
+
+### 8.20. Fallen Empire — Abandon de partie (Backend)
+> Implémentation serveur du bouton « ☠ ABANDONNER » (§8.17) : le joueur qui envoie `{"action":"abandon","payload":{}}` devient un **Empire déchu** — marqué inactif, ses tours sont sautés, ses territoires restent sur la carte et se défendent automatiquement. **Backend exclusif** (⚠️ push + redéploiement VPS requis, §1/§8.7).
+
+- **Schéma (`state_schemas.py`) :** nouveau champ `PlayerState.is_active: bool = Field(default=True)`. `False` = a abandonné. **Distinct de `status`** : un joueur abandonné reste `"alive"` tant que ses territoires tiennent (il peut encore être éliminé militairement) ; le défaut `True` garde les états Redis existants valides (rétro-compatible).
+- **Routage (`sockets/router.py`) :** l'action `abandon` est interceptée **dans le routeur** (nouveau handler `_handle_abandon`, branché entre `faction_choice` et les actions de jeu) et **PAS via `GameEngine.process_action`** — car ce dernier exige « c'est votre tour », alors que l'abandon est autorisé à tout moment. Le handler : (1) refuse si déjà abandonné ou éliminé (erreur personnelle `{"type":"error",...}`), (2) passe `is_active=False`, (3) gère le stage courant (voir ci-dessous), (4) vérifie la victoire (`_check_victory`), (5) si c'était le tour du joueur et que la partie continue, force `engine._end_turn` (le tour passe au prochain joueur actif), (6) sauvegarde dans Redis, (7) diffuse `{"type":"player_abandoned","player_id":...,"state":...}` à toute la salle, (8) appelle `_finalize_if_over` (si l'abandon couronne le dernier actif → `game_over` + `process_match_results`).
+- **Moteur (`engine.py`) — tours sautés :** `_end_turn` ne donne le tour qu'aux joueurs `status=="alive"` **ET** `is_active==True`. La boucle de recherche reste **bornée** (`for _ in range(len(player_ids))`) → jamais infinie ; s'il ne reste qu'un actif, c'est `_check_victory` qui clôt. Gardes complémentaires : `_calculate_reinforcements` renvoie 0 et `_draw_card_for_current_player` ne pioche pas pour un joueur inactif ; `process_action` refuse toute action d'un joueur inactif (« Vous avez abandonné la partie »).
+- **Abandon pendant le `placement` (anti soft-lock) — ⚠️ MAJ §8.31 (déploiement aveugle) :** le stock du joueur ET son tampon `pending_blind_deploy` sont vidés ; si, lui retiré, **tous les joueurs actifs restants ont déjà soumis** leur déploiement aveugle, la Phase 0 est **résolue immédiatement** (`_all_blind_deploys_ready` → `_resolve_blind_deployment`). `_start_playing` donne le 1ᵉʳ tour au premier joueur **actif** de `turn_order`. *(Historique pré-§8.31 : placement séquentiel, `_all_stocks_empty`/`_advance_setup_index` sautaient les inactifs — ces helpers sont désormais legacy.)* **Déclenché aussi automatiquement sur déconnexion brutale** (Alt+F4/crash) en partie en cours (§8.31).
+- **Victoire « Last Man Standing » (`_check_victory`) :** les prétendants sont les joueurs vivants **ET actifs** (`contenders`). S'il n'en reste **qu'un, il gagne automatiquement** (tous les autres éliminés OU abandonnés). Les objectifs secrets ne sont vérifiés que pour les actifs (un abandonné ne peut plus gagner). Si tous abandonnent (0 actif), pas de vainqueur (la salle finit détruite à la dernière déconnexion, §8.12).
+- **Défense automatique :** aucun code ajouté — c'est le comportement par défaut du moteur : les territoires gardent leur `owner_id` et leurs garnisons, et `_handle_attack` fait toujours lancer les dés de défense pour le propriétaire. Un Empire déchu se défend donc « tout seul », jusqu'à l'élimination éventuelle (`status="eliminated"` quand son dernier territoire tombe).
+- **Frontend (FAIT) :** `network_manager.gd` route `player_abandoned` → applique l'état diffusé (`GameState.update_from_json`) puis émet `game_state_updated` (refresh générique plateau/HUD) **et** le signal dédié `player_abandoned(player_id: int)` (id coercé `int()`, piège JSON §5). ⚠️ Convention du projet : `game_state_updated` est un signal **sans argument** — l'état est appliqué à `GameState` AVANT l'émission (même pattern qu'`action_result`). `main.gd` s'y abonne (`_on_player_abandoned`) : journal **rouge** dans le `MilitaryLog` (« Le Joueur N a abandonné ! Défense automatique activée. », numéro séquentiel `GameState.player_number`) ; si c'est le joueur **local** : `hud.lock_abandon_button()` (bouton « 🏳️ ABANDONNÉ » désactivé — anti double-envoi ; `_disarm_abandon` respecte le verrou si son timer de 3 s retombe après coup) et `_update_instruction` affiche « Vous avez abandonné — vos territoires se défendent automatiquement » via le helper `_am_abandoned()` (lit `is_active` dans l'état ; clics plateau/cartes déjà neutralisés par les contrôles de tour, le serveur ne rendant plus jamais la main). **MAJ §8.23 :** côté joueur **LOCAL**, l'abandon **quitte désormais immédiatement l'arène** (retour `main_menu.tscn` après envoi de l'action) — `lock_abandon_button()` / l'instruction « Vous avez abandonné » ne concernent donc plus que le suivi de l'abandon des **autres** joueurs. Validation : compilation headless + boot runtime `main.tscn` 0 erreur.
+- **Validation :** `py_compile` OK sur `state_schemas.py`, `engine.py`, `router.py`, `state_manager.py`. Machine d'état inchangée par ailleurs (stages/phases intacts ; `is_active` a un défaut → désérialisation des parties existantes OK).
+
+### 8.26. Déploiement EN MASSE (`deploy_units` bulk) + tampon de confirmation (full-stack)
+> ⚠️ **MAJ §8.31 :** en **placement** (Phase 0), `deploy_units` est désormais une **soumission AVEUGLE & SIMULTANÉE** (stockée puis appliquée pour tous à la résolution) et non plus une pose immédiate séquentielle ; `_handle_place_initial` est **déprécié**. La partie ci-dessous décrit le flux d'origine — toujours valable pour les **renforts de Phase 2** (`_handle_deploy_units`), mais supersédé pour la Phase 0.
+> Correctif de playtest : le placement « 1 clic = 1 envoi serveur » était brouillon et bavard. Nouveau flux UX : un **tampon local** alimenté au clic, puis un **bouton de confirmation** qui envoie TOUT d'un coup. **Frontend → actif au relancement du client ; Backend → push + redéploiement VPS requis (§1/§8.7).**
+
+- **Contrat réseau (nouveau).** L'action `deploy_units` ne reçoit plus une troupe unique mais un **dictionnaire complet** : `{"action": "deploy_units", "payload": {"deployments": {"alaska": 2, "brazil": 1}}}`. L'ancien format unitaire `{"territory_id", "amount"}` reste **toléré** (rétro-compat, `GameEngine._parse_deployments` le normalise ; les nombres JSON en float entier sont acceptés). Cette même action sert aux **deux** contextes de pose de troupes.
+- **Backend — deux handlers, un parseur.** `_parse_deployments(payload)` valide le dict (entiers > 0). En **placement initial** (stage `placement`), `process_action` route `deploy_units` vers `_handle_bulk_setup_placement` **AVANT** la garde « playing » (le tour de placement suit `setup_index`, pas `current_player_id`) : somme **exactement = stock**, application groupée, stock **vidé**, puis `_advance_setup_index` / `_start_playing`. En **Phase 2** (renforts), `_handle_deploy_units` applique le dict (somme **≤ stock**), débite le stock, et reste en phase 2 (l'avance vers l'attaque se fait au `pass_turn`). Évènement `units_deployed` / `initial_units_placed` enrichi d'une clé `deployments`. L'ancien `_handle_place_initial` (fournée de 3) est **conservé** (action `place_initial`, tests de régression `test_setup_phase.py`).
+- **Frontend — tampon `pending_deployments` (main.gd).** `_in_deploy_mode()` = mon tour de placement OU ma Phase 2. Dans ce mode, le **clic GAUCHE** sur un territoire allié ajoute +1 au tampon (`_buffer_add`), le **clic DROIT** retire −1 (nouveau signal `board.territory_right_clicked`, câblé sur l'`input_event` des Area2D). Le badge affiche alors **`Troupes+X` en doré** (`territory_badge.set_data(..., pending)`, `board.set_pending_deployments(dict)`). Le tampon est **purgé** hors mode déploiement (changement de tour/phase) dans `_refresh`.
+- **Frontend — bouton « CONFIRMER LE DÉPLOIEMENT » (hud.gd).** Construit **par code** et inséré dans la TopBar juste avant « Fin de Phase » (`_build_confirm_button`). `set_deploy_confirm(active, total, quota)` : masqué hors déploiement, **activé uniquement** quand `total == quota` (= le stock à placer), libellé `✔ CONFIRMER (total/quota)`. Au clic → signal `deploy_confirmed` → `main._on_deploy_confirmed` envoie le dict bulk puis vide le tampon. Tests moteur : `backend/test_deploy_contamination.py` (placement bulk, Phase 2 bulk, parseur).
+
+### 8.28. Propagation des pseudos réels (`PlayerState.username`) (full-stack)
+> Correctif de playtest : les joueurs étaient désignés par « Joueur #X » (id DB) au lieu de leur vrai pseudo. Le pseudo réel est désormais injecté côté serveur et affiché **partout**. **Backend → push + redéploiement VPS requis (§1/§8.7).**
+
+- **Schéma.** Nouveau champ **`PlayerState.username: str = ""`**, peuplé à la création de la partie par `create_initial_state` (lit `players_data[i]["username"]`).
+- **Source du pseudo (Backend).** Le WebSocket ne transporte que l'`player_id` (le JWT met le username dans `sub`, §5). Le routeur résout donc le pseudo via la **base** : `_lookup_username(player_id)` (helper `router.py`, session DB dédiée, tolérant aux pannes), passé à `manager.connect(..., username)`. Le `ConnectionManager` suit `usernames[room_id][pid]` et l'expose (`get_usernames`) ; `_try_start_game` et l'endpoint REST `start_game` (via la relation `GameRoomPlayer.user.username`) injectent ces pseudos dans `players_data`. Le message lobby `lobby_state` porte désormais une clé **`usernames` {id: pseudo}**.
+- **Affichage (Frontend).** `main.gd._display_name(pid)` lit `PlayerState.username` diffusé (replis : pseudo local `AuthManager`, puis « Joueur N »). `hud.gd.update_display` affiche le vrai pseudo du joueur actif (plus seulement le nôtre). `waiting_room.gd._on_lobby_state(players, ready, usernames)` et le signal `network_manager.lobby_state_updated` à **3 arguments** affichent les vrais noms dès la salle d'attente. Le journal d'abandon et l'écran de victoire/`game_over` utilisent aussi `_display_name`.
+
+### 8.31. Sprint « Matchmaking, Déploiement aveugle, Zone stricte, Timers/AFK » (Backend)
+> Sprint backend : (1) salles complètes filtrées du lobby + abandon immédiat sur déconnexion brutale ; (2) zone radioactive en **BLOC STRICT de 4** qui se **téléporte** (ne grandit plus) + immunité du Culte étendue ; (3) refonte de la Phase 0 en **DÉPLOIEMENT AVEUGLE & SIMULTANÉ** ; (4) **MINUTERIES** de tour (90 s / 60 s) + gestion **AFK**. **Backend → push + redéploiement VPS requis (§1/§8.7).** ⚠️ **Nécessite des ajustements FRONTEND** (voir « Suites frontend » en fin de section) : tel quel l'arène reste fonctionnelle, mais l'UX de la Phase 0 et l'affichage du timer doivent être adaptés côté client.
+
+**1. Matchmaking & déconnexions (`lobby.py`, `router.py`).**
+- `GET /lobby/rooms` (`lobby.py`) ne renvoie une salle QUE si `status == "waiting"` **ET** que le nombre de joueurs actuels (`count(GameRoomPlayer)`) est **strictement inférieur** à `max_players` → les salles pleines (ou en partie) disparaissent de la liste, évitant un `POST /join` voué au « Room is full » (§5).
+- **Hard disconnect (Alt+F4 / crash, `_maybe_abandon_on_disconnect`) :** sur `WebSocketDisconnect`, si la salle n'est pas vidée et qu'une **partie est en cours** (état Redis présent, non terminée, joueur encore actif), le routeur déclenche **immédiatement** `_handle_abandon()` pour ce joueur (Empire déchu, §8.20) — au lieu d'un simple `player_disconnected` — pour ne pas bloquer la salle. En lobby (pas de partie), comportement inchangé.
+
+**2. Zone radioactive — bloc strict de 4, téléportation, Culte (`engine.py`).**
+- **Ne grossit plus.** `_expand_contamination` (extension du cluster) est **supprimé** au profit de `_relocate_contamination` : à **chaque nouveau round global** (`_end_turn`, `is_new_global_round`), la zone se **TÉLÉPORTE** intégralement sur un nouveau foyer aléatoire.
+- **Bloc strict de 4.** `_form_contamination_block` tire un foyer parmi les territoires ayant **≥ 3 voisins** (quasi tous les 42), puis **exactement 3** de ses voisins (`random.sample`) → un bloc **toujours = 4 territoires**. Utilisé par `_initialize_contamination` (démarrage) ET `_relocate_contamination` (rounds). `probability` est figée à `1.0` (mécanique de pression/croissance retirée ; clé conservée pour la forme de l'état, §8.27).
+- **Culte de l'Isotope — passif réparé (`_apply_contamination_damage`).** L'immunité s'applique désormais à **TOUS** les territoires du Culte présents dans la zone (**0 dégât chacun** + une ligne de journal verte par territoire), et non plus seulement au mieux garni. `_isotope_protected_territory` (sélection du « meilleur ») est **supprimé**. Dégâts normaux inchangés (−1/territoire, neutralisation à 0 → neutre). *(Modèle de zone détaillé : §8.27 dans [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md).)*
+
+**3. Phase 0 — DÉPLOIEMENT AVEUGLE ET SIMULTANÉ (`engine.py`, `state_schemas.py`).**
+- **Schéma.** Nouveau champ **`PlayerState.pending_blind_deploy: Dict[str, int] = {}`** : tampon `{territory_id: nb}` soumis d'un coup, **STOCKÉ sans être appliqué** (aveugle). Vide = pas encore soumis.
+- **Plus d'ordre de tour.** `_handle_bulk_setup_placement` (action `deploy_units` en stage `placement`) n'utilise **plus** `setup_index` : **n'importe quel joueur actif** peut soumettre, **en parallèle**. Validation inchangée (somme **== stock**, territoires possédés), puis stockage dans `pending_blind_deploy` (la carte ne bouge pas → « aveugle »). Refus si déjà soumis ou si le joueur a abandonné. Évènement **`blind_deploy_submitted`** `{player_id, ready_count, expected_count}`.
+- **Résolution simultanée.** Quand **TOUS** les joueurs actifs ont soumis (`_all_blind_deploys_ready`), `_resolve_blind_deployment` applique **tous** les tampons d'un coup sur la carte, vide tampons + stocks, puis `_start_playing` (stage → `playing`, phase 1, bloc de contamination posé). L'évènement final porte `setup_complete=True`.
+- **Confidentialité.** Le routeur **masque** `pending_blind_deploy` de **tous** les joueurs dans l'état diffusé tant qu'on est en `placement` (`router._state_payload`) → personne ne voit où les autres posent avant la résolution. Les garnisons ne se révèlent qu'à la résolution.
+- **`place_initial` DÉPRÉCIÉ.** L'ancien placement séquentiel (`_handle_place_initial`, 3 troupes/tour) **lève une erreur explicite**. `setup_index` / `_advance_setup_index` / `_all_stocks_empty` deviennent **legacy** (plus utilisés dans le flux Phase 0 ; supersède §8.26).
+
+**4. Minuteries de tour & AFK (`router.py`, `connection_manager.py`).**
+- **Stockage runtime — `RoomTimers` (`connection_manager.py`, instance `timers`).** Par salle : la **tâche asyncio** courante, un **verrou** (`get_lock`) sérialisant **toutes** les mutations d'état (actions joueur ET expirations) pour éviter les races Redis, la **signature de tour armée** `(stage, current_turn, current_player_id)`, les **compteurs AFK** par joueur, et le flag « a agi ce tour ». Pur stockage, aucune logique de jeu.
+- **Temps impartis (`router.py`).** **90 s** pour la Phase 0 (`PHASE0_TIMEOUT_SECONDS`), **60 s** par tour (`TURN_TIMEOUT_SECONDS`, couvre les phases 1-4 ; phases 0/5 automatiques). La minuterie de Phase 0 est armée quand **tous les joueurs ont verrouillé leur faction** (= l'arène se charge) ; celle d'un tour à chaque **changement de tour** (`_post_action_timer` : (ré)arme si la signature change, sinon note l'activité du joueur courant).
+- **AFK Phase 0 (90 s) — `_resolve_phase0_afk`.** `fill_missing_blind_deploys` répartit **aléatoirement** le stock des joueurs n'ayant pas validé (sur leurs propres territoires), puis force la résolution simultanée et diffuse (`blind_deploy_resolved`, `forced=True`).
+- **AFK tour (60 s) — `_handle_turn_afk`.** Si le joueur a **agi** ce tour-ci → on termine juste son tour (`force_end_turn`, pas de pénalité). Sinon → **strike** (tours consécutifs sans action) ; à **2 strikes** → `_handle_abandon` automatique (Empire déchu) ; en deçà → passage de tour forcé (évènement `turn_timeout`). Un strike retombe à 0 dès que le joueur agit. `GameEngine.force_end_turn` saute proprement toutes les phases restantes (abandonne tout état bloquant en attente : conquête / Éclipse / espionnage).
+- **Robustesse.** L'expiration s'exécute sous verrou et **vérifie la signature de tour** : si l'état a changé entre-temps (le joueur a agi), la minuterie est **obsolète** et ne fait rien. Annulée à la fin de partie (`_finalize_if_over`) et purgée à la destruction de salle (`timers.cleanup`).
+
+**Contrat réseau (nouveautés, §5).** Évènements serveur→client ajoutés (enveloppe `action_result`) : **`blind_deploy_submitted`** (décompte des prêts en Phase 0), **`blind_deploy_resolved`** (`forced` si AFK), **`turn_timeout`** (tour forcé pour AFK). **`player_abandoned`** est désormais aussi émis sur **déconnexion brutale**. `deploy_units` en stage `placement` = **soumission aveugle** (et non plus pose immédiate). `pending_blind_deploy` est **masqué** dans l'état diffusé en Phase 0.
+
+**Validation.** `py_compile` OK (`engine.py` / `router.py` / `connection_manager.py` / `state_schemas.py` / `lobby.py`). Suites moteur (réel, sans Redis) : `test_setup_phase.py` **37 ✅** (réécrit pour le modèle aveugle/simultané), `test_deploy_contamination.py` **24 ✅** (bloc strict de 4, téléportation, déploiement aveugle), `test_factions.py` **42 ✅** (immunité Culte étendue à tous ses territoires de la zone).
+
+**Suites frontend (⚠️ À FAIRE — `frontend/`, hors périmètre de ce sprint backend).**
+- **Phase 0 :** le client gate aujourd'hui la pose sur `setup_index` (`main.gd._is_my_setup_turn`). Avec le modèle aveugle/simultané, autoriser **tout joueur actif** à composer son déploiement et à le **CONFIRMER une fois** (un seul envoi `deploy_units` couvrant tout le stock), puis afficher un état **« en attente des autres (X/Y) »** (via `ready_count`/`expected_count` de `blind_deploy_submitted`). `setup_index` n'est plus pertinent en Phase 0.
+- **Timer :** le HUD affiche déjà un compteur MM:SS côté client (`hud.gd`, remis à zéro au changement de signature de tour) — l'aligner sur **90 s** (placement) / **60 s** (tour). Le serveur reste l'autorité (force résolution / passage / abandon).
+- **Évènements :** router `blind_deploy_submitted` / `blind_deploy_resolved` / `turn_timeout` dans le journal, et gérer `player_abandoned` reçu sur déconnexion brutale d'un adversaire. → **RÉALISÉ en §8.32** (voir [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)).
+
+### 8.33. Time Bank (timer de combat) + Chat de salle (Général / Privé) (Backend)
+> Sprint **backend** : (1) **Time Bank** — amortir le temps des animations de combat (Split-Screen VS) en créditant **+10 s** au timer du tour à chaque attaque réussie, **plafonné à 90 s** au total (anti-abus) ; (2) **Chat de salle** fonctionnel via les WebSockets, limité à **2 canaux** — l'onglet « Alliés » est **officiellement abandonné** (jeu chacun-pour-soi). **Aucun changement du schéma d'état** (`state_schemas.py` inchangé). Validé par une suite moteur dédiée (`test_time_bank_chat.py`, **33 ✅**) + non-régression (`test_factions` 42 / `test_deploy_contamination` 24 / `test_setup_phase` 37).
+
+**1. Time Bank — échéance de tour DYNAMIQUE (`engine.py`, `connection_manager.py`, `router.py`).**
+- **Bonus déclaré par l'engine.** Constante `GameEngine.TIME_BANK_ATTACK_BONUS_SECONDS = 10`. L'évènement `attack_result` porte désormais le champ **`time_bank_bonus_seconds`** : l'engine se contente de **DÉCLARER** le bonus (séparation des responsabilités — il ne connaît pas le temps réel) ; le plafonnement et l'application à la tâche asyncio sont du ressort des minuteries.
+- **Échéance monotone + plafond (`RoomTimers`).** Deux nouveaux dicts par salle : **`deadlines`** (échéance monotone courante `loop.time()`) et **`hard_caps`** (plafond absolu du tour). Méthodes : `arm_deadline(now, delay, max_total)` (pose `now+delay` et `now+max_total` → **réinitialise la bank** du nouveau tour), `get_deadline`, **`extend_deadline(bonus)`** (`min(deadline+bonus, hard_cap)`, no-op si rien d'armé), `clear_deadline`. Purgés par `cleanup` et au `clear_deadline` de fin de partie.
+- **Minuterie à échéance dynamique (`_turn_timeout`, refonte).** La coroutine ne dort plus un `delay` fixe : elle **boucle** en dormant jusqu'à l'échéance courante, puis **SOUS VERROU relit l'échéance** — si la Time Bank l'a repoussée pendant le sommeil ou l'attente du verrou, elle **se rendort** ; sinon elle applique l'AFK. L'extension repoussant **toujours** l'échéance plus tard, se réveiller à l'ancienne échéance puis se rendormir est correct (et borné par le plafond). La garde de **signature de tour** (obsolescence si l'état a changé) est conservée. ⇒ **Pas besoin de réveiller/recréer** la tâche à chaque attaque.
+- **Application (`router.py`).** `_arm_next_timer` pose l'échéance : **placement** `90 s` **sans bank** (`max_total == delay`) ; **jeu** `60 s`, `max_total = TURN_MAX_TIMEOUT_SECONDS = 90`. Dans la branche action de jeu : après une action réussie, si `event["time_bank_bonus_seconds"]` est présent **ET** qu'on est en `playing`, joueur **actif courant**, partie **non gagnée** → `timers.extend_deadline(room_id, bonus)`.
+- **Anti-abus.** Plafond **dur à 90 s par tour** (= base 60 + 30 de bank max) : un joueur qui attaque en boucle ne peut **pas** faire remonter indéfiniment son timer pour bloquer la salle.
+
+**2. Chat de salle — canaux « Général » et « Privé » (`router.py`).**
+- **2 canaux SEULEMENT.** `CHAT_TABS = ("general", "private")`. L'onglet **« Alliés » est abandonné** (chacun-pour-soi) : tout `tab` hors de ces deux valeurs est **rejeté** (erreur privée à l'expéditeur).
+- **Protocole tolérant.** `_handle_chat_message` accepte le payload **à plat** (`{type:"send_chat_message", tab, text, target_id}`, contrat principal) **OU** en enveloppe `{action, payload}`. Intercepté **HORS verrou** dans la boucle WS (un message de chat ne mute aucun état → ne doit pas être sérialisé derrière les actions de jeu / les minuteries).
+- **Général.** Diffusé à **toute la salle** (`broadcast_to_room`) — l'expéditeur reçoit son propre **écho**.
+- **Privé.** `target_id` **requis**, **distinct** de l'expéditeur et **connecté** (sinon erreur). Envoyé **uniquement à la cible** + **écho à l'expéditeur** ; jamais reçu par un tiers.
+- **Sécurité / robustesse.** Message **estampillé serveur** (`sender_id` + `sender_name` = pseudo réel résolu, repli `Joueur {id}` — **pas d'usurpation** côté client) ; `target_id` normalisé en **int** (piège des ids JSON §5) ; texte **strippé**, message **vide ignoré** silencieusement, **tronqué** à `CHAT_MAX_LENGTH = 500` (anti-spam). **Côté serveur**, le chat est traité **indépendamment du `stage`** (techniquement accepté en lobby comme en arène). ⚠️ **DÉCISION PRODUIT (frontend, §8.42) : le chat n'existe QUE dans l'arène.** Le client **n'expose AUCUNE UI de chat en lobby / `waiting_room`** (choix délibéré) → il n'émet ni n'affiche jamais de chat hors arène ; la capacité serveur « lobby » reste donc inutilisée par design.
+
+**Contrat réseau (§5 mis à jour).** Client→serveur : `send_chat_message`. Serveur→client : `chat_message` (`tab`, `sender_id`, `sender_name`, `text`, `target_id` en privé). `attack_result` porte en plus `time_bank_bonus_seconds`.
+
+**Frontend (✅ FAIT — §8.42, cf. [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)).** L'UI chat est désormais **câblée au réseau** : `network_manager.send_chat_message` (forme à plat) + signal `chat_message_received` → `hud.add_chat_message`. **2 canaux Général/Privé** (l'onglet Alliés 🤝 a été **retiré**, ainsi que sa page de tab). ⚠️ **Le chat n'existe QUE dans l'arène** (`main.tscn`) — **décision produit : aucun chat en lobby / `waiting_room`** (pas d'UI prévue ailleurs). Le rebours HUD (local, §8.32) **reflète désormais** la Time Bank : à réception d'`attack_result`, `main.gd` lit `time_bank_bonus_seconds` et appelle `hud.add_time_to_timer(bonus)`, qui crédite le compteur du tour courant (cumul `_turn_bonus`, **plafond visuel 90 s = `TURN_TIME_MAX`**, miroir du `hard_cap` serveur). Appliqué sur **tous les clients** (compteur du tour commun à tous), **avant** l'animation VS. L'étiquette « ⏱ TIME BANK +10 s » du Split-Screen VS subsiste (cosmétique, attaquant local). Le serveur reste l'autorité.
+
+**Fichiers touchés (backend).** `api/game/engine.py` (constante + champ `time_bank_bonus_seconds`), `api/sockets/connection_manager.py` (`RoomTimers` : `deadlines`/`hard_caps` + méthodes), `api/sockets/router.py` (`TURN_MAX_TIMEOUT_SECONDS`, `_arm_next_timer`/`_turn_timeout` refondus en échéance dynamique, extension après attaque, `_handle_chat_message`/`_send_room_error` + interception WS). **NOUVEAU** `backend/test_time_bank_chat.py`.
+
+**Validation.** `py_compile` OK (`engine.py` / `router.py` / `connection_manager.py`). `test_time_bank_chat.py` **33 ✅** (Time Bank : +10/attaque, plafond 90, placement sans bank, réarmement, clear/cleanup ; Chat : général+écho, privé ciblé+écho, Alliés rejeté, gardes cible-manquante/soi-même/déconnecté/vide, enveloppe `{action,payload}` tolérée, troncature 500, repli pseudo). Non-régression moteur (réel, sans Redis) : `test_factions` **42 ✅**, `test_deploy_contamination` **24 ✅**, `test_setup_phase` **37 ✅**.
+
+### 8.34. `current_players` exposé dans la liste des salles (Backend)
+> Le « Radar des Opérations » du lobby (§2.2, [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)) affichait `—/max` faute d'occupation courante dans la réponse. Le payload de salle expose désormais **`current_players: int`** → vraie jauge « joueurs/max ». **Backend → push + redéploiement VPS requis (§1/§8.7).** Lève la « limite backend » notée en §2.2 (le frontend lisait déjà ce champ **défensivement**, il devient donc actif sans modification client).
+
+- **Schéma (`models/schemas.py`).** `GameRoomResponse` gagne **`current_players: int = 0`**. Défaut `0` → rétro-compatible (toute réponse qui ne le peuple pas reste valide) ; avec `from_attributes=True`, Pydantic lit l'**attribut transitoire** posé sur l'objet ORM s'il existe, sinon retombe sur le défaut.
+- **Route liste (`GET /lobby/rooms`, `lobby.py`).** Le compteur `count(GameRoomPlayer)` **était déjà calculé** pour le filtre « non pleine » (§8.31) ; il est désormais **posé sur l'objet ORM** (`room.current_players = current_players`) avant d'être renvoyé. **Attribut transitoire NON persisté** (ce n'est pas une colonne `GameRoom` ; aucun `commit` ne suit la lecture).
+- **Route création (`POST /lobby/rooms`).** Renseigne aussi `db_room.current_players` (= 1, le créateur étant auto-inscrit) pour un payload cohérent au lieu du défaut `0`.
+- **Contrat (§5 mis à jour).** `GET /lobby/rooms` → chaque salle porte `current_players`. **Aucun nouveau champ persistant en base** (calcul à la volée).
+- **Validation.** `py_compile` OK (`api/v1/endpoints/lobby.py`, `models/schemas.py`). ⚠️ Runtime complet (FastAPI/SQLAlchemy) à vérifier sur le VPS après redéploiement.
+
+### 8.35. « Mémoire Tactique » : `GameState.statistics` (Backend — schéma + câblage moteur)
+> Nouveau champ d'état destiné à alimenter les onglets de renseignements « Intel » du HUD (§3 ; **consommé côté client par le tiroir « INTEL : ZONE », §8.36** [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)) : il centralise les statistiques **GLOBALES** de la partie. ✅ **Schéma + alimentation moteur câblés** — le champ est diffusé dans l'état ET peuplé par le moteur à chaque résolution de tour (attrition de zone + stagnation, voir §4.2 dans [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md)). Pas de migration ni de redéploiement bloquant : champ à défaut → rétro-compatible avec les états Redis existants.
+
+- **Schéma (`state_schemas.py`).** Nouveau modèle imbriqué **`GameStatistics`** + champ **`GameState.statistics: GameStatistics = Field(default_factory=GameStatistics)`**. Deux compteurs au départ : `zone_kills_by_player: Dict[int, int] = {}` (clé = `player_id`, valeur = unités détruites par la zone, ex. `{1: 15, 2: 3}`) et `zone_stagnation_turns: int = 0` (rounds globaux consécutifs sans déplacement de la zone). **Modèle typé** (et non `Dict[str, Any] = {}`) → la structure par défaut est **garantie présente** (un `Dict = {}` partirait vide, exposant les consommateurs à un `KeyError`) et le frontend dispose d'un contrat stable. Clé `int` choisie pour rester homogène avec `players` / `initiative_rolls` / `objectives`.
+- **Diffusion & State Redaction.** Données **PUBLIQUES** → propagées telles quelles par `router._state_payload` (`model_dump()` du modèle entier, aucune liste blanche à mettre à jour) et **NON rédigées** par `_redact_state_for_player` (qui ne masque que les objectifs secrets). En JSON, les clés `int` de `zone_kills_by_player` deviennent des `str` (`{"1": 15}`) — exactement comme `objectives` / `players`.
+- **Rétro-compatibilité.** `default_factory` → toute partie neuve démarre avec la structure complète ; un état Redis **antérieur** (sans `statistics`) se redésérialise sans erreur (`model_validate_json` applique le défaut), comme pour `stage` / `is_active`. **Aucun nouveau champ persistant en base** (l'état de partie vit dans Redis).
+- **Alimentation moteur (`engine.py`).** Deux points de câblage, dans la résolution de tour (Phase 0) :
+  - **Attrition — `_apply_contamination_damage`.** Un compteur local recense les troupes RÉELLEMENT détruites pour le joueur entrant (1 par territoire contaminé qu'il possède), puis `zone_kills_by_player[player_id] += kills` (clé initialisée à 0 via `.get`). **Immunité respectée** : le Culte de l'Isotope (et toute immunité environnementale via le retour anticipé `immune_to_contamination`) → 0 dégât → **aucun kill compté, aucune entrée parasite**. Un territoire ravagé jusqu'à 0 (→ neutre) compte bien sa dernière troupe comme kill.
+  - **Stagnation — `_relocate_contamination`.** L'ancien bloc est capturé **avant** la téléportation ; si le nouveau bloc recoupe l'ancien (`old & new` ≥ 1 territoire), `zone_stagnation_turns += 1`, sinon il retombe à `0` (déménagement complet, ou aucune zone précédente). Appelé une seule fois par **round global** (cf. `is_new_global_round`) → cadence d'incrément = 1/round.
+- **Validation.** `py_compile` OK (`state_schemas.py`, `engine.py`, `router.py`, `connection_manager.py`, `state_manager.py`). Smoke-test Pydantic **2.13.4** (schéma) : défauts, **isolation des instances**, auto-remplissage, **rétro-compat** (état sans le champ), round-trip JSON Redis + clés `int→str`. Test comportemental moteur (stubs SQLAlchemy/Redis, **réel sans Redis**) : attrition normale, accumulation, territoire→neutre, **immunité Culte = 0 kill**, stagnation overlap/disjoint/zone-absente — **tous verts**. Suites de non-régression : `test_deploy_contamination.py` **24 ✅**, `test_factions.py` **42 ✅**, `test_setup_phase.py` **37 ✅**. ⚠️ Runtime complet (FastAPI/Redis) à revalider sur le VPS.
+
+### 8.46. Liaison Frontend↔Backend : config centralisée, session persistante, classement (full-stack)
+> Session de **câblage frontend↔backend** : (P0) deux correctifs de session/login ; (P1) un autoload **`ApiConfig`** source unique des hôtes + **session persistante avec reconnexion auto** ; (P2) **classement mondial RÉEL** via un nouvel endpoint public. **`frontend/` est un dépôt git imbriqué SÉPARÉ** ; moteur **Godot 4.7**.
+>
+> ⚠️ **IMPORTANT — REDÉPLOIEMENT BACKEND REQUIS (Docker/VPS, §1/§8.7).** Tant que le VPS n'est pas à jour : `GET /leaderboard` répond **404** (le client retombe proprement sur le classement de prévisualisation) **et** le token reste **plafonné à 30 min**. La **`SECRET_KEY_FASTAPI`** du `.env` reste un **placeholder à remplacer** (sécurité — NON traité dans cette session).
+
+**P0a — Durée de vie du JWT lue depuis la config (`auth.py`, `core/config.py`).** `auth.py` figeait `ACCESS_TOKEN_EXPIRE_MINUTES = 30` **en dur**, ce qui ignorait le `.env` (`1440`) et **coupait les sessions au bout de 30 min**. *Fix :* la valeur vient désormais de **`settings.ACCESS_TOKEN_EXPIRE_MINUTES`** — champ **AJOUTÉ** à `core/config.py` (défaut **1440**, surchargé par `.env`).
+
+**P0b — Login robuste : encodage du corps (`auth_manager.gd`).** `AuthManager.login` envoyait `username=...&password=...` **SANS encodage** → un `&`, `=`, `+` ou espace cassait le corps `x-www-form-urlencoded`. *Fix :* chaque valeur est désormais **`.uri_encode()`-ée**.
+
+**P1a — `ApiConfig` (NOUVEL autoload, `api_config.gd`).** Enregistré comme **PREMIER autoload** dans `project.godot` (avant `AuthManager`/`NetworkManager`). **Source UNIQUE des hôtes backend** : expose `http_host` et `ws_host`. `auth_manager`, `network_manager` et `bootloader` lisent leur hôte ici au démarrage (`get_node_or_null` + **repli sur la prod si absent** → aucune régression). **Bascule dev/prod sans recompiler :** argument de ligne de commande **`--local`** (→ `http://127.0.0.1:8000` / `ws://127.0.0.1:8000`) **OU** fichier **`user://server_host.txt`** (URL `http(s)` libre, hôte WS déduit). *Avant :* l'URL de prod (`api.wasteland-warfare.com`) était **dupliquée en dur dans 3 fichiers**.
+
+**P1b — Session persistante + reconnexion auto (`auth_manager.gd`, `auth_screen`, `lobby_screen`).** Le JWT est sauvegardé dans **`user://session.dat`** à chaque login réussi (`AuthManager._save_session`). Au démarrage, `auth_screen` tente une reconnexion **SILENCIEUSE** (`AuthManager.try_restore_session()` → validation via **`GET /auth/me`**) : token valide → **entrée directe au menu** ; expiré/invalide → purge (`clear_session`) + écran de login normal. La déconnexion (`lobby_screen._on_back_pressed`) appelle **`AuthManager.clear_session()`** qui efface mémoire **ET** disque (sinon l'auto-login relogguerait après un logout volontaire).
+
+**P2 — Classement mondial RÉEL (`leaderboard.py`, `models/schemas.py`, `network_manager.gd`, `leaderboard.gd`).** NOUVEL endpoint **PUBLIC** `GET /api/v1/leaderboard?limit=N` (`leaderboard.py`, enregistré dans `api/__init__.py`) — **aucune authentification** (cohérent avec `GET /lobby/rooms`). Tri par `points_classement` **décroissant**, départage par `stats_victoires` **décroissant**. Réponse = `List[LeaderboardEntry]` — **NOUVEAU schéma Pydantic** dans `models/schemas.py` (champs `username`, `niveau`, `stats_victoires`, `stats_parties_jouees`, `points_classement` ; schéma annoté en §F du contrat). Côté client : **`NetworkManager.fetch_leaderboard()`** + signal **`leaderboard_loaded(entries)`** ; `leaderboard.gd` **REMPLACE le mock** par les vraies données (repli mock gracieux si le serveur ne répond pas ; au passage la stat victoires locale lit enfin le bon champ `stats_victoires`). ✅ **Écart RÉCONCILIÉ (cf. §9.2) :** l'endpoint a depuis été **réaligné sur §9.2** — tri par **victoires** (départage niveau puis points), **enveloppe `{entries, me}`**, **`offset`**, **rang global** et **bloc `me`** (auth optionnelle). Signaux client mis à jour en conséquence (`leaderboard_loaded(entries, me)` ; `fetch_leaderboard(limit, offset)`), avec **tolérance à l'ancienne forme** pendant la fenêtre de redéploiement VPS.
+
+**Contexte projet (rappels).** L'ancienne ouverture `intro_video.tscn` a été retirée au profit de `title_splash.tscn` ; il n'existe **PLUS** de `splash_screen.tscn` (ancien nom). Les écrans Profile/Leaderboard/Shop étaient des maquettes : **Leaderboard est désormais relié** (P2), **Shop reste un mock** (aucun backend).
+
+**Validation.** Éditions appliquées ; ⚠️ runtime complet (token 1440 min, `GET /leaderboard`) **actif uniquement après redéploiement VPS** (voir bandeau IMPORTANT).
+
+### 8.47. Économie globale : Points de Match, XP, Niveaux (cap infini), Coins (Backend)
+> Sprint **backend** : implémentation de l'économie de fin de partie — **points de classement**, **XP**, **courbe de niveaux INFINIE** et **monnaie virtuelle « Coins »**. Le calcul de fin de partie (`process_match_results`) est **réécrit** selon les règles exactes du GDD ; les payloads `/auth/me` (profil) et `game_over` (clôture) sont enrichis. **Backend → push + redéploiement VPS requis (§1/§8.7).** Validé : `py_compile` OK (7 fichiers) + suite de tests `rewards.py` (**112/112 ✅**).
+>
+> ⚠️ **MIGRATION DB — désormais AUTOMATIQUE au démarrage.** Nouvelle colonne **`users.coins`** (`Integer`, `default=0`, `server_default="0"`, `nullable=False`). `Base.metadata.create_all` (au `startup`) **ne fait que CRÉER** les tables manquantes → il n'ajoute **JAMAIS** une colonne à une table `users` déjà existante (sur une base persistée, la colonne resterait absente → `UndefinedColumn` → 500). **C'est désormais géré automatiquement** par **`core/db_migrations.py` → `sync_missing_columns(engine)`**, appelée dans `main.py` **juste après `create_all`** : au boot, elle inspecte la base réelle et ajoute les colonnes ORM manquantes (idempotent, non destructif, pré-crée les types ENUM nommés, warn sur les colonnes FK). **Plus aucune étape manuelle requise.** Le script `migration_coins.sql` (`ALTER … ADD COLUMN IF NOT EXISTS`) est conservé comme **archive / fallback** + son étape **FACULTATIVE** de reset d'XP (que l'auto-migration ne fait pas).
+
+**1. Module de calcul PUR (`api/game/rewards.py`, NOUVEAU).** Aucune dépendance Redis/Pydantic/SQLAlchemy (testable isolément, comme `objectives.py`). ⚠️ **Toutes les valeurs renvoyées sont des `int`** (piège float §5). Règles :
+- **Points de Match (selon le rang final).**
+  - **1er (Gagnant) :** `20` (base) `+ 1×territoires` (possédés en fin) `+ 2×continents` (possédés en fin) `+ 5×joueurs éliminés par lui` `+ 10×(unités ennemies tuées // 100)`.
+  - **2e :** `10` (résilience) `+ 1×territoires + 2×continents + 5×éliminations`. **PAS** les 20 pts de victoire ni le bonus de 100 unités tuées. *Départage de la 2e place :* territoires > continents > unités tuées (décroissants — `rank_players`).
+  - **3e et + :** `1×territoires` **uniquement**.
+- **XP de match.** `+1 / territoire conquis` (pendant la partie) `+1 / unité ennemie tuée` ; `+5 / continent conquis` (**1er & 2e uniquement**) ; `+100` forfait (**1er uniquement**).
+- **Courbe de niveaux (cap INFINI).** Phase 1 (niv. 1→20) : `XP_requise = 200 × niveau`. Phase 2 (niv. 21+) : `XP_requise = 4000` constante. Transition LISSE (`200×20 == 4000`). `xp_required_for_level(level)` est la source unique (mirroir client `xp_coins_bar.gd`).
+- **Coins.** `+100` Coins **à chaque palier de 10 niveaux atteint** (10, 20, 30, …).
+
+**2. Persistance & schémas (`state_manager.process_match_results`, `models/models.py`, `models/schemas.py`).**
+- `process_match_results(db, winner_id, match_stats)` (**signature changée** — ne prend plus `match_type`/`rankings` mais le dict `match_stats` produit par `GameEngine.build_match_stats`) calcule rangs + points + XP + niveaux + Coins, **persiste** (`points_classement`, `experience`, `niveau`, `coins`, `stats_victoires`, `stats_parties_jouees`) et **renvoie** `{ player_id : MatchRewards }`.
+- **`User.coins`** : nouvelle colonne (cf. bandeau migration).
+- **`UserResponse` (`/auth/me`)** expose désormais **`coins`** + 4 alias canoniques DÉRIVÉS et **typés `int`** : **`player_level`** (= niveau), **`current_xp`** (= experience), **`xp_to_next_level`** (= `xp_required_for_level(niveau) − experience`), **`coins_balance`** (= coins). Le client lit indifféremment l'ancien nom ou le nouveau (réconcilie une partie de §9.1 : `level`/`xp`/`xp_max`/`credits`).
+
+```jsonc
+// GET /api/v1/auth/me → UserResponse (extrait économie, §8.47) — clés AJOUTÉES :
+{
+  "niveau": 12, "experience": 300, "coins": 250,   // champs ORM bruts (rétro-compat)
+  "player_level": 12,        // int — alias de niveau
+  "current_xp": 300,         // int — XP dans le niveau courant
+  "xp_to_next_level": 100,   // int — XP restante pour le niveau suivant
+  "coins_balance": 250       // int — solde de Coins
+}
+```
+
+**3. Câblage moteur (`engine.py`, `state_schemas.py`).** `GameStatistics` gagne 4 compteurs (cf. bloc `statistics` du §C) peuplés dans `_handle_attack`, attribués à l'**ATTAQUANT** : `combat_kills_by_player` (+= pertes défensives infligées), `conquests_by_player` (+1 / conquête), `eliminations_by_player` (+1 quand la cible perd son dernier territoire), `continents_conquered_by_player` (liste dédoublonnée des continents pris à 100 % — `_credit_continent_conquests`). `GameEngine.build_match_stats(state)` agrège, EN FIN de partie, possessions finales (territoires/continents) + ces compteurs.
+
+**4. Contrat réseau (§5 & §C/§B mis à jour).** `game_over` porte désormais **`rankings: Array<int>`** (ordre 1er→dernier, départage 2e place serveur) **et `match_rewards`** = `{ "<player_id:str>": MatchRewards }`. **`MatchRewards`** (nouveau schéma `models/schemas.py`) : `{ match_points, xp_earned, coins_earned, level_up_triggered, new_level, current_xp, xp_to_next_level, levels_gained }` — **toutes valeurs ENTIÈRES**. Le client (`network_manager.gd`) relaie via le signal **`match_over(winner_id, match_type, rankings, match_rewards)`** + cache `last_match_rewards` ; le Rapport Post-Op (`operation_report.gd` + `xp_coins_bar.gd`) anime le décompte des points puis le remplissage de la barre d'XP (lueur dorée aux paliers de 10 niveaux). *(Côté frontend : FRONTEND_INTERFACES.md §8.48.)*
+
+**Fichiers touchés (backend).** **NOUVEAU** `api/game/rewards.py`, **NOUVEAU** `test_rewards.py` (suite de tests), **NOUVEAU** `migration_coins.sql` (ALTER) ; `api/game/state_manager.py` (`process_match_results` réécrit) ; `api/game/engine.py` (compteurs combat + `build_match_stats`/`_credit_continent_conquests`) ; `api/game/state_schemas.py` (`GameStatistics` +4 compteurs) ; `api/sockets/router.py` (`_finalize_if_over` → `build_match_stats` + broadcast `match_rewards`) ; `models/models.py` (colonne `coins`) ; `models/schemas.py` (`UserResponse` + `MatchRewards`). **MAJ auto-migration & robustesse :** **NOUVEAU** `core/db_migrations.py` (`sync_missing_columns` — ajout auto des colonnes ORM manquantes au démarrage, remplace l'ALTER manuel) ; `main.py` (appel après `create_all` **+** handler global `@app.exception_handler(Exception)` → 500 JSON).
+
+**Validation.** `py_compile` OK (7 fichiers). **Suite dédiée `backend/test_rewards.py` : 112 OK / 0 FAIL** (`python test_rewards.py`, style maison sans pytest — bootstrap qui stube SQLAlchemy + faux `models.models.User`, ni FastAPI ni serveur Redis requis). Couvre **100 % de `rewards.py`** (courbe 200×niv / 4000 plat + garde anti-boucle ; points 1er/2e/3e + bornes du bonus de kills ; XP par rang ; montées multi-niveaux ; **bascule Phase 1→2 18→21 avec 100 Coins au niveau 20** ; saut franchissant 10 ET 20 → 200 Coins ; départage 2e place) **+** `process_match_results` (orchestration + persistance via faux Session, dont **2e éliminé à 0 territoire → 10+5×elim de résilience**, et joueur introuvable) **+** `GameEngine.build_match_stats`/`_credit_continent_conquests` (agrégat continents + dédoublonnage). ⚠️ Runtime complet (FastAPI/SQLAlchemy/Redis) à revalider sur le VPS après redéploiement. **La colonne `coins` est désormais ajoutée AUTOMATIQUEMENT au boot** (`core/db_migrations.py`) — `migration_coins.sql` n'est plus à appliquer à la main.
+
+### 8.48. Correctifs « boucle de gameplay » — anti double-avance, ordre d'Initiative & verrou UI (full-stack)
+> Autopsie de 3 régressions de playtest (tours sautés, sauts d'étapes, double-confirmation/gel).
+> ⚠️ **Le moteur de minuteries/verrou/AFK (§8.31/§8.33) est resté CORRECT** — vérifié : pas de race
+> sur `get_lock`, pas de double-fire de minuterie, pas de faux AFK d'un joueur actif (le strike est
+> purgé dès la 1ʳᵉ action « même-tour » de chaque tour). Les causes racines étaient ailleurs.
+
+**1. `pass_turn` idempotent par phase (`engine.py`, `_handle_pass_turn`).** L'action accepte un champ
+**optionnel `from_phase`** (`{"action":"pass_turn","payload":{"from_phase":<int>}}`) = la phase que le
+CLIENT croit courante. Le serveur **rejette** (`ValueError` → `type:error`) toute requête dont
+`from_phase` ≠ `state.phase`. Une 2ᵉ trame `pass_turn` bufferisée (double-clic / latence) porte donc
+l'ANCIENNE phase et devient un **no-op**, au lieu d'avancer une 2ᵉ fois et de **sauter une étape**.
+Champ absent (ancien client) → aucune contrainte (rétro-compatible). Même esprit que la garde de
+signature de tour des minuteries (§8.31).
+
+**2. Ordre des tours = `turn_order` à CHAQUE tour (`engine.py`, `_end_turn`).** **Bug corrigé :** la
+rotation se faisait sur `sorted(players.keys())` (ids croissants) dès le tour 2, **ignorant l'ordre
+d'Initiative** (§4.1.1) que seul `_start_playing` respectait (1ᵉʳ tour). `_end_turn` tourne désormais
+sur **`state.turn_order`** (figé à la création, jamais muté), avec repli défensif sur l'ordre trié si
+`turn_order` est absent (état Redis antérieur). Joueurs inactifs/éliminés toujours sautés (Fallen
+Empire) ; `is_new_global_round` (téléportation de zone §8.31) inchangé sémantiquement (détecté au
+bouclage de `turn_order`).
+
+**3. Frontend — verrou « action en vol » + tampon de déploiement préservé (`main.gd`, `hud.gd`).** Le
+bouton **« Fin de Phase »** est désactivé dès le clic (`hud.set_pass_enabled(false)`) et un verrou
+`_pass_in_flight` interdit un 2ᵉ envoi tant que le serveur n'a pas répondu (levé par
+`game_state_updated` / `game_error`) ; `pass_turn` joint `from_phase = GameState.current_phase`. Le
+tampon `deploy_units` est **mémorisé avant purge** (`_deploy_snapshot`) et **restauré** si le serveur
+refuse → plus de placement reperdu ni de soft-lock « en attente » en Phase 0.
+
+**4. Durcissement AFK (`router.py`, `_post_action_timer`).** Le compteur de *strikes* est aussi remis
+à zéro sur l'action qui **clôt** le tour (branche de ré-armement), garantissant la sémantique « 2
+tours **consécutifs** sans action » même si une action met directement fin au tour. Défensif (aucun
+impact sur le plafond 60/90 s ni la Time Bank §8.33).
+
+**Fichiers touchés.** Backend : `api/game/engine.py` (`_end_turn`, `_handle_pass_turn`),
+`api/sockets/router.py` (`_post_action_timer`). Frontend : `scripts/game/main.gd`,
+`scripts/ui/hud.gd`. **NOUVEAU** `backend/test_turn_loop_fixes.py`.
+
+**Validation.** `py_compile` OK ; Godot `--import` du frontend **propre (0 ERROR)** ; non-régression
+moteur `test_setup_phase` **37** / `test_deploy_contamination` **24** / `test_factions` **42** /
+`test_time_bank_chat` **33** ✅ ; **nouvelle suite `test_turn_loop_fixes.py` 13 ✅ / 0 ❌** (rotation
+`turn_order` + saut d'inactifs, garde `from_phase` anti double-avance, purge du strike sur fin de
+tour). ⚠️ Runtime complet (FastAPI/Redis) à revalider sur le VPS après redéploiement.
+
+### 8.61. Couche RPG Héros — contrat réseau (state / combat / fin de partie) + réalignement économie (Backend)
+> Référence réseau de la **surcouche RPG des héros** (sprint RPG & Survie) — **jamais documentée ici** jusqu'ici — et **réalignement** du réglage sur le cahier des charges. Côté client, le HUD qui consomme tout ceci est détaillé en **§8.60** de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md). ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**. Toutes les valeurs entières = **entiers PURS** (piège JSON float §5 ; clés de `players`/`objectives` = `string` après JSON).
+- **Stats héros dans le `state` diffusé (`PlayerState`, PUBLIQUES).** Chaque `players[pid]` porte : `hero_level`, `hero_pv_max`, `hero_pv_current`, `hero_pa`, `hero_pb` (réduction **fraction 0.0–0.30**, PAS un %), `hero_pp_min`, `hero_pp_max`, `hero_pp_current`, `hero_regen` (fraction), `is_dead`. **La State Redaction ne masque QUE les objectifs secrets** → les stats héros sont **publiques** (inspection d'un adversaire OK). Tous à défaut 0/False → rétro-compat (un état Redis antérieur se redésérialise sans erreur). **Éphémères** (Redis only) : `hero_pv_current`/`hero_pp_current`/`is_dead` ne sont **jamais** persistés en SQL.
+- **NEUFS — barre d'XP in-game.** `hero_xp_in_level` / `hero_xp_for_level` : **instantané méta-jeu pris au DÉMARRAGE** de la partie (XP dans le niveau courant / coût du niveau), **statique pendant le match** (les montées de niveau s'appliquent en FIN de partie) ; `0/0` = niveau max (barre masquée). Peuplés par `hero_progression.get_hero_progress` côté REST `start_game` ET draft WS `faction_choice`. Éphémères (Redis), non SQL.
+- **Combat — `action_result.event.hero_duel`.** UN duel par ATTAQUE (pas par dé). Dict `{attacker_id, defender_id, pp_delta, attacker_pp, damage, defender_pv, defender_pv_max, hero_died}` (ou `null` si héros non initialisés / défenseur déjà mort). Asymétrique : seul le PP de l'**attaquant** bouge (`pp_delta = dés_gagnés − dés_perdus`, borné `[pp_min,pp_max]`), seul le PV du **défenseur** baisse (`damage = max(1, floor((PA+PP)·(1−PB)))`). **Permadeath** : `defender_pv ≤ 0` → joueur `status="eliminated"`, **tous ses territoires garnison forcée à 1** (conservés, pas neutres). La mécanique Risk (dés/troupes/conquête) et la Time Bank (+10 s/attaque, max 90 s) sont **inchangées**.
+- **Fin de partie — `game_over.match_rewards[pid]` (champs héros).** `hero_xp_earned`, `hero_level` (avant), `hero_new_level`, `hero_levels_gained`, `hero_total_xp`, `hero_level_up`, `hero_xp_in_level`, `hero_xp_for_level`, `hero_milestones[{level,bonus}]`, **+ NEUF `hero_coins_earned`**. Barème XP héros : +1/10 unités tuées (arrondi sup), +150 objectif, +5/territoire en fin, +100/coup de grâce, +1/10 PV de dégâts. **Coins par niveau** : 1-5 aléatoire **par niveau** franchi (sans gating Pass pour l'instant — palier « avec Pass Season » 10-20 différé), crédités sur `User.coins`. La progression (`HeroProgression(user_id, faction_id)` : `hero_level`, `hero_xp` lifetime) est la **SEULE** donnée héros persistée en SQL.
+- **Objectifs DOUBLES (redaction préservée).** Chaque objectif = `{type:"double", kill_objective, classic_objective, params}` (sémantique **OU** : tuer le héros X **OU** conquérir territoire/continent Y). Le volet « tuer X » exige `eliminated_by[X] == self_id` (le **coup de grâce** crédite le tueur, pas un « chasseur » au hasard). L'objectif entier est **masqué** aux adversaires (`{type:"hidden", description:"Objectif classifié"}`).
+- **Endpoint roster.** `GET /api/v1/heroes` (authentifié) — schéma détaillé en **§8.59** de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md).
+- **⚠️ Réalignement cahier des charges (2026-06-26).** **Cap héros = 50** (était 100 ; `rewards.HERO_LEVEL_MAX` + `factions.HERO_LEVEL_MAX`, à garder synchro). **Courbe d'XP FIGÉE** `step(N→N+1)=round(348·1.05^(N-1))`, N=1..49, **total 69050 @50** (générée au boot). **Paliers de stats = exactement 10/20/30/40/50** (10 héros re-tunés en préservant les totaux max). **`pp_max ∈ [15,20]`**. Validé par TDD (16 suites backend vertes).
+
+### 8.62. Minuterie PAR PHASE — le rebours repart à chaque « Fin de Phase » (full-stack, 2026-07-01)
+> **Correctif gameplay.** L'ancien modèle « **60 s pour tout le tour** » (couvrant les phases 1-4) **coupait le tour** d'un joueur en pleine phase tardive : le temps passé en Renforts/Déploiement grignotait celui de l'Attaque/Mouvement, et l'expiration forçait la fin de tour. Désormais le serveur **repart le rebours à neuf à CHAQUE « Fin de Phase »**, avec un **budget par type de phase**. ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**.
+- **Budgets par phase (`router.py`).** `DEFAULT_PHASE_TIMEOUT_SECONDS = 60` (Renforts 1 / Déploiement 2 / Mouvement 4) ; **Attaque (phase 3)** `ATTACK_PHASE_TIMEOUT_SECONDS = 90`, **extensible jusqu'à `ATTACK_PHASE_MAX_TIMEOUT_SECONDS = 180`** par la Time Bank (§8.33). Table `PHASE_TIMEOUT_SECONDS` + helper `_playing_phase_budget(phase) -> (delay, max_total)` (plafond == délai hors Attaque → **pas d'extension** : aucune attaque hors phase 3). Les constantes `TURN_TIMEOUT_SECONDS`/`TURN_MAX_TIMEOUT_SECONDS` (60/90 globaux) sont **supprimées**. Phase 0 inchangée (`PHASE0_TIMEOUT_SECONDS = 90`).
+- **Réarmement intra-tour (`router.py` + `RoomTimers`).** `_arm_next_timer` pose le budget de la **phase courante** et mémorise `timers.set_armed_phase(phase)` (nouveau dict `armed_phases` dans `RoomTimers`, purgé par `clear_deadline`/`cleanup`). `_post_action_timer` : si la **signature de tour est inchangée** (même tour/joueur) mais que la **phase a changé** (clic « Fin de Phase »), il appelle le **NEUF `_rearm_deadline_for_phase`** → annule la tâche, repose l'échéance + plafond selon la nouvelle phase, **relance** la coroutine d'expiration (gère un budget plus COURT que le reliquat, ex. sortie d'Attaque prolongée). **Le bookkeeping AFK reste au niveau du TOUR** : `acted`/`afk_strikes` ne sont **pas** réinitialisés au changement de phase → un joueur qui enchaîne ses phases reste « actif » (aucun strike), mais l'inactivité prolongée sur **une** phase finit toujours par expirer. Une action **intra-phase** (déploiement, attaque) **ne** réarme **pas** (sinon la Time Bank serait remise à zéro à chaque attaque).
+- **Time Bank (§8.33) — plafond porté à 180 s.** Le hard_cap est désormais celui de la **phase d'Attaque** (180 s) et non plus 90 s tour-large ; il est reposé à neuf à l'entrée de la phase 3. `extend_deadline` borne toujours à `hard_caps[room]`. Aucun changement de protocole (`attack_result.time_bank_bonus_seconds` inchangé).
+- **Client (`frontend/hud.gd`) — miroir visuel.** Le rebours local est **keyé sur `étape|tour|joueur|phase`** (était sans phase) → il **repart à chaque phase**. Helper `_phase_turn_limit()` (90 s + bonus jusqu'à 180 s en Attaque, 60 s sinon) ; `add_time_to_timer` plafonne à `ATTACK_PHASE_TIME_MAX = 180`. Constante `TURN_TIME_MAX` (90) remplacée. Le serveur reste l'**autorité** (force passage/abandon).
+- **Validation.** `test_turn_loop_fixes.py` **20 ✅** (dont 7 NEUVES : budget 60/90 s par phase, plafond 180 s, `armed_phase`, activité préservée, échéance Time Bank intacte sur action intra-phase) ; `test_time_bank_chat.py` **33 ✅** ; `py_compile` OK (`router.py`/`connection_manager.py`) ; réimport headless `frontend/` **0 ERROR** (`hud.gd`).
+
+### 8.63. Chasse aux bugs moteur — 3 correctifs de robustesse/équité (Backend, 2026-07-01)
+> Revue adversariale multi-agents du moteur (`engine.py`) + routeur/minuteries. **3 bugs CONFIRMÉS** corrigés (2 candidats écartés après réfutation : le plafond Aegis `>= 2` est volontaire et correct ; le `KeyError` d'attaque via aéroporté est du **code mort** — `airborne_attacks_left` n'est jamais incrémenté). ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**.
+- **(HAUT) XP héros « objectif » offerte aux PERDANTS (`objectives.py`).** `is_objective_complete` (volet `eliminate_player`) posait `last_standing = alive_count <= 1` **sans vérifier que le porteur est le survivant**. En fin de partie par élimination (1 seul vivant), `build_match_stats` — qui évalue l'objectif de **TOUS** les joueurs, éliminés compris — créditait donc l'objectif (et le bonus **+150 XP héros**, `rewards.compute_hero_match_xp`) à **chaque perdant**. ✅ Garde ajoutée : `last_standing` n'est vrai que si `players_status[self_id] == "alive"` (sans `self_id` — anciens appelants/tests — ancien comportement conservé). Sans effet sur `_check_victory` (qui n'évalue que des `contenders` vivants et tranche `len<=1` en amont).
+- **(MOYEN) `_handle_move_units` — entrées non validées (`engine.py`).** (1) `amount` n'était ni typé ni borné : un **float** (`2.5`, piège JSON §5) **corrompait la garnison en float** (persistée en Redis) ; une **chaîne** faisait planter `amount <= 0` sur un **`TypeError`** non capturé par le routeur (qui n'attrape que `ValueError`) → **socket coupé**. (2) Les ids de territoires source/cible n'étaient pas vérifiés → **`KeyError`** brut sur un id absent/inconnu (None…). ✅ Validations ajoutées en tête (miroir de `_handle_conquer_move`/`_handle_deploy_units`) : `amount` entier strict (rejette bool/float/str) puis `>0` ; `source`/`target` ∈ `state.territories` → sinon `ValueError` propre.
+- **(MOYEN) Minuterie corrompue par l'abandon/déconnexion d'un TIERS (`router.py`).** Un abandon **hors tour** (`action "abandon"`, autorisé) ou la **déconnexion brutale d'un joueur non courant** appelait `_schedule_turn_timer` → `_arm_next_timer`, qui **réinitialisait l'échéance ET le flag « a agi »** (`reset_acted`) du **joueur courant** : faux **strike AFK** (→ abandon auto au 2ᵉ) pour un joueur ayant pourtant joué, et **rebours remis à plein** à chaque départ d'un tiers (vecteur de blocage de salle). ✅ NEUF `_reschedule_timer_if_turn_changed` : ne (ré)arme **que si la signature de tour a réellement changé** (le sortant était le joueur courant → `_end_turn`, ou Phase 0 résolue) ; les deux sites d'abandon (action + `_maybe_abandon_on_disconnect`) l'utilisent.
+- **Validation.** `test_turn_loop_fixes.py` **30 ✅** (+10 : validations `move_units`, minuterie préservée hors-tour) ; `test_objectives_double.py` **28 ✅** (+3 : repli « dernier survivant » réservé au survivant) ; non-régression complète (`test_rewards` 121, `test_factions` 42, `test_hero_xp` 35, `test_hero_stats` 188, `test_heroes_roster` 247, `test_setup_phase` 37, `test_deploy_contamination` 24, `test_state_redaction` 15, `test_hero_combat` 28, `test_repro_*`, `test_updater_installer` 10) — **17 suites vertes** ; `py_compile` OK. *(`test_simulation.py` exige `fastapi` installé — non lancé dans l'env de tests léger ; échec d'import pré-existant, sans rapport.)*
+
+---
+
+## 📥 9. DEMANDES FRONTEND EN ATTENTE — endpoints REST à spécifier (R1 / R2 / R3)
+
+> **🤖 À L'ATTENTION DE L'AGENT IA BACKEND.** Section **rédigée par l'agent Frontend** (procédure « signalement » du protocole inter-IA en tête de fichier — *« signale-le… pour que l'agent Backend ajoute le champ au schéma ET à ce fichier »*). Les écrans **R1 Boutique/Inventaire**, **R2 Profil** et **R3 Classement mondial** sont **déjà réalisés côté client** (§8.39 / §8.40 / §8.41 dans [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)) mais tournent sur des **données MOCK** faute d'endpoints. Ci-dessous, le **contrat dont le client a besoin**, ancré sur ce qu'il **lit déjà défensivement** → une fois l'endpoint livré, **« seul le peuplement changera »** côté client (aucune refonte UI). Les clés proposées sont **canoniques** : si le backend en retient d'autres, **documenter le choix ICI** pour que le client s'aligne (il accepte aujourd'hui plusieurs alias, listés par écran). **Rappels normatifs :** piège **JSON float §5** (ids/nombres → `int()`, clés de dict indexées = `string`) ; auth **JWT** (`Authorization: Bearer`), préfixe **`/api/v1`** ; aujourd'hui le client lit le profil via **`GET /api/v1/auth/me`** (`UserResponse` : `id`, `username`, `email`, `niveau`/`level`) et n'a **aucun** autre endpoint joueur. ⚠️ **Backend → push + redéploiement VPS requis** (§1) ; tant que le VPS n'est pas à jour, le client garde ses mocks (lecture défensive).
+
+### 9.1. R2 — Profil & statistiques joueur *(à spécifier en premier : alimente aussi R3)*
+Soit en **étendant `UserResponse`** (`/auth/me`), soit via un endpoint dédié **`GET /profile/stats`** (au choix backend ; le client lit déjà ces champs sur la réponse de `/auth/me`). Champs attendus (clé canonique → alias acceptés aujourd'hui) :
+```jsonc
+{
+  "level": 12,            // int — niveau (DÉJÀ exposé ; alias lus : "niveau" | "level")
+  "xp": 640,              // int — alias : "xp" | "experience" | "exp" | "points"
+  "xp_max": 1000,         // int — alias : "xp_max" | "xp_next" | "next_level_xp" | "niveau_suivant_xp"
+  "games_played": 47,     // int — alias : "parties_jouees" | "games_played" | "matches"
+  "wins": 29,             // int — alias : "victoires" | "wins"
+  "losses": 18,           // int — alias : "defaites" | "losses"
+  "heaviest_toll": 1842,  // int — unités perdues cumulées ; alias : "tribut" | "plus_lourd_tribut" | "heaviest_toll" | "units_lost"
+  "favorite_faction": "barons_ferraille", // string — id snake_case (miroir factions.py) ; alias : "faction_favorite" | "favorite_faction" | "faction" | "main_faction"
+  "credits": 2500         // int — solde Boutique (R1) ; alias : "credits" | "credit" | "solde" | "monnaie" | "currency"
+}
+```
+- **Historique récent** — `GET /profile/history?limit=5` → `Array` (le plus récent en premier) :
+```jsonc
+{ "win": true, "faction_id": "barons_ferraille", "detail": "12 territoires · 8 tours" } // bool / string / string
+```
+- **Consommé par :** `scripts/ui/profile.gd` (`_on_profile_loaded` / `_history`). *(Détail mock : §8.40.)*
+
+### 9.2. R3 — Classement mondial — `GET /leaderboard?limit=50&offset=0` ✅ LIVRÉ & ALIGNÉ
+Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc, puis **points de classement** desc, puis **id** asc → rang déterministe et pagination cohérente). Pagination par `limit` (1–100, défaut 20) / `offset` (≥ 0). **PUBLIC** ; le bloc **`me`** n'est renseigné que si la requête porte un **token Bearer valide** (sinon `null` — l'endpoint reste accessible sans auth).
+> ✅ **ÉCART RÉCONCILIÉ (décision : aligner le backend sur §9.2).** L'endpoint `GET /api/v1/leaderboard` (livré en §8.46) a été **réaligné** : tri par **victoires** (et non plus `points_classement`), **enveloppe `{entries, me}`**, **`offset`** ajouté, **rang global** par entrée, **bloc `me`** (auth optionnelle via `get_current_user_optional`). Chaque entrée porte **les deux jeux de clés** (canoniques `rank`/`level`/`wins` **et** historiques `niveau`/`stats_victoires`/…) → rétro-compatible. *(Implémenté dans `leaderboard.py` + `models/schemas.py` ; schéma résumé en §F.)*
+```jsonc
+{
+  "entries": [
+    // Clés CANONIQUES + alias historiques (cf. §F). Triées, rang global 1-based (offset inclus).
+    { "rank": 1, "username": "RAVAGEUR_PRIME", "level": 58, "wins": 412,
+      "niveau": 58, "stats_victoires": 412, "stats_parties_jouees": 500, "points_classement": 9001 }
+  ],
+  "me": { "rank": 137, "username": "HAKIM", "level": 23, "wins": 118 }  // null si non authentifié
+}
+```
+- **Consommé par :** `scripts/ui/leaderboard.gd`. Quand le serveur répond avec des rangs (forme §9.2), le client **respecte l'ordre et les rangs serveur** et surligne l'opérateur courant (ajouté en bas via `me` s'il est hors page). Repli **mock/legacy** : tant que le serveur est muet/hors-ligne **ou** sur l'ancienne forme « liste plate » (avant redéploiement VPS), le client trie/range côté client. Clés `wins`/`level` = mêmes alias qu'en §9.1. *(Détail mock : §8.41.)*
+
+### 9.3. R1 — Boutique / Inventaire / Économie
+- **`GET /shop/catalog`** → `Array<ShopItem>` (PUBLIC ; catalogue **persistant** en base `shop_items`, **seedé au démarrage** depuis `api/game/shop_catalog.py`) :
+```jsonc
+{
+  "id": "corporation_aegis",            // string — id snake_case (clé d'inventaire / d'achat)
+  "category": "faction",                // string — "faction" | "skin" | "pass" | "currency"
+  "price": 5000,                        // int — Coins si currency_type=virtual ; CENTIMES € si fiat
+  "name_key": "SHOP_ITEM_AEGIS_NAME",   // string — CLÉ i18n (R4)
+  "desc_key": "SHOP_ITEM_AEGIS_DESC",   // string — CLÉ i18n (R4)
+  "currency_type": "virtual",           // string — "virtual" (Coins) | "fiat" (argent réel)
+  "grant_amount": null,                 // int|null — Coins crédités par un pack 'currency' fiat
+  "hero_key": null                      // string|null — id de faction liée à un 'skin'
+}
+```
+- **`GET /shop/inventory`** → `{ "credits": 2500, "items": { "skin_aegis_obsidienne": 1 }, "has_active_pass": false, "pass_expires_at": null }` (`credits: int` ; `items` = `{ "<item_id:str>": int }` = factions/skins possédés ; `has_active_pass: bool` **dérivé** de `User.special_pass_expires_at` ; `pass_expires_at: str|null` = date ISO 8601 d'expiration du Pass si actif, sinon `null` → le client en dérive les jours restants). Authentifié.
+- **`POST /shop/purchase/virtual`** payload `{ "item_id": "corporation_aegis" }` → achat en **Coins** (faction/skin = **définitif** ; Pass Spécial = **+90 j**). Succès `{ "credits", "items", "has_active_pass", "pass_expires_at" }` ; échec HTTP 400 (« Crédits insuffisants » / « Article déjà acquis » / « Cet article s'achète en argent réel » / « Article inconnu »). Authentifié.
+- **`POST /shop/purchase/fiat`** payload `{ "item_id": "coins_pack_small" }` → achat de Coins en **argent réel** (packs « currency »). ⚠️ **STUB** serveur (aucun PSP branché) : simule le paiement puis crédite `grant_amount` Coins. Succès `{ "credits", "items", "has_active_pass", "pass_expires_at" }` ; échec HTTP 400 (« Article inconnu » / « Cet article s'achète en Coins » pour un article non-fiat). Authentifié.
+- **`POST /shop/purchase`** — **ALIAS DÉPRÉCIÉ** de `/purchase/virtual` (rétro-compat des clients antérieurs au split virtual/fiat).
+- **Consommé par :** `scripts/ui/shop.gd` (`_catalog` / `_owned` / `_credits` / `_has_active_pass`) + `scripts/managers/network_manager.gd` (`purchase_item_virtual` / `purchase_item_fiat`). Le client résout `name_key`/`desc_key`/`SHOP_CAT_<CATEGORY>` via `tr()` (R4) et choisit la route d'achat selon `currency_type`.
+
+> **Aucune de ces données n'est sensible** (pas de redaction par destinataire, §4.4) ni temps-réel (REST simple, pas de WS). **Priorité suggérée :** §9.1 (débloque R2 **et** R3) → §9.2 → §9.3.

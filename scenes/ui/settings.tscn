@@ -1,0 +1,303 @@
+[gd_scene format=3 uid="uid://bw5tt1ngscrn0"]
+
+[ext_resource type="Texture2D" uid="uid://dl6ps8pllyfe" path="res://assets/images/bg_wasteland.png" id="1_bgw"]
+[ext_resource type="Script" path="res://scripts/ui/settings.gd" id="2_set"]
+
+[sub_resource type="SystemFont" id="font_warzone"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="StyleBoxFlat" id="bg_panel"]
+content_margin_left = 36.0
+content_margin_top = 36.0
+content_margin_right = 36.0
+content_margin_bottom = 36.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.9)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxLine" id="filet_cyan"]
+color = Color(0.211765, 0.772549, 0.85098, 0.5)
+thickness = 2
+
+[node name="SettingsScreen" type="Control" node_paths=PackedStringArray("panel", "back_button", "master_slider", "master_value", "music_slider", "music_value", "sfx_slider", "sfx_value", "fullscreen_button", "windowed_button", "resolution_box", "language_box", "status_label", "logout_button")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_set")
+panel = NodePath("CenterContainer/MainPanel")
+back_button = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/BackButton")
+master_slider = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow/MasterSlider")
+master_value = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow/MasterValue")
+music_slider = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow/MusicSlider")
+music_value = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow/MusicValue")
+sfx_slider = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow/SfxSlider")
+sfx_value = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow/SfxValue")
+fullscreen_button = NodePath("CenterContainer/MainPanel/RootVBox/WindowModeRow/FullscreenButton")
+windowed_button = NodePath("CenterContainer/MainPanel/RootVBox/WindowModeRow/WindowedButton")
+resolution_box = NodePath("CenterContainer/MainPanel/RootVBox/ResolutionRow/ResolutionBox")
+language_box = NodePath("CenterContainer/MainPanel/RootVBox/LanguageRow/LanguageBox")
+status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
+logout_button = NodePath("CenterContainer/MainPanel/RootVBox/LogoutButton")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("1_bgw")
+expand_mode = 2
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MainPanel" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(900, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("bg_panel")
+
+[node name="RootVBox" type="VBoxContainer" parent="CenterContainer/MainPanel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="HeaderBar" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TitleBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="TitleEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 13
+text = "SETTINGS_EYEBROW"
+
+[node name="TitleLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 30
+text = "SETTINGS_TITLE"
+
+[node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="BackButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
+custom_minimum_size = Vector2(150, 48)
+layout_mode = 2
+size_flags_vertical = 4
+text = "COMMON_BACK"
+
+[node name="FiletTop" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="AudioEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "SETTINGS_AUDIO"
+
+[node name="AudioRows" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MasterRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/AudioRows"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MasterLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow"]
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "SETTINGS_VOL_MASTER"
+vertical_alignment = 1
+
+[node name="MasterSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow"]
+custom_minimum_size = Vector2(360, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+
+[node name="MasterValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow"]
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "—"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="MusicRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/AudioRows"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MusicLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow"]
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "SETTINGS_VOL_MUSIC"
+vertical_alignment = 1
+
+[node name="MusicSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow"]
+custom_minimum_size = Vector2(360, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+
+[node name="MusicValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow"]
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "—"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="SfxRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/AudioRows"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="SfxLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow"]
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "SETTINGS_VOL_SFX"
+vertical_alignment = 1
+
+[node name="SfxSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow"]
+custom_minimum_size = Vector2(360, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+
+[node name="SfxValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow"]
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "—"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="FiletMid" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="DisplayEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "SETTINGS_DISPLAY"
+
+[node name="WindowModeRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="WindowModeLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/WindowModeRow"]
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "SETTINGS_WINDOW_MODE"
+vertical_alignment = 1
+
+[node name="FullscreenButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/WindowModeRow"]
+custom_minimum_size = Vector2(170, 38)
+layout_mode = 2
+text = "SETTINGS_FULLSCREEN"
+
+[node name="WindowedButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/WindowModeRow"]
+custom_minimum_size = Vector2(170, 38)
+layout_mode = 2
+text = "SETTINGS_WINDOWED"
+
+[node name="ResolutionRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="ResolutionLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/ResolutionRow"]
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "SETTINGS_RESOLUTION"
+vertical_alignment = 1
+
+[node name="ResolutionBox" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/ResolutionRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="FiletMid2" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="LanguageEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "SETTINGS_LANGUAGE"
+
+[node name="LanguageRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="LanguageBox" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/LanguageRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="FiletBottom" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="StatusLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "SETTINGS_STATUS"
+horizontal_alignment = 1
+
+[node name="LogoutButton" type="Button" parent="CenterContainer/MainPanel/RootVBox"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+text = "SETTINGS_LOGOUT"

@@ -1,0 +1,1023 @@
+[gd_scene format=3 uid="uid://boif8d71dk1g2"]
+
+[ext_resource type="Script" uid="uid://cbrsbp3cqc67" path="res://scripts/game/main.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://d28wpsw4jcp5" path="res://scripts/ui/hud.gd" id="2_hud"]
+[ext_resource type="Script" uid="uid://dfj661nwhpe8r" path="res://scripts/game/tactical_camera.gd" id="4_cam"]
+[ext_resource type="Material" uid="uid://bdkk4w7rh2hdj" path="res://shaders/crt_board_material.tres" id="4_iba00"]
+[ext_resource type="PackedScene" uid="uid://rjvqp7avq3wq" path="res://scenes/game/board.tscn" id="4_uaf1y"]
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_j7lav"]
+lifetime_randomness = 0.4
+particle_flag_disable_z = true
+emission_shape = 3
+emission_box_extents = Vector3(1360, 8, 1)
+direction = Vector3(0, 1, 0)
+spread = 18.0
+initial_velocity_min = 10.0
+initial_velocity_max = 25.0
+gravity = Vector3(0, 16, 0)
+scale_max = 3.0
+color = Color(0.82, 0.82, 0.85, 0.4)
+turbulence_enabled = true
+turbulence_noise_strength = 3.0
+turbulence_noise_scale = 1.8
+turbulence_influence_min = 0.05
+turbulence_influence_max = 0.18
+
+[sub_resource type="SystemFont" id="SystemFont_mil"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="Theme" id="Theme_mil"]
+default_font = SubResource("SystemFont_mil")
+default_font_size = 15
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_glass"]
+content_margin_left = 14.0
+content_margin_top = 10.0
+content_margin_right = 14.0
+content_margin_bottom = 10.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.8)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.211765, 0.772549, 0.85098, 0.35)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+shadow_color = Color(0, 0, 0, 0.35)
+shadow_size = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_topbar"]
+content_margin_left = 20.0
+content_margin_top = 5.0
+content_margin_right = 20.0
+content_margin_bottom = 6.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.8)
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 0.7)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+shadow_color = Color(0, 0, 0, 0.3)
+shadow_size = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_intel"]
+content_margin_left = 14.0
+content_margin_top = 12.0
+content_margin_right = 14.0
+content_margin_bottom = 12.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.82)
+border_width_left = 4
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.211765, 0.772549, 0.85098, 0.9)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+shadow_color = Color(0, 0, 0, 0.4)
+shadow_size = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ghost"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.35)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.211765, 0.772549, 0.85098, 0.55)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ghost_hover"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.14)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_abandon"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.43137255, 0.078431375, 0.078431375, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_abandon_pressed"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.2901961, 0.050980393, 0.050980393, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_abandon_hover"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.54901963, 0.101960786, 0.101960786, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.101961, 0.12549, 0.156863, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_hover"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.18)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[sub_resource type="ButtonGroup" id="ButtonGroup_chat"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+content_margin_left = 8.0
+content_margin_top = 8.0
+content_margin_right = 8.0
+content_margin_bottom = 8.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.72)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+
+[node name="Main" type="Node" unique_id=1253176475]
+script = ExtResource("1_script")
+
+[node name="MapViewportContainer" type="SubViewportContainer" parent="." unique_id=272985539]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[node name="MapContent" type="SubViewport" parent="MapViewportContainer" unique_id=1361177972]
+transparent_bg = true
+handle_input_locally = false
+physics_object_picking = true
+size = Vector2i(1152, 648)
+render_target_update_mode = 4
+
+[node name="TacticalCamera" type="Camera2D" parent="MapViewportContainer/MapContent" unique_id=771627960]
+position = Vector2(1100, 765)
+script = ExtResource("4_cam")
+
+[node name="Board" parent="MapViewportContainer/MapContent" unique_id=407443896 instance=ExtResource("4_uaf1y")]
+
+[node name="AshParticles" type="GPUParticles2D" parent="MapViewportContainer/MapContent" unique_id=298488208]
+position = Vector2(1108, -100)
+amount = 220
+lifetime = 13.0
+preprocess = 10.0
+randomness = 1.0
+process_material = SubResource("ParticleProcessMaterial_j7lav")
+
+[node name="PostFX" type="CanvasLayer" parent="MapViewportContainer/MapContent" unique_id=1978574]
+
+[node name="CRTEffect" type="ColorRect" parent="MapViewportContainer/MapContent/PostFX" unique_id=36682007]
+material = ExtResource("4_iba00")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="HUD" type="Control" parent="." unique_id=1949513834]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme = SubResource("Theme_mil")
+script = ExtResource("2_hud")
+
+[node name="TopCenterWidget" type="PanelContainer" parent="HUD" unique_id=1897351785]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_top = 10.0
+grow_horizontal = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_topbar")
+
+[node name="TopVBox" type="VBoxContainer" parent="HUD/TopCenterWidget" unique_id=519698888]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="TopRow" type="HBoxContainer" parent="HUD/TopCenterWidget/TopVBox" unique_id=2030505454]
+layout_mode = 2
+theme_override_constants/separation = 14
+alignment = 1
+
+[node name="IdentityLabel" type="Label" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=403506161]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 18
+text = "👤 —"
+
+[node name="FactionInfoButton" type="Button" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=880011001]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+tooltip_text = "Pouvoir de faction"
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+text = "ⓘ"
+
+[node name="VSeparator0" type="VSeparator" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=97365820]
+layout_mode = 2
+
+[node name="PhaseLabel" type="Label" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=1248289555]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 22
+text = "PHASE : —"
+
+[node name="VSeparator1" type="VSeparator" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=485128774]
+layout_mode = 2
+
+[node name="InfoLabel" type="Label" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=508044294]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 18
+text = "—"
+
+[node name="VSeparator2" type="VSeparator" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=341088871]
+layout_mode = 2
+
+[node name="TimerLabel" type="Label" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=1222872330]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 22
+text = "00:00"
+
+[node name="InstructionLabel" type="Label" parent="HUD/TopCenterWidget/TopVBox" unique_id=1602561541]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(560, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
+theme_override_font_sizes/font_size = 16
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="TopRightWidget" type="PanelContainer" parent="HUD" unique_id=735032696]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -12.0
+offset_top = 10.0
+offset_right = -12.0
+grow_horizontal = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_glass")
+
+[node name="AbandonButton" type="Button" parent="HUD/TopRightWidget" unique_id=1508611963]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_styles/normal = SubResource("StyleBoxFlat_abandon")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_abandon_pressed")
+theme_override_styles/hover = SubResource("StyleBoxFlat_abandon_hover")
+text = "☠ ABANDONNER"
+
+[node name="SidePanelWidget" type="Control" parent="HUD" unique_id=1478926449]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -320.0
+offset_top = 64.0
+offset_bottom = -8.0
+grow_horizontal = 0
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="GlassBody" type="PanelContainer" parent="HUD/SidePanelWidget" unique_id=401406776]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_glass")
+
+[node name="SideVBox" type="VBoxContainer" parent="HUD/SidePanelWidget/GlassBody" unique_id=1293070308]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="SideTitle" type="Label" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=1215136252]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 14
+text = "📡 COMMUNICATIONS"
+horizontal_alignment = 1
+
+[node name="ChatIconBar" type="HBoxContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=150589755]
+layout_mode = 2
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="TabBtnGeneral" type="Button" parent="HUD/SidePanelWidget/GlassBody/SideVBox/ChatIconBar" unique_id=461381364]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(46, 34)
+layout_mode = 2
+tooltip_text = "Canal général"
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+toggle_mode = true
+button_pressed = true
+button_group = SubResource("ButtonGroup_chat")
+text = "📢"
+
+[node name="TabBtnPrive" type="Button" parent="HUD/SidePanelWidget/GlassBody/SideVBox/ChatIconBar" unique_id=335293751]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(46, 34)
+layout_mode = 2
+tooltip_text = "Canal privé"
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+toggle_mode = true
+button_group = SubResource("ButtonGroup_chat")
+text = "🔒"
+
+[node name="ChatTabs" type="TabContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=842572557]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+size_flags_stretch_ratio = 1.2
+theme_override_font_sizes/font_size = 16
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+current_tab = 0
+tabs_visible = false
+
+[node name="GÉNÉRAL" type="RichTextLabel" parent="HUD/SidePanelWidget/GlassBody/SideVBox/ChatTabs" unique_id=1096405538]
+layout_mode = 2
+theme_override_font_sizes/normal_font_size = 16
+bbcode_enabled = true
+scroll_following = true
+metadata/_tab_index = 0
+
+[node name="PRIVÉ" type="RichTextLabel" parent="HUD/SidePanelWidget/GlassBody/SideVBox/ChatTabs" unique_id=1519411577]
+visible = false
+layout_mode = 2
+theme_override_font_sizes/normal_font_size = 16
+bbcode_enabled = true
+scroll_following = true
+metadata/_tab_index = 1
+
+[node name="MilitaryLog" type="PanelContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=978157413]
+layout_mode = 2
+size_flags_vertical = 3
+size_flags_stretch_ratio = 0.8
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="LogVBox" type="VBoxContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox/MilitaryLog" unique_id=1431564840]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LogTitle" type="Label" parent="HUD/SidePanelWidget/GlassBody/SideVBox/MilitaryLog/LogVBox" unique_id=595790537]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 16
+text = "▣ JOURNAL MILITAIRE"
+horizontal_alignment = 1
+
+[node name="LogText" type="RichTextLabel" parent="HUD/SidePanelWidget/GlassBody/SideVBox/MilitaryLog/LogVBox" unique_id=723422796]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/normal_font_size = 16
+bbcode_enabled = true
+scroll_following = true
+
+[node name="ToggleSidePanelButton" type="Button" parent="HUD/SidePanelWidget" unique_id=53496626]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = -26.0
+offset_top = -42.0
+offset_bottom = 42.0
+grow_horizontal = 0
+grow_vertical = 2
+tooltip_text = "Replier / déployer le panneau"
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_glass")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_glass")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+text = "▶"
+
+[node name="BottomCenterWidget" type="VBoxContainer" parent="HUD" unique_id=1658342055]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_constants/separation = 0
+
+[node name="ToggleBottomPanelButton" type="Button" parent="HUD/BottomCenterWidget" unique_id=880011002]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 22)
+layout_mode = 2
+size_flags_horizontal = 4
+tooltip_text = "Replier / déployer le panneau inférieur"
+theme_override_font_sizes/font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_glass")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_glass")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+text = "▼"
+
+[node name="GlassBody" type="PanelContainer" parent="HUD/BottomCenterWidget" unique_id=880011003]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_glass")
+
+[node name="BottomVBox" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody" unique_id=157362644]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="CardsTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox" unique_id=936200591]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 13
+text = "▤ INVENTAIRE — CARTES ÉVÈNEMENT"
+horizontal_alignment = 1
+
+[node name="CardsBox" type="HBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox" unique_id=1649655257]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="ObjectiveLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox" unique_id=431373405]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(560, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 13
+text = "🎯 OBJECTIF : —"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="ActionRow" type="HBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox" unique_id=1547559084]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="AmountLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox/ActionRow" unique_id=784556440]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "QUANTITÉ :"
+
+[node name="AmountSpin" type="SpinBox" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox/ActionRow" unique_id=1885257618]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 1.0
+max_value = 99.0
+value = 3.0
+
+[node name="VSeparator" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox/ActionRow" unique_id=1643500317]
+layout_mode = 2
+
+[node name="NextPhaseButton" type="Button" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox/ActionRow" unique_id=1873555286]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_colors/font_pressed_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
+text = "FIN DE PHASE ▶"
+
+[node name="IntelWidget" type="VBoxContainer" parent="HUD"]
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 8.0
+offset_top = -120.0
+offset_right = 270.0
+offset_bottom = 120.0
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 6
+alignment = 1
+
+[node name="IntelToggleButton" type="Button" parent="HUD/IntelWidget"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+tooltip_text = "Renseignements — Zone de Contamination"
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_colors/font_pressed_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
+text = "🛰 INTEL : ZONE ▸"
+
+[node name="IntelPanel" type="PanelContainer" parent="HUD/IntelWidget"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(252, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_intel")
+
+[node name="IntelVBox" type="VBoxContainer" parent="HUD/IntelWidget/IntelPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="IntelTitle" type="Label" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 15
+text = "☢ MÉMOIRE TACTIQUE"
+
+[node name="StagnationLabel" type="Label" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(224, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 14
+text = "STAGNATION ZONE : —"
+autowrap_mode = 3
+
+[node name="IntelSep" type="HSeparator" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
+layout_mode = 2
+
+[node name="ZoneKillsTitle" type="Label" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 13
+text = "☠ PERTES INFLIGÉES PAR LA ZONE"
+
+[node name="ZoneKillsList" type="VBoxContainer" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="FactionTooltip" type="PanelContainer" parent="HUD" unique_id=880011004]
+unique_name_in_owner = true
+visible = false
+z_index = 50
+layout_mode = 0
+offset_right = 360.0
+offset_bottom = 90.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="TooltipVBox" type="VBoxContainer" parent="HUD/FactionTooltip" unique_id=880011005]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="FactionTooltipTitle" type="Label" parent="HUD/FactionTooltip/TooltipVBox" unique_id=880011006]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 18
+text = "—"
+
+[node name="FactionTooltipDesc" type="RichTextLabel" parent="HUD/FactionTooltip/TooltipVBox" unique_id=880011007]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+fit_content = true
+bbcode_enabled = true
+theme_override_font_sizes/normal_font_size = 14
+
+[node name="Button" type="Button" parent="." unique_id=947914248]
+offset_left = 50.0
+offset_top = 50.0
+offset_right = 250.0
+offset_bottom = 100.0
+text = "Initialiser la partie"
+
+[node name="ConquerDialog" type="Control" parent="." unique_id=300336629]
+unique_name_in_owner = true
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="ColorRect" parent="ConquerDialog" unique_id=1262683920]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="Center" type="CenterContainer" parent="ConquerDialog" unique_id=1830055407]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="ConquerDialog/Center" unique_id=1347671788]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="ConquerDialog/Center/Panel" unique_id=266493532]
+custom_minimum_size = Vector2(480, 0)
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="ConquerDialog/Center/Panel/VBox" unique_id=318669922]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 24
+text = "🏴 TERRITOIRE CONQUIS"
+horizontal_alignment = 1
+
+[node name="ConquerInfo" type="Label" parent="ConquerDialog/Center/Panel/VBox" unique_id=526516861]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 17
+text = "Conquête !"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="ConquerSlider" type="HSlider" parent="ConquerDialog/Center/Panel/VBox" unique_id=1406135404]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 1.0
+max_value = 3.0
+value = 3.0
+
+[node name="ConquerValue" type="Label" parent="ConquerDialog/Center/Panel/VBox" unique_id=411776543]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 19
+text = "—"
+horizontal_alignment = 1
+
+[node name="ConquerConfirm" type="Button" parent="ConquerDialog/Center/Panel/VBox" unique_id=240323883]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_colors/font_pressed_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 19
+theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
+text = "✔ DÉPLOYER LES TROUPES"
+
+[node name="EclipseDialog" type="Control" parent="." unique_id=943669916]
+unique_name_in_owner = true
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="ColorRect" parent="EclipseDialog" unique_id=2008617563]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="Center" type="CenterContainer" parent="EclipseDialog" unique_id=1776895677]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="EclipseDialog/Center" unique_id=1209658168]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="EclipseDialog/Center/Panel" unique_id=956226755]
+custom_minimum_size = Vector2(520, 0)
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Title" type="Label" parent="EclipseDialog/Center/Panel/VBox" unique_id=133341218]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 24
+text = "🌑 ORDRE DE L'ÉCLIPSE"
+horizontal_alignment = 1
+
+[node name="EclipseInfo" type="Label" parent="EclipseDialog/Center/Panel/VBox" unique_id=295466102]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 17
+text = "Choisissez la carte Événement à conserver (l'autre est défaussée) :"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="CardsRow" type="HBoxContainer" parent="EclipseDialog/Center/Panel/VBox" unique_id=751827350]
+layout_mode = 2
+theme_override_constants/separation = 24
+alignment = 1
+
+[node name="EclipseCard0" type="Button" parent="EclipseDialog/Center/Panel/VBox/CardsRow" unique_id=1835763070]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 100)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 36
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+text = "+0"
+
+[node name="EclipseCard1" type="Button" parent="EclipseDialog/Center/Panel/VBox/CardsRow" unique_id=448778896]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 100)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 36
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+text = "+0"
+
+[node name="SpyDialog" type="Control" parent="." unique_id=1528403144]
+unique_name_in_owner = true
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="ColorRect" parent="SpyDialog" unique_id=474673285]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="Center" type="CenterContainer" parent="SpyDialog" unique_id=2101568718]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="SpyDialog/Center" unique_id=967385626]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="SpyDialog/Center/Panel" unique_id=149266269]
+custom_minimum_size = Vector2(480, 0)
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="SpyDialog/Center/Panel/VBox" unique_id=331216678]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 24
+text = "🕵 CHASSEURS D'OMBRES"
+horizontal_alignment = 1
+
+[node name="SpyInfo" type="Label" parent="SpyDialog/Center/Panel/VBox" unique_id=560088618]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 17
+text = "Espionnez l'objectif secret d'un adversaire :"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="SpyButtonsBox" type="VBoxContainer" parent="SpyDialog/Center/Panel/VBox" unique_id=1878154017]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="IntelFactionsToggleButton" type="Button" parent="HUD/IntelWidget"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+tooltip_text = "Renseignements — Pouvoirs passifs des factions en jeu"
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_colors/font_pressed_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
+text = "🛰 INTEL : FACTIONS ▸"
+
+[node name="IntelFactionsPanel" type="PanelContainer" parent="HUD/IntelWidget"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(252, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_intel")
+
+[node name="IntelFactionsVBox" type="VBoxContainer" parent="HUD/IntelWidget/IntelFactionsPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="FactionsIntelTitle" type="Label" parent="HUD/IntelWidget/IntelFactionsPanel/IntelFactionsVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 15
+text = "🎖 FORCES EN PRÉSENCE"
+
+[node name="FactionsList" type="VBoxContainer" parent="HUD/IntelWidget/IntelFactionsPanel/IntelFactionsVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TerritoryInspector" type="PanelContainer" parent="HUD"]
+unique_name_in_owner = true
+visible = false
+modulate = Color(1, 1, 1, 0)
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -276.0
+offset_top = -212.0
+offset_right = -16.0
+offset_bottom = -64.0
+grow_horizontal = 0
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_intel")
+
+[node name="InspectorVBox" type="VBoxContainer" parent="HUD/TerritoryInspector"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="HeaderRow" type="HBoxContainer" parent="HUD/TerritoryInspector/InspectorVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="InspectorName" type="Label" parent="HUD/TerritoryInspector/InspectorVBox/HeaderRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 20
+text = "—"
+
+[node name="InspectorClose" type="Button" parent="HUD/TerritoryInspector/InspectorVBox/HeaderRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
+text = "✕"
+
+[node name="OwnerEyebrow" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 11
+text = "❯ PROPRIÉTAIRE"
+
+[node name="InspectorOwner" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 18
+text = "—"
+
+[node name="TroopsEyebrow" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 11
+text = "❯ GARNISON"
+
+[node name="InspectorTroops" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/font_size = 18
+text = "—"
+
+[node name="InspectorStatus" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.498039, 1, 0, 1)
+theme_override_font_sizes/font_size = 14
+text = ""

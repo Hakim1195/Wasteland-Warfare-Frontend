@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" format=3]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "gardiens_eden"
+name = "Les Gardiens d'Éden"
+description = "Sentinelles du dernier sanctuaire verdoyant, les Gardiens d'Éden protègent jalousement les rares terres encore fertiles. Leur emprise sur un continent entier est une forteresse vivante.
+
+[b]Pouvoir :[/b] +1 au bonus de chaque continent entièrement contrôlé."
+modifiers = {
+"continent_bonus_plus": 1
+}
+hero_path = "res://assets/images/heroes/gardiens_eden.png"
+hero_model_path = "res://assets/models/gardiens_eden.glb"
+accent_color = Color(0.180392, 0.545098, 0.341176, 1)

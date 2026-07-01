@@ -1,0 +1,408 @@
+[gd_scene format=3 uid="uid://factionsel01"]
+
+[ext_resource type="Texture2D" uid="uid://dl6ps8pllyfe" path="res://assets/images/bg_wasteland.png" id="1_bg"]
+[ext_resource type="Script" uid="uid://bcn5b4tgjc1e" path="res://scripts/ui/faction_selection.gd" id="2_script"]
+
+[sub_resource type="SystemFont" id="font_warzone"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="StyleBoxFlat" id="panel_warzone"]
+content_margin_left = 40.0
+content_margin_top = 28.0
+content_margin_right = 40.0
+content_margin_bottom = 28.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.92)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxLine" id="filet_cyan"]
+color = Color(0.211765, 0.772549, 0.85098, 0.5)
+thickness = 2
+
+[sub_resource type="StyleBoxFlat" id="nav_normal"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.101961, 0.12549, 0.156863, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="nav_hover"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.2)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="btn_disabled"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.101961, 0.12549, 0.156863, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.541176, 0.592157, 0.647059, 1)
+
+[sub_resource type="StyleBoxFlat" id="slot_bg"]
+bg_color = Color(0.082353, 0.101961, 0.129412, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 0.45)
+
+[sub_resource type="StyleBoxFlat" id="portrait_frame"]
+content_margin_left = 6.0
+content_margin_top = 6.0
+content_margin_right = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="cta_normal"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="cta_pressed"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.55)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="cta_hover"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.32)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+shadow_color = Color(0.211765, 0.772549, 0.85098, 0.5)
+shadow_size = 10
+
+[node name="FactionSelection" type="Control" unique_id=1631597678 node_paths=PackedStringArray("faction_name_label", "description_label", "hero_portrait", "portrait_placeholder", "prev_button", "next_button", "confirm_button", "status_label", "card", "panel", "counter_label")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_script")
+faction_name_label = NodePath("CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/FactionNameLabel")
+description_label = NodePath("CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/IntelColumn/DescriptionLabel")
+hero_portrait = NodePath("CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/PortraitFrame/PortraitWrap/HeroPortrait")
+portrait_placeholder = NodePath("CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/PortraitFrame/PortraitWrap/PortraitPlaceholder")
+prev_button = NodePath("CenterContainer/PanelContainer/VBox/Carousel/PrevButton")
+next_button = NodePath("CenterContainer/PanelContainer/VBox/Carousel/NextButton")
+confirm_button = NodePath("CenterContainer/PanelContainer/VBox/ConfirmButton")
+status_label = NodePath("StatusLabel")
+card = NodePath("CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card")
+panel = NodePath("CenterContainer/PanelContainer")
+counter_label = NodePath("CenterContainer/PanelContainer/VBox/TopRow/CounterLabel")
+
+[node name="Background" type="TextureRect" parent="." unique_id=1948386032]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("1_bg")
+expand_mode = 2
+
+[node name="Scrim" type="ColorRect" parent="." unique_id=2131379978]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.058824, 0.07451, 0.094118, 0.55)
+
+[node name="Header" type="VBoxContainer" parent="." unique_id=377755914]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 26.0
+offset_bottom = 110.0
+grow_horizontal = 2
+theme_override_constants/separation = 2
+alignment = 1
+
+[node name="TitleEyebrow" type="Label" parent="Header" unique_id=586426625]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "FS_EYEBROW"
+horizontal_alignment = 1
+
+[node name="TitleLabel" type="Label" parent="Header" unique_id=325981603]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 38
+text = "FS_TITLE"
+horizontal_alignment = 1
+
+[node name="CenterContainer" type="CenterContainer" parent="." unique_id=2093614592]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 40.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="CenterContainer" unique_id=1137787510]
+custom_minimum_size = Vector2(1180, 820)
+layout_mode = 2
+theme_override_styles/panel = SubResource("panel_warzone")
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/PanelContainer" unique_id=449548710]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="TopRow" type="HBoxContainer" parent="CenterContainer/PanelContainer/VBox" unique_id=955995234]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SelectionEyebrow" type="Label" parent="CenterContainer/PanelContainer/VBox/TopRow" unique_id=308327390]
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "FS_SELECTION"
+vertical_alignment = 1
+
+[node name="Spacer" type="Control" parent="CenterContainer/PanelContainer/VBox/TopRow" unique_id=1175619736]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DossierEyebrow" type="Label" parent="CenterContainer/PanelContainer/VBox/TopRow" unique_id=1594183593]
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "FS_DOSSIER"
+vertical_alignment = 1
+
+[node name="CounterLabel" type="Label" parent="CenterContainer/PanelContainer/VBox/TopRow" unique_id=604909841]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 24
+text = "01 / 10"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="FiletTop" type="HSeparator" parent="CenterContainer/PanelContainer/VBox" unique_id=634613319]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="Carousel" type="HBoxContainer" parent="CenterContainer/PanelContainer/VBox" unique_id=1449146416]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 18
+alignment = 1
+
+[node name="PrevButton" type="Button" parent="CenterContainer/PanelContainer/VBox/Carousel" unique_id=694990822]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 36
+theme_override_styles/normal = SubResource("nav_normal")
+theme_override_styles/pressed = SubResource("nav_hover")
+theme_override_styles/hover = SubResource("nav_hover")
+theme_override_styles/disabled = SubResource("btn_disabled")
+theme_override_styles/focus = SubResource("nav_normal")
+text = "❮"
+
+[node name="CenterSlot" type="PanelContainer" parent="CenterContainer/PanelContainer/VBox/Carousel" unique_id=479912640]
+custom_minimum_size = Vector2(860, 540)
+clip_contents = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("slot_bg")
+
+[node name="Card" type="Control" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot" unique_id=246435050]
+layout_mode = 2
+
+[node name="CardVBox" type="VBoxContainer" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card" unique_id=1074691801]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = 22.0
+offset_right = -24.0
+offset_bottom = -22.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+
+[node name="FactionNameLabel" type="Label" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox" unique_id=2138031921]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 34
+text = "FS_FACTION_DEFAULT"
+horizontal_alignment = 1
+
+[node name="Body" type="HBoxContainer" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox" unique_id=99922937]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 22
+
+[node name="PortraitFrame" type="PanelContainer" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body" unique_id=735286054]
+custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("portrait_frame")
+
+[node name="PortraitWrap" type="Control" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/PortraitFrame" unique_id=2065303798]
+custom_minimum_size = Vector2(0, 340)
+layout_mode = 2
+
+[node name="PortraitPlaceholder" type="ColorRect" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/PortraitFrame/PortraitWrap" unique_id=1099248867]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.101961, 0.12549, 0.156863, 1)
+
+[node name="HeroPortrait" type="TextureRect" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/PortraitFrame/PortraitWrap" unique_id=1260019968]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="IntelColumn" type="VBoxContainer" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body" unique_id=1964205499]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="IntelEyebrow" type="Label" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/IntelColumn" unique_id=1126505167]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 13
+text = "FS_INTEL"
+
+[node name="IntelFilet" type="HSeparator" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/IntelColumn" unique_id=903874829]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="DescriptionLabel" type="RichTextLabel" parent="CenterContainer/PanelContainer/VBox/Carousel/CenterSlot/Card/CardVBox/Body/IntelColumn" unique_id=730891031]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_colors/default_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_font_sizes/normal_font_size = 20
+bbcode_enabled = true
+text = "FS_DESC_DEFAULT"
+fit_content = true
+
+[node name="NextButton" type="Button" parent="CenterContainer/PanelContainer/VBox/Carousel" unique_id=1045613954]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 36
+theme_override_styles/normal = SubResource("nav_normal")
+theme_override_styles/pressed = SubResource("nav_hover")
+theme_override_styles/hover = SubResource("nav_hover")
+theme_override_styles/disabled = SubResource("btn_disabled")
+theme_override_styles/focus = SubResource("nav_normal")
+text = "❯"
+
+[node name="FiletBottom" type="HSeparator" parent="CenterContainer/PanelContainer/VBox" unique_id=1641216662]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="NavHint" type="Label" parent="CenterContainer/PanelContainer/VBox" unique_id=956541047]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 13
+text = "FS_NAV_HINT"
+horizontal_alignment = 1
+
+[node name="ConfirmButton" type="Button" parent="CenterContainer/PanelContainer/VBox" unique_id=1943994548]
+custom_minimum_size = Vector2(520, 60)
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 22
+theme_override_styles/normal = SubResource("cta_normal")
+theme_override_styles/pressed = SubResource("cta_pressed")
+theme_override_styles/hover = SubResource("cta_hover")
+theme_override_styles/disabled = SubResource("btn_disabled")
+theme_override_styles/focus = SubResource("cta_normal")
+text = "FS_CONFIRM"
+
+[node name="StatusLabel" type="Label" parent="." unique_id=972076250]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -70.0
+offset_bottom = -25.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 22
+text = "FS_STATUS_DEFAULT"
+horizontal_alignment = 1

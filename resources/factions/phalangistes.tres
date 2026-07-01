@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="FactionData" load_steps=2 format=3 uid="uid://fact_phalangistes"]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "phalanges_acier"
+name = "Les Phalangistes"
+description = "Colonne d'acier rescapée des bunkers militaires, les Phalangistes ne connaissent qu'une loi : la discipline du feu. Leurs vétérans corrigent la chance elle-même quand le métal parle.
+
+[b]Pouvoir :[/b] relance 1 dé de combat ≤ 2 par tour en attaque."
+modifiers = {
+"attack_reroll_low_dice": 1
+}
+logo_path = ""
+hero_path = "res://assets/images/heroes/phalangistes.png"
+hero_model_path = "res://assets/models/Personnage-1.glb"
+accent_color = Color(0.827451, 0.329412, 0, 1)

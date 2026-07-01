@@ -1,0 +1,63 @@
+extends Camera2D
+
+# CAMÉRA TACTIQUE — vit dans le SubViewport `MapContent` (CONTEXTE.md §8.17).
+# Vue par défaut : centrée sur la carte, dézoomée pour voir 100 % du plateau (board_bg).
+# Vue combat : `focus_on_combat()` fait un travelling vers le point médian des deux
+# belligérants avec un zoom 1.5x. AUCUNE logique de jeu ici (Règle d'Or §6.1) :
+# c'est main.gd qui décide QUAND focaliser et quand revenir à la vue d'ensemble.
+
+# Espace de conception du plateau ÉLARGI au format 16:9 (§8.50) : la carte utile
+# (2200×1530, §8.18) est centrée et le shader `tactical_map` prolonge la MER dans
+# les bandes latérales (260 px de chaque côté) → 2720×1530 = 16/9 exact, l'écran est
+# rempli sans bande noire ni rognage. `BOARD_CENTER` = centre réel du cadre élargi
+# (les territoires n'ont PAS bougé : la zone centrale reste à sa place d'origine).
+const BOARD_SIZE := Vector2(2720, 1530)
+const BOARD_CENTER := Vector2(1108, 757)
+# Multiplicateur appliqué au zoom "plein plateau" pendant un combat (zoom 1.5x).
+const COMBAT_ZOOM_FACTOR := 1.5
+# Durée du travelling (glissement + zoom).
+const FOCUS_DURATION := 0.8
+
+var _tween: Tween
+
+func _ready() -> void:
+	# SubViewportContainer.stretch = true redimensionne le SubViewport à chaque
+	# resize de fenêtre → on recadre la vue plein plateau à chaque changement.
+	get_viewport().size_changed.connect(_fit_full_board)
+	_fit_full_board()
+
+# Le plus grand zoom qui fait tenir 100 % du plateau dans le viewport courant.
+# (En Godot 4, zoom < 1 = dézoom : on voit PLUS que la taille du viewport.)
+func _full_board_zoom() -> Vector2:
+	var vp := Vector2(get_viewport().get_visible_rect().size)
+	if vp.x <= 0.0 or vp.y <= 0.0:
+		return Vector2.ONE
+	var z := minf(vp.x / BOARD_SIZE.x, vp.y / BOARD_SIZE.y)
+	return Vector2(z, z)
+
+# Vue par défaut : carte entière visible, caméra au centre du plateau (sans animation).
+func _fit_full_board() -> void:
+	_kill_tween()
+	position = BOARD_CENTER
+	zoom = _full_board_zoom()
+
+# Travelling de combat : calcule le point central entre les deux positions, puis glisse
+# la caméra vers ce point en zoomant (1.5x la vue plein plateau) en 0.8 s (Sine / Out).
+func focus_on_combat(pos_a: Vector2, pos_b: Vector2) -> void:
+	var center := (pos_a + pos_b) / 2.0
+	var target_zoom := _full_board_zoom() * COMBAT_ZOOM_FACTOR
+	_kill_tween()
+	_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT).set_parallel(true)
+	_tween.tween_property(self, "position", center, FOCUS_DURATION)
+	_tween.tween_property(self, "zoom", target_zoom, FOCUS_DURATION)
+
+# Retour fluide à la vue d'ensemble (même cinétique que le focus).
+func reset_view() -> void:
+	_kill_tween()
+	_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT).set_parallel(true)
+	_tween.tween_property(self, "position", BOARD_CENTER, FOCUS_DURATION)
+	_tween.tween_property(self, "zoom", _full_board_zoom(), FOCUS_DURATION)
+
+func _kill_tween() -> void:
+	if _tween and _tween.is_valid():
+		_tween.kill()

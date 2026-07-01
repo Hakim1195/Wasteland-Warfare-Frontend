@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" format=3]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "ordre_eclipse"
+name = "L'Ordre de l'Éclipse"
+description = "Secte mystique qui lit l'avenir dans les éclipses de cendres. Ses devins anticipent les bouleversements du champ de bataille et ne gardent que les présages les plus favorables.
+
+[b]Pouvoir :[/b] pioche 2 cartes Événement, en garde 1, remet l'autre sous le deck."
+modifiers = {
+"event_draw_pick_count": 2
+}
+hero_path = "res://assets/images/heroes/ordre_eclipse.png"
+hero_model_path = "res://assets/models/ordre_eclipse.glb"
+accent_color = Color(0.419608, 0.301961, 0.54902, 1)

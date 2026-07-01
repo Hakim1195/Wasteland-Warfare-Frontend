@@ -1,0 +1,58 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Wasteland Warfare"
+config/version="1.0.2"
+run/main_scene="res://scenes/ui/bootloader.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://assets/images/logo_mark.svg"
+config/windows_native_icon="res://assets/images/logo.ico"
+
+[autoload]
+
+ApiConfig="*res://scripts/managers/api_config.gd"
+AuthManager="*uid://40712fuw4yxj"
+NetworkManager="*uid://bcla1hs428wu0"
+GameState="*uid://ce1a5xn8r42un"
+MapData="*res://map_data.gd"
+LocaleManager="*res://scripts/managers/locale_manager.gd"
+SettingsManager="*res://scripts/managers/settings_manager.gd"
+TransitionManager="*res://scripts/managers/transition_manager.gd"
+AudioManager="*res://scripts/managers/audio_manager.gd"
+MatchConfig="*res://scripts/managers/match_config.gd"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/mode=3
+window/size/borderless=true
+window/stretch/mode="canvas_items"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
+
+[internationalization]
+
+locale/translations=PackedStringArray("res://translations/ui_strings.fr.translation", "res://translations/ui_strings.en.translation", "res://translations/ui_strings.it.translation")
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+rendering_device/driver.windows="d3d12"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

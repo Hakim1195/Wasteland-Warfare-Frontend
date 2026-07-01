@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="FactionData" load_steps=2 format=3 uid="uid://fact_barons_ferraille"]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "barons_ferraille"
+name = "Les Barons de la Ferraille"
+description = "Seigneurs des décharges et des casses du vieux monde, les Barons forgent des légions à partir des rebuts de l'humanité. Là où d'autres voient des ruines, eux voient un arsenal inépuisable.
+
+[b]Pouvoir :[/b] +1 unité bonus fixe à chaque phase de renforts."
+modifiers = {
+"bonus_reinforcement_flat": 1
+}
+logo_path = ""
+hero_path = "res://assets/images/heroes/barons_ferraille.png"
+hero_model_path = "res://assets/models/Personnage-1.glb"
+accent_color = Color(0.627451, 0.321569, 0.176471, 1)

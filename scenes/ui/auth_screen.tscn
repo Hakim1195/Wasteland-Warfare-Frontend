@@ -1,0 +1,405 @@
+[gd_scene format=3 uid="uid://ddykmbhw23qja"]
+
+[ext_resource type="Script" uid="uid://c444xkpihavk8" path="res://scripts/ui/auth_screen.gd" id="1_ouk20"]
+[ext_resource type="PackedScene" uid="uid://cwwlog0emblem1" path="res://scenes/ui/ww_logo.tscn" id="3_pw7ui"]
+
+[sub_resource type="Gradient" id="Gradient_bg"]
+offsets = PackedFloat32Array(0, 0.55, 1)
+colors = PackedColorArray(0.105882, 0.109804, 0.129412, 1, 0.054902, 0.054902, 0.070588, 1, 0.019608, 0.019608, 0.027451, 1)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_bg"]
+gradient = SubResource("Gradient_bg")
+width = 320
+height = 320
+fill = 1
+fill_from = Vector2(0.5, 0.42)
+fill_to = Vector2(1.1, 1.05)
+
+[sub_resource type="Gradient" id="Gradient_spark"]
+offsets = PackedFloat32Array(0, 0.5, 1)
+colors = PackedColorArray(0.85, 0.95, 1, 1, 0.35, 0.7, 0.82, 0.6, 0.21, 0.45, 0.55, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_spark"]
+gradient = SubResource("Gradient_spark")
+width = 16
+height = 16
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(1, 0.5)
+
+[sub_resource type="Gradient" id="Gradient_ash_life"]
+offsets = PackedFloat32Array(0, 0.18, 0.8, 1)
+colors = PackedColorArray(0.72, 0.8, 0.86, 0, 0.62, 0.72, 0.8, 0.38, 0.56, 0.66, 0.74, 0.3, 0.5, 0.6, 0.68, 0)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_ash_life"]
+gradient = SubResource("Gradient_ash_life")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_ash"]
+lifetime_randomness = 0.5
+particle_flag_disable_z = true
+emission_shape = 3
+emission_box_extents = Vector3(960, 540, 1)
+direction = Vector3(0, -1, 0)
+spread = 35.0
+initial_velocity_min = 4.0
+initial_velocity_max = 16.0
+gravity = Vector3(0, -7, 0)
+scale_min = 0.12
+scale_max = 0.32
+color_ramp = SubResource("GradientTexture1D_ash_life")
+turbulence_enabled = true
+turbulence_noise_strength = 2.5
+turbulence_noise_scale = 1.5
+turbulence_influence_min = 0.04
+turbulence_influence_max = 0.16
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_glass_panel"]
+content_margin_left = 32.0
+content_margin_top = 28.0
+content_margin_right = 32.0
+content_margin_bottom = 28.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.9)
+border_width_left = 4
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 16
+
+[sub_resource type="SystemFont" id="SystemFont_title"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_tab_panel"]
+content_margin_left = 0.0
+content_margin_top = 18.0
+content_margin_right = 0.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_tab_unselected"]
+content_margin_left = 16.0
+content_margin_top = 8.0
+content_margin_right = 16.0
+content_margin_bottom = 8.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tab_hover"]
+content_margin_left = 16.0
+content_margin_top = 8.0
+content_margin_right = 16.0
+content_margin_bottom = 8.0
+bg_color = Color(1, 1, 1, 0.05)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tab_selected"]
+content_margin_left = 16.0
+content_margin_top = 8.0
+content_margin_right = 16.0
+content_margin_bottom = 8.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_field"]
+content_margin_left = 14.0
+content_margin_top = 12.0
+content_margin_right = 14.0
+content_margin_bottom = 12.0
+bg_color = Color(0.101961, 0.12549, 0.156863, 0.6)
+border_width_bottom = 2
+border_color = Color(0.541176, 0.592157, 0.647059, 0.45)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_field_focus"]
+content_margin_left = 14.0
+content_margin_top = 12.0
+content_margin_right = 14.0
+content_margin_bottom = 12.0
+bg_color = Color(0.101961, 0.12549, 0.156863, 0.85)
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+shadow_color = Color(0.211765, 0.772549, 0.85098, 0.35)
+shadow_size = 6
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_primary"]
+content_margin_left = 16.0
+content_margin_top = 14.0
+content_margin_right = 16.0
+content_margin_bottom = 14.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_primary_pressed"]
+content_margin_left = 16.0
+content_margin_top = 14.0
+content_margin_right = 16.0
+content_margin_bottom = 14.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.55)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_primary_hover"]
+content_margin_left = 16.0
+content_margin_top = 14.0
+content_margin_right = 16.0
+content_margin_bottom = 14.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.32)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.4, 0.85, 0.92, 1)
+shadow_color = Color(0.211765, 0.772549, 0.85098, 0.5)
+shadow_size = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_quit"]
+content_margin_left = 14.0
+content_margin_top = 12.0
+content_margin_right = 14.0
+content_margin_bottom = 12.0
+bg_color = Color(1, 1, 1, 0.025)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.541176, 0.592157, 0.647059, 0.45)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_quit_hover"]
+content_margin_left = 14.0
+content_margin_top = 12.0
+content_margin_right = 14.0
+content_margin_bottom = 12.0
+bg_color = Color(0.482353, 0.094118, 0.078431, 0.55)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.839216, 0.270588, 0.247059, 0.8)
+
+[node name="AuthScreen" type="Control" unique_id=1768253517 node_paths=PackedStringArray("status_label", "login_email_input", "login_password_input", "login_button", "reg_username_input", "reg_email_input", "reg_password_input", "register_button", "background", "hero_graphic", "ash_particles", "quit_button")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ouk20")
+status_label = NodePath("LeftColumn/LoginPanel/Content/StatusLabel")
+login_email_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Connexion/EmailInput")
+login_password_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Connexion/PasswordInput")
+login_button = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Connexion/LoginButton")
+reg_username_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/UsernameInput")
+reg_email_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/EmailInput")
+reg_password_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/PasswordInput")
+register_button = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/RegisterButton")
+background = NodePath("Background")
+hero_graphic = NodePath("HeroGraphic")
+ash_particles = NodePath("AshParticles")
+quit_button = NodePath("LeftColumn/LoginPanel/Content/QuitButton")
+
+[node name="Background" type="TextureRect" parent="." unique_id=1028584451]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -60.0
+offset_top = -60.0
+offset_right = 60.0
+offset_bottom = 60.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = SubResource("GradientTexture2D_bg")
+expand_mode = 1
+
+[node name="HeroGraphic" type="TextureRect" parent="." unique_id=1857234808]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.5
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -60.0
+offset_top = -60.0
+offset_right = 60.0
+offset_bottom = 60.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="AshParticles" type="GPUParticles2D" parent="." unique_id=312689457]
+position = Vector2(960, 540)
+amount = 90
+texture = SubResource("GradientTexture2D_spark")
+lifetime = 9.0
+preprocess = 9.0
+randomness = 1.0
+process_material = SubResource("ParticleProcessMaterial_ash")
+
+[node name="LeftColumn" type="VBoxContainer" parent="." unique_id=580930525]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -212.0
+offset_top = -336.5
+offset_right = 212.0
+offset_bottom = 336.5
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 24
+alignment = 1
+
+[node name="Logo" parent="LeftColumn" instance=ExtResource("3_pw7ui") unique_id=716736431]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+size_flags_horizontal = 4
+title_size = 32
+mark_size = 60.0
+
+[node name="LoginPanel" type="PanelContainer" parent="LeftColumn" unique_id=1396011967]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_glass_panel")
+
+[node name="Content" type="VBoxContainer" parent="LeftColumn/LoginPanel" unique_id=966103105]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TitleLabel" type="Label" parent="LeftColumn/LoginPanel/Content" unique_id=176563535]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
+theme_override_fonts/font = SubResource("SystemFont_title")
+theme_override_font_sizes/font_size = 30
+text = "AUTH_TITLE"
+
+[node name="TabContainer" type="TabContainer" parent="LeftColumn/LoginPanel/Content" unique_id=889991818]
+custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
+theme_override_colors/font_selected_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hovered_color = Color(0.95, 0.95, 0.95, 1)
+theme_override_colors/font_unselected_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 18
+theme_override_styles/panel = SubResource("StyleBoxEmpty_tab_panel")
+theme_override_styles/tab_unselected = SubResource("StyleBoxEmpty_tab_unselected")
+theme_override_styles/tab_hovered = SubResource("StyleBoxFlat_tab_hover")
+theme_override_styles/tab_selected = SubResource("StyleBoxFlat_tab_selected")
+current_tab = 0
+
+[node name="Connexion" type="VBoxContainer" parent="LeftColumn/LoginPanel/Content/TabContainer" unique_id=82100386]
+layout_mode = 2
+theme_override_constants/separation = 16
+metadata/_tab_index = 0
+
+[node name="EmailInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Connexion" unique_id=366395479]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
+theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
+theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_field")
+theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
+placeholder_text = "AUTH_ID_PLACEHOLDER"
+
+[node name="PasswordInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Connexion" unique_id=2005488099]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
+theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
+theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_field")
+theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
+placeholder_text = "AUTH_PASSWORD_PLACEHOLDER"
+secret = true
+
+[node name="LoginButton" type="Button" parent="LeftColumn/LoginPanel/Content/TabContainer/Connexion" unique_id=550742926]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 20
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn_primary")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_primary_pressed")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_primary_hover")
+theme_override_styles/focus = SubResource("StyleBoxFlat_btn_primary")
+text = "AUTH_LOGIN"
+
+[node name="Inscription" type="VBoxContainer" parent="LeftColumn/LoginPanel/Content/TabContainer" unique_id=1415575303]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 16
+metadata/_tab_index = 1
+
+[node name="UsernameInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=2046158744]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
+theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
+theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_field")
+theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
+placeholder_text = "AUTH_USERNAME_PLACEHOLDER"
+
+[node name="EmailInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=93019955]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
+theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
+theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_field")
+theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
+placeholder_text = "AUTH_EMAIL_PLACEHOLDER"
+
+[node name="PasswordInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=922314186]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
+theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
+theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_field")
+theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
+placeholder_text = "AUTH_PASSWORD_PLACEHOLDER"
+secret = true
+
+[node name="RegisterButton" type="Button" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=1001289739]
+custom_minimum_size = Vector2(350, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 20
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn_primary")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_primary_pressed")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_primary_hover")
+theme_override_styles/focus = SubResource("StyleBoxFlat_btn_primary")
+text = "AUTH_REGISTER"
+
+[node name="StatusLabel" type="Label" parent="LeftColumn/LoginPanel/Content" unique_id=643284081]
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 16
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="QuitButton" type="Button" parent="LeftColumn/LoginPanel/Content" unique_id=2029812795]
+custom_minimum_size = Vector2(350, 46)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.88, 1)
+theme_override_colors/font_hover_color = Color(0.95, 0.6, 0.55, 1)
+theme_override_font_sizes/font_size = 16
+theme_override_styles/normal = SubResource("StyleBoxFlat_btn_quit")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_quit_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_btn_quit_hover")
+theme_override_styles/focus = SubResource("StyleBoxFlat_btn_quit")
+text = "AUTH_QUIT"

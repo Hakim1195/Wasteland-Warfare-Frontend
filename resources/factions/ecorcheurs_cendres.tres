@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" format=3]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "ecorcheurs_cendres"
+name = "Les Écorcheurs des Cendres"
+description = "Maraudeurs qui font de la terreur une arme. Le seul bruit de leurs lames suffit à briser le moral des garnisons : ce qui survit à l'assaut fuit dans la poussière.
+
+[b]Pouvoir :[/b] éliminer 2 unités en une attaque force le retrait d'une 3e par la terreur."
+modifiers = {
+"terror_extra_kill": true
+}
+hero_path = "res://assets/images/heroes/ecorcheurs_cendres.png"
+hero_model_path = "res://assets/models/ecorcheurs_cendres.glb"
+accent_color = Color(0.701961, 0.129412, 0.129412, 1)

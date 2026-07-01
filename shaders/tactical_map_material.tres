@@ -1,0 +1,23 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://shaders/tactical_map.gdshader" id="1_tacmap"]
+
+[resource]
+shader = ExtResource("1_tacmap")
+shader_parameter/c_shadow = Color(0.043, 0.058, 0.078, 1)
+shader_parameter/c_mid = Color(0.101, 0.129, 0.172, 1)
+shader_parameter/c_land = Color(0.223, 0.29, 0.341, 1)
+shader_parameter/c_high = Color(0.341, 0.521, 0.58, 1)
+shader_parameter/accent = Color(0.211765, 0.772549, 0.85098, 1)
+shader_parameter/chroma_keep = 0.07
+shader_parameter/contrast = 1.12
+shader_parameter/edge_radius = 1.4
+shader_parameter/edge_gain = 3.2
+shader_parameter/edge_tint = 0.22
+shader_parameter/edge_dark = 0.3
+shader_parameter/grid_count = Vector2(24, 16)
+shader_parameter/grid_width = 0.018
+shader_parameter/grid_alpha = 0.045
+shader_parameter/pad_frac = 0.095588
+shader_parameter/ocean_fallback = Color(0.42, 0.42, 0.23, 1)
+shader_parameter/ocean_sat_max = 0.32

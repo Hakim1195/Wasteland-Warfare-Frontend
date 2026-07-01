@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="FactionData" format=3]
+
+[ext_resource type="Script" path="res://resources/factions/faction_data.gd" id="1_fd"]
+
+[resource]
+script = ExtResource("1_fd")
+id = "pillards_poussiere"
+name = "Les Nomades de la Poussière"
+description = "Caravanes pillardes qui ne dorment jamais deux nuits au même endroit. Là où les autres factions creusent des tranchées, les Nomades frappent et disparaissent dans les tempêtes de cendres.
+
+[b]Pouvoir :[/b] droit à 2 déplacements stratégiques distincts en fin de tour."
+modifiers = {
+"bonus_strategic_moves": 1
+}
+hero_path = "res://assets/images/heroes/nomades.png"
+hero_model_path = "res://assets/models/nomades.glb"
+accent_color = Color(0.847059, 0.521569, 0.156863, 1)

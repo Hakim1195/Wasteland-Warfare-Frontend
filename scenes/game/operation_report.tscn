@@ -1,0 +1,140 @@
+[gd_scene load_steps=9 format=3 uid="uid://operation_report_ww"]
+
+[ext_resource type="Script" path="res://scripts/game/operation_report.gd" id="1_or"]
+[ext_resource type="Shader" path="res://shaders/report_blur.gdshader" id="2_blur"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_blur"]
+shader = ExtResource("2_blur")
+shader_parameter/blur_amount = 3.0
+shader_parameter/darken = 0.55
+shader_parameter/tint = Color(0.058824, 0.07451, 0.094118, 1)
+
+[sub_resource type="SystemFont" id="SystemFont_or"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="Theme" id="Theme_or"]
+default_font = SubResource("SystemFont_or")
+default_font_size = 16
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_report"]
+content_margin_left = 44.0
+content_margin_top = 34.0
+content_margin_right = 44.0
+content_margin_bottom = 34.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.92)
+border_width_left = 4
+border_width_top = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+shadow_color = Color(0, 0, 0, 0.5)
+shadow_size = 24
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cta"]
+content_margin_left = 20.0
+content_margin_top = 12.0
+content_margin_right = 20.0
+content_margin_bottom = 12.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cta_hover"]
+content_margin_left = 20.0
+content_margin_top = 12.0
+content_margin_right = 20.0
+content_margin_bottom = 12.0
+bg_color = Color(0.211765, 0.772549, 0.85098, 0.32)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.4, 0.85, 0.92, 1)
+shadow_color = Color(0.211765, 0.772549, 0.85098, 0.5)
+shadow_size = 10
+
+[node name="OperationReport" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = SubResource("Theme_or")
+script = ExtResource("1_or")
+
+[node name="BlurRect" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+material = SubResource("ShaderMaterial_blur")
+color = Color(0, 0, 0, 1)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ReportPanel" type="PanelContainer" parent="Center"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_report")
+
+[node name="ReportVBox" type="VBoxContainer" parent="Center/ReportPanel"]
+custom_minimum_size = Vector2(640, 0)
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="ReportTitle" type="Label" parent="Center/ReportPanel/ReportVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
+theme_override_font_sizes/font_size = 46
+horizontal_alignment = 1
+autowrap_mode = 3
+text = "OPÉRATION TERMINÉE"
+
+[node name="Sep" type="HSeparator" parent="Center/ReportPanel/ReportVBox"]
+layout_mode = 2
+
+[node name="AttritionEyebrow" type="Label" parent="Center/ReportPanel/ReportVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 14
+text = "❯ RAPPORT D'ATTRITION"
+
+[node name="StagnationReport" type="Label" parent="Center/ReportPanel/ReportVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 16
+autowrap_mode = 3
+text = "—"
+
+[node name="AttritionList" type="VBoxContainer" parent="Center/ReportPanel/ReportVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="BackToLobbyButton" type="Button" parent="Center/ReportPanel/ReportVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 56)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_colors/font_pressed_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_font_sizes/font_size = 20
+theme_override_styles/normal = SubResource("StyleBoxFlat_cta")
+theme_override_styles/hover = SubResource("StyleBoxFlat_cta_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_cta_hover")
+theme_override_styles/focus = SubResource("StyleBoxFlat_cta")
+text = "❮ RETOURNER AU LOBBY"

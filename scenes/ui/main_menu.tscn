@@ -1,0 +1,323 @@
+[gd_scene load_steps=7 format=3 uid="uid://d23oxcmwk2ulc"]
+
+[ext_resource type="Texture2D" uid="uid://dl6ps8pllyfe" path="res://assets/images/bg_wasteland.png" id="1_bg"]
+[ext_resource type="Script" uid="uid://mtwwupjkpeih" path="res://scripts/ui/main_menu.gd" id="1_scr"]
+[ext_resource type="Texture2D" uid="uid://myecjn4gbgqk" path="res://assets/images/logo_mark.svg" id="2_logo"]
+
+[sub_resource type="SystemFont" id="font_warzone"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="StyleBoxLine" id="filet_cyan"]
+color = Color(0.211765, 0.772549, 0.85098, 0.5)
+thickness = 2
+
+[sub_resource type="StyleBoxFlat" id="card_panel"]
+content_margin_left = 18.0
+content_margin_top = 16.0
+content_margin_right = 18.0
+content_margin_bottom = 16.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.85)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.211765, 0.772549, 0.85098, 0.3)
+
+[sub_resource type="StyleBoxFlat" id="nav_bar_panel"]
+content_margin_left = 8.0
+content_margin_top = 2.0
+content_margin_right = 8.0
+content_margin_bottom = 2.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.95)
+border_width_bottom = 2
+border_color = Color(0.211765, 0.772549, 0.85098, 0.6)
+
+[node name="MainMenu" type="Control" node_paths=PackedStringArray("welcome_label", "status_label", "lobby_tab", "characters_tab", "shop_tab", "leaderboard_tab", "settings_button", "system_button", "xp_coins_slot", "hero_portrait", "portrait_placeholder", "mode_eyebrow", "play_button", "leaderboard_content", "challenges_content", "cards_row")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_scr")
+welcome_label = NodePath("Hud/Shell/TopBar/UtilityCluster/IdentityFrame/IdentityRow/IdentityBox/WelcomeLabel")
+status_label = NodePath("Hud/Shell/BottomRow/CtaColumn/StatusLabel")
+lobby_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/LobbyTab")
+characters_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/CharactersTab")
+shop_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/ShopTab")
+leaderboard_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/LeaderboardTab")
+settings_button = NodePath("Hud/Shell/TopBar/UtilityCluster/SettingsButton")
+system_button = NodePath("Hud/Shell/TopBar/UtilityCluster/SystemButton")
+xp_coins_slot = NodePath("Hud/Shell/TopBar/UtilityCluster/IdentityFrame/IdentityRow/XpCoinsSlot")
+hero_portrait = NodePath("HeroLayer/HeroPortrait")
+portrait_placeholder = NodePath("HeroLayer/PortraitPlaceholder")
+mode_eyebrow = NodePath("Hud/Shell/BottomRow/CtaColumn/ModeEyebrow")
+play_button = NodePath("Hud/Shell/BottomRow/CtaColumn/StartButton")
+leaderboard_content = NodePath("Hud/Shell/MidRow/LeftColumn/LeaderboardCard/LeaderboardContent")
+challenges_content = NodePath("Hud/Shell/MidRow/LeftColumn/ChallengesCard/ChallengesContent")
+cards_row = NodePath("Hud/Shell/BottomRow/CardsRow")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("1_bg")
+expand_mode = 2
+
+[node name="HeroLayer" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 70.0
+offset_bottom = -150.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="PortraitPlaceholder" type="ColorRect" parent="HeroLayer"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -230.0
+offset_top = -345.0
+offset_right = 230.0
+offset_bottom = 345.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.101961, 0.12549, 0.156863, 1)
+
+[node name="HeroPortrait" type="TextureRect" parent="HeroLayer"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Hud" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 40
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 40
+theme_override_constants/margin_bottom = 22
+
+[node name="Shell" type="VBoxContainer" parent="Hud"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="TopBar" type="HBoxContainer" parent="Hud/Shell"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="BrandBox" type="HBoxContainer" parent="Hud/Shell/TopBar"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 12
+
+[node name="LogoSmall" type="TextureRect" parent="Hud/Shell/TopBar/BrandBox"]
+custom_minimum_size = Vector2(72, 72)
+layout_mode = 2
+size_flags_vertical = 4
+texture = ExtResource("2_logo")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="BrandTitle" type="Label" parent="Hud/Shell/TopBar/BrandBox"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 20
+text = "WASTELAND WARFARE"
+
+[node name="LeftSpacer" type="Control" parent="Hud/Shell/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="NavPanel" type="PanelContainer" parent="Hud/Shell/TopBar"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/panel = SubResource("nav_bar_panel")
+
+[node name="NavTabs" type="HBoxContainer" parent="Hud/Shell/TopBar/NavPanel"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="LobbyTab" type="Button" parent="Hud/Shell/TopBar/NavPanel/NavTabs"]
+layout_mode = 2
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "MENU_TAB_LOBBY"
+
+[node name="CharactersTab" type="Button" parent="Hud/Shell/TopBar/NavPanel/NavTabs"]
+layout_mode = 2
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "MENU_TAB_CHARACTERS"
+
+[node name="ShopTab" type="Button" parent="Hud/Shell/TopBar/NavPanel/NavTabs"]
+layout_mode = 2
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "MENU_TAB_SHOP"
+
+[node name="LeaderboardTab" type="Button" parent="Hud/Shell/TopBar/NavPanel/NavTabs"]
+layout_mode = 2
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "MENU_TAB_LEADERBOARD"
+
+[node name="RightSpacer" type="Control" parent="Hud/Shell/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="UtilityCluster" type="HBoxContainer" parent="Hud/Shell/TopBar"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 12
+
+[node name="IdentityFrame" type="PanelContainer" parent="Hud/Shell/TopBar/UtilityCluster"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/panel = SubResource("card_panel")
+
+[node name="IdentityRow" type="HBoxContainer" parent="Hud/Shell/TopBar/UtilityCluster/IdentityFrame"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="IdentityBox" type="VBoxContainer" parent="Hud/Shell/TopBar/UtilityCluster/IdentityFrame/IdentityRow"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 0
+
+[node name="OperatorEyebrow" type="Label" parent="Hud/Shell/TopBar/UtilityCluster/IdentityFrame/IdentityRow/IdentityBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 13
+text = "COMMON_OPERATOR"
+
+[node name="WelcomeLabel" type="Label" parent="Hud/Shell/TopBar/UtilityCluster/IdentityFrame/IdentityRow/IdentityBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 22
+text = "—"
+
+[node name="XpCoinsSlot" type="HBoxContainer" parent="Hud/Shell/TopBar/UtilityCluster/IdentityFrame/IdentityRow"]
+layout_mode = 2
+size_flags_vertical = 4
+
+[node name="SettingsButton" type="Button" parent="Hud/Shell/TopBar/UtilityCluster"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_vertical = 4
+auto_translate_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "⚙"
+
+[node name="SystemButton" type="Button" parent="Hud/Shell/TopBar/UtilityCluster"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_vertical = 4
+auto_translate_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "⏻"
+
+[node name="FiletSeparator" type="HSeparator" parent="Hud/Shell"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="MidRow" type="HBoxContainer" parent="Hud/Shell"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 20
+
+[node name="LeftColumn" type="VBoxContainer" parent="Hud/Shell/MidRow"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 14
+
+[node name="LeaderboardCard" type="PanelContainer" parent="Hud/Shell/MidRow/LeftColumn"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("card_panel")
+
+[node name="LeaderboardContent" type="VBoxContainer" parent="Hud/Shell/MidRow/LeftColumn/LeaderboardCard"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ChallengesCard" type="PanelContainer" parent="Hud/Shell/MidRow/LeftColumn"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("card_panel")
+
+[node name="ChallengesContent" type="VBoxContainer" parent="Hud/Shell/MidRow/LeftColumn/ChallengesCard"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ColumnSpacer" type="Control" parent="Hud/Shell/MidRow/LeftColumn"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="CenterSpacer" type="Control" parent="Hud/Shell/MidRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="BottomRow" type="HBoxContainer" parent="Hud/Shell"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="CtaColumn" type="VBoxContainer" parent="Hud/Shell/BottomRow"]
+layout_mode = 2
+size_flags_vertical = 8
+theme_override_constants/separation = 8
+
+[node name="ModeEyebrow" type="Label" parent="Hud/Shell/BottomRow/CtaColumn"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 13
+text = "MENU_SELECT_MODE"
+
+[node name="StartButton" type="Button" parent="Hud/Shell/BottomRow/CtaColumn"]
+custom_minimum_size = Vector2(360, 84)
+layout_mode = 2
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 26
+text = "MENU_PLAY"
+
+[node name="StatusLabel" type="Label" parent="Hud/Shell/BottomRow/CtaColumn"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 15
+
+[node name="CardsRow" type="HBoxContainer" parent="Hud/Shell/BottomRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 8
+theme_override_constants/separation = 14
+alignment = 1

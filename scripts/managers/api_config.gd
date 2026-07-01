@@ -1,0 +1,59 @@
+extends Node
+##
+## ApiConfig (autoload) — SOURCE UNIQUE des hôtes backend (REST + WebSocket).
+##
+## Avant : l'URL de prod était codée en dur dans TROIS fichiers (auth_manager, network_manager,
+## bootloader) → impossible de tester en local sans éditer chacun. Désormais ces managers lisent
+## leur hôte ICI (au démarrage, via /root/ApiConfig). Un seul point à changer.
+##
+## Bascule dev/prod (par ordre de priorité) :
+##   1. Fichier `user://server_host.txt` : contient une URL http(s) (ex: "http://192.168.1.20:8000").
+##      Pratique pour pointer une instance précise SANS recompiler. L'hôte WS (ws/wss) en est déduit.
+##   2. Argument de ligne de commande `--local` : bascule sur 127.0.0.1:8000 (backend Docker local).
+##   3. Sinon : PRODUCTION (api.wasteland-warfare.com).
+##
+## ⚠️ Doit être le PREMIER autoload (avant AuthManager/NetworkManager) pour que ses valeurs soient
+## prêtes quand ceux-ci s'initialisent. Les managers le lisent défensivement (get_node_or_null) et
+## retombent sur la prod si l'autoload manque → aucune régression si on le retire.
+
+const PROD_HTTP := "https://api.wasteland-warfare.com"
+const PROD_WS := "wss://api.wasteland-warfare.com"
+const LOCAL_HTTP := "http://127.0.0.1:8000"
+const LOCAL_WS := "ws://127.0.0.1:8000"
+const OVERRIDE_FILE := "user://server_host.txt"
+
+# Hôte HTTP de base (sans suffixe). NetworkManager y ajoute "/api/v1", le bootloader "/api".
+var http_host: String = PROD_HTTP
+# Hôte WebSocket de base (sans suffixe). NetworkManager y ajoute "/ws/".
+var ws_host: String = PROD_WS
+
+
+func _ready() -> void:
+	# 1) Override par fichier (une URL http(s) sur la 1re ligne).
+	if FileAccess.file_exists(OVERRIDE_FILE):
+		var f := FileAccess.open(OVERRIDE_FILE, FileAccess.READ)
+		if f != null:
+			var custom := f.get_as_text().strip_edges()
+			f.close()
+			if custom != "":
+				_apply_http_host(custom)
+				print("🌐 ApiConfig: hôte personnalisé (server_host.txt) = ", http_host)
+				return
+
+	# 2) Argument --local (éditeur/dev contre un backend Docker local).
+	var argv := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	if argv.has("--local"):
+		http_host = LOCAL_HTTP
+		ws_host = LOCAL_WS
+		print("🌐 ApiConfig: mode LOCAL (--local) = ", http_host)
+		return
+
+	# 3) Production (défaut).
+	print("🌐 ApiConfig: mode PRODUCTION = ", http_host)
+
+
+# Déduit l'hôte WebSocket (ws/wss) à partir d'un hôte HTTP fourni, et normalise (sans "/" final).
+func _apply_http_host(host: String) -> void:
+	host = host.rstrip("/")
+	http_host = host
+	ws_host = host.replace("https://", "wss://").replace("http://", "ws://")
