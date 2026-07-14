@@ -7,6 +7,9 @@ extends Control
 # de jeu / réseau ici — main.gd pousse les données (populate) et gère la navigation (back_to_lobby).
 
 signal back_to_lobby
+# Re-queue en 1 clic (G3 §8.70) : « REJOUER » depuis le débriefing — bénéficie à TOUS les joueurs
+# en fin de partie, pas qu'aux éliminés. main.gd relaie vers NetworkManager.requeue().
+signal requeue_requested
 
 const ACCENT_CYAN := Color("36c5d9")
 const ACCENT_GOLD := Color("e0b249")
@@ -24,6 +27,39 @@ func _ready() -> void:
 	# SFX d'interface (survol/retour — R6).
 	%BackToLobbyButton.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
 	%BackToLobbyButton.pressed.connect(func() -> void: AudioManager.play_sfx("back"))
+	_build_requeue_button()
+
+# Bouton « ⟳ REJOUER » (G3 §8.70), construit par code À CÔTÉ du retour lobby (aucune retouche
+# .tscn) : or (CTA de relance), anti double-clic, émet requeue_requested (main.gd décide).
+func _build_requeue_button() -> void:
+	var anchor: Button = %BackToLobbyButton
+	var parent := anchor.get_parent()
+	var btn := Button.new()
+	btn.name = "RequeueButton"
+	btn.text = tr("REPORT_REQUEUE")
+	btn.custom_minimum_size = anchor.custom_minimum_size
+	btn.focus_mode = Control.FOCUS_NONE
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(ACCENT_GOLD, 0.14)
+	sb.set_border_width_all(2)
+	sb.border_color = ACCENT_GOLD
+	sb.set_content_margin_all(10)
+	var hover := sb.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT_GOLD, 0.30)
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_stylebox_override("focus", sb)
+	btn.add_theme_color_override("font_color", ACCENT_GOLD)
+	btn.add_theme_color_override("font_hover_color", Color("eef3f7"))
+	btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	btn.pressed.connect(func() -> void:
+		AudioManager.play_sfx("confirm")
+		btn.disabled = true
+		requeue_requested.emit())
+	parent.add_child(btn)
+	parent.move_child(btn, anchor.get_index())
 
 # Remplit le rapport. data = {
 #   title: String, title_color: Color, stagnation: int,
@@ -97,6 +133,15 @@ func _build_and_animate_rewards(rewards: Dictionary) -> void:
 	points_lbl.add_theme_font_size_override("font_size", 22)
 	points_lbl.text = "POINTS DE MATCH : +0"
 	block.add_child(points_lbl)
+
+	# Pass Spécial (M4 §8.67) : le serveur a appliqué +25 % d'XP (et coins héros ×4) — simple
+	# RELAIS du flag, suffixe discret or sur la ligne d'XP (aucun calcul client).
+	if bool(rewards.get("pass_bonus_applied", false)):
+		var pass_lbl := Label.new()
+		pass_lbl.text = "★ +25 % XP — PASS SPÉCIAL ACTIF"
+		pass_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+		pass_lbl.add_theme_font_size_override("font_size", 13)
+		block.add_child(pass_lbl)
 
 	# Jauge XP + Coins réutilisable (remplissage cyan + lueur dorée aux paliers de 10 niveaux).
 	var bar = XpCoinsBarScript.new()

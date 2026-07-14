@@ -112,6 +112,12 @@ var _faction_desc: String = ""
 # Tiroir « INTEL : ZONE » (§8.36) — état ouvert/fermé + Tween de fondu du panneau (Mémoire Tactique).
 var _intel_open := false
 var _intel_tween: Tween
+# Télégraphe de zone (G1 §8.62) : ligne d'état PERMANENTE « ☢ PROCHAINE ZONE : … » (or), créée
+# par code sous l'objectif secret (BottomVBox) — pattern _build_confirm_button (pas de retouche .tscn).
+var _forecast_label: Label = null
+# Prévision de combat (G4 §8.63) : ligne « PRÉVISION : victoire NN % … » créée par code sous
+# l'instruction (TopCenterWidget), visible uniquement au survol d'une cible valide en Phase 3.
+var _odds_label: Label = null
 # Tiroir « INTEL : FACTIONS » (§2) — état ouvert/fermé + Tween de fondu (miroir du tiroir Zone).
 var _factions_intel_open := false
 var _factions_intel_tween: Tween
@@ -259,6 +265,44 @@ func get_amount() -> int:
 func set_instruction(text: String) -> void:
 	%InstructionLabel.text = text
 
+# =========================================================
+# Prévision de combat (G4 §8.63) — « PRÉVISION : victoire NN % · pertes est. N,N »
+# =========================================================
+# Ligne créée par code SOUS l'instruction (TopCenterWidget) : cyan si ≥ 65 %, or si 40-65 %,
+# rouge si < 40 %. Poussée par main.gd au survol d'une cible ennemie adjacente (Phase 3, source
+# sélectionnée), masquée au unhover / à la désélection. Calcul 100 % client (CombatOdds) — les
+# pouvoirs ponctuels À ÉTATS (cartes, boucliers…) ne sont pas simulés, d'où la mention discrète.
+
+func _ensure_odds_label() -> void:
+	if _odds_label != null and is_instance_valid(_odds_label):
+		return
+	_odds_label = Label.new()
+	_odds_label.name = "CombatOddsLabel"
+	_odds_label.add_theme_font_size_override("font_size", 14)
+	_odds_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_odds_label.visible = false
+	var anchor: Control = %InstructionLabel
+	var parent := anchor.get_parent()
+	parent.add_child(_odds_label)
+	parent.move_child(_odds_label, anchor.get_index() + 1)
+
+func show_forecast(win_prob: float, exp_losses: float) -> void:
+	_ensure_odds_label()
+	var pct := int(round(win_prob * 100.0))
+	var col: Color = Color("d6453f")  # rouge danger (< 40 %)
+	if win_prob >= 0.65:
+		col = ACCENT_CYAN
+	elif win_prob >= 0.40:
+		col = ACCENT_GOLD
+	var losses_txt := ("%.1f" % exp_losses).replace(".", ",")
+	_odds_label.text = "PRÉVISION : victoire %d %% · pertes est. %s   (hors pouvoirs à états)" % [pct, losses_txt]
+	_odds_label.add_theme_color_override("font_color", col)
+	_odds_label.visible = true
+
+func hide_forecast() -> void:
+	if _odds_label != null and is_instance_valid(_odds_label):
+		_odds_label.visible = false
+
 # Active/désactive le bouton « Fin de Phase » (verrou anti double-envoi piloté par main.gd, §8.48).
 func set_pass_enabled(enabled: bool) -> void:
 	%NextPhaseButton.disabled = not enabled
@@ -352,6 +396,37 @@ func set_intel(stagnation: int, entries: Array) -> void:
 		row.add_theme_color_override("font_color", e.get("color", Color.WHITE))
 		row.add_theme_font_size_override("font_size", 14)
 		list.add_child(row)
+
+# =========================================================
+# Télégraphe de la zone (G1 §8.62) — « PROCHAINE ZONE : <noms> »
+# =========================================================
+# Ligne d'état PERMANENTE (or, charte §2) affichée sous l'objectif secret dans le bloc central bas.
+# Poussée par main.gd (noms déjà résolus via MapData — le HUD reste une View pure §6.1). Le label
+# est créé paresseusement par code et inséré juste APRÈS %ObjectiveLabel dans son conteneur.
+
+func _ensure_forecast_label() -> void:
+	if _forecast_label != null and is_instance_valid(_forecast_label):
+		return
+	_forecast_label = Label.new()
+	_forecast_label.name = "ZoneForecastLabel"
+	_forecast_label.add_theme_color_override("font_color", ACCENT_GOLD)
+	_forecast_label.add_theme_font_size_override("font_size", 13)
+	_forecast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var anchor: Control = %ObjectiveLabel
+	var parent := anchor.get_parent()
+	parent.add_child(_forecast_label)
+	parent.move_child(_forecast_label, anchor.get_index() + 1)
+
+# Alimente la ligne du télégraphe. `names` = noms lisibles des territoires annoncés (Array[String],
+# résolus par main.gd). Vide → mention neutre (serveur antérieur au télégraphe / partie non lancée).
+func set_zone_forecast(names: Array) -> void:
+	_ensure_forecast_label()
+	if names.is_empty():
+		_forecast_label.text = "☢ PROCHAINE ZONE : (non annoncée)"
+	else:
+		var joined := ", ".join(PackedStringArray(names))
+		_forecast_label.text = "☢ PROCHAINE ZONE : " + joined
+
 
 # =========================================================
 # Tiroir « INTEL : FACTIONS » (§2) — pouvoirs passifs des factions adverses
@@ -970,19 +1045,28 @@ func _refresh_cards() -> void:
 		lbl.add_theme_color_override("font_color", Color("8a8f7a"))
 		box.add_child(lbl)
 		return
+	# Main TOUJOURS INSPECTABLE, jouable UNIQUEMENT pendant SON tour de jeu (G3 §8.70 explicité) :
+	# hors tour (ou éliminé — jamais joueur courant), les vignettes restent visibles mais
+	# DÉSACTIVÉES (lecture seule) au lieu de laisser le serveur refuser le clic.
+	var playable := GameState.stage == "playing" \
+		and int(GameState.current_player_id) == int(AuthManager.user_id) \
+		and str(my.get("status", "alive")) == "alive"
 	# Chaque carte est un entier de troupes : on l'affiche comme un bouton « +N ».
 	# Le piège JSON (§5) convertit les nombres en float → on repasse en int() pour l'affichage.
 	for i in range(hand.size()):
-		box.add_child(_make_card_button(int(hand[i]), i))
+		box.add_child(_make_card_button(int(hand[i]), i, playable))
 
 # Vignette de carte stylisée : un bouton « +N » (valeur en gros). Clic = card_played(index).
-func _make_card_button(value: int, index: int) -> Control:
+# `playable` = false (hors tour / éliminé) → vignette VISIBLE mais désactivée (lecture seule).
+func _make_card_button(value: int, index: int, playable: bool = true) -> Control:
 	var card := Button.new()
 	card.text = "+%d" % value
 	card.custom_minimum_size = Vector2(80, 60)
 	card.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	card.tooltip_text = "Jouer cette carte : +%d troupes à déployer." % value
+	card.disabled = not playable
+	card.tooltip_text = ("Jouer cette carte : +%d troupes à déployer." % value) if playable \
+		else ("+%d troupes — jouable pendant votre tour." % value)
 	card.add_theme_font_size_override("font_size", 28)
 	card.add_theme_color_override("font_color", Color("f0e6d2"))
 

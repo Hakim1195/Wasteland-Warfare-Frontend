@@ -19,6 +19,12 @@ uniform sampler2D id_map : filter_nearest;
 uniform vec4 territory_colors[TCOUNT];                 // index i -> territory_colors[i-1] (rgb + alpha de remplissage)
 uniform float territory_edge[TCOUNT];                  // alpha du contour neon par territoire
 uniform float territory_mine[TCOUNT];                  // 1 = territoire du JOUEUR LOCAL (porte une ombre de relief)
+// TELEGRAPHE de zone (G1 §8.62) : 1 = territoire ANNONCE pour la PROCHAINE zone radioactive ->
+// liseré OR/ambre PULSANT le long des vraies cotes (distinct du vert toxique de la zone courante).
+uniform float territory_forecast[TCOUNT];
+uniform vec3 forecast_color = vec3(1.0, 0.75, 0.1);    // or/ambre (charte Warzone Command)
+uniform float forecast_pulse_speed = 2.6;              // vitesse de pulsation (rad/s)
+uniform float forecast_width : hint_range(0.0, 6.0) = 2.4;  // liseré plus epais que le contour normal
 uniform float border_width : hint_range(0.0, 4.0) = 1.4;   // epaisseur du contour (px texture)
 uniform float border_boost : hint_range(1.0, 4.0) = 2.3;   // surbrillance du contour
 // --- Relief : ombre portee des territoires possedes par MOI (§8.52, reintroduite sur les vraies cotes) ---
@@ -50,6 +56,22 @@ void fragment() {
 		if (edge) {
 			rgb = clamp(col.rgb * border_boost, 0.0, 1.0);
 			a = max(a, territory_edge[idx - 1]);   // contour neon (mien vif / adverse attenue / neutre 0)
+		}
+		// --- Telegraphe (G1 §8.62) : liseré OR PULSANT des territoires annonces pour la
+		//     PROCHAINE zone. Detection de bord ELARGIE (forecast_width > border_width) -> le
+		//     liseré est plus epais que le contour normal et reste lisible par-dessus lui.
+		//     S'applique AUSSI a un territoire deja contamine (chevauchement possible des blocs).
+		if (territory_forecast[idx - 1] > 0.5) {
+			vec2 fpx = TEXTURE_PIXEL_SIZE * forecast_width;
+			bool fedge = idx_at(UV + vec2(fpx.x, 0.0)) != idx
+				|| idx_at(UV - vec2(fpx.x, 0.0)) != idx
+				|| idx_at(UV + vec2(0.0, fpx.y)) != idx
+				|| idx_at(UV - vec2(0.0, fpx.y)) != idx;
+			if (fedge) {
+				float pulse = 0.55 + 0.45 * sin(TIME * forecast_pulse_speed);
+				rgb = forecast_color;
+				a = max(a, pulse);
+			}
 		}
 		outc = vec4(rgb, a);
 	}

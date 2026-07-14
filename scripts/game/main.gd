@@ -78,6 +78,9 @@ const FACTIONS_DIR := "res://resources/factions/"
 var _faction_info_cache: Dictionary = {}
 # Cache enrichi (nom + description + pouvoir passif) pour le tiroir « INTEL : FACTIONS » (§2).
 var _faction_full_cache: Dictionary = {}
+# Cache des MODIFICATEURS de faction (id -> Dictionary), miroir du registre backend §4.3 lu des
+# .tres — consommé par la Prévision de combat (G4 §8.63 : flags de dés passés à CombatOdds).
+var _faction_mods_cache: Dictionary = {}
 # Héros adverse actuellement inspecté (clic territoire) ; -1 = aucun. Sert au rafraîchissement temps
 # réel de l'inspecteur (les PV/PP de la cible changent après un combat). Voir _refresh_enemy_inspector.
 var _inspected_enemy_id: int = -1
@@ -102,6 +105,9 @@ func _ready():
 
 	board.territory_clicked.connect(_on_territory_clicked)
 	board.territory_right_clicked.connect(_on_territory_right_clicked)
+	# Prévision de combat (G4 §8.63) : survol d'une cible en Phase 3 → probabilités affichées.
+	board.territory_hovered.connect(_on_territory_hovered)
+	board.territory_unhovered.connect(_on_territory_unhovered)
 	# Inspecteur Tactique (§1) : un clic GAUCHE dans le vide referme le panneau (board_cleared).
 	board.board_cleared.connect(hud.hide_territory_inspector)
 	# Inspecteur Héros adverse (sprint RPG) : même geste de fermeture (clic dans le vide).
@@ -126,6 +132,11 @@ func _ready():
 		_refresh()
 	else:
 		button.text = "Initialiser une partie (debug)"
+
+	# Prévision de combat (G4 §8.63) : PRÉCHAUFFE la table DP au chargement de l'arène (~100 ms,
+	# invisible ici) pour que le tout premier survol d'une grosse bataille soit instantané (< 1 ms,
+	# tout est mémoïsé ensuite). Différé pour ne pas retarder le premier rendu de la scène.
+	_warm_combat_odds.call_deferred()
 
 # =========================================================
 # Accès / helpers d'état
@@ -158,10 +169,18 @@ func _my_state() -> Dictionary:
 	var me = GameState.players.get(str(_my_id()), {})
 	return me if typeof(me) == TYPE_DICTIONARY else {}
 
+# Vrai si le joueur LOCAL est ÉLIMINÉ (mode observateur G3 §8.70) : il ne peut PLUS émettre
+# d'action de jeu (le serveur refuse déjà, mais l'UI ne doit rien proposer). Défauts sûrs :
+# jamais éliminé tant que l'état n'est pas synchronisé.
+func _is_eliminated() -> bool:
+	var me := _my_state()
+	return str(me.get("status", "alive")) == "eliminated" or bool(me.get("is_dead", false))
+
 # Vrai si une fenêtre modale bloquante est ouverte (conquête / Éclipse / espionnage) : le jeu
 # local est alors figé, comme l'exige %ConquerDialog (§8.23) et les pop-ups de faction (§8.3).
+# DURCI (G3 §8.70) : un ÉLIMINÉ ne peut JAMAIS émettre d'action de jeu (observateur pur).
 func _input_blocked() -> bool:
-	return _awaiting_conquer_move or _awaiting_eclipse or _awaiting_spy
+	return _awaiting_conquer_move or _awaiting_eclipse or _awaiting_spy or _is_eliminated()
 
 # =========================================================
 # Clics sur le plateau
@@ -271,6 +290,86 @@ func _select_source(tid: String):
 func _clear_source():
 	_source = ""
 	board.set_selected_source("")
+	# Prévision de combat (G4 §8.63) : plus de source → plus de prévision affichable.
+	hud.hide_forecast()
+
+# =========================================================
+# Prévision de combat (G4 §8.63) — survol d'une cible en Phase 3
+# =========================================================
+
+# Préchauffage de la DP (appelé une fois, différé, au chargement de l'arène) : calcule le pire
+# cas SANS flags (60v60, la table couvre alors toutes les garnisons inférieures) + le couple de
+# flags de MA faction contre chaque faction adverse présente (tables séparées par flags).
+func _warm_combat_odds() -> void:
+	var my_mods := _faction_modifiers(str(_my_state().get("faction", "")))
+	CombatOdds.conquest_probability(CombatOdds.MAX_UNITS, CombatOdds.MAX_UNITS, {}, {})
+	for k in GameState.players:
+		var pdata: Dictionary = GameState.players.get(k, {})
+		var fid := str(pdata.get("faction", ""))
+		if fid != "":
+			CombatOdds.conquest_probability(
+				CombatOdds.MAX_UNITS, CombatOdds.MAX_UNITS, my_mods, _faction_modifiers(fid))
+
+# Survol d'un territoire : si (mon tour, Phase 3, source sélectionnée, cible ENNEMIE adjacente),
+# calcule la probabilité de conquête EXACTE côté client (CombatOdds, aucune requête réseau) et la
+# pousse au HUD. Toute condition manquante → prévision masquée. Le calcul est mémoïsé (statique)
+# → survol instantané (< 1 ms après le premier calcul d'un couple de garnisons).
+func _on_territory_hovered(tid: String) -> void:
+	if GameState.stage != "playing" or int(GameState.current_phase) != 3 \
+			or not _is_playing_my_turn() or _input_blocked() or _source == "":
+		hud.hide_forecast()
+		return
+	var owner = _owner(tid)
+	if owner == null or int(owner) == _my_id():
+		hud.hide_forecast()
+		return
+	if not MapData.are_adjacent(_source, tid):
+		hud.hide_forecast()
+		return
+	var att_units := _garrison(_source)
+	var def_units := _garrison(tid)
+	if att_units < 2 or def_units < 1:
+		hud.hide_forecast()
+		return
+	var atk_mods := _faction_modifiers(str(_my_state().get("faction", "")))
+	var def_state: Dictionary = GameState.players.get(str(int(owner)), {})
+	var def_mods := _faction_modifiers(str(def_state.get("faction", "")))
+	var odds := CombatOdds.conquest_probability(att_units, def_units, atk_mods, def_mods)
+	hud.show_forecast(float(odds.get("win_prob", 0.0)), float(odds.get("exp_att_losses", 0.0)))
+
+func _on_territory_unhovered(_tid: String) -> void:
+	hud.hide_forecast()
+
+# Modificateurs de faction par id (miroir du registre backend §4.3), lus du .tres et mis en cache.
+# Même scan robuste export-safe que _faction_info (.remap, duck-typing). {} si faction inconnue.
+func _faction_modifiers(fid: String) -> Dictionary:
+	if fid == "":
+		return {}
+	if _faction_mods_cache.has(fid):
+		return _faction_mods_cache[fid]
+	var mods: Dictionary = {}
+	var dir := DirAccess.open(FACTIONS_DIR)
+	if dir != null:
+		dir.list_dir_begin()
+		var file_name := dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				var fn := file_name
+				if fn.ends_with(".remap"):
+					fn = fn.trim_suffix(".remap")
+				if fn.ends_with(".tres"):
+					var full := FACTIONS_DIR + fn
+					if ResourceLoader.exists(full):
+						var res = load(full)
+						if res != null and str(res.get("id")) == fid:
+							var m = res.get("modifiers")
+							if typeof(m) == TYPE_DICTIONARY:
+								mods = m
+							break
+			file_name = dir.get_next()
+		dir.list_dir_end()
+	_faction_mods_cache[fid] = mods
+	return mods
 
 # =========================================================
 # Tampon de déploiement local (§8.26) — placement initial & renforts Phase 2
@@ -853,6 +952,18 @@ func _push_intel() -> void:
 		})
 	hud.set_intel(stagnation, entries)
 
+	# Télégraphe de la zone (G1 §8.62) : résout les NOMS lisibles des territoires annoncés
+	# (contamination_zone.next_territories, pré-tirés serveur) et pousse la ligne permanente au HUD.
+	# Clé absente (serveur antérieur / état legacy) → liste vide, mention neutre côté HUD.
+	var zone: Dictionary = GameState.contamination_zone if typeof(GameState.contamination_zone) == TYPE_DICTIONARY else {}
+	var forecast_names: Array = []
+	var next_tids = zone.get("next_territories", [])
+	if typeof(next_tids) == TYPE_ARRAY:
+		for tid in next_tids:
+			var info: Dictionary = MapData.TERRITORIES.get(str(tid), {})
+			forecast_names.append(str(info.get("name", tid)))
+	hud.set_zone_forecast(forecast_names)
+
 # =========================================================
 # Résolution visuelle des combats (Split-Screen VS)
 # =========================================================
@@ -887,6 +998,10 @@ func _play_combat_resolution(event: Dictionary) -> void:
 			"defender_losses": int(event.get("defender_losses", 0)),
 			"time_bank_bonus": int(event.get("time_bank_bonus_seconds", 0)),
 			"local_is_attacker": int(GameState.current_player_id) == _my_id(),
+			# Skins équipés (M5 §8.69) : lus du PlayerState PUBLIC de chaque camp — les DEUX
+			# joueurs voient le skin de l'autre dans le Split-Screen VS (moment vitrine).
+			"attacker_skin": _equipped_skin_of(atk_owner),
+			"defender_skin": _equipped_skin_of(def_owner),
 		})
 	await vs_screen.animation_finished
 
@@ -904,6 +1019,15 @@ func _faction_of_player(pid) -> String:
 	var p = GameState.players.get(str(int(pid)), {})
 	if typeof(p) == TYPE_DICTIONARY:
 		return str(p.get("faction", ""))
+	return ""
+
+# Skin équipé d'un joueur (M5 §8.69) — champ PUBLIC de son PlayerState ("" si aucun / inconnu).
+func _equipped_skin_of(pid) -> String:
+	if pid == null:
+		return ""
+	var p = GameState.players.get(str(int(pid)), {})
+	if typeof(p) == TYPE_DICTIONARY:
+		return str(p.get("equipped_skin", ""))
 	return ""
 
 # Caméra tactique : sur un résultat d'attaque, travelling vers les deux belligérants
@@ -989,8 +1113,49 @@ func _refresh():
 	# (pending_eclipse_choice / pending_spy_choice). Idempotent — sans effet pour les autres tours.
 	_maybe_prompt_eclipse()
 	_maybe_prompt_spy()
+	# Mode OBSERVATEUR (G3 §8.70) : si NOUS venons d'être éliminés, bandeau K.I.A. + caméra libre.
+	_maybe_show_spectator()
 	if GameState.winner_id != null:
 		_show_victory()
+
+# =========================================================
+# Mode OBSERVATEUR (G3 §8.70) — bandeau K.I.A. + caméra libre + re-queue
+# =========================================================
+const SpectatorOverlayScene := preload("res://scenes/ui/spectator_overlay.tscn")
+var _spectator_shown := false
+
+func _maybe_show_spectator() -> void:
+	if _spectator_shown or GameState.winner_id != null:
+		return
+	if not _is_eliminated():
+		return
+	_spectator_shown = true
+	var overlay := SpectatorOverlayScene.instantiate()
+	add_child(overlay)  # au-dessus du HUD (dernier enfant de Main), non bloquant (bandeau seul)
+	overlay.requeue_pressed.connect(_on_spectator_requeue)
+	overlay.quit_pressed.connect(_on_spectator_quit)
+	# Caméra tactique LIBRE (pan drag droit/molette + zoom molette) : l'observateur explore.
+	camera.set_free_navigation(true)
+	# Échec de re-queue → retour au lobby (le socket est déjà fermé par requeue()).
+	if not NetworkManager.requeue_failed.is_connected(_on_requeue_failed):
+		NetworkManager.requeue_failed.connect(_on_requeue_failed)
+	hud.add_log("[color=#e0b249]★ K.I.A. — vous passez en MODE OBSERVATEUR (caméra libre, chat ouvert).[/color]")
+
+func _on_spectator_requeue() -> void:
+	# Le helper réseau enchaîne quitter → radar → rejoindre/créer → waiting_room (G3 §8.70).
+	NetworkManager.requeue()
+
+func _on_spectator_quit() -> void:
+	# Sortie propre du spectateur : même chemin que l'abandon (le serveur nous sait déjà éliminé —
+	# aucune action à envoyer), socket coupé puis retour menu.
+	NetworkManager.connected = false
+	NetworkManager.set_process(false)
+	NetworkManager.socket.close()
+	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
+
+func _on_requeue_failed(_message: String) -> void:
+	# Repli : retour au lobby (l'écran lobby réaffiche le radar ; le message est déjà explicite).
+	TransitionManager.change_scene("res://scenes/ui/lobby_screen.tscn")
 
 func _show_victory():
 	if _victory_shown:
@@ -1035,6 +1200,10 @@ func _show_operation_report() -> void:
 	add_child(report)  # dernier enfant de Main -> dessiné au-dessus de tout
 	_report_node = report
 	report.back_to_lobby.connect(_on_back_to_lobby)
+	# « ⟳ REJOUER » du débriefing (G3 §8.70) : re-queue en 1 clic pour TOUS les joueurs.
+	report.requeue_requested.connect(_on_spectator_requeue)
+	if not NetworkManager.requeue_failed.is_connected(_on_requeue_failed):
+		NetworkManager.requeue_failed.connect(_on_requeue_failed)
 	# Récompenses du joueur LOCAL (Économie §8.47) : déjà reçues via match_over → animées d'emblée ;
 	# sinon vides ici, et poussées plus tard par _on_match_over (course réseau état/clôture).
 	report.populate({

@@ -13,6 +13,11 @@ signal territory_clicked(territory_id)
 # Clic DROIT sur un territoire (Area2D uniquement) — utilisé par le tampon de déploiement
 # (main.gd) pour RETIRER une troupe en attente (-1). Voir §8.26.
 signal territory_right_clicked(territory_id)
+# SURVOL d'un territoire (Area2D mouse_entered/mouse_exited) — consommé par la Prévision de
+# combat (G4 §8.63) : en Phase 3, source sélectionnée + survol d'une cible ennemie adjacente →
+# main.gd calcule et affiche les probabilités (CombatOdds). Vue pure : on ne fait qu'émettre.
+signal territory_hovered(territory_id)
+signal territory_unhovered(territory_id)
 # Clic GAUCHE dans le VIDE (aucun territoire touché) — referme l'Inspecteur Tactique de Territoire
 # (§1, charte Warzone Command). Émis par _unhandled_input avec une garde « même frame » contre le
 # picking physique des Area2D (qui émet input_event AVANT _unhandled_input dans la même passe).
@@ -189,6 +194,13 @@ func _wire_click(node: Node, t_id: String) -> void:
 		var cb := _on_area_input_event.bind(t_id)
 		if not node.input_event.is_connected(cb):
 			node.input_event.connect(cb)
+		# Survol (G4 §8.63) : relaie l'entrée/sortie de souris (prévision de combat).
+		var cb_in := _on_area_mouse_entered.bind(t_id)
+		if not node.mouse_entered.is_connected(cb_in):
+			node.mouse_entered.connect(cb_in)
+		var cb_out := _on_area_mouse_exited.bind(t_id)
+		if not node.mouse_exited.is_connected(cb_out):
+			node.mouse_exited.connect(cb_out)
 	elif node.has_signal("pressed"):
 		var cb_btn := _on_pressed.bind(t_id)
 		if not node.pressed.is_connected(cb_btn):
@@ -242,6 +254,19 @@ func _contaminated_set() -> Dictionary:
 		out[str(zone["position"])] = true
 	return out
 
+# TÉLÉGRAPHE (G1 §8.62) : ensemble {tid: true} des territoires ANNONCÉS pour la PROCHAINE zone
+# (contamination_zone.next_territories, pré-tiré par le serveur un round à l'avance). Même contrat
+# que _contaminated_set ; clé absente (serveur antérieur / état legacy) → ensemble vide, aucun crash.
+func _forecast_set() -> Dictionary:
+	var out: Dictionary = {}
+	var zone = GameState.contamination_zone
+	if typeof(zone) != TYPE_DICTIONARY:
+		return out
+	if zone.has("next_territories") and typeof(zone["next_territories"]) == TYPE_ARRAY:
+		for tid in zone["next_territories"]:
+			out[str(tid)] = true
+	return out
+
 # Pousse le tampon de déploiement local (main.gd, §8.26) sur le plateau et redessine. Un dict
 # vide efface tous les "+X". Appelé pendant les phases de placement / renforts.
 func set_pending_deployments(pending: Dictionary) -> void:
@@ -272,6 +297,7 @@ func _build_owner_colors() -> void:
 func generate_board() -> void:
 	_build_owner_colors()
 	var contaminated := _contaminated_set()
+	var forecast := _forecast_set()
 
 	# Tableaux pousses a l'overlay (§8.51), indexes par la carte-ID : couleur+alpha de remplissage
 	# et alpha de contour. Initialises transparents -> les territoires neutres restent invisibles.
@@ -284,6 +310,9 @@ func generate_board() -> void:
 	# 1 = territoire du JOUEUR LOCAL -> porte une ombre de relief (§8.52, via l'overlay).
 	var ov_mine := PackedFloat32Array()
 	ov_mine.resize(42)
+	# 1 = territoire ANNONCÉ pour la prochaine zone -> liseré or pulsant (télégraphe G1 §8.62).
+	var ov_forecast := PackedFloat32Array()
+	ov_forecast.resize(42)
 
 	for tid in _nodes:
 		var node = _nodes[tid]
@@ -305,6 +334,8 @@ func generate_board() -> void:
 		# Couleur de remplissage du polygone (avec surbrillance de sélection et teinte de zone).
 		# Type explicite : `tid` (clé de Dictionary) est un Variant → l'inférence `:=` échoue.
 		var is_contaminated: bool = contaminated.has(tid)
+		# Territoire annoncé pour la PROCHAINE zone (télégraphe G1 §8.62 — liseré or + badge ⚠).
+		var is_forecast: bool = forecast.has(tid)
 		var fill_col: Color
 		var fill_alpha: float
 		if territory_owner != null:
@@ -339,10 +370,12 @@ func generate_board() -> void:
 				ov_colors[oi] = Color(fill_col.r, fill_col.g, fill_col.b, fill_alpha)
 				ov_edges[oi] = edge_a
 				ov_mine[oi] = 1.0 if is_mine else 0.0
+				ov_forecast[oi] = 1.0 if is_forecast else 0.0
 
 		# Badge de troupes : bordure à l'accent du propriétaire, nombre d'unités au centre,
-		# alerte ☢ si contaminé, et "+X" doré pour les troupes en attente de confirmation.
-		_update_badge(tid, garrison, accent, is_contaminated, pending)
+		# alerte ☢ si contaminé, "+X" doré pour les troupes en attente, ⚠ or si le territoire
+		# est annoncé pour la prochaine zone (télégraphe G1 §8.62).
+		_update_badge(tid, garrison, accent, is_contaminated, pending, is_forecast)
 
 		# Libellé/garnison : on n'écrase un texte que si le nœud expose la propriété `text`
 		# (cas fallback BaseButton ; les Area2D dessinés à la main n'ont pas de `text`).
@@ -363,6 +396,7 @@ func generate_board() -> void:
 		m.set_shader_parameter("territory_colors", ov_colors)
 		m.set_shader_parameter("territory_edge", ov_edges)
 		m.set_shader_parameter("territory_mine", ov_mine)
+		m.set_shader_parameter("territory_forecast", ov_forecast)
 
 # Crée (une fois) puis renvoie le Polygon2D de remplissage d'un territoire, construit à partir
 # de son CollisionPolygon2D (mêmes points, transformés dans l'espace local de l'Area2D).
@@ -459,9 +493,11 @@ func _clear_own_relief(tid: String) -> void:
 		shadow.visible = false
 
 # Crée ou met à jour le badge de troupes d'un territoire, positionné en son centre.
-# `contaminated` (défaut false) pilote l'alerte ☢ ; repassé à chaque rafraîchissement → un
-# territoire qui quitte la zone est automatiquement réinitialisé (☢ retiré).
-func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool = false, pending: int = 0) -> void:
+# `contaminated` (défaut false) pilote l'alerte ☢ ; `forecast` (défaut false) le ⚠ or du
+# télégraphe (G1 §8.62) ; repassés à chaque rafraîchissement → un territoire qui quitte la zone
+# (ou n'est plus annoncé) est automatiquement réinitialisé (☢/⚠ retirés).
+func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool = false,
+		pending: int = 0, forecast: bool = false) -> void:
 	var pos := get_territory_position(tid)
 	if pos == Vector2.INF:
 		return
@@ -475,7 +511,7 @@ func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool =
 		_badge_layer.add_child(badge)
 		_badges[tid] = badge
 	badge.global_position = pos
-	badge.set_data(troops, accent, contaminated, pending)
+	badge.set_data(troops, accent, contaminated, pending, forecast)
 
 # Position monde (espace du SubViewport) du centre d'un territoire — utilisée par la
 # caméra tactique pour cadrer les combats. Centre = centroïde du CollisionPolygon2D si
@@ -496,6 +532,13 @@ func get_territory_position(tid: String) -> Vector2:
 
 func _on_pressed(tid: String) -> void:
 	territory_clicked.emit(tid)
+
+# Survol d'un territoire (G4 §8.63) : simple relais de signal (aucune logique de jeu, §6.1).
+func _on_area_mouse_entered(tid: String) -> void:
+	territory_hovered.emit(tid)
+
+func _on_area_mouse_exited(tid: String) -> void:
+	territory_unhovered.emit(tid)
 
 # Handler des Area2D : clic GAUCHE enfoncé → territory_clicked ; clic DROIT enfoncé →
 # territory_right_clicked (retrait d'une troupe en attente, §8.26). Les autres évènements

@@ -33,7 +33,7 @@ bg_color = Color(0.058824, 0.07451, 0.094118, 0.95)
 border_width_bottom = 2
 border_color = Color(0.211765, 0.772549, 0.85098, 0.6)
 
-[node name="MainMenu" type="Control" node_paths=PackedStringArray("welcome_label", "status_label", "lobby_tab", "characters_tab", "shop_tab", "leaderboard_tab", "settings_button", "system_button", "xp_coins_slot", "hero_portrait", "portrait_placeholder", "mode_eyebrow", "play_button", "leaderboard_content", "challenges_content", "cards_row")]
+[node name="MainMenu" type="Control" node_paths=PackedStringArray("welcome_label", "status_label", "lobby_tab", "characters_tab", "shop_tab", "missions_tab", "leaderboard_tab", "settings_button", "system_button", "xp_coins_slot", "hero_portrait", "portrait_placeholder", "mode_eyebrow", "play_button", "leaderboard_content", "challenges_content", "cards_row")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -46,6 +46,7 @@ status_label = NodePath("Hud/Shell/BottomRow/CtaColumn/StatusLabel")
 lobby_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/LobbyTab")
 characters_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/CharactersTab")
 shop_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/ShopTab")
+missions_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/MissionsTab")
 leaderboard_tab = NodePath("Hud/Shell/TopBar/NavPanel/NavTabs/LeaderboardTab")
 settings_button = NodePath("Hud/Shell/TopBar/UtilityCluster/SettingsButton")
 system_button = NodePath("Hud/Shell/TopBar/UtilityCluster/SystemButton")
@@ -179,6 +180,12 @@ layout_mode = 2
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 16
 text = "MENU_TAB_SHOP"
+
+[node name="MissionsTab" type="Button" parent="Hud/Shell/TopBar/NavPanel/NavTabs"]
+layout_mode = 2
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 16
+text = "MENU_TAB_MISSIONS"
 
 [node name="LeaderboardTab" type="Button" parent="Hud/Shell/TopBar/NavPanel/NavTabs"]
 layout_mode = 2

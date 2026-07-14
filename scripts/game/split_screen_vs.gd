@@ -89,8 +89,12 @@ func _on_lifetime_expired() -> void:
 func start_combat_resolution(attacker_faction_id: String, defender_faction_id: String,
 		attack_rolls: Array, defense_rolls: Array, meta: Dictionary = {}) -> void:
 	_meta = meta
-	var attacker := _load_faction(attacker_faction_id, FALLBACK_ACCENT_ATTACKER)
-	var defender := _load_faction(defender_faction_id, FALLBACK_ACCENT_DEFENDER)
+	# Skins équipés (M5 §8.69) : lus du PlayerState PUBLIC de chaque camp par main.gd et passés
+	# dans meta — LES DEUX joueurs voient donc le skin de l'autre (moment vitrine du cosmétique).
+	var attacker := _load_faction(attacker_faction_id, FALLBACK_ACCENT_ATTACKER,
+		str(meta.get("attacker_skin", "")))
+	var defender := _load_faction(defender_faction_id, FALLBACK_ACCENT_DEFENDER,
+		str(meta.get("defender_skin", "")))
 	_setup_side(true, attacker)
 	_setup_side(false, defender)
 	_attack_dice = _spawn_dice(%LeftDice, attack_rolls.size(), attacker["accent"])
@@ -115,7 +119,8 @@ func start_combat_resolution(attacker_faction_id: String, defender_faction_id: S
 # Retrouve la ressource FactionData correspondant à l'id réseau (ex: "phalanges_acier").
 # 7 factions sur 10 n'ont pas encore de .tres au stade MVP : repli sur un libellé dérivé
 # de l'id et un accent de la charte, pour que l'écran reste fonctionnel quoi qu'il arrive.
-func _load_faction(faction_id: String, fallback_accent: Color) -> Dictionary:
+func _load_faction(faction_id: String, fallback_accent: Color, equipped_skin: String = "") -> Dictionary:
+	var out := {}
 	for res in _faction_resources():
 		if str(res.get("id")) == faction_id:
 			# Coercitions défensives : le duck-typing n'exige que "id" ; une ressource sans
@@ -124,14 +129,63 @@ func _load_faction(faction_id: String, fallback_accent: Color) -> Dictionary:
 			var accent = res.get("accent_color")
 			var hero = res.get("hero_path")
 			var model = res.get("hero_model_path")
-			return {
+			out = {
 				"name": str(res.get("name")),
 				"accent": accent if accent is Color else fallback_accent,
 				"hero_path": hero if hero is String else "",
 				"hero_model_path": model if model is String else "",
 			}
-	var pretty := faction_id.capitalize() if faction_id != "" else "Faction Inconnue"
-	return {"name": pretty, "accent": fallback_accent, "hero_path": "", "hero_model_path": ""}
+			break
+	if out.is_empty():
+		var pretty := faction_id.capitalize() if faction_id != "" else "Faction Inconnue"
+		out = {"name": pretty, "accent": fallback_accent, "hero_path": "", "hero_model_path": ""}
+
+	# --- Skin équipé (M5 §8.69) : surcharge data-driven des visuels du héros. Un SkinData dont
+	#     l'id ET la faction correspondent surcharge portrait/modèle (si ses chemins EXISTENT)
+	#     et l'accent (accent_override) — placeholder teinté sinon (convention §4.3). ---
+	if equipped_skin != "":
+		var skin = _find_skin(equipped_skin, faction_id)
+		if skin != null:
+			var s_portrait := str(skin.get("portrait_path") if skin.get("portrait_path") != null else "")
+			var s_model := str(skin.get("model_path") if skin.get("model_path") != null else "")
+			if s_portrait != "" and ResourceLoader.exists(s_portrait):
+				out["hero_path"] = s_portrait
+			if s_model != "" and ResourceLoader.exists(s_model):
+				out["hero_model_path"] = s_model
+			var s_accent = skin.get("accent_override")
+			if s_accent is Color:
+				out["accent"] = s_accent
+	return out
+
+# =========================================================
+# Registre des SKINS (M5 §8.69 — data-driven, pattern factions §4.3)
+# =========================================================
+const SKINS_DIR := "res://resources/skins/"
+
+# Retrouve la ressource SkinData (id + faction cohérents), ou null. Duck-typing (comme les
+# factions) : on n'exige pas le class_name global SkinData, seulement les champs.
+func _find_skin(skin_id: String, faction_id: String):
+	var dir := DirAccess.open(SKINS_DIR)
+	if dir == null:
+		return null
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir():
+			var fn := file_name
+			if fn.ends_with(".remap"):
+				fn = fn.trim_suffix(".remap")
+			if fn.ends_with(".tres"):
+				var full := SKINS_DIR + fn
+				if ResourceLoader.exists(full):
+					var res = load(full)
+					if res != null and str(res.get("id")) == skin_id \
+							and str(res.get("faction_id")) == faction_id:
+						dir.list_dir_end()
+						return res
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	return null
 
 # Charge toutes les ressources de factions. Duck-typing : on n'exige pas le type global
 # FactionData (son enregistrement peut manquer selon le cache d'import, cf. §8.14 bug 2).

@@ -22,6 +22,8 @@ extends Control
 @export var lobby_tab: Button
 @export var characters_tab: Button
 @export var shop_tab: Button
+# Onglet « OPÉRATIONS » (missions M2 §8.65) — pastille or = nombre de missions réclamables.
+@export var missions_tab: Button
 @export var leaderboard_tab: Button
 
 # --- Top Bar : cluster utilitaire ---
@@ -141,9 +143,11 @@ func _ready() -> void:
 	_style_tab(lobby_tab, true)
 	_style_tab(characters_tab, false)
 	_style_tab(shop_tab, false)
+	_style_tab(missions_tab, false)
 	_style_tab(leaderboard_tab, false)
 	if characters_tab: characters_tab.pressed.connect(_on_characters_pressed)
 	if shop_tab: shop_tab.pressed.connect(_on_inventory_pressed)
+	if missions_tab: missions_tab.pressed.connect(_on_missions_pressed)
 	if leaderboard_tab: leaderboard_tab.pressed.connect(_on_leaderboard_pressed)
 
 	# --- Top Bar : boutons système (engrenage cyan + power rouge) ---
@@ -177,7 +181,7 @@ func _ready() -> void:
 
 	# --- Audio (R6) : nappe d'ambiance + SFX d'interface sur les boutons interactifs (no-op headless). ---
 	AudioManager.start_menu_ambient()
-	WarzoneUI.wire_buttons_sfx([lobby_tab, characters_tab, shop_tab, leaderboard_tab, settings_button, system_button, play_button])
+	WarzoneUI.wire_buttons_sfx([lobby_tab, characters_tab, shop_tab, missions_tab, leaderboard_tab, settings_button, system_button, play_button])
 
 	# --- Jauge XP/Coins, montée dans son slot de la Top Bar. ---
 	_mount_xp_bar()
@@ -196,6 +200,10 @@ func _ready() -> void:
 	AuthManager.get_profile()
 	NetworkManager.fetch_profile_history(1)
 	NetworkManager.fetch_leaderboard(3)
+	# Missions (M2 §8.65) : pastille or « réclamables » sur l'onglet OPÉRATIONS, rafraîchie à
+	# chaque retour au menu (fetch → missions_loaded → _update_missions_badge).
+	NetworkManager.missions_loaded.connect(_on_missions_badge_data)
+	NetworkManager.fetch_missions()
 
 
 # =========================================================
@@ -853,6 +861,8 @@ func _on_locale_changed(_code: String) -> void:
 	for mid in _mode_cards:
 		_apply_mode_sub(_mode_cards[mid])
 	_rebuild_lb_rows()
+	# Pastille OPÉRATIONS : texte formaté (« ●N ») → re-rendu manuel au changement de langue.
+	_update_missions_badge()
 
 func _go(path: String) -> void:
 	TransitionManager.change_scene(path)
@@ -870,6 +880,27 @@ func _on_characters_pressed() -> void:
 
 func _on_inventory_pressed() -> void:
 	_go("res://scenes/ui/shop.tscn")
+
+func _on_missions_pressed() -> void:
+	_go("res://scenes/ui/missions.tscn")
+
+# Pastille OR de l'onglet OPÉRATIONS (M2 §8.65) : « OPÉRATIONS ●N » quand N missions sont
+# complétées non réclamées ; libellé i18n simple sinon. Re-rendue au changement de langue.
+var _missions_claimable: int = 0
+
+func _on_missions_badge_data(data: Dictionary) -> void:
+	_missions_claimable = int(data.get("claimable_count", 0))
+	_update_missions_badge()
+
+func _update_missions_badge() -> void:
+	if missions_tab == null:
+		return
+	if _missions_claimable > 0:
+		missions_tab.text = "%s ●%d" % [tr("MENU_TAB_MISSIONS"), _missions_claimable]
+		missions_tab.add_theme_color_override("font_color", GOLD)
+	else:
+		missions_tab.text = tr("MENU_TAB_MISSIONS")
+		missions_tab.remove_theme_color_override("font_color")
 
 func _on_profile_pressed() -> void:
 	_go("res://scenes/ui/profile.tscn")

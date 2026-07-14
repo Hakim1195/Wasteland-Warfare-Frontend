@@ -61,6 +61,23 @@ signal shop_inventory_loaded(data: Dictionary)
 signal shop_purchase_success(data: Dictionary)
 # Achat refusé par le serveur (HTTP 400) : message d'erreur prêt à afficher (« Crédits insuffisants »…).
 signal shop_purchase_failed(message: String)
+# Rotation gratuite hebdomadaire des factions payantes (M3 §8.66) :
+# { week_key, free_faction_ids: [id, id], rotates_at } — émis par fetch_shop_rotation.
+signal shop_rotation_loaded(data: Dictionary)
+# Skin équipé/déséquipé (M5 §8.69) : réponse = inventaire complet (forme GET /shop/inventory,
+# bloc `equipped` à jour). Échec (400) → message serveur.
+signal skin_equipped(data: Dictionary)
+signal skin_equip_failed(message: String)
+# Re-queue en 1 clic (G3 §8.70) : échec de la chaîne quitter→radar→rejoindre/créer (l'écran
+# appelant retombe sur le lobby). Le SUCCÈS ne signale rien : requeue() navigue lui-même.
+signal requeue_failed(message: String)
+# Missions quotidiennes/hebdos (M2 §8.65) : { daily: [...], weekly: [...], daily_resets_at,
+# weekly_resets_at, claimable_count } — émis par fetch_missions.
+signal missions_loaded(data: Dictionary)
+# Claim réussi : { coins_balance, reward_paid, pass_bonus_applied } — émis par claim_mission.
+signal mission_claimed(data: Dictionary)
+# Claim refusé (HTTP 400/401) : message d'erreur prêt à afficher.
+signal mission_claim_failed(message: String)
 # Fin de partie (Économie §8.47) : le serveur diffuse `game_over` avec le détail des gains par joueur.
 # `match_rewards` = { "<player_id:str>": { match_points, xp_earned, coins_earned, level_up_triggered,
 # new_level, current_xp, xp_to_next_level, levels_gained } } (toutes valeurs entières — piège JSON §5).
@@ -108,11 +125,17 @@ func connect_to_server(room_id: String):
 	if has_node("/root/GameState"):
 		cv = str(GameState.client_version)
 	var final_url = websocket_url + room_id + "/" + str(AuthManager.user_id) + "?client_version=" + cv.uri_encode()
+	# On journalise l'URL SANS le token (le JWT ne doit jamais traîner dans les logs).
 	print("🌐 NETWORK: Tentative de connexion WebSocket vers " + final_url)
-	
+
+	# Authentification du handshake (C2/M1) : le serveur EXIGE le JWT en query string (?token=)
+	# et ferme en 4001 sinon. L'en-tête Authorization ci-dessous est conservé par compat mais
+	# n'est PAS lu par le serveur (les WebSocketPeer navigateurs ne portent pas d'en-têtes).
+	if AuthManager.jwt_token != "":
+		final_url += "&token=" + str(AuthManager.jwt_token).uri_encode()
+
 	var tls_options = TLSOptions.client_unsafe()
-	
-	# NOUVEAU : On attache le Token JWT pour prouver notre identité au WebSocket
+
 	if AuthManager.jwt_token != "":
 		var headers = ["Authorization: Bearer " + AuthManager.jwt_token]
 		socket.set_handshake_headers(headers)
@@ -150,6 +173,15 @@ func _process(_delta):
 			print("🚫 NETWORK: connexion refusée par le serveur (version) : " + msg)
 			game_error.emit(msg)
 			lobby_error.emit(msg)
+		elif code == 4001 or code == 4003:
+			# Codes applicatifs du handshake authentifié (C2/M1) : 4001 = token absent/invalide/
+			# expiré ou identité incohérente ; 4003 = pas membre de la salle demandée. On remonte
+			# le message serveur (raison ASCII) tel quel — l'écran courant l'affiche en rouge.
+			var auth_reason := socket.get_close_reason()
+			var auth_msg := auth_reason if auth_reason != "" else "Connexion refusée : session invalide, reconnectez-vous."
+			print("🚫 NETWORK: connexion refusée par le serveur (auth %d) : %s" % [code, auth_msg])
+			game_error.emit(auth_msg)
+			lobby_error.emit(auth_msg)
 		connected = false
 		set_process(false)
 
@@ -346,8 +378,15 @@ func _on_room_joined(_result, response_code, _headers, _body, http_node):
 # 4. Classement mondial (R3 — §9.2) : GET /leaderboard?limit=&offset= (public ; enrichi du bloc `me`
 # si le token est joint). Le serveur trie par victoires décroissantes et renvoie une enveloppe
 # {entries, me}. On relaie (entries, me) via leaderboard_loaded — l'écran mappe les champs.
-func fetch_leaderboard(limit: int = 20, offset: int = 0):
-	_send_api_request("/leaderboard?limit=" + str(limit) + "&offset=" + str(offset),
+# Bloc saison { id, ends_at } de la DERNIÈRE réponse leaderboard (M6 §8.68), lu par leaderboard.gd.
+# Propriété (et non un 3ᵉ argument de signal) : leaderboard_loaded garde sa signature (entries, me)
+# pour ses écouteurs existants (main_menu top-3). Vide si le backend est antérieur à M6.
+var last_leaderboard_season: Dictionary = {}
+
+# `scope` (M6 §8.68) : "season" (défaut serveur — ladder saisonnier avec divisions) | "lifetime"
+# (comportement historique §9.2). Les écrans legacy qui n'envoient pas scope reçoivent le défaut.
+func fetch_leaderboard(limit: int = 20, offset: int = 0, scope: String = "season"):
+	_send_api_request("/leaderboard?limit=%d&offset=%d&scope=%s" % [limit, offset, scope],
 		HTTPClient.METHOD_GET, {}, _on_leaderboard_fetched)
 
 func _on_leaderboard_fetched(_result, response_code, _headers, body, http_node):
@@ -356,7 +395,7 @@ func _on_leaderboard_fetched(_result, response_code, _headers, body, http_node):
 		lobby_error.emit("Erreur lors de la récupération du classement.")
 		return
 	var data = JSON.parse_string(body.get_string_from_utf8())
-	# Forme CANONIQUE §9.2 : enveloppe {entries, me}.
+	# Forme CANONIQUE §9.2 : enveloppe {entries, me} (+ bloc `season` depuis M6).
 	if typeof(data) == TYPE_DICTIONARY:
 		var entries = data.get("entries", [])
 		var me = data.get("me", {})
@@ -364,9 +403,12 @@ func _on_leaderboard_fetched(_result, response_code, _headers, body, http_node):
 			entries = []
 		if typeof(me) != TYPE_DICTIONARY:
 			me = {}
+		var season = data.get("season", {})
+		last_leaderboard_season = season if typeof(season) == TYPE_DICTIONARY else {}
 		leaderboard_loaded.emit(entries, me)
 	# Tolérance : ancien backend (avant redéploiement VPS) → liste plate sans bloc `me`.
 	elif typeof(data) == TYPE_ARRAY:
+		last_leaderboard_season = {}
 		leaderboard_loaded.emit(data, {})
 
 # =========================================================
@@ -480,3 +522,167 @@ func _on_purchase_completed(_result, response_code, _headers, body, http_node):
 		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
 			msg = str(data["detail"])
 		shop_purchase_failed.emit(msg)
+
+# =========================================================
+# RE-QUEUE EN 1 CLIC (G3 §8.70) — helper partagé (overlay observateur + rapport post-op)
+# =========================================================
+# Quitte la salle courante (WS fermé + DELETE leave), scanne le radar, REJOINT la première salle
+# `waiting` non pleine, sinon CRÉE une salle (publique, 6 places par défaut), puis navigue vers
+# waiting_room. Toute erreur → requeue_failed(message) (l'appelant retombe sur le lobby).
+var _requeue_active := false
+
+func requeue() -> void:
+	if _requeue_active:
+		return
+	_requeue_active = true
+	# 1) Fermer proprement le WebSocket de la salle courante (le serveur traite la déconnexion :
+	#    un éliminé ne déclenche NI abandon NI minuterie — garanti côté backend §8.70).
+	if socket.get_ready_state() == WebSocketPeer.STATE_OPEN \
+			or socket.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
+		socket.close()
+	connected = false
+	set_process(false)
+	# 2) Libérer la place côté base (DELETE leave — échec TOLÉRÉ : la salle a pu être détruite
+	#    par la déconnexion, ou la partie n'était plus `waiting`).
+	if current_room_id != "":
+		_send_api_request("/lobby/rooms/" + current_room_id + "/leave",
+			HTTPClient.METHOD_DELETE, {}, _on_requeue_left)
+	else:
+		_requeue_scan()
+
+func _on_requeue_left(_result, _response_code, _headers, _body, http_node):
+	http_node.queue_free()
+	_requeue_scan()
+
+func _requeue_scan() -> void:
+	current_room_id = ""
+	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_requeue_rooms)
+
+func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200:
+		_requeue_fail("Radar injoignable — retour au lobby.")
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_ARRAY:
+		_requeue_fail("Radar illisible — retour au lobby.")
+		return
+	# Première salle `waiting` PUBLIQUE non pleine (piège JSON §5 : int() sur tous les nombres).
+	for room in data:
+		if typeof(room) != TYPE_DICTIONARY:
+			continue
+		if bool(room.get("is_private", false)):
+			continue
+		var maxp := int(room.get("max_players", 0))
+		var cur := int(room.get("current_players", 0))
+		if str(room.get("status", "waiting")) == "waiting" and cur < maxp and maxp > 0:
+			var rid := int(room.get("id", -1))
+			if rid > 0:
+				_send_api_request("/lobby/rooms/" + str(rid) + "/join",
+					HTTPClient.METHOD_POST, {}, _on_requeue_joined.bind(rid))
+				return
+	# Aucune salle disponible → on en CRÉE une (défauts §8.70 : publique, 6 places).
+	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST,
+		{"max_players": 6, "is_private": false, "secret_code": ""}, _on_requeue_created)
+
+# NB signature : _send_api_request bind http_node APRÈS le rid déjà lié → (…, http_node, rid).
+func _on_requeue_joined(_result, response_code, _headers, _body, http_node, rid: int):
+	http_node.queue_free()
+	if response_code == 200:
+		_requeue_enter(rid)
+	else:
+		# La salle s'est remplie entre le scan et le join : on retente un cycle complet.
+		_requeue_scan()
+
+func _on_requeue_created(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200 and response_code != 201:
+		_requeue_fail("Impossible de créer une salle — retour au lobby.")
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	var rid := int(data.get("id", -1)) if typeof(data) == TYPE_DICTIONARY else -1
+	if rid <= 0:
+		_requeue_fail("Salle créée illisible — retour au lobby.")
+		return
+	_requeue_enter(rid)
+
+func _requeue_enter(room_id: int) -> void:
+	_requeue_active = false
+	current_room_id = str(int(room_id))
+	# Socket NEUF : WebSocketPeer ne se reconnecte pas proprement après un close().
+	socket = WebSocketPeer.new()
+	connected = false
+	connect_to_server(current_room_id)
+	TransitionManager.change_scene("res://scenes/ui/waiting_room.tscn")
+
+func _requeue_fail(message: String) -> void:
+	_requeue_active = false
+	requeue_failed.emit(message)
+
+# 10 ter. Équipe un SKIN possédé (M5 §8.69) : POST /shop/equip {skin_id} — la faction est
+# dérivée côté serveur (hero_key). Réponse = inventaire complet (bloc `equipped` à jour).
+func equip_skin(skin_id: String):
+	_send_api_request("/shop/equip", HTTPClient.METHOD_POST, {"skin_id": skin_id}, _on_skin_equipped)
+
+# Déséquipe le skin d'une faction : POST /shop/equip {faction_id, skin_id: null}.
+func unequip_skin(faction_id: String):
+	_send_api_request("/shop/equip", HTTPClient.METHOD_POST,
+		{"faction_id": faction_id, "skin_id": null}, _on_skin_equipped)
+
+func _on_skin_equipped(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if response_code == 200 and typeof(data) == TYPE_DICTIONARY:
+		skin_equipped.emit(data)
+	else:
+		var msg := "Équipement impossible."
+		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
+			msg = str(data["detail"])
+		skin_equip_failed.emit(msg)
+
+# 10 bis. Rotation gratuite hebdomadaire (M3 §8.66) : GET /shop/rotation (PUBLIC). Les deux
+# factions payantes jouables gratuitement cette semaine (déterministe, bascule lundi 04:00 UTC).
+func fetch_shop_rotation():
+	_send_api_request("/shop/rotation", HTTPClient.METHOD_GET, {}, _on_shop_rotation_fetched)
+
+func _on_shop_rotation_fetched(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code == 200:
+		var data = JSON.parse_string(body.get_string_from_utf8())
+		if typeof(data) == TYPE_DICTIONARY:
+			shop_rotation_loaded.emit(data)
+	# Pas de signal d'erreur dédié : les écrans appliquent leur REPLI GRACIEUX (M3) quand la
+	# rotation reste muette (draft : griser toutes les payantes non possédées).
+
+# 11. Missions quotidiennes & hebdomadaires (M2 §8.65) : GET /missions (authentifié). Assigne
+# côté serveur au premier appel de la période (lazy, déterministe) puis renvoie la liste +
+# les comptes à rebours de reset et la pastille `claimable_count`.
+func fetch_missions():
+	_send_api_request("/missions", HTTPClient.METHOD_GET, {}, _on_missions_fetched)
+
+func _on_missions_fetched(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code == 200:
+		var data = JSON.parse_string(body.get_string_from_utf8())
+		if typeof(data) == TYPE_DICTIONARY:
+			missions_loaded.emit(data)
+	else:
+		lobby_error.emit("Erreur lors de la récupération des missions.")
+
+# 12. Réclame la récompense d'une mission COMPLÉTÉE : POST /missions/claim {mission_id}.
+# Succès → { coins_balance, reward_paid, pass_bonus_applied } (bonus Pass ×1.5 appliqué serveur).
+# Échec (400 « Mission non terminée » / « Déjà réclamée ») → message du serveur.
+func claim_mission(mission_id: String):
+	_send_api_request("/missions/claim", HTTPClient.METHOD_POST,
+		{"mission_id": mission_id}, _on_mission_claimed)
+
+func _on_mission_claimed(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if response_code == 200 and typeof(data) == TYPE_DICTIONARY:
+		mission_claimed.emit(data)
+	else:
+		var msg := "Réclamation impossible."
+		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
+			msg = str(data["detail"])
+		mission_claim_failed.emit(msg)

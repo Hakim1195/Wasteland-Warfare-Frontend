@@ -99,6 +99,9 @@ func _ready():
 	NetworkManager.profile_history_loaded.connect(_on_history_loaded)
 	NetworkManager.fetch_profile_stats()
 	NetworkManager.fetch_profile_history(5)
+	# Saison (M6 §8.68) : division + points de saison viennent de /auth/me (season_points/division).
+	AuthManager.profile_loaded.connect(_on_me_loaded)
+	AuthManager.get_profile()
 
 	# Premier rendu avec les valeurs neutres (écrasées dès que le serveur répond).
 	_refresh_all()
@@ -126,6 +129,23 @@ func _on_profile_loaded(data: Dictionary):
 
 	_refresh_all()
 	_set_status(tr("PROFILE_STATUS_LOADED"))
+
+# --- Saison (M6 §8.68) : division + points de saison depuis /auth/me --------
+var _season_points: int = 0
+var _division: String = ""
+# Couleurs des divisions (miroir de leaderboard.gd — bronze/argent/or/platine/élite).
+const DIVISION_COLORS := {
+	"BRONZE": Color("cd7f32"),
+	"ARGENT": Color("c0c0c0"),
+	"OR": Color(0.878431, 0.698039, 0.286275, 1),
+	"PLATINE": Color("9adfea"),
+	"ELITE": Color(0.211765, 0.772549, 0.85098, 1),
+}
+
+func _on_me_loaded(data: Dictionary) -> void:
+	_season_points = _read_int(data, ["season_points"], _season_points)
+	_division = str(data.get("division", _division))
+	_populate_stats()
 
 # --- Historique récent (GET /profile/history) ------------------------------
 # Le serveur renvoie des entrées {win, faction_id, detail}. On résout faction_id -> nom d'affichage
@@ -195,6 +215,12 @@ func _populate_stats() -> void:
 	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_LOSSES"), str(_losses), DANGER))
 	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_RATIO"), "%d%%" % int(round(ratio)), ACCENT))
 	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_TOLL"), _format_thousands(_heaviest_toll), MUTED))
+	# Saison (M6 §8.68) : division + points saisonniers (masqués tant que /auth/me n'a pas répondu).
+	if _division != "":
+		stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_DIVISION"), _division,
+			DIVISION_COLORS.get(_division, MUTED)))
+		stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_SEASON_POINTS"),
+			_format_thousands(_season_points), ACCENT))
 
 # Carte readout : eyebrow (libellé) + valeur en gros (couleur sémantique). Surface gunmetal + liseré cyan.
 func _make_stat_card(label: String, value: String, value_color: Color) -> PanelContainer:

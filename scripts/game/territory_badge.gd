@@ -10,6 +10,10 @@ extends Node2D
 # une icône ☢ verte au-dessus du chiffre ET un anneau vert nucléaire autour de la pastille.
 # L'état est repassé à CHAQUE rafraîchissement par board.gd → un territoire qui sort de la zone
 # est automatiquement réinitialisé (☢ masqué, anneau retiré).
+#
+# TÉLÉGRAPHE (G1 §8.62) : si le territoire est ANNONCÉ pour la prochaine zone
+# (contamination_zone.next_territories), le badge affiche un ⚠ OR sous le chiffre — distinct du
+# ☢ vert de la zone courante. Même contrat : l'état est repassé à chaque rafraîchissement.
 
 const RADIUS := 30.0
 const BORDER_WIDTH := 5.0
@@ -23,6 +27,8 @@ const RAD_RING_WIDTH := 4.0
 const TEXT_COLOR := Color(0.933333, 0.952941, 0.968627, 1)
 # Or vif pour les troupes EN ATTENTE de confirmation (tampon de déploiement, §8.26).
 const PENDING_COLOR := Color("e0b249")
+# Or/ambre du TÉLÉGRAPHE de zone (G1 §8.62) — miroir de forecast_color du shader overlay.
+const FORECAST_COLOR := Color(1.0, 0.75, 0.1)
 
 @onready var _label: Label = $Label
 @onready var _rad_label: Label = $RadLabel
@@ -35,18 +41,27 @@ var _troops_text: String = "0"
 var _contaminated: bool = false
 # Vrai s'il reste des troupes en attente de confirmation sur ce territoire (affichage "+X" doré).
 var _has_pending: bool = false
+# Vrai si ce territoire est ANNONCÉ pour la prochaine zone (⚠ or, télégraphe G1 §8.62).
+var _forecast: bool = false
+# Label ⚠ créé PAR CODE au premier besoin (pas de retouche du .tscn) : clone du RadLabel (hérite
+# de sa police symboles), repositionné SOUS le chiffre, teinté or.
+var _forecast_label: Label = null
 
 func _ready() -> void:
 	_apply_text()
 	_apply_contamination()
+	_apply_forecast()
 	queue_redraw()
 
 # Met à jour le badge : nombre de troupes, couleur de bordure (accent de faction), état de
-# contamination (☢) et troupes EN ATTENTE (`pending` → affichage "Troupes+X" doré, §8.26).
-# `contaminated`/`pending` par défaut → rétro-compatible avec d'anciens appels à 2/3 arguments.
-func set_data(troops: int, accent: Color, contaminated: bool = false, pending: int = 0) -> void:
+# contamination (☢), troupes EN ATTENTE (`pending` → affichage "Troupes+X" doré, §8.26) et
+# ANNONCE de prochaine zone (`forecast` → ⚠ or, télégraphe G1 §8.62).
+# Défauts → rétro-compatible avec d'anciens appels à 2/3/4 arguments.
+func set_data(troops: int, accent: Color, contaminated: bool = false, pending: int = 0,
+		forecast: bool = false) -> void:
 	_border_color = accent
 	_contaminated = contaminated
+	_forecast = forecast
 	_has_pending = pending > 0
 	if _has_pending:
 		_troops_text = "%d+%d" % [troops, pending]
@@ -55,6 +70,7 @@ func set_data(troops: int, accent: Color, contaminated: bool = false, pending: i
 	if is_node_ready():
 		_apply_text()
 		_apply_contamination()
+		_apply_forecast()
 	queue_redraw()
 
 func _apply_text() -> void:
@@ -68,6 +84,21 @@ func _apply_contamination() -> void:
 	if _rad_label:
 		_rad_label.visible = _contaminated
 
+# Affiche ou masque le ⚠ or du télégraphe (G1 §8.62). Le label est créé paresseusement en
+# dupliquant RadLabel (même police symboles / contour), miroir SOUS le chiffre, teinté or.
+func _apply_forecast() -> void:
+	if _forecast and _forecast_label == null and _rad_label != null:
+		_forecast_label = _rad_label.duplicate()
+		_forecast_label.name = "ForecastLabel"
+		_forecast_label.text = "⚠"
+		_forecast_label.add_theme_color_override("font_color", FORECAST_COLOR)
+		# Miroir vertical du ☢ (qui occupe [-72,-32] au-dessus) → [32,72] SOUS le chiffre.
+		_forecast_label.offset_top = 32.0
+		_forecast_label.offset_bottom = 72.0
+		add_child(_forecast_label)
+	if _forecast_label != null:
+		_forecast_label.visible = _forecast
+
 func _draw() -> void:
 	# Disque de fond sombre.
 	draw_circle(Vector2.ZERO, RADIUS, BG_COLOR)
@@ -76,3 +107,7 @@ func _draw() -> void:
 	# Alerte radioactive : anneau vert nucléaire entourant le badge (lisible même de loin).
 	if _contaminated:
 		draw_arc(Vector2.ZERO, RADIUS + RAD_RING_WIDTH, 0.0, TAU, 48, RAD_COLOR, RAD_RING_WIDTH, true)
+	# Télégraphe (G1 §8.62) : anneau OR (par-dessous le vert si les deux s'appliquent) pour un
+	# territoire annoncé — lisible même quand le shader du plateau est indisponible.
+	elif _forecast:
+		draw_arc(Vector2.ZERO, RADIUS + RAD_RING_WIDTH, 0.0, TAU, 48, FORECAST_COLOR, RAD_RING_WIDTH, true)

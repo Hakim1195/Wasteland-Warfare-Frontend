@@ -69,6 +69,27 @@ var _me: Dictionary = {}
 # Police condensée de la charte (§2), construite en code pour les nœuds générés dynamiquement.
 var _font: SystemFont
 
+# --- Ladder SAISONNIER (lot M6 §8.68) ---
+# Scope courant : "season" (défaut, divisions + points de saison) | "lifetime" (historique §9.2).
+var _scope := "season"
+# Bloc { id, ends_at } de la réponse (compte à rebours de fin de saison), lu de NetworkManager.
+var _season_info: Dictionary = {}
+# Vrai si le serveur fournit les divisions (backend ≥ M6). Repli legacy : false → onglet GÉNÉRAL seul.
+var _has_division_data := false
+# Onglets SAISON / GÉNÉRAL construits par code dans la barre d'en-tête.
+var _tab_season: Button = null
+var _tab_lifetime: Button = null
+
+# Couleurs des divisions (M6 §8.68 — bronze/argent/or charte/platine cyan pâle/élite cyan tactique).
+const DIVISION_COLORS := {
+	"BRONZE": Color("cd7f32"),
+	"ARGENT": Color("c0c0c0"),
+	"OR": Color(0.878431, 0.698039, 0.286275, 1),
+	"PLATINE": Color("9adfea"),
+	"ELITE": Color(0.211765, 0.772549, 0.85098, 1),
+}
+const COL_DIVISION := 120.0
+
 func _ready():
 	_font = SystemFont.new()
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
@@ -91,9 +112,12 @@ func _ready():
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
 	AuthManager.get_profile()
 
+	# Onglets SAISON / GÉNÉRAL (M6 §8.68) — le classement OUVRE sur SAISON.
+	_build_scope_tabs()
+
 	# Classement mondial RÉEL (§P2) : GET /leaderboard via NetworkManager. Remplace le mock dès la réponse.
 	NetworkManager.leaderboard_loaded.connect(_on_leaderboard_loaded)
-	NetworkManager.fetch_leaderboard(20)
+	NetworkManager.fetch_leaderboard(20, 0, _scope)
 
 	# Premier rendu avec les valeurs mock (mises à jour si /auth/me ou le classement répondent).
 	_refresh()
@@ -105,6 +129,8 @@ func _ready():
 # historiques (niveau/stats_victoires). Le bloc `me` fixe l'identité + le rang global de l'opérateur.
 func _on_leaderboard_loaded(entries: Array, me: Dictionary) -> void:
 	_me = me if typeof(me) == TYPE_DICTIONARY else {}
+	# Bloc saison { id, ends_at } (M6) — stocké par NetworkManager à côté du signal (signature stable).
+	_season_info = NetworkManager.last_leaderboard_season
 	_server_board.clear()
 	for e in entries:
 		if typeof(e) != TYPE_DICTIONARY:
@@ -114,15 +140,116 @@ func _on_leaderboard_loaded(entries: Array, me: Dictionary) -> void:
 			"level": int(e.get("level", e.get("niveau", 1))),
 			"wins": int(e.get("wins", e.get("stats_victoires", 0))),
 			"rank": int(e.get("rank", 0)),
+			# M6 : points de saison + division (défauts sûrs sur un backend antérieur).
+			"season_points": int(e.get("season_points", 0)),
+			"division": str(e.get("division", "")),
 		})
+	# Repli LEGACY (M6, convention §9.2 client défensif) : réponse sans `division` → le backend
+	# est antérieur au ladder saisonnier → onglet GÉNÉRAL seul (les onglets se masquent).
+	_has_division_data = entries.size() > 0 and typeof(entries[0]) == TYPE_DICTIONARY \
+		and entries[0].has("division")
+	_update_scope_tabs_visibility()
 	# Identité/valeurs locales depuis le bloc me (rang global fiable même si l'opérateur est hors page).
 	if not _me.is_empty():
 		if _me.has("username") and str(_me["username"]) != "":
 			_local_name = str(_me["username"])
 		_local_level = int(_me.get("level", _local_level))
 		_local_wins = int(_me.get("wins", _local_wins))
+	_build_columns_header()
 	_refresh()
-	_set_status(tr("LEADERBOARD_EMPTY") if _server_board.is_empty() else tr("LEADERBOARD_STATUS_LOCATED"))
+	_set_status(_season_status_line())
+
+# Ligne de statut enrichie (M6) : division de l'opérateur + compte à rebours de fin de saison.
+func _season_status_line() -> String:
+	if _server_board.is_empty():
+		return tr("LEADERBOARD_EMPTY")
+	var base := tr("LEADERBOARD_STATUS_LOCATED")
+	if _scope != "season" or not _has_division_data:
+		return base
+	var parts: Array = []
+	if not _me.is_empty() and str(_me.get("division", "")) != "":
+		parts.append(tr("LEADERBOARD_MY_DIVISION").format({"division": str(_me["division"])}))
+	var days := _season_days_left()
+	if days > 0:
+		parts.append(tr("LEADERBOARD_SEASON_END").format({"days": days}))
+	if parts.is_empty():
+		return base
+	return " · ".join(PackedStringArray(parts))
+
+func _season_days_left() -> int:
+	var ends := str(_season_info.get("ends_at", ""))
+	if ends == "":
+		return 0
+	var end_epoch := int(Time.get_unix_time_from_datetime_string(ends.trim_suffix("Z")))
+	return maxi(0, int((end_epoch - int(Time.get_unix_time_from_system())) / 86400))
+
+# --- Onglets SAISON / GÉNÉRAL (M6 §8.68) -------------------------------------
+func _build_scope_tabs() -> void:
+	var header := back_button.get_parent()
+	if header == null:
+		return
+	_tab_season = _make_scope_tab(tr("LEADERBOARD_TAB_SEASON"), true)
+	_tab_season.pressed.connect(func() -> void: _switch_scope("season"))
+	_tab_lifetime = _make_scope_tab(tr("LEADERBOARD_TAB_LIFETIME"), false)
+	_tab_lifetime.pressed.connect(func() -> void: _switch_scope("lifetime"))
+	# Insérés AVANT le bouton RETOUR (fin de la barre d'en-tête).
+	header.add_child(_tab_season)
+	header.add_child(_tab_lifetime)
+	header.move_child(_tab_season, back_button.get_index())
+	header.move_child(_tab_lifetime, back_button.get_index())
+
+func _make_scope_tab(text: String, active: bool) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 15)
+	WarzoneUI.wire_button_sfx(btn)
+	_style_scope_tab(btn, active)
+	return btn
+
+func _style_scope_tab(btn: Button, active: bool) -> void:
+	if btn == null:
+		return
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(ACCENT, 0.18) if active else Color(0, 0, 0, 0)
+	if active:
+		sb.border_width_bottom = 3
+		sb.border_color = ACCENT
+	sb.content_margin_left = 14.0
+	sb.content_margin_right = 14.0
+	sb.content_margin_top = 8.0
+	sb.content_margin_bottom = 8.0
+	var hover := sb.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT, 0.14)
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_stylebox_override("focus", sb)
+	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
+
+func _switch_scope(scope: String) -> void:
+	if scope == _scope:
+		return
+	_scope = scope
+	_style_scope_tab(_tab_season, _scope == "season")
+	_style_scope_tab(_tab_lifetime, _scope == "lifetime")
+	_set_status(tr("LEADERBOARD_STATUS_PREVIEW"))
+	NetworkManager.fetch_leaderboard(20, 0, _scope)
+
+# Repli legacy (backend sans divisions) : les onglets disparaissent, on force le GÉNÉRAL.
+func _update_scope_tabs_visibility() -> void:
+	var show := _has_division_data or _server_board.is_empty()
+	if _tab_season != null:
+		_tab_season.visible = show
+	if _tab_lifetime != null:
+		_tab_lifetime.visible = show
+	if not show and _scope != "lifetime":
+		_scope = "lifetime"
+		_style_scope_tab(_tab_season, false)
+		_style_scope_tab(_tab_lifetime, true)
 
 # --- Profil / lecture défensive --------------------------------------------
 func _on_profile_loaded(data: Dictionary):
@@ -164,7 +291,9 @@ func _build_server_entries() -> Array:
 	# Opérateur hors de la page renvoyée : on l'ajoute distinctement avec son rang global (si connu).
 	if not present and not _me.is_empty():
 		rows.append({"name": _local_name, "level": _local_level, "wins": _local_wins,
-			"rank": int(_me.get("rank", 0)), "is_local": true})
+			"rank": int(_me.get("rank", 0)), "is_local": true,
+			"season_points": int(_me.get("season_points", 0)),
+			"division": str(_me.get("division", ""))})
 	return rows
 
 # Chemin REPLI : fusionne la source (mock, ou liste plate legacy) + l'opérateur local, trie desc.
@@ -261,8 +390,15 @@ func _build_columns_header() -> void:
 	columns_header.add_theme_constant_override("separation", 14)
 	columns_header.add_child(_header_cell(tr("LEADERBOARD_COL_RANK"), COL_RANK, HORIZONTAL_ALIGNMENT_LEFT))
 	columns_header.add_child(_header_cell(tr("COMMON_OPERATOR"), 0.0, HORIZONTAL_ALIGNMENT_LEFT, true))
+	# Colonne DIVISION (M6 §8.68) — uniquement sur l'onglet SAISON avec un backend qui la fournit.
+	if _show_division_column():
+		columns_header.add_child(_header_cell(tr("LEADERBOARD_COL_DIVISION"), COL_DIVISION, HORIZONTAL_ALIGNMENT_CENTER))
 	columns_header.add_child(_header_cell(tr("COMMON_LEVEL"), COL_LEVEL, HORIZONTAL_ALIGNMENT_CENTER))
 	columns_header.add_child(_header_cell(tr("COMMON_WINS"), COL_WINS, HORIZONTAL_ALIGNMENT_RIGHT))
+
+# La colonne division ne s'affiche que sur le ladder SAISON d'un backend ≥ M6 (repli §9.2 sinon).
+func _show_division_column() -> bool:
+	return _scope == "season" and _has_division_data
 
 func _header_cell(text: String, width: float, align: int, expand: bool = false) -> Label:
 	var l := Label.new()
@@ -324,6 +460,19 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(name_label)
+
+	# Badge de DIVISION (M6 §8.68) : texte coloré au ton de la division + points de saison.
+	if _show_division_column():
+		var division := str(entry.get("division", ""))
+		var div_label := Label.new()
+		div_label.text = "%s · %d" % [division, int(entry.get("season_points", 0))] if division != "" else "—"
+		div_label.add_theme_font_override("font", _font)
+		div_label.add_theme_font_size_override("font_size", 15)
+		div_label.add_theme_color_override("font_color", DIVISION_COLORS.get(division, MUTED))
+		div_label.custom_minimum_size = Vector2(COL_DIVISION, 0)
+		div_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		div_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		h.add_child(div_label)
 
 	# Niveau (valeur centrée).
 	var level_label := Label.new()

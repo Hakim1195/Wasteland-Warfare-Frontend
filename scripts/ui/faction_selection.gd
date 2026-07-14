@@ -65,6 +65,21 @@ var _locked: Dictionary = {}
 # Non typée à dessein (appels dynamiques — pas de class_name sur le composant).
 var _hero3d = null
 
+# --- Rotation & possession des factions PAYANTES (M3 §8.66) ---
+# Ids des factions PAYANTES (catalogue serveur, catégorie "faction") ; prix Coins par id.
+var _paid_ids: Dictionary = {}        # fid -> prix (int)
+# Ids possédés (inventaire serveur, quantité > 0).
+var _owned_ids: Dictionary = {}       # fid -> true
+# Ids gratuits CETTE SEMAINE (rotation serveur). Tant que la rotation n'a pas répondu, le
+# REPLI GRACIEUX grise toutes les payantes non possédées (comportement sûr — le serveur
+# refuse de toute façon un choix verrouillé, erreur privée §8.66).
+var _rotation_ids: Dictionary = {}    # fid -> true
+# Bandeau « GRATUITE CETTE SEMAINE » / « VERROUILLÉE » créé par code au-dessus du nom.
+var _access_banner: Label = null
+# Skins équipés par faction (M5 §8.69) : { faction_id: skin_id } — bloc `equipped` de l'inventaire.
+var _equipped_map: Dictionary = {}
+const SKINS_DIR := "res://resources/skins/"
+
 func _ready():
 	# Encoches biseautées sur le panneau principal (charte « Warzone Command » §2).
 	WarzoneUI.add_corner_notches(panel)
@@ -83,6 +98,15 @@ func _ready():
 
 	# Réseau : on écoute les verrouillages des autres joueurs.
 	NetworkManager.faction_locked.connect(_on_faction_locked)
+
+	# M3 (§8.66) : possession + rotation AVANT de laisser confirmer une payante. Chargements
+	# asynchrones ; en attendant, les payantes non possédées sont grisées (repli sûr).
+	NetworkManager.shop_catalog_loaded.connect(_on_shop_catalog_for_draft)
+	NetworkManager.shop_inventory_loaded.connect(_on_shop_inventory_for_draft)
+	NetworkManager.shop_rotation_loaded.connect(_on_shop_rotation_for_draft)
+	NetworkManager.fetch_shop_catalog()
+	NetworkManager.fetch_shop_inventory()
+	NetworkManager.fetch_shop_rotation()
 
 	if _factions.is_empty():
 		# Robustesse : aucune ressource trouvée -> on n'autorise pas de confirmation à vide.
@@ -191,6 +215,93 @@ func _apply_card_content() -> void:
 	# Compteur de position toujours à jour (réactualisé à chaque glissement, pas seulement au lock).
 	if counter_label:
 		counter_label.text = "%02d / %02d" % [_index + 1, _factions.size()]
+	# M3 (§8.66) : accès à la faction courante (bandeau + grisage + verrou du CONFIRMER).
+	_apply_access_state(f)
+
+# =========================================================
+# Rotation & possession des factions payantes (M3 §8.66)
+# =========================================================
+
+func _on_shop_catalog_for_draft(items: Array) -> void:
+	_paid_ids.clear()
+	for it in items:
+		if typeof(it) == TYPE_DICTIONARY and str(it.get("category", "")) == "faction":
+			# Piège JSON §5 : prix en float après parse → int().
+			_paid_ids[str(it.get("id", ""))] = int(it.get("price", 0))
+	_refresh_access()
+
+func _on_shop_inventory_for_draft(data: Dictionary) -> void:
+	_owned_ids.clear()
+	var items: Dictionary = data.get("items", {})
+	for fid in items:
+		if int(items[fid]) > 0:
+			_owned_ids[str(fid)] = true
+	# Skins équipés par faction (M5 §8.69) : { faction_id: skin_id } — le carrousel montre le
+	# héros AVEC son propre skin équipé (même résolution que le Split-Screen VS).
+	var eq = data.get("equipped", {})
+	_equipped_map = eq if typeof(eq) == TYPE_DICTIONARY else {}
+	_refresh_access()
+	_refresh_card(true)
+
+func _on_shop_rotation_for_draft(data: Dictionary) -> void:
+	_rotation_ids.clear()
+	for fid in data.get("free_faction_ids", []):
+		_rotation_ids[str(fid)] = true
+	_refresh_access()
+
+# Vrai si la faction est VERROUILLÉE pour ce joueur : payante, non possédée, hors rotation.
+# Tant que le catalogue n'a pas répondu, rien n'est payant côté client (le serveur reste
+# l'autorité et refusera un choix verrouillé — erreur privée, draft non cassé).
+func _is_locked(fid: String) -> bool:
+	if not _paid_ids.has(fid):
+		return false
+	if _owned_ids.has(fid):
+		return false
+	return not _rotation_ids.has(fid)
+
+func _refresh_access() -> void:
+	if _factions.is_empty() or _confirmed:
+		return
+	_apply_access_state(_factions[_index])
+
+# Applique l'état d'accès de la faction affichée : bandeau OR « GRATUITE CETTE SEMAINE »
+# (rotation), bandeau verrou + prix + renvoi BOUTIQUE (payante verrouillée, carte grisée,
+# CONFIRMER désactivé), rien pour une gratuite/possédée.
+func _apply_access_state(f) -> void:
+	var fid := str(f.id)
+	_ensure_access_banner()
+	var locked := _is_locked(fid)
+	var in_rotation: bool = _rotation_ids.has(fid) and not _owned_ids.has(fid)
+
+	if in_rotation:
+		_access_banner.visible = true
+		_access_banner.text = tr("FS_ROTATION_FREE")
+		_access_banner.add_theme_color_override("font_color", Color("e0b249"))
+	elif locked:
+		_access_banner.visible = true
+		_access_banner.text = tr("FS_LOCKED_PAID").format({"price": _paid_ids.get(fid, 0)})
+		_access_banner.add_theme_color_override("font_color", Color("8a97a5"))
+	else:
+		_access_banner.visible = false
+
+	# Grisage de la carte + verrou du CONFIRMER (le serveur re-valide de toute façon §8.66).
+	card.modulate = Color(0.62, 0.66, 0.72, 1.0) if locked else Color.WHITE
+	if not _confirmed:
+		confirm_button.disabled = locked
+		confirm_button.text = tr("FS_LOCKED_BTN") if locked else tr("FS_CONFIRM")
+
+# Bandeau d'accès créé par code SOUS le nom de faction (aucune retouche .tscn).
+func _ensure_access_banner() -> void:
+	if _access_banner != null and is_instance_valid(_access_banner):
+		return
+	_access_banner = Label.new()
+	_access_banner.name = "AccessBanner"
+	_access_banner.visible = false
+	_access_banner.add_theme_font_size_override("font_size", 15)
+	_access_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var parent := faction_name_label.get_parent()
+	parent.add_child(_access_banner)
+	parent.move_child(_access_banner, faction_name_label.get_index() + 1)
 
 # Construit le texte BBCode : lore + liste des modificateurs (miroir frontend du registre §4.3).
 func _build_description(f) -> String:
@@ -215,11 +326,27 @@ func _ensure_hero3d() -> void:
 
 # Portrait du héros : 3D D'ABORD si la faction expose un .glb valide (le modèle est échangé hors
 # écran pendant le glissement de carte), sinon repli sur le portrait 2D, puis placeholder coloré.
+# M5 (§8.69) : le skin ÉQUIPÉ du joueur pour cette faction surcharge portrait/modèle/accent
+# (même résolution que le Split-Screen VS ; placeholder teinté accent_override si assets absents).
 func _set_portrait(f) -> void:
 	var accent: Color = f.accent_color
 	var model_path := ""
 	if f.get("hero_model_path") != null:
 		model_path = str(f.get("hero_model_path"))
+	var portrait_path := str(f.hero_path) if f.hero_path != null else ""
+
+	# --- Surcharge par le skin équipé (M5) ---
+	var skin = _find_skin(str(_equipped_map.get(str(f.id), "")), str(f.id))
+	if skin != null:
+		var s_model := str(skin.get("model_path") if skin.get("model_path") != null else "")
+		var s_portrait := str(skin.get("portrait_path") if skin.get("portrait_path") != null else "")
+		if s_model != "" and ResourceLoader.exists(s_model):
+			model_path = s_model
+		if s_portrait != "" and ResourceLoader.exists(s_portrait):
+			portrait_path = s_portrait
+		var s_accent = skin.get("accent_override")
+		if s_accent is Color:
+			accent = s_accent
 
 	# --- Chemin 3D ---
 	_ensure_hero3d()
@@ -234,8 +361,8 @@ func _set_portrait(f) -> void:
 	if _hero3d != null:
 		_hero3d.visible = false
 	var tex = null
-	if f.hero_path != "" and ResourceLoader.exists(f.hero_path):
-		tex = load(f.hero_path)
+	if portrait_path != "" and ResourceLoader.exists(portrait_path):
+		tex = load(portrait_path)
 	if tex != null:
 		hero_portrait.texture = tex
 		hero_portrait.visible = true
@@ -244,7 +371,34 @@ func _set_portrait(f) -> void:
 		hero_portrait.texture = null
 		hero_portrait.visible = false
 		portrait_placeholder.visible = true
-		portrait_placeholder.color = f.accent_color.darkened(0.25)
+		portrait_placeholder.color = accent.darkened(0.25)
+
+# Retrouve la ressource SkinData (id + faction cohérents), ou null (duck-typing, export-safe —
+# miroir de split_screen_vs._find_skin). skin_id vide → null immédiat.
+func _find_skin(skin_id: String, faction_id: String):
+	if skin_id == "":
+		return null
+	var dir := DirAccess.open(SKINS_DIR)
+	if dir == null:
+		return null
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir():
+			var fn := file_name
+			if fn.ends_with(".remap"):
+				fn = fn.trim_suffix(".remap")
+			if fn.ends_with(".tres"):
+				var full := SKINS_DIR + fn
+				if ResourceLoader.exists(full):
+					var res = load(full)
+					if res != null and str(res.get("id")) == skin_id \
+							and str(res.get("faction_id")) == faction_id:
+						dir.list_dir_end()
+						return res
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	return null
 
 # =========================================================
 # CONFIRMATION & SYNCHRONISATION RÉSEAU
@@ -255,6 +409,10 @@ func _on_confirm_pressed() -> void:
 	if _confirmed or _factions.is_empty():
 		return
 	var f = _factions[_index]
+	# M3 (§8.66) : jamais de confirmation d'une faction verrouillée (double sécurité — le bouton
+	# est déjà désactivé, et le serveur refuserait de toute façon avec une erreur privée).
+	if _is_locked(str(f.id)):
+		return
 	_confirmed = true
 
 	# Verrouillage de l'UI : on ne peut plus changer de faction.

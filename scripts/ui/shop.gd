@@ -108,8 +108,14 @@ func _ready():
 	NetworkManager.shop_inventory_loaded.connect(_on_inventory_loaded)
 	NetworkManager.shop_purchase_success.connect(_on_purchase_success)
 	NetworkManager.shop_purchase_failed.connect(_on_purchase_failed)
+	# Rotation gratuite hebdomadaire (M3 §8.66) : bannière + badges sur les factions concernées.
+	NetworkManager.shop_rotation_loaded.connect(_on_rotation_loaded)
+	# Skins équipables (M5 §8.69) : la réponse d'equip est un inventaire complet → même handler.
+	NetworkManager.skin_equipped.connect(_on_skin_equipped)
+	NetworkManager.skin_equip_failed.connect(_on_skin_equip_failed)
 	NetworkManager.fetch_shop_catalog()
 	NetworkManager.fetch_shop_inventory()
+	NetworkManager.fetch_shop_rotation()
 	_update_credits()
 
 	# Peuplement initial (vide jusqu'aux réponses serveur), onglet Boutique actif.
@@ -148,6 +154,12 @@ func _on_catalog_loaded(items: Array) -> void:
 func _on_inventory_loaded(data: Dictionary) -> void:
 	_credits = int(data.get("credits", 0))
 	_has_active_pass = bool(data.get("has_active_pass", false))
+	# Saison courante (M4 §8.67) : { id, ends_at } — compte à rebours du Pass ET de la saison.
+	var season_data = data.get("season", {})
+	_season = season_data if typeof(season_data) == TYPE_DICTIONARY else {}
+	# Skins équipés (M5 §8.69) : { faction_id: skin_id } — pilote ÉQUIPER / ÉQUIPÉ ✓.
+	var eq = data.get("equipped", {})
+	_equipped = eq if typeof(eq) == TYPE_DICTIONARY else {}
 	# Date d'expiration du Pass (peut arriver à null → "").
 	var pe = data.get("pass_expires_at", "")
 	_pass_expires_at = str(pe) if pe != null else ""
@@ -236,6 +248,102 @@ func _show_tab(show_shop: bool):
 	_style_tab(shop_tab_button, show_shop)
 	_style_tab(inventory_tab_button, not show_shop)
 
+# --- Rotation gratuite hebdomadaire (M3 §8.66) ------------------------------
+# Ids des factions payantes GRATUITES cette semaine + bannière construite par code au-dessus
+# de la grille Boutique. Repli gracieux : rotation muette → aucune bannière, aucun badge.
+var _rotation_ids: Dictionary = {}
+var _rotation_banner: Label = null
+# --- Saison courante (M4 §8.67) : { id, ends_at } lu du bloc `season` de GET /shop/inventory. ---
+var _season: Dictionary = {}
+# --- Skins équipés (M5 §8.69) : { faction_id: skin_id } lu du bloc `equipped` de l'inventaire. ---
+var _equipped: Dictionary = {}
+
+# Vrai si CE skin est celui actuellement équipé pour sa faction.
+func _is_skin_equipped(item: Dictionary) -> bool:
+	var hero_key := str(item.get("hero_key", ""))
+	return hero_key != "" and str(_equipped.get(hero_key, "")) == str(item.get("id", ""))
+
+# Bouton ÉQUIPER (or) / ÉQUIPÉ ✓ (désactivé) d'un skin possédé (M5 §8.69).
+func _make_equip_button(item: Dictionary) -> Button:
+	var btn := Button.new()
+	btn.custom_minimum_size = Vector2(0, 40)
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 14)
+	btn.focus_mode = Control.FOCUS_NONE
+	if _is_skin_equipped(item):
+		btn.text = tr("SHOP_EQUIPPED")
+		btn.disabled = true
+		btn.add_theme_color_override("font_disabled_color", GOLD)
+	else:
+		btn.text = tr("SHOP_EQUIP")
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.bg_color = Color(GOLD, 0.14)
+		sb.set_border_width_all(2)
+		sb.border_color = GOLD
+		sb.set_content_margin_all(8)
+		var hover := sb.duplicate() as StyleBoxFlat
+		hover.bg_color = Color(GOLD, 0.30)
+		btn.add_theme_stylebox_override("normal", sb)
+		btn.add_theme_stylebox_override("hover", hover)
+		btn.add_theme_stylebox_override("pressed", hover)
+		btn.add_theme_stylebox_override("focus", sb)
+		btn.add_theme_color_override("font_color", GOLD)
+		btn.add_theme_color_override("font_hover_color", TEXT)
+		btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+		btn.pressed.connect(func() -> void: AudioManager.play_sfx("confirm"))
+		var skin_id := str(item.get("id", ""))
+		btn.pressed.connect(func(): NetworkManager.equip_skin(skin_id))
+	return btn
+
+func _on_skin_equipped(data: Dictionary) -> void:
+	# La réponse est un inventaire COMPLET (bloc `equipped` à jour) → même traitement.
+	_on_inventory_loaded(data)
+	_set_status(tr("SHOP_EQUIP_OK"))
+
+func _on_skin_equip_failed(message: String) -> void:
+	_set_status(message)
+
+# Jours restants avant la fin de la saison courante (0 si inconnue) — ends_at ISO suffixe Z.
+func _season_days_left() -> int:
+	var ends := str(_season.get("ends_at", ""))
+	if ends == "":
+		return 0
+	var end_epoch := int(Time.get_unix_time_from_datetime_string(ends.trim_suffix("Z")))
+	var now := int(Time.get_unix_time_from_system())
+	return maxi(0, int((end_epoch - now) / 86400))
+
+func _on_rotation_loaded(data: Dictionary) -> void:
+	_rotation_ids.clear()
+	for fid in data.get("free_faction_ids", []):
+		_rotation_ids[str(fid)] = true
+	_ensure_rotation_banner()
+	if _rotation_ids.is_empty():
+		_rotation_banner.visible = false
+	else:
+		var names: Array = []
+		for fid in _rotation_ids:
+			names.append(_faction_name(str(fid)).to_upper())
+		names.sort()
+		_rotation_banner.text = tr("SHOP_ROTATION_BANNER").format({"factions": " · ".join(PackedStringArray(names))})
+		_rotation_banner.visible = true
+	_populate_shop()
+
+func _ensure_rotation_banner() -> void:
+	if _rotation_banner != null and is_instance_valid(_rotation_banner):
+		return
+	_rotation_banner = Label.new()
+	_rotation_banner.name = "RotationBanner"
+	_rotation_banner.visible = false
+	_rotation_banner.add_theme_font_override("font", _font)
+	_rotation_banner.add_theme_font_size_override("font_size", 15)
+	_rotation_banner.add_theme_color_override("font_color", GOLD)
+	_rotation_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# Insérée juste AU-DESSUS de la grille Boutique (même parent), sans retouche .tscn.
+	var parent := shop_grid.get_parent()
+	parent.add_child(_rotation_banner)
+	parent.move_child(_rotation_banner, shop_grid.get_index())
+
 # --- Peuplement Boutique ----------------------------------------------------
 func _populate_shop():
 	_clear(shop_grid)
@@ -279,6 +387,12 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		hero.add_theme_color_override("font_color", text_accent)
 		v.add_child(hero)
 
+	# Rotation (M3 §8.66) : la faction est jouable GRATUITEMENT cette semaine — badge or.
+	if category == "faction" and _rotation_ids.has(id):
+		var rot := _eyebrow(tr("SHOP_ROTATION_BADGE"))
+		rot.add_theme_color_override("font_color", GOLD)
+		v.add_child(rot)
+
 	# Description (texte muet, retour à la ligne) — clé traduite (R4).
 	var desc := _body_label(tr(str(item.get("desc", ""))))
 	desc.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -290,7 +404,23 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		grant.add_theme_color_override("font_color", GOLD)
 		v.add_child(grant)
 
-	# Pass déjà actif : on le signale avec les jours restants (sans empêcher de le prolonger).
+	# Pass Spécial (M4 §8.67) : les 4 AVANTAGES CONCRETS + skin exclusif + fin de saison.
+	if category == "pass":
+		for i in range(1, 5):
+			var perk := _body_label(tr("SHOP_PASS_PERK_%d" % i))
+			perk.add_theme_color_override("font_color", TEXT)
+			v.add_child(perk)
+		var skin_line := _eyebrow(tr("SHOP_PASS_SEASON_SKIN").format({"season": str(_season.get("id", "S?"))}))
+		skin_line.add_theme_color_override("font_color", GOLD)
+		v.add_child(skin_line)
+		var days_left := _season_days_left()
+		if days_left > 0:
+			var season_line := _eyebrow(tr("SHOP_PASS_SEASON_END").format(
+				{"season": str(_season.get("id", "S?")), "days": days_left}))
+			v.add_child(season_line)
+
+	# Pass déjà actif : on le signale avec les jours restants (sans empêcher un futur ré-achat en
+	# saison suivante — le serveur refuse un double achat tant qu'il est actif, M4).
 	if pass_active:
 		var days := _pass_days_left()
 		var active := _eyebrow((tr("SHOP_PASS_ACTIVE_DAYS") % days) if days > 0 else tr("SHOP_PASS_ACTIVE"))
@@ -302,6 +432,9 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		var in_depot := _eyebrow(tr("SHOP_IN_DEPOT"))
 		in_depot.add_theme_color_override("font_color", GOLD)
 		v.add_child(in_depot)
+		# Skin possédé (M5 §8.69) : bouton ÉQUIPER / ÉQUIPÉ ✓ (un skin équipé par faction).
+		if category == "skin":
+			v.add_child(_make_equip_button(item))
 	else:
 		# CTA d'achat (cyan). Libellé « ACHETER » pour un pack fiat (argent réel), « ACQUÉRIR » sinon.
 		var buy := Button.new()
@@ -391,6 +524,10 @@ func _build_inventory_card(item: Dictionary, qty: int) -> PanelContainer:
 	var owned := _eyebrow(tr("SHOP_IN_DEPOT"))
 	owned.add_theme_color_override("font_color", GOLD)
 	v.add_child(owned)
+
+	# Skin possédé (M5 §8.69) : équipable depuis l'inventaire aussi.
+	if str(item.get("category", "")) == "skin":
+		v.add_child(_make_equip_button(item))
 
 	WarzoneUI.add_corner_notches(card)
 	return card

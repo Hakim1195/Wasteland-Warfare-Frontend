@@ -1,48 +1,45 @@
 extends Control
 
-# ÉCRAN MISSIONS (onglet « MISSIONS » de la barre) — défis QUOTIDIENS / HEBDOMADAIRES façon Warzone.
-# Deux onglets internes basculent la liste des objectifs (barre de progression cyan + récompense XP
-# en badge hexagonal or). View PURE (Règle d'Or §6.1). Construit par code (charte « Warzone Command »).
-#
-# ⚠️ Données MOCK : le backend n'expose pas encore d'objectifs (à spécifier dans CONTRAT_RESEAU §9,
-# au même titre que R1/R2/R3). Quand l'endpoint existera, « seul le peuplement change » (les rangées
-# sont déjà alimentées par une liste de dictionnaires { key, cur, goal, xp }).
+# ÉCRAN OPÉRATIONS — missions QUOTIDIENNES / HEBDOMADAIRES (lot M2 — PLAN_EVOLUTIONS §8.65).
+# Ex-maquette MOCK (§8.55, orpheline depuis le retrait de l'ancienne top-nav) désormais BRANCHÉE
+# au backend réel : GET /missions (assignation lazy déterministe côté serveur) + POST /missions/claim.
+# View PURE (Règle d'Or §6.1) : toute la progression est SERVEUR — l'écran ne fait qu'afficher et
+# relayer les claims via NetworkManager (signaux missions_loaded / mission_claimed / _claim_failed).
+# Accès : onglet « OPÉRATIONS » du menu principal (pastille or = missions réclamables).
+# Construit par code (charte « Warzone Command » §2 : gunmetal, cyan tactique, or récompense).
 
-const TopNav = preload("res://scripts/ui/top_nav.gd")
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 
 const ACCENT := Color("36c5d9")
 const GOLD := Color("e0b249")
 const TEXT := Color("eef3f7")
 const MUTED := Color("8a97a5")
+const DANGER := Color("d6453f")
 const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 0.9)
-const BAR_H := 56.0
-
-const _DAILY := [
-	{"key": "MISSION_D1", "cur": 0, "goal": 5, "xp": 2500},
-	{"key": "MISSION_D2", "cur": 3, "goal": 10, "xp": 2500},
-	{"key": "MISSION_D3", "cur": 0, "goal": 3, "xp": 2500},
-]
-const _WEEKLY := [
-	{"key": "MISSION_W1", "cur": 1, "goal": 3, "xp": 7500},
-	{"key": "MISSION_W2", "cur": 40, "goal": 100, "xp": 7500},
-	{"key": "MISSION_W3", "cur": 2, "goal": 5, "xp": 7500},
-]
 
 var _font: Font
-var _list: VBoxContainer
-var _tab_daily: Button
-var _tab_weekly: Button
-var _showing_daily := true
+var _daily_box: VBoxContainer
+var _weekly_box: VBoxContainer
+var _daily_countdown: Label
+var _weekly_countdown: Label
+var _status: Label
+# Échéances de reset (epoch UTC, dérivées des ISO serveur) — pilotent les comptes à rebours.
+var _daily_reset_epoch: int = 0
+var _weekly_reset_epoch: int = 0
+# Anti double-clic : id de la mission dont le claim est EN VOL ("" = aucun).
+var _claim_in_flight: String = ""
 
 func _ready() -> void:
 	_font = _make_font()
-	var nav := TopNav.new()
-	nav.active_tab = "missions"
-	add_child(nav)
 	AudioManager.start_menu_ambient()
 	_build()
-	_refresh_list()
+
+	NetworkManager.missions_loaded.connect(_on_missions_loaded)
+	NetworkManager.mission_claimed.connect(_on_mission_claimed)
+	NetworkManager.mission_claim_failed.connect(_on_claim_failed)
+
+	_set_status(tr("MISSIONS_STATUS_LOADING"), MUTED)
+	NetworkManager.fetch_missions()
 
 func _make_font() -> Font:
 	var f := SystemFont.new()
@@ -53,11 +50,10 @@ func _make_font() -> Font:
 func _build() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.offset_top = BAR_H
 	add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(780, 0)
+	panel.custom_minimum_size = Vector2(980, 0)
 	var st := StyleBoxFlat.new()
 	st.bg_color = GUNMETAL
 	st.set_corner_radius_all(0)
@@ -69,58 +65,114 @@ func _build() -> void:
 	WarzoneUI.add_corner_notches(panel)
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 16)
+	vb.add_theme_constant_override("separation", 12)
 	panel.add_child(vb)
 
-	vb.add_child(_label("MISSIONS_EYEBROW", 14, ACCENT, HORIZONTAL_ALIGNMENT_LEFT))
-	vb.add_child(_label("MISSIONS_TITLE", 38, TEXT, HORIZONTAL_ALIGNMENT_LEFT))
-
-	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 10)
-	_tab_daily = _make_toggle("MISSIONS_TAB_DAILY", true)
-	_tab_daily.pressed.connect(func() -> void: _switch(true))
-	_tab_weekly = _make_toggle("MISSIONS_TAB_WEEKLY", false)
-	_tab_weekly.pressed.connect(func() -> void: _switch(false))
-	tabs.add_child(_tab_daily)
-	tabs.add_child(_tab_weekly)
-	vb.add_child(tabs)
+	# --- En-tête : eyebrow + titre à gauche, RETOUR à droite ---
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 16)
+	vb.add_child(header)
+	var title_box := VBoxContainer.new()
+	title_box.add_theme_constant_override("separation", 0)
+	header.add_child(title_box)
+	title_box.add_child(_label(tr("MISSIONS_EYEBROW"), 14, ACCENT, HORIZONTAL_ALIGNMENT_LEFT))
+	title_box.add_child(_label(tr("MISSIONS_TITLE"), 36, TEXT, HORIZONTAL_ALIGNMENT_LEFT))
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+	var back := Button.new()
+	back.text = tr("COMMON_BACK")
+	back.custom_minimum_size = Vector2(150, 46)
+	back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	back.add_theme_font_override("font", _font)
+	back.add_theme_font_size_override("font_size", 16)
+	WarzoneUI.apply_ghost_button(back)
+	WarzoneUI.wire_button_sfx(back)
+	back.pressed.connect(_on_back_pressed)
+	header.add_child(back)
 
 	WarzoneUI.add_filet(vb)
 
-	_list = VBoxContainer.new()
-	_list.add_theme_constant_override("separation", 10)
-	vb.add_child(_list)
+	# --- Section QUOTIDIENNES : eyebrow + compte à rebours + liste ---
+	var d_header := HBoxContainer.new()
+	vb.add_child(d_header)
+	d_header.add_child(_label(tr("MISSIONS_DAILY"), 16, ACCENT, HORIZONTAL_ALIGNMENT_LEFT))
+	var d_spacer := Control.new()
+	d_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	d_header.add_child(d_spacer)
+	_daily_countdown = _label("--:--:--", 13, MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
+	d_header.add_child(_daily_countdown)
 
-	vb.add_child(_label("MISSIONS_STATUS", 13, MUTED, HORIZONTAL_ALIGNMENT_LEFT))
+	_daily_box = VBoxContainer.new()
+	_daily_box.add_theme_constant_override("separation", 8)
+	vb.add_child(_daily_box)
 
-func _switch(daily: bool) -> void:
-	if daily == _showing_daily:
-		return
-	_showing_daily = daily
-	AudioManager.play_sfx("click")
-	_style_toggle(_tab_daily, daily)
-	_style_toggle(_tab_weekly, not daily)
-	_refresh_list()
+	WarzoneUI.add_filet(vb)
 
-func _refresh_list() -> void:
-	for c in _list.get_children():
+	# --- Section HEBDOMADAIRES ---
+	var w_header := HBoxContainer.new()
+	vb.add_child(w_header)
+	w_header.add_child(_label(tr("MISSIONS_WEEKLY"), 16, ACCENT, HORIZONTAL_ALIGNMENT_LEFT))
+	var w_spacer := Control.new()
+	w_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	w_header.add_child(w_spacer)
+	_weekly_countdown = _label("--:--:--", 13, MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
+	w_header.add_child(_weekly_countdown)
+
+	_weekly_box = VBoxContainer.new()
+	_weekly_box.add_theme_constant_override("separation", 8)
+	vb.add_child(_weekly_box)
+
+	WarzoneUI.add_filet(vb)
+
+	_status = _label("", 14, MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	_status.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	vb.add_child(_status)
+
+# =========================================================
+# Peuplement depuis le serveur (missions_loaded)
+# =========================================================
+
+func _on_missions_loaded(data: Dictionary) -> void:
+	_claim_in_flight = ""
+	_fill(_daily_box, data.get("daily", []))
+	_fill(_weekly_box, data.get("weekly", []))
+	_daily_reset_epoch = _epoch_from_iso(str(data.get("daily_resets_at", "")))
+	_weekly_reset_epoch = _epoch_from_iso(str(data.get("weekly_resets_at", "")))
+	var claimable := int(data.get("claimable_count", 0))
+	if claimable > 0:
+		_set_status(tr("MISSIONS_STATUS_CLAIMABLE").format({"n": claimable}), GOLD)
+	else:
+		_set_status(tr("MISSIONS_STATUS_UP_TO_DATE"), MUTED)
+
+func _fill(box: VBoxContainer, entries: Array) -> void:
+	for c in box.get_children():
+		box.remove_child(c)
 		c.queue_free()
-	var data: Array = _DAILY if _showing_daily else _WEEKLY
-	for m in data:
-		_list.add_child(_make_row(m))
+	if entries.is_empty():
+		box.add_child(_label(tr("MISSIONS_STATUS_EMPTY"), 13, MUTED, HORIZONTAL_ALIGNMENT_LEFT))
+		return
+	for m in entries:
+		if typeof(m) == TYPE_DICTIONARY:
+			box.add_child(_make_row(m))
 
-# Rangée d'objectif : intitulé + barre de progression cyan + compteur + récompense XP (badge hexagone or).
+# Rangée : intitulé + description | barre de progression cyan (or si complétée) + compteur |
+# badge récompense Coins | bouton RÉCLAMER (or) / RÉCLAMÉE ✓ (muet).
 func _make_row(m: Dictionary) -> Control:
-	var cur := int(m.get("cur"))
-	var goal := maxi(1, int(m.get("goal")))
-	var done := cur >= goal
+	# Piège JSON §5 : nombres en float après parse → int() systématique.
+	var cur := int(m.get("progress", 0))
+	var goal := maxi(1, int(m.get("target", 1)))
+	var completed := bool(m.get("completed", false))
+	var claimed := bool(m.get("claimed", false))
+	var reward := int(m.get("reward_coins", 0))
+	var mission_id := str(m.get("mission_id", ""))
 
 	var row := PanelContainer.new()
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(1, 1, 1, 0.03)
 	st.set_corner_radius_all(0)
 	st.border_width_left = 3
-	st.border_color = GOLD if done else ACCENT
+	st.border_color = GOLD if (completed and not claimed) else (MUTED if claimed else ACCENT)
 	st.set_content_margin_all(12)
 	row.add_theme_stylebox_override("panel", st)
 
@@ -130,10 +182,13 @@ func _make_row(m: Dictionary) -> Control:
 
 	var left := VBoxContainer.new()
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.add_theme_constant_override("separation", 6)
-	var lbl := _label(str(m.get("key")), 16, TEXT, HORIZONTAL_ALIGNMENT_LEFT)
-	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	left.add_child(lbl)
+	left.add_theme_constant_override("separation", 4)
+	var name_lbl := _label(tr(str(m.get("name_key", ""))), 16, MUTED if claimed else TEXT, HORIZONTAL_ALIGNMENT_LEFT)
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	left.add_child(name_lbl)
+	var desc_lbl := _label(tr(str(m.get("desc_key", ""))), 12, MUTED, HORIZONTAL_ALIGNMENT_LEFT)
+	desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	left.add_child(desc_lbl)
 	var bar := ProgressBar.new()
 	bar.show_percentage = false
 	bar.custom_minimum_size = Vector2(0, 6)
@@ -144,60 +199,136 @@ func _make_row(m: Dictionary) -> Control:
 	bg.bg_color = Color(1, 1, 1, 0.08)
 	bg.set_corner_radius_all(0)
 	var fg := StyleBoxFlat.new()
-	fg.bg_color = GOLD if done else ACCENT
+	fg.bg_color = GOLD if completed else ACCENT
 	fg.set_corner_radius_all(0)
 	bar.add_theme_stylebox_override("background", bg)
 	bar.add_theme_stylebox_override("fill", fg)
 	left.add_child(bar)
 	hb.add_child(left)
 
-	var counter := _label("%d/%d" % [cur, goal], 16, GOLD if done else ACCENT, HORIZONTAL_ALIGNMENT_RIGHT)
+	var counter := _label("%d/%d" % [cur, goal], 16,
+		GOLD if completed else ACCENT, HORIZONTAL_ALIGNMENT_RIGHT)
 	counter.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	counter.custom_minimum_size = Vector2(70, 0)
+	counter.custom_minimum_size = Vector2(76, 0)
 	counter.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hb.add_child(counter)
 
-	var badge := WarzoneUI.make_hex_badge(str(int(m.get("xp"))), _font, 13, GOLD, GUNMETAL, 54.0)
+	# Récompense en COINS (badge hexagonal or, valeur brute serveur — le ×1.5 Pass est appliqué
+	# au claim par le serveur et affiché dans le statut).
+	var badge := WarzoneUI.make_hex_badge(str(reward), _font, 13, GOLD, GUNMETAL, 52.0)
 	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge.tooltip_text = tr("MISSIONS_REWARD_TOOLTIP")
 	hb.add_child(badge)
+
+	# Bouton d'action : RÉCLAMER (or, actif) / RÉCLAMÉE ✓ (désactivé) / EN COURS (désactivé muet).
+	var btn := Button.new()
+	btn.custom_minimum_size = Vector2(150, 44)
+	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 14)
+	btn.focus_mode = Control.FOCUS_NONE
+	if claimed:
+		btn.text = tr("MISSIONS_CLAIMED")
+		btn.disabled = true
+		btn.add_theme_color_override("font_color", MUTED)
+		btn.add_theme_color_override("font_disabled_color", MUTED)
+	elif completed:
+		btn.text = tr("MISSIONS_CLAIM")
+		_style_claim_button(btn)
+		WarzoneUI.wire_button_sfx(btn)
+		btn.pressed.connect(_on_claim_pressed.bind(mission_id, btn))
+	else:
+		btn.text = tr("MISSIONS_IN_PROGRESS")
+		btn.disabled = true
+		btn.add_theme_color_override("font_disabled_color", Color(MUTED, 0.6))
+	hb.add_child(btn)
 	return row
 
-func _make_toggle(key: String, active: bool) -> Button:
-	var btn := Button.new()
-	btn.text = key
-	btn.focus_mode = Control.FOCUS_NONE
-	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	btn.add_theme_font_override("font", _font)
-	btn.add_theme_font_size_override("font_size", 16)
-	WarzoneUI.wire_button_sfx(btn)
-	_style_toggle(btn, active)
-	return btn
-
-func _style_toggle(btn: Button, active: bool) -> void:
+func _style_claim_button(btn: Button) -> void:
 	var sb := StyleBoxFlat.new()
 	sb.set_corner_radius_all(0)
-	sb.content_margin_left = 16.0
-	sb.content_margin_right = 16.0
-	sb.content_margin_top = 8.0
-	sb.content_margin_bottom = 8.0
-	if active:
-		sb.bg_color = Color(ACCENT, 0.18)
-		sb.border_width_bottom = 3
-		sb.border_color = ACCENT
-	else:
-		sb.bg_color = Color(0, 0, 0, 0)
+	sb.bg_color = Color(GOLD, 0.14)
+	sb.set_border_width_all(2)
+	sb.border_color = GOLD
+	sb.set_content_margin_all(8)
 	var hover := sb.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(ACCENT, 0.16)
+	hover.bg_color = Color(GOLD, 0.30)
 	btn.add_theme_stylebox_override("normal", sb)
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", hover)
 	btn.add_theme_stylebox_override("focus", sb)
-	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
+	btn.add_theme_color_override("font_color", GOLD)
 	btn.add_theme_color_override("font_hover_color", TEXT)
 
-func _label(key_or_text: String, size: int, color: Color, align: int) -> Label:
+# =========================================================
+# Claim (POST /missions/claim) — anti double-clic + re-fetch
+# =========================================================
+
+func _on_claim_pressed(mission_id: String, btn: Button) -> void:
+	if _claim_in_flight != "":
+		return  # un claim est déjà en vol : on ignore (anti double-dépense côté UI).
+	_claim_in_flight = mission_id
+	btn.disabled = true
+	NetworkManager.claim_mission(mission_id)
+
+func _on_mission_claimed(data: Dictionary) -> void:
+	AudioManager.play_sfx("confirm")
+	var paid := int(data.get("reward_paid", 0))
+	var msg := tr("MISSIONS_STATUS_CLAIMED").format({"n": paid})
+	if bool(data.get("pass_bonus_applied", false)):
+		msg += "  " + tr("MISSIONS_PASS_BONUS")
+	_set_status(msg, GOLD)
+	# Source de vérité serveur : on RE-FETCHE la liste (progress/claimed/pastille à jour).
+	NetworkManager.fetch_missions()
+
+func _on_claim_failed(message: String) -> void:
+	_claim_in_flight = ""
+	_set_status(message, DANGER)
+	NetworkManager.fetch_missions()
+
+# =========================================================
+# Comptes à rebours de reset (04:00 UTC / lundi 04:00 UTC)
+# =========================================================
+
+func _process(_delta: float) -> void:
+	var now := int(Time.get_unix_time_from_system())
+	if _daily_countdown != null and _daily_reset_epoch > 0:
+		_daily_countdown.text = tr("MISSIONS_RESET_IN") + " " + _fmt_delta(_daily_reset_epoch - now)
+	if _weekly_countdown != null and _weekly_reset_epoch > 0:
+		_weekly_countdown.text = tr("MISSIONS_RESET_IN") + " " + _fmt_delta(_weekly_reset_epoch - now)
+
+func _fmt_delta(seconds: int) -> String:
+	if seconds <= 0:
+		return "00:00:00"
+	var d := seconds / 86400
+	var h := (seconds % 86400) / 3600
+	var m := (seconds % 3600) / 60
+	var s := seconds % 60
+	if d > 0:
+		return "%dj %02d:%02d:%02d" % [d, h, m, s]
+	return "%02d:%02d:%02d" % [h, m, s]
+
+# ISO "2026-07-15T04:00:00Z" (UTC) → epoch. Godot ne gère pas le suffixe Z → retiré avant parse.
+func _epoch_from_iso(iso: String) -> int:
+	if iso == "":
+		return 0
+	return int(Time.get_unix_time_from_datetime_string(iso.trim_suffix("Z")))
+
+# =========================================================
+# Divers
+# =========================================================
+
+func _set_status(text: String, color: Color) -> void:
+	if _status != null:
+		_status.text = text
+		_status.add_theme_color_override("font_color", color)
+
+func _on_back_pressed() -> void:
+	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
+
+func _label(text: String, size: int, color: Color, align: int) -> Label:
 	var l := Label.new()
-	l.text = key_or_text
+	l.text = text
 	l.add_theme_font_override("font", _font)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)

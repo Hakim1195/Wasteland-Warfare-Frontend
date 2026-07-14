@@ -20,6 +20,51 @@ const FOCUS_DURATION := 0.8
 
 var _tween: Tween
 
+# --- Navigation LIBRE (lot G3 §8.70 — mode observateur) ---
+# Activée pour un joueur ÉLIMINÉ (main.gd) : pan au DRAG (clic droit ou molette enfoncée) +
+# zoom à la MOLETTE, bornés au plateau. Désactivée par défaut (vue pilotée : plein plateau /
+# travelling de combat, comportement historique inchangé).
+var free_navigation := false
+const FREE_ZOOM_MAX_FACTOR := 4.0   # zoom max = 4× la vue plein plateau.
+const FREE_ZOOM_STEP := 1.12        # facteur par cran de molette.
+var _dragging := false
+
+func set_free_navigation(enabled: bool) -> void:
+	free_navigation = enabled
+	if not enabled:
+		_fit_full_board()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not free_navigation:
+		return
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_MIDDLE:
+			_dragging = event.pressed
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_apply_free_zoom(FREE_ZOOM_STEP)
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_apply_free_zoom(1.0 / FREE_ZOOM_STEP)
+	elif event is InputEventMouseMotion and _dragging:
+		_kill_tween()
+		# Déplacement en espace MONDE (relative est en pixels écran → diviser par le zoom).
+		position -= event.relative / zoom.x
+		_clamp_to_board()
+
+func _apply_free_zoom(factor: float) -> void:
+	_kill_tween()
+	var base := _full_board_zoom().x
+	var z: float = clampf(zoom.x * factor, base, base * FREE_ZOOM_MAX_FACTOR)
+	zoom = Vector2(z, z)
+	_clamp_to_board()
+
+# Garde la caméra dans le cadre du plateau (la moitié visible ne sort jamais des bords).
+func _clamp_to_board() -> void:
+	var half := Vector2(get_viewport().get_visible_rect().size) / (2.0 * zoom.x)
+	var top_left := BOARD_CENTER - BOARD_SIZE / 2.0
+	var bottom_right := BOARD_CENTER + BOARD_SIZE / 2.0
+	position.x = clampf(position.x, top_left.x + half.x, maxf(top_left.x + half.x, bottom_right.x - half.x))
+	position.y = clampf(position.y, top_left.y + half.y, maxf(top_left.y + half.y, bottom_right.y - half.y))
+
 func _ready() -> void:
 	# SubViewportContainer.stretch = true redimensionne le SubViewport à chaque
 	# resize de fenêtre → on recadre la vue plein plateau à chaque changement.
