@@ -61,6 +61,12 @@ var _confirmed: bool = false
 var _is_animating: bool = false
 # player_id (int) -> faction_id : qui a verrouillé quoi. Sert à détecter "tout le monde a choisi".
 var _locked: Dictionary = {}
+# Vrai dès que la bascule vers l'arène est engagée (garde anti double change_scene : la
+# resynchronisation draft_state + les faction_locked peuvent compléter le draft plusieurs fois).
+var _left: bool = false
+# Échéance UNIX (s) d'auto-verrouillage du draft (G2 durci) : le serveur verrouille d'office les
+# retardataires passé ce délai — on affiche le compte à rebours. -1 = aucune échéance connue.
+var _draft_deadline_at: float = -1.0
 # Instance du héros 3D, montée une fois dans PortraitWrap (modèle échangé via set_model au défilement).
 # Non typée à dessein (appels dynamiques — pas de class_name sur le composant).
 var _hero3d = null
@@ -98,6 +104,20 @@ func _ready():
 
 	# Réseau : on écoute les verrouillages des autres joueurs.
 	NetworkManager.faction_locked.connect(_on_faction_locked)
+	# Resynchronisation du Draft (G2 durci) : les faction_locked des BOTS partent juste après
+	# game_started, PENDANT la transition de scène — cet écran n'était pas encore à l'écoute et
+	# les perdait (compteur bloqué à 1/3, partie jamais lancée). On demande donc au serveur la
+	# photographie complète des verrouillages dès l'arrivée ici.
+	NetworkManager.draft_state_received.connect(_on_draft_state)
+	# Un joueur qui abandonne/déconnecte pendant le draft ne verrouillera jamais : on recompte
+	# les attendus (joueurs ACTIFS) à chaque abandon pour ne pas attendre son verrou à vie.
+	NetworkManager.player_abandoned.connect(_on_player_abandoned)
+	# Filet de sécurité : si l'état passe en "playing" (Phase 0 résolue pendant qu'on était
+	# encore ici — resync manquée, timeout serveur…), on rejoint l'arène sans condition.
+	NetworkManager.game_state_updated.connect(_on_game_state_updated)
+	_draft_deadline_at = NetworkManager.last_draft_deadline_at
+	if NetworkManager.connected:
+		NetworkManager.request_draft_state()
 
 	# M3 (§8.66) : possession + rotation AVANT de laisser confirmer une payante. Chargements
 	# asynchrones ; en attendant, les payantes non possédées sont grisées (repli sûr).
@@ -433,28 +453,89 @@ func _on_faction_locked(player_id, faction_id) -> void:
 	_register_lock(player_id, faction_id)
 	_update_status()
 
+# Photographie complète du Draft renvoyée par le serveur (réponse à request_draft_state) :
+# rattrape les verrouillages manqués pendant la transition de scène (bots notamment).
+# Clés du dict = player_id en STRING (piège JSON §5) → int() avant enregistrement.
+func _on_draft_state(locked: Dictionary) -> void:
+	_draft_deadline_at = NetworkManager.last_draft_deadline_at
+	for key in locked:
+		_register_lock(str(key).to_int(), str(locked[key]))
+	_update_status()
+
+# Abandon/déconnexion pendant le draft : le partant ne verrouillera jamais — l'état diffusé
+# (is_active=false) est déjà appliqué à GameState, on recompte donc les attendus.
+func _on_player_abandoned(_player_id: int) -> void:
+	_maybe_start_game()
+	_update_status()
+
+# Filet de sécurité : la partie est passée en "playing" alors qu'on est encore sur le draft
+# (verrouillages manqués + Phase 0 résolue côté serveur) → on rejoint l'arène sans condition.
+func _on_game_state_updated() -> void:
+	if GameState.stage == "playing":
+		_go_to_arena()
+
 # Enregistre un verrouillage et déclenche éventuellement le départ de la partie.
 func _register_lock(player_id, faction_id) -> void:
 	_locked[int(player_id)] = faction_id
 	_maybe_start_game()
 
-# Bascule vers l'arène quand TOUS les joueurs de la partie ont verrouillé leur faction.
+# Bascule vers l'arène quand TOUS les joueurs ACTIFS de la partie ont verrouillé leur faction.
+# (Compter tous les joueurs attendait à vie le verrou d'un déconnecté — compteur figé à N-1/N.)
 func _maybe_start_game() -> void:
 	var expected := _expected_players()
-	if expected > 0 and _locked.size() >= expected:
-		status_label.text = tr("FS_ALL_READY")
-		TransitionManager.change_scene("res://scenes/game/main.tscn")
+	if expected <= 0:
+		return
+	var locked_active := 0
+	for pid in _locked:
+		if _is_player_active(pid):
+			locked_active += 1
+	if locked_active >= expected:
+		_go_to_arena()
 
-# Nombre de joueurs attendus : la composition de la partie est déjà connue (GameState peuplé
-# par le message game_started reçu en salle d'attente).
+# Bascule unique vers l'arène (garde anti double change_scene : resync + broadcasts + filet
+# stage=="playing" peuvent tous conclure « draft terminé »).
+func _go_to_arena() -> void:
+	if _left:
+		return
+	_left = true
+	status_label.text = tr("FS_ALL_READY")
+	TransitionManager.change_scene("res://scenes/game/main.tscn")
+
+# Vrai si le joueur est encore ACTIF dans la partie (déserteurs exclus). Lecture défensive de
+# GameState.players : clés string (piège JSON §5), is_active absent = actif (rétro-compat).
+func _is_player_active(pid) -> bool:
+	var p = GameState.players.get(str(int(pid)), null)
+	if p == null:
+		p = GameState.players.get(int(pid), null)
+	if not (p is Dictionary):
+		return true
+	return bool(p.get("is_active", true))
+
+# Nombre de joueurs attendus au draft : les joueurs ACTIFS de la partie (GameState peuplé par
+# le message game_started reçu en salle d'attente, puis tenu à jour par player_abandoned).
 func _expected_players() -> int:
-	return GameState.players.size()
+	var count := 0
+	for pid in GameState.players:
+		if _is_player_active(pid):
+			count += 1
+	return count
 
 func _update_status() -> void:
-	if _factions.is_empty():
+	if _factions.is_empty() or _left:
 		return
 	var expected := _expected_players()
 	var count_txt := str(_locked.size())
 	if expected > 0:
 		count_txt += " / " + str(expected)
 	status_label.text = tr("FS_STATUS") % [_index + 1, _factions.size(), count_txt]
+
+func _process(_delta: float) -> void:
+	# Compte à rebours d'auto-verrouillage (G2 durci) : tant que le joueur n'a PAS confirmé et
+	# qu'une échéance serveur est connue, le statut affiche le temps restant (à 0, le serveur
+	# verrouille d'office la faction provisoire et la salle bascule d'elle-même vers l'arène).
+	if _left or _confirmed or _draft_deadline_at <= 0.0 or _factions.is_empty():
+		return
+	var remaining := int(ceil(_draft_deadline_at - Time.get_unix_time_from_system()))
+	if remaining >= 0 and remaining <= 30:
+		status_label.text = tr("FS_AUTO_LOCK_IN") % remaining
+		status_label.add_theme_color_override("font_color", Color(0.878431, 0.698039, 0.286275, 1))

@@ -25,6 +25,14 @@ var last_bot_fill_at: float = -1.0
 signal game_started_signal
 # Émis quand un joueur verrouille sa faction pendant le Draft (CONTEXTE.md §3, étape de sélection).
 signal faction_locked(player_id, faction_id)
+# Resynchronisation du Draft (G2 durci) : réponse PRIVÉE du serveur à l'action get_draft.
+# `locked` = { "player_id": "faction_id" } (clés string, piège JSON §5) — TOUS les verrouillages
+# déjà actés (bots compris), y compris ceux diffusés pendant la transition de scène du client.
+signal draft_state_received(locked: Dictionary)
+# Échéance UNIX (s) d'auto-verrouillage du draft (G2 durci) : passé ce délai, le serveur
+# verrouille d'office les retardataires. Mise à jour par game_started ET draft_state ; -1 = aucune.
+# Propriété (et non arg de signal) : même pattern que last_bot_fill_at.
+var last_draft_deadline_at: float = -1.0
 # Émis quand un joueur abandonne la partie (Fallen Empire, CONTEXTE.md §8.20). L'état diffusé
 # avec le message (is_active=false, tour éventuellement déjà passé) est appliqué à GameState
 # AVANT l'émission — les écouteurs peuvent donc lire player_number/players directement.
@@ -228,6 +236,9 @@ func _handle_server_message(msg: Dictionary) -> void:
 				rewards)
 		"game_started":
 			# La partie démarre : on applique l'état initial puis on signale le départ.
+			# L'échéance d'auto-verrouillage du draft (G2 durci) accompagne le message.
+			var gda = msg.get("draft_deadline_at", null)
+			last_draft_deadline_at = float(gda) if (typeof(gda) == TYPE_FLOAT or typeof(gda) == TYPE_INT) else -1.0
 			if msg.has("state") and has_node("/root/GameState"):
 				GameState.update_from_json(msg["state"])
 			game_state_updated.emit()
@@ -236,6 +247,13 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# Un joueur a verrouillé sa faction pendant le Draft. On relaie aux écouteurs
 			# (faction_selection.gd) le couple (player_id, faction_id).
 			faction_locked.emit(msg.get("player_id"), msg.get("faction_id", ""))
+		"draft_state":
+			# Resynchronisation du Draft (G2 durci) : photographie COMPLÈTE des verrouillages —
+			# rattrape les faction_locked émis pendant la transition de scène (bots notamment).
+			var dda = msg.get("draft_deadline_at", null)
+			last_draft_deadline_at = float(dda) if (typeof(dda) == TYPE_FLOAT or typeof(dda) == TYPE_INT) else -1.0
+			var locked_map = msg.get("locked", {})
+			draft_state_received.emit(locked_map if typeof(locked_map) == TYPE_DICTIONARY else {})
 		"player_abandoned":
 			# Fallen Empire (§8.20) : un joueur a abandonné. On applique l'état diffusé
 			# (is_active=false, tour éventuellement passé au joueur actif suivant), puis
@@ -294,6 +312,12 @@ func request_lobby_state() -> void:
 # "player_id":..., "faction_id":...} à toute la salle (relayé via le signal faction_locked).
 func send_faction_choice(faction_id: String) -> void:
 	send_action("faction_choice", {"faction_id": faction_id})
+
+# Demande la photographie du Draft (G2 durci) : le serveur répond en PRIVÉ par un message
+# "draft_state" (relayé via draft_state_received). Appelé par faction_selection à son _ready
+# pour rattraper les faction_locked diffusés pendant la transition de scène.
+func request_draft_state() -> void:
+	send_action("get_draft", {})
 
 # Chat de salle (§8.33) : envoi à PLAT (contrat principal) — {"type":"send_chat_message", tab, text,
 # target_id}. tab ∈ {"general","private"} ; target_id REQUIS en privé. Le serveur estampille
