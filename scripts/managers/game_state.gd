@@ -15,6 +15,10 @@ var initiative_rolls: Dictionary = {}
 var objectives: Dictionary = {}
 var winner_id = null  # null tant que la partie n'est pas gagnée
 
+# Carte jouée (registre multi-cartes G5 §8.71 : "classic_42" | "skirmish_atlantic").
+# Posée à chaque update_from_json ; défaut classic (rétro-compat serveur antérieur).
+var map_id: String = "classic_42"
+
 # Version du client (auto-updater, CONTEXTE.md §9). Renseignée par le bootloader au démarrage
 # à partir de user://client_version.txt (défaut "1.0.0"). Envoyée au serveur dans l'URL du
 # WebSocket (network_manager) pour la validation de version stricte côté backend.
@@ -51,6 +55,11 @@ func update_from_json(state_data: Dictionary):
 	initiative_rolls = state_data.get("initiative_rolls", {})
 	objectives = state_data.get("objectives", {})
 	winner_id = state_data.get("winner_id", null)
+	# Carte jouée (registre multi-cartes G5 §8.71) — diffusée dans l'état ; défaut classic
+	# (serveur antérieur / état legacy). Consommée par board.gd (masquage) et MapData (adjacence).
+	map_id = str(state_data.get("map_id", "classic_42"))
+	# NB : `is_bot` (G2 §8.72) est un champ PUBLIC de chaque PlayerState (dans `players`) — lu
+	# directement via GameState.players[pid].is_bot par main.gd/hud.gd (pas de miroir dédié ici).
 	# Le serveur sérialise la zone radioactive ; défaut {} si absente (état pré-game/placement).
 	contamination_zone = state_data.get("contamination_zone", {})
 	# « Mémoire Tactique » (§8.35) : statistiques globales publiques (alimente le tiroir Intel, §8.36).

@@ -20,6 +20,25 @@ const FOCUS_DURATION := 0.8
 
 var _tween: Tween
 
+# --- Cadre de référence (lot G5 §8.71 — carte réduite) ---
+# La vue « plein plateau » (et ses bornes de pan/zoom) suit CE rect : plateau ENTIER par défaut
+# (carte classique, comportement historique intact) ; recadré sur le rect englobant des
+# territoires ACTIFS quand une sous-carte est jouée (posé par main.gd depuis board.gd).
+var _board_rect := Rect2(BOARD_CENTER - BOARD_SIZE / 2.0, BOARD_SIZE)
+# Marge de respiration autour des territoires actifs (px monde).
+const ACTIVE_RECT_PADDING := 90.0
+
+func set_board_rect(rect: Rect2) -> void:
+	# Rect vide → retour au cadre plein plateau (carte complète).
+	var target := Rect2(BOARD_CENTER - BOARD_SIZE / 2.0, BOARD_SIZE)
+	if rect.size != Vector2.ZERO:
+		target = rect.grow(ACTIVE_RECT_PADDING)
+	if _board_rect.is_equal_approx(target):
+		return
+	_board_rect = target
+	if not free_navigation:
+		_fit_full_board()
+
 # --- Navigation LIBRE (lot G3 §8.70 — mode observateur) ---
 # Activée pour un joueur ÉLIMINÉ (main.gd) : pan au DRAG (clic droit ou molette enfoncée) +
 # zoom à la MOLETTE, bornés au plateau. Désactivée par défaut (vue pilotée : plein plateau /
@@ -57,11 +76,11 @@ func _apply_free_zoom(factor: float) -> void:
 	zoom = Vector2(z, z)
 	_clamp_to_board()
 
-# Garde la caméra dans le cadre du plateau (la moitié visible ne sort jamais des bords).
+# Garde la caméra dans le cadre COURANT (plateau entier, ou sous-carte active — G5).
 func _clamp_to_board() -> void:
 	var half := Vector2(get_viewport().get_visible_rect().size) / (2.0 * zoom.x)
-	var top_left := BOARD_CENTER - BOARD_SIZE / 2.0
-	var bottom_right := BOARD_CENTER + BOARD_SIZE / 2.0
+	var top_left := _board_rect.position
+	var bottom_right := _board_rect.end
 	position.x = clampf(position.x, top_left.x + half.x, maxf(top_left.x + half.x, bottom_right.x - half.x))
 	position.y = clampf(position.y, top_left.y + half.y, maxf(top_left.y + half.y, bottom_right.y - half.y))
 
@@ -71,19 +90,19 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_fit_full_board)
 	_fit_full_board()
 
-# Le plus grand zoom qui fait tenir 100 % du plateau dans le viewport courant.
-# (En Godot 4, zoom < 1 = dézoom : on voit PLUS que la taille du viewport.)
+# Le plus grand zoom qui fait tenir 100 % du CADRE COURANT dans le viewport (G5 : le cadre
+# suit la sous-carte active). (En Godot 4, zoom < 1 = dézoom : on voit PLUS que le viewport.)
 func _full_board_zoom() -> Vector2:
 	var vp := Vector2(get_viewport().get_visible_rect().size)
-	if vp.x <= 0.0 or vp.y <= 0.0:
+	if vp.x <= 0.0 or vp.y <= 0.0 or _board_rect.size.x <= 0.0 or _board_rect.size.y <= 0.0:
 		return Vector2.ONE
-	var z := minf(vp.x / BOARD_SIZE.x, vp.y / BOARD_SIZE.y)
+	var z := minf(vp.x / _board_rect.size.x, vp.y / _board_rect.size.y)
 	return Vector2(z, z)
 
-# Vue par défaut : carte entière visible, caméra au centre du plateau (sans animation).
+# Vue par défaut : cadre courant entièrement visible, caméra à son centre (sans animation).
 func _fit_full_board() -> void:
 	_kill_tween()
-	position = BOARD_CENTER
+	position = _board_rect.get_center()
 	zoom = _full_board_zoom()
 
 # Travelling de combat : calcule le point central entre les deux positions, puis glisse
@@ -96,11 +115,11 @@ func focus_on_combat(pos_a: Vector2, pos_b: Vector2) -> void:
 	_tween.tween_property(self, "position", center, FOCUS_DURATION)
 	_tween.tween_property(self, "zoom", target_zoom, FOCUS_DURATION)
 
-# Retour fluide à la vue d'ensemble (même cinétique que le focus).
+# Retour fluide à la vue d'ensemble (même cinétique que le focus ; cadre courant — G5).
 func reset_view() -> void:
 	_kill_tween()
 	_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT).set_parallel(true)
-	_tween.tween_property(self, "position", BOARD_CENTER, FOCUS_DURATION)
+	_tween.tween_property(self, "position", _board_rect.get_center(), FOCUS_DURATION)
 	_tween.tween_property(self, "zoom", _full_board_zoom(), FOCUS_DURATION)
 
 func _kill_tween() -> void:

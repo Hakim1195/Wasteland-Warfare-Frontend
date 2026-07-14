@@ -78,6 +78,8 @@ func _ready():
 	if join_button: join_button.pressed.connect(_on_join_manual_pressed)
 	if create_public_button: create_public_button.pressed.connect(_on_create_public_pressed)
 	if create_private_button: create_private_button.pressed.connect(_on_create_private_pressed)
+	# Sélecteur de CARTE (G5 §8.71) : « GUERRE MONDIALE — 42 » / « THÉÂTRE ATLANTIQUE — 20, rapide ».
+	_build_map_selector()
 	if back_button: back_button.pressed.connect(_on_back_pressed)
 
 	# SFX d'interface (survol/clic — R6) + nappe d'ambiance des menus (idempotente, R6).
@@ -177,15 +179,51 @@ func _on_join_manual_pressed():
 	else:
 		status_label.text = tr("LOBBY_INVALID_ID")
 
+# =========================================================
+# Sélecteur de CARTE (G5 §8.71) — construit par code au-dessus des boutons de création
+# =========================================================
+var _selected_map_id := "classic_42"
+var _map_option: OptionButton = null
+# Ordre des items du sélecteur → map_id (index 0 = classique, 1 = Atlantique).
+const _MAP_CHOICES := ["classic_42", "skirmish_atlantic"]
+
+func _build_map_selector() -> void:
+	if create_public_button == null:
+		return
+	var parent := create_public_button.get_parent()
+	var eyebrow := Label.new()
+	eyebrow.text = tr("LOBBY_MAP_EYEBROW")
+	eyebrow.add_theme_font_size_override("font_size", 12)
+	eyebrow.add_theme_color_override("font_color", Color(0.211765, 0.772549, 0.85098, 1))
+	_map_option = OptionButton.new()
+	_map_option.add_item(tr("LOBBY_MAP_CLASSIC"))
+	_map_option.add_item(tr("LOBBY_MAP_ATLANTIC"))
+	_map_option.custom_minimum_size = Vector2(0, 40)
+	_map_option.focus_mode = Control.FOCUS_NONE
+	_map_option.item_selected.connect(func(idx: int) -> void:
+		_selected_map_id = _MAP_CHOICES[clampi(idx, 0, _MAP_CHOICES.size() - 1)])
+	# Insérés juste AU-DESSUS du bouton « CRÉER UNE OPÉRATION » (aucune retouche .tscn).
+	parent.add_child(eyebrow)
+	parent.add_child(_map_option)
+	parent.move_child(eyebrow, create_public_button.get_index())
+	parent.move_child(_map_option, create_public_button.get_index())
+
+# Effectif de création CLAMPÉ aux bornes de la carte choisie (G5) : le serveur re-clampe de
+# toute façon, mais on évite de créer une salle qui ne matcherait pas le mode du joueur.
+func _create_headcount() -> int:
+	var max_p := int(MapData.MAP_DEFS.get(_selected_map_id, {}).get("max_players", 6))
+	return clampi(_required_players, 3, max_p)
+
 func _on_create_public_pressed():
-	# Effectif AUTOMATIQUE hérité du mode (MatchConfig) — plus aucune saisie manuelle (§8.57).
-	status_label.text = tr("LOBBY_CREATING_PUBLIC") % _required_players
-	NetworkManager.create_room(false, "", _required_players)
+	# Effectif AUTOMATIQUE hérité du mode (MatchConfig, §8.57), CLAMPÉ aux bornes de la carte
+	# choisie (G5 §8.71 : Théâtre Atlantique = 3-4). Le serveur re-clampe de toute façon.
+	status_label.text = tr("LOBBY_CREATING_PUBLIC") % _create_headcount()
+	NetworkManager.create_room(false, "", _create_headcount(), _selected_map_id)
 
 func _on_create_private_pressed():
 	# Idem : la salle privée naît avec l'effectif du mode sélectionné au Menu Principal.
-	status_label.text = tr("LOBBY_CREATING_PRIVATE") % _required_players
-	NetworkManager.create_room(true, "SECRET123", _required_players) # Le code secret sera configurable plus tard
+	status_label.text = tr("LOBBY_CREATING_PRIVATE") % _create_headcount()
+	NetworkManager.create_room(true, "SECRET123", _create_headcount(), _selected_map_id) # Le code secret sera configurable plus tard
 
 # RETOUR (refonte navigation) : simple retour au menu principal, avec le fondu gunmetal
 # entrant/sortant du TransitionManager (cohérent avec leaderboard / shop / profile / settings).
@@ -261,6 +299,19 @@ func _build_room_row(room: Dictionary) -> PanelContainer:
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hbox.add_child(name_label)
+
+	# Label de CARTE (G5 §8.71) : renvoyé par le serveur (map_label) ; repli sur le miroir local
+	# via map_id ; muet si aucun des deux (backend antérieur — aucune régression d'affichage).
+	var map_txt := str(room.get("map_label", ""))
+	if map_txt == "" and room.has("map_id"):
+		map_txt = MapData.map_label(str(room.get("map_id", "")))
+	if map_txt != "":
+		var map_lbl := Label.new()
+		map_lbl.text = map_txt.to_upper()
+		map_lbl.add_theme_font_size_override("font_size", 13)
+		map_lbl.add_theme_color_override("font_color", Color(0.541176, 0.592157, 0.647059, 1))
+		map_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		hbox.add_child(map_lbl)
 
 	# Jauge d'effectif "joueurs/max" (centrée).
 	var count_label := Label.new()

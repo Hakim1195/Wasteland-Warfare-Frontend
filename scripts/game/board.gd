@@ -298,6 +298,12 @@ func generate_board() -> void:
 	_build_owner_colors()
 	var contaminated := _contaminated_set()
 	var forecast := _forecast_set()
+	# Carte réduite (G5 §8.71) : territoires de LA CARTE JOUÉE — les nœuds hors carte sont
+	# masqués/désactivés plus bas ; le rect englobant des actifs recadre la caméra tactique.
+	var map_terrs: Dictionary = MapData.map_territories(GameState.map_id)
+	var partial_map: bool = map_terrs.size() < _nodes.size()
+	var active_rect := Rect2()
+	var have_rect := false
 
 	# Tableaux pousses a l'overlay (§8.51), indexes par la carte-ID : couleur+alpha de remplissage
 	# et alpha de contour. Initialises transparents -> les territoires neutres restent invisibles.
@@ -316,6 +322,24 @@ func generate_board() -> void:
 
 	for tid in _nodes:
 		var node = _nodes[tid]
+		# Hors carte (G5) : nœud invisible + non cliquable + badge masqué, rien d'autre à faire
+		# (l'overlay reste transparent : le territoire n'existe pas dans GameState.territories).
+		var in_map: bool = map_terrs.has(tid)
+		if "visible" in node:
+			node.visible = in_map
+		if "input_pickable" in node:
+			node.input_pickable = in_map
+		if not in_map:
+			var stale = _badges.get(tid)
+			if stale != null and is_instance_valid(stale):
+				stale.visible = false
+			continue
+		# Rect englobant des territoires ACTIFS (recadrage caméra, seulement en carte partielle).
+		if partial_map:
+			var node_rect := _node_world_rect(node)
+			if node_rect.size != Vector2.ZERO:
+				active_rect = node_rect if not have_rect else active_rect.merge(node_rect)
+				have_rect = true
 		var t: Dictionary = GameState.territories.get(tid, {})
 		var territory_owner = t.get("owner_id")
 		var garrison := int(t.get("garrison", 0))
@@ -397,6 +421,30 @@ func generate_board() -> void:
 		m.set_shader_parameter("territory_edge", ov_edges)
 		m.set_shader_parameter("territory_mine", ov_mine)
 		m.set_shader_parameter("territory_forecast", ov_forecast)
+
+	# Cadre actif (G5) : mémorisé pour la caméra — Rect2() vide sur la carte COMPLÈTE (le
+	# cadrage historique plein plateau est alors conservé, non-régression classic).
+	_active_rect = active_rect if (partial_map and have_rect) else Rect2()
+
+# Rect englobant MONDE d'un territoire actif (rect caméra G5) — Rect2() vide si aucun polygone.
+func _node_world_rect(node: Node) -> Rect2:
+	for child in node.get_children():
+		if child is CollisionPolygon2D and child.polygon.size() > 0:
+			var xform: Transform2D = child.global_transform
+			var rect := Rect2(xform * child.polygon[0], Vector2.ZERO)
+			for p in child.polygon:
+				rect = rect.expand(xform * p)
+			return rect
+	if node is Node2D:
+		return Rect2(node.global_position, Vector2.ZERO)
+	return Rect2()
+
+# Rect englobant des territoires de la carte ACTIVE (G5 §8.71) — vide = carte complète (le
+# consommateur, la caméra tactique, garde alors sa vue plein plateau historique).
+var _active_rect := Rect2()
+
+func get_active_map_rect() -> Rect2:
+	return _active_rect
 
 # Crée (une fois) puis renvoie le Polygon2D de remplissage d'un territoire, construit à partir
 # de son CollisionPolygon2D (mêmes points, transformés dans l'espace local de l'Area2D).
@@ -510,6 +558,8 @@ func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool =
 		badge = TerritoryBadgeScene.instantiate()
 		_badge_layer.add_child(badge)
 		_badges[tid] = badge
+	# Ré-affiche un badge masqué par un passage hors-carte (changement de carte, G5 §8.71).
+	badge.visible = true
 	badge.global_position = pos
 	badge.set_data(troops, accent, contaminated, pending, forecast)
 

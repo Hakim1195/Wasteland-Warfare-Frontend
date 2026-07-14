@@ -85,11 +85,76 @@ const TERRITORIES := {
 
 # --- Helpers ---
 
-func are_adjacent(a: String, b: String) -> bool:
-	return TERRITORIES.has(a) and b in TERRITORIES[a]["neighbors"]
+# =====================================================================================
+# REGISTRE MULTI-CARTES (lot G5 §8.71) — miroir strict de backend/api/game/map_data.py
+# =====================================================================================
+# La carte « Théâtre Atlantique » est DÉRIVÉE du graphe 42 (sous-graphe induit NA+SA+EU,
+# voisins filtrés) — aucune duplication de données, mêmes noms/bonus. Les constantes
+# historiques (TERRITORIES/CONTINENTS) restent la carte classique : rien ne casse.
 
-func neighbors_of(territory_id: String) -> Array:
-	return TERRITORIES.get(territory_id, {}).get("neighbors", [])
+const DEFAULT_MAP_ID := "classic_42"
+# Définitions du registre : label + continents inclus + bornes joueurs (miroir backend).
+const MAP_DEFS := {
+	"classic_42": {
+		"label": "Guerre Mondiale",
+		"continent_ids": ["north_america", "south_america", "europe", "africa", "asia", "oceania"],
+		"min_players": 3, "max_players": 6,
+	},
+	"skirmish_atlantic": {
+		"label": "Théâtre Atlantique",
+		"continent_ids": ["north_america", "south_america", "europe"],
+		"min_players": 3, "max_players": 4,
+	},
+}
+# Cache des sous-cartes dérivées (calculées une fois par map_id).
+var _maps_cache: Dictionary = {}
+
+# Entrée du registre pour `map_id` (repli DÉFENSIF sur classic_42 — même contrat que le backend).
+# Retour : { "label": String, "territories": Dictionary, "continent_territories": Dictionary }.
+func get_map(map_id: String) -> Dictionary:
+	var mid: String = map_id if MAP_DEFS.has(map_id) else DEFAULT_MAP_ID
+	if _maps_cache.has(mid):
+		return _maps_cache[mid]
+	var def: Dictionary = MAP_DEFS[mid]
+	var cont_ids: Array = def["continent_ids"]
+	var terrs := {}
+	var cont_terrs := {}
+	for cid in cont_ids:
+		cont_terrs[cid] = []
+	for tid in TERRITORIES:
+		var d: Dictionary = TERRITORIES[tid]
+		if not cont_ids.has(d["continent"]):
+			continue
+		var nbrs: Array = []
+		for n in d["neighbors"]:
+			if cont_ids.has(TERRITORIES[n]["continent"]):
+				nbrs.append(n)
+		terrs[tid] = {"name": d["name"], "continent": d["continent"], "neighbors": nbrs}
+		cont_terrs[d["continent"]].append(tid)
+	var out := {
+		"label": str(def["label"]),
+		"territories": terrs,
+		"continent_territories": cont_terrs,
+	}
+	_maps_cache[mid] = out
+	return out
+
+# Territoires de la carte donnée ("" → carte classique, comportement historique).
+func map_territories(map_id: String = DEFAULT_MAP_ID) -> Dictionary:
+	return get_map(map_id)["territories"]
+
+# Libellé lisible d'une carte (radar du lobby, sélecteur de création).
+func map_label(map_id: String) -> String:
+	return str(get_map(map_id)["label"])
+
+# Adjacence SUR LA CARTE DONNÉE (G5) : les voisins des sous-cartes sont filtrés — passer
+# GameState.map_id en jeu. Sans map_id → carte classique (comportement historique intact).
+func are_adjacent(a: String, b: String, map_id: String = DEFAULT_MAP_ID) -> bool:
+	var terrs: Dictionary = get_map(map_id)["territories"]
+	return terrs.has(a) and b in terrs[a]["neighbors"]
+
+func neighbors_of(territory_id: String, map_id: String = DEFAULT_MAP_ID) -> Array:
+	return get_map(map_id)["territories"].get(territory_id, {}).get("neighbors", [])
 
 func continent_of(territory_id: String) -> String:
 	return TERRITORIES.get(territory_id, {}).get("continent", "")

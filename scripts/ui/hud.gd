@@ -826,6 +826,9 @@ func update_display() -> void:
 	var uname := str(pdata.get("username", ""))
 	if uname == "":
 		uname = "JOUEUR %d" % GameState.player_number(GameState.current_player_id)
+	# Bot de remplissage (G2 §8.72) : préfixe « [IA] » (id négatif ou is_bot public).
+	if int(GameState.current_player_id) < 0 or bool(pdata.get("is_bot", false)):
+		uname = "[IA] " + uname
 	var who := "%s (%s)" % [uname, str(pdata.get("faction", "?"))]
 	%InfoLabel.text = "TOUR %s ▪ %s ▪ STOCK : %s" % [
 		str(GameState.current_turn), who, str(pdata.get("units_in_stock", 0))]

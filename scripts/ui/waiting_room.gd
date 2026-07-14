@@ -12,6 +12,9 @@ extends Control
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 
 var is_ready: bool = false
+# Remplissage IA (G2 §8.72) : échéance UNIX (s) du fill (-1 = aucun) — pilote le compte à rebours
+# « REMPLISSAGE IA DANS Xs » affiché dans le statut réseau. Mis à jour à chaque lobby_state.
+var _bot_fill_at: float = -1.0
 
 func _ready():
 	# Encoches biseautées sur le panneau central (charte §2).
@@ -73,9 +76,21 @@ func _on_game_started():
 func _on_game_error(message: String):
 	network_status_label.text = tr("WR_ERROR_PREFIX") % message
 
+func _process(_delta: float) -> void:
+	# Compte à rebours de remplissage IA (G2 §8.72) : tant qu'une échéance est armée, on affiche
+	# le nombre de secondes restantes ; le _process s'arrête de facto quand _bot_fill_at repasse à -1.
+	if _bot_fill_at > 0.0:
+		var remaining := int(ceil(_bot_fill_at - Time.get_unix_time_from_system()))
+		if remaining > 0:
+			network_status_label.text = tr("WR_BOT_FILL_IN") % remaining
+			network_status_label.add_theme_color_override("font_color", Color(0.878431, 0.698039, 0.286275, 1))
+
 # Redessine la liste des joueurs à partir de l'état serveur (ids connectés + ids prêts + pseudos).
 func _on_lobby_state(players: Array, ready_ids: Array, usernames: Dictionary = {}):
-	network_status_label.text = tr("WR_LOBBY_STATE") % [players.size(), ready_ids.size()]
+	# Échéance de remplissage IA (propriété du NetworkManager — le signal garde sa signature).
+	_bot_fill_at = NetworkManager.last_bot_fill_at
+	if _bot_fill_at <= 0.0:
+		network_status_label.text = tr("WR_LOBBY_STATE") % [players.size(), ready_ids.size()]
 
 	for child in player_list.get_children():
 		child.queue_free()
@@ -97,7 +112,9 @@ func _on_lobby_state(players: Array, ready_ids: Array, usernames: Dictionary = {
 		var uname := str(usernames.get(str(int(pid)), ""))
 		if uname == "":
 			uname = tr("WR_PLAYER_FALLBACK") % (i + 1)
-		var line = "👤 " + uname
+		# Bot de remplissage (G2 §8.72) : id NÉGATIF → préfixe « [IA] » + icône robot.
+		var is_bot := int(pid) < 0
+		var line = ("🤖 [IA] " + uname) if is_bot else ("👤 " + uname)
 		if is_me:
 			line += tr("WR_ME_SUFFIX")
 		line += "   " + (tr("WR_STATUS_READY") if is_ready_p else tr("WR_STATUS_WAITING"))

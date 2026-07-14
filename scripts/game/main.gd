@@ -241,7 +241,7 @@ func _do_attack_click(tid: String):
 				_select_source(tid)
 			return
 		# Adjacence (UX) : la cible doit être frontalière de la source. Le serveur re-valide.
-		if not MapData.are_adjacent(_source, tid):
+		if not MapData.are_adjacent(_source, tid, GameState.map_id):
 			hud.add_log("⛔ Cible non adjacente à la source.")
 			return
 		# Combat VALIDÉ ici : source à moi (≥2 unités), cible ennemie adjacente (MapData).
@@ -273,7 +273,7 @@ func _do_move_click(tid: String):
 			hud.add_log("⛔ Destination invalide (territoire allié requis).")
 			return
 		# Adjacence (UX) : la destination doit être frontalière de la source. Le serveur re-valide.
-		if not MapData.are_adjacent(_source, tid):
+		if not MapData.are_adjacent(_source, tid, GameState.map_id):
 			hud.add_log("⛔ Destination non adjacente à la source.")
 			return
 		NetworkManager.send_action("move_units", {
@@ -323,7 +323,7 @@ func _on_territory_hovered(tid: String) -> void:
 	if owner == null or int(owner) == _my_id():
 		hud.hide_forecast()
 		return
-	if not MapData.are_adjacent(_source, tid):
+	if not MapData.are_adjacent(_source, tid, GameState.map_id):
 		hud.hide_forecast()
 		return
 	var att_units := _garrison(_source)
@@ -764,13 +764,18 @@ func _territory_name(tid: String) -> String:
 # PlayerState (§8.28). Replis successifs : notre pseudo local (AuthManager) si c'est nous, sinon
 # "Joueur N" (numéro séquentiel 1..N) si l'identité n'a pas pu être résolue côté serveur.
 func _display_name(pid: int) -> String:
+	# Bot de remplissage (G2 §8.72) : id NÉGATIF → préfixe « [IA] » (l'état public porte is_bot ET
+	# l'indicatif dans username ; le préfixe est posé ICI, côté client, comme prévu au contrat).
 	var p = GameState.players.get(str(pid), {})
+	var is_bot: bool = pid < 0 or (typeof(p) == TYPE_DICTIONARY and bool(p.get("is_bot", false)))
 	if typeof(p) == TYPE_DICTIONARY:
 		var uname := str(p.get("username", ""))
 		if uname != "":
-			return uname
+			return ("[IA] " + uname) if is_bot else uname
 	if pid == _my_id() and AuthManager.username != "":
 		return AuthManager.username
+	if is_bot:
+		return "[IA] Bot %d" % absi(pid)
 	return "Joueur %d" % GameState.player_number(pid)
 
 # Infos de faction du joueur LOCAL (nom + description du pouvoir) lues de son .tres, pour le tooltip
@@ -1081,6 +1086,9 @@ func _refresh():
 	if not _in_deploy_mode() and not pending_deployments.is_empty():
 		pending_deployments.clear()
 	board.set_pending_deployments(pending_deployments if _in_deploy_mode() else {})
+	# Carte réduite (G5 §8.71) : recadre la vue « plein plateau » sur les territoires ACTIFS
+	# (rect vide sur la carte complète → cadrage historique conservé, non-régression classic).
+	camera.set_board_rect(board.get_active_map_rect())
 	# Identité locale (pseudo + couleur de faction) poussée au HUD — couleur cohérente avec le
 	# plateau (board.get_player_color), pour colorer le pseudo dans la TopBar (§8.23).
 	hud.set_local_identity(_display_name(_my_id()), board.get_player_color(_my_id()))

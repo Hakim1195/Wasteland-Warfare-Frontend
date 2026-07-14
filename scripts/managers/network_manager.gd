@@ -18,6 +18,9 @@ signal player_left(player_id)
 # Émis quand la composition de la salle d'attente change (joueurs connectés + prêts + pseudos).
 # `usernames` = { "player_id": "pseudo" } (clés string, piège JSON §5) pour afficher les VRAIS noms.
 signal lobby_state_updated(players: Array, ready: Array, usernames: Dictionary)
+# Échéance UNIX (s) du remplissage IA (G2 §8.72), lue par waiting_room.gd ; -1 = aucun fill armé.
+# Propriété (et non 4ᵉ arg du signal) pour ne pas casser les écouteurs existants de lobby_state.
+var last_bot_fill_at: float = -1.0
 # Émis quand la partie démarre (l'état initial est déjà appliqué à GameState).
 signal game_started_signal
 # Émis quand un joueur verrouille sa faction pendant le Draft (CONTEXTE.md §3, étape de sélection).
@@ -205,6 +208,10 @@ func _handle_server_message(msg: Dictionary) -> void:
 		"player_disconnected":
 			player_left.emit(msg.get("player_id"))
 		"lobby_state":
+			# Remplissage IA (G2 §8.72) : échéance UNIX (s) du fill, ou null. Stockée en propriété
+			# (le signal garde sa signature à 3 args) — waiting_room.gd la lit pour son compte à rebours.
+			var bfa = msg.get("bot_fill_at", null)
+			last_bot_fill_at = float(bfa) if (typeof(bfa) == TYPE_FLOAT or typeof(bfa) == TYPE_INT) else -1.0
 			lobby_state_updated.emit(msg.get("players", []), msg.get("ready", []), msg.get("usernames", {}))
 		"game_over":
 			# La victoire est déjà gérée via winner_id dans l'état ; ici on relaie le RÉSULTAT
@@ -344,11 +351,14 @@ func _on_rooms_fetched(_result, response_code, _headers, body, http_node):
 # 2. Créer une salle
 # max_players par défaut = 6 (capacité maximale autorisée, cf. §4 : 3 à 6 joueurs).
 # Auparavant figé à 3, ce qui bloquait toutes les salles à 3 places.
-func create_room(is_private: bool, secret_code: String = "", max_players: int = 6):
+func create_room(is_private: bool, secret_code: String = "", max_players: int = 6,
+		map_id: String = "classic_42"):
 	var payload = {
 		"max_players": max_players,
 		"is_private": is_private,
-		"secret_code": secret_code if is_private else "" # <-- Correction ici ("" au lieu de null)
+		"secret_code": secret_code if is_private else "", # <-- Correction ici ("" au lieu de null)
+		# Carte jouée (G5 §8.71) — validée serveur (400 si inconnue), max_players clampé par carte.
+		"map_id": map_id,
 	}
 	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST, payload, _on_room_created)
 
