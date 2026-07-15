@@ -36,6 +36,17 @@ const PALETTE := [
 	Color("9b6fd0"),  # améthyste
 	Color("46b58a"),  # vert oxydé
 ]
+# Palette DALTONIENNE (E10 §8.82) : Okabe-Ito, sûre pour deutan/protan/tritan. Quand le mode
+# daltonien est actif, elle REMPLACE la palette de faction pour TOUS les joueurs — la bascule vit
+# DANS get_player_color (source unique E1) → roster, VS, feed, badges suivent automatiquement.
+const PALETTE_COLORBLIND := [
+	Color("e69f00"),  # orange
+	Color("56b4e9"),  # bleu ciel
+	Color("009e73"),  # vert bleuté
+	Color("f0e442"),  # jaune
+	Color("cc79a7"),  # rose
+	Color("0072b2"),  # bleu profond
+]
 
 # Visibilité Tactique (Partie 2) : badge de troupes + remplissage coloré des territoires.
 const TerritoryBadgeScene := preload("res://scenes/game/territory_badge.tscn")
@@ -77,6 +88,12 @@ const OWN_RELIEF_COLOR := Color(0, 0, 0, 0.5)
 
 var _selected_source: String = ""
 var _owner_colors: Dictionary = {}
+# Surlignage des cibles valides (E7 §8.79) : {tid: true} des cibles d'attaque légales, posé par
+# main.gd à la sélection d'une source (Phase 3). Vide = aucun contexte d'attaque (rendu normal).
+var _attack_targets: Dictionary = {}
+# Flèche d'intention (E7) : Line2D pointillée animée source → territoire survolé (créée à la volée).
+var _intent_arrow: Line2D = null
+var _intent_target: String = ""
 # id_territoire -> nœud visuel trouvé dans le conteneur.
 var _nodes: Dictionary = {}
 # faction_id (string) -> accent_color (Color), chargé une fois depuis resources/factions/*.tres.
@@ -108,9 +125,24 @@ var _overlay: Sprite2D = null
 var _tid_index: Dictionary = {}              # tid -> index (1..N) dans la carte-ID
 
 func _ready() -> void:
+	# E1 §8.73 : le plateau s'enregistre pour les briques UI (player_chip) qui résolvent couleur
+	# joueur / accent de faction via get_player_color / get_faction_accent — la palette reste
+	# UNIQUE (piège n° 2 PLAN_EXPERIENCE : jamais de 2ᵉ table côté composants).
+	add_to_group("game_board")
 	_index_territory_nodes()
 	_load_faction_accents()
 	_setup_territory_overlay()
+	# Mode daltonien (E10 §8.82) : au changement, on purge la table de couleurs (recalculée avec
+	# la palette Okabe-Ito) et on redessine — toute l'UI suit via get_player_color.
+	if not SettingsManager.comfort_changed.is_connected(_on_comfort_changed):
+		SettingsManager.comfort_changed.connect(_on_comfort_changed)
+
+func _on_comfort_changed(key: String, _value) -> void:
+	# colorblind → palette + motifs ; reduced_motion → motion_scale du shader. Les deux exigent
+	# un redraw (couleurs/motifs recalculés, uniformes repoussés).
+	if key == "colorblind_mode" or key == "reduced_motion":
+		_owner_colors.clear()
+		generate_board()
 
 # Construit l'overlay des territoires (§8.51) : un Sprite2D portant la CARTE-ID, recouvrant
 # EXACTEMENT le board_bg, avec territory_overlay.gdshader. Texture chargee BRUTE (index exacts,
@@ -224,6 +256,65 @@ func set_selected_source(tid: String) -> void:
 	_selected_source = tid
 	generate_board()
 
+# Contexte d'attaque (E7 §8.79) : main.gd calcule les cibles légales à la sélection d'une source
+# (Phase 3) → liseré cramoisi pulsant sur les cibles + désaturation des autres (via l'overlay).
+func set_attack_context(source_tid: String, valid_targets: Array) -> void:
+	_attack_targets = {}
+	for tid in valid_targets:
+		_attack_targets[str(tid)] = true
+	generate_board()
+
+func clear_attack_context() -> void:
+	if _attack_targets.is_empty() and _intent_target == "":
+		return
+	_attack_targets = {}
+	clear_intent_arrow()
+	generate_board()
+
+# Flèche d'intention pointillée (E7) : source → territoire survolé. Recréée si la cible change.
+func set_intent_arrow(target_tid: String) -> void:
+	if _selected_source == "" or target_tid == _selected_source:
+		clear_intent_arrow()
+		return
+	var from := get_territory_position(_selected_source)
+	var to := get_territory_position(target_tid)
+	if from == Vector2.INF or to == Vector2.INF:
+		clear_intent_arrow()
+		return
+	_intent_target = target_tid
+	if _intent_arrow == null or not is_instance_valid(_intent_arrow):
+		_intent_arrow = Line2D.new()
+		_intent_arrow.width = 5.0
+		_intent_arrow.default_color = Color(0.85, 0.15, 0.15, 0.85)
+		_intent_arrow.z_index = 50
+		_intent_arrow.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		_intent_arrow.end_cap_mode = Line2D.LINE_CAP_ROUND
+		add_child(_intent_arrow)
+	_intent_arrow.visible = true
+	# Trait principal + tête de flèche (deux segments obliques) — pointillé simulé par segments.
+	var dir := (to - from).normalized()
+	var head := to - dir * 46.0
+	var perp := dir.orthogonal()
+	_intent_arrow.points = PackedVector2Array([from, head])
+	if _intent_head == null or not is_instance_valid(_intent_head):
+		_intent_head = Line2D.new()
+		_intent_head.width = 5.0
+		_intent_head.default_color = Color(0.85, 0.15, 0.15, 0.95)
+		_intent_head.z_index = 50
+		add_child(_intent_head)
+	_intent_head.visible = true
+	_intent_head.points = PackedVector2Array([
+		head + perp * 22.0 - dir * 4.0, to, head - perp * 22.0 - dir * 4.0])
+
+var _intent_head: Line2D = null
+
+func clear_intent_arrow() -> void:
+	_intent_target = ""
+	if _intent_arrow != null and is_instance_valid(_intent_arrow):
+		_intent_arrow.visible = false
+	if _intent_head != null and is_instance_valid(_intent_head):
+		_intent_head.visible = false
+
 # Couleur d'un joueur telle qu'utilisée sur le plateau (accent de faction, sinon PALETTE par
 # index, gris si inconnu). Exposé pour que le HUD colore le pseudo du joueur de façon COHÉRENTE
 # avec ses territoires (CONTEXTE.md §8.23). Reconstruit la table si elle n'a pas encore été bâtie.
@@ -231,6 +322,12 @@ func get_player_color(pid: int) -> Color:
 	if _owner_colors.is_empty():
 		_build_owner_colors()
 	return _owner_colors.get(pid, NEUTRAL_COLOR)
+
+# Accent d'une faction (accent_color de son .tres) — NEUTRAL_COLOR si inconnue / sans ressource.
+# Exposé pour la brique identité player_chip (E1 §8.73) : la table des accents chargée ici reste
+# la SEULE source (aucun doublon de scan côté UI).
+func get_faction_accent(faction_id: String) -> Color:
+	return _faction_accents.get(faction_id, NEUTRAL_COLOR)
 
 # Id du joueur LOCAL (la perspective de CE client) — ses territoires sont mis en avant (hologramme
 # vif + relief) pour les distinguer des adversaires. Même source que main._my_id() / le HUD :
@@ -275,21 +372,38 @@ func set_pending_deployments(pending: Dictionary) -> void:
 
 # Construit la table propriétaire -> couleur. Priorité à l'accent_color de la FACTION du
 # joueur (via FactionData), sinon repli sur la PALETTE par index (ordre stable des ids).
+# Mode DALTONIEN (E10 §8.82) : la palette Okabe-Ito par INDEX remplace TOUT (y compris les accents
+# de faction) → distinction garantie des 6 factions ; les motifs (shader) renforcent la couleur.
 func _build_owner_colors() -> void:
 	var pids: Array = []
 	for k in GameState.players.keys():
 		pids.append(int(k))
 	pids.sort()
 	_owner_colors.clear()
+	var colorblind: bool = bool(SettingsManager.get_comfort("colorblind_mode"))
 	for i in range(pids.size()):
 		var pid: int = pids[i]
-		var col: Color = PALETTE[i % PALETTE.size()]
-		var pdata = GameState.players.get(str(pid), {})
-		if typeof(pdata) == TYPE_DICTIONARY:
-			var fid := str(pdata.get("faction", ""))
-			if _faction_accents.has(fid):
-				col = _faction_accents[fid]
+		var col: Color
+		if colorblind:
+			col = PALETTE_COLORBLIND[i % PALETTE_COLORBLIND.size()]
+		else:
+			col = PALETTE[i % PALETTE.size()]
+			var pdata = GameState.players.get(str(pid), {})
+			if typeof(pdata) == TYPE_DICTIONARY:
+				var fid := str(pdata.get("faction", ""))
+				if _faction_accents.has(fid):
+					col = _faction_accents[fid]
 		_owner_colors[pid] = col
+
+# Index de PALETTE d'un joueur (0..5, ordre stable des ids) — sert au motif daltonien (pattern_id
+# par index de joueur, E10 §8.82).
+func _player_palette_index(pid: int) -> int:
+	var pids: Array = []
+	for k in GameState.players.keys():
+		pids.append(int(k))
+	pids.sort()
+	var idx := pids.find(pid)
+	return idx if idx >= 0 else 0
 
 # Rafraîchit l'apparence de chaque nœud-territoire à partir de l'état courant (GameState) :
 # remplissage semi-transparent à la couleur de faction du propriétaire (gris si neutre),
@@ -319,6 +433,13 @@ func generate_board() -> void:
 	# 1 = territoire ANNONCÉ pour la prochaine zone -> liseré or pulsant (télégraphe G1 §8.62).
 	var ov_forecast := PackedFloat32Array()
 	ov_forecast.resize(42)
+	# 1 = cible d'attaque valide -> liseré cramoisi pulsant (E7 §8.79).
+	var ov_attack := PackedFloat32Array()
+	ov_attack.resize(42)
+	# Motif daltonien par index de joueur (E10 §8.82) : 0 = aucun (mode normal), 1..6 sinon.
+	var ov_pattern := PackedFloat32Array()
+	ov_pattern.resize(42)
+	var colorblind: bool = bool(SettingsManager.get_comfort("colorblind_mode"))
 
 	for tid in _nodes:
 		var node = _nodes[tid]
@@ -395,11 +516,19 @@ func generate_board() -> void:
 				ov_edges[oi] = edge_a
 				ov_mine[oi] = 1.0 if is_mine else 0.0
 				ov_forecast[oi] = 1.0 if is_forecast else 0.0
+				ov_attack[oi] = 1.0 if _attack_targets.has(tid) else 0.0
+				# Motif daltonien (E10) : index de joueur +1 (1..6) sur les territoires possédés.
+				if colorblind and territory_owner != null:
+					ov_pattern[oi] = float(_player_palette_index(int(territory_owner)) % 6 + 1)
 
 		# Badge de troupes : bordure à l'accent du propriétaire, nombre d'unités au centre,
 		# alerte ☢ si contaminé, "+X" doré pour les troupes en attente, ⚠ or si le territoire
-		# est annoncé pour la prochaine zone (télégraphe G1 §8.62).
-		_update_badge(tid, garrison, accent, is_contaminated, pending, is_forecast)
+		# est annoncé pour la prochaine zone (télégraphe G1 §8.62). Mode daltonien (E10) :
+		# initiale du pseudo du propriétaire en redondance texte.
+		var initial := ""
+		if colorblind and territory_owner != null:
+			initial = _owner_initial(int(territory_owner))
+		_update_badge(tid, garrison, accent, is_contaminated, pending, is_forecast, initial)
 
 		# Libellé/garnison : on n'écrase un texte que si le nœud expose la propriété `text`
 		# (cas fallback BaseButton ; les Area2D dessinés à la main n'ont pas de `text`).
@@ -421,6 +550,13 @@ func generate_board() -> void:
 		m.set_shader_parameter("territory_edge", ov_edges)
 		m.set_shader_parameter("territory_mine", ov_mine)
 		m.set_shader_parameter("territory_forecast", ov_forecast)
+		m.set_shader_parameter("territory_attack", ov_attack)
+		# attack_dim > 0 dès qu'une source a des cibles surlignées → désaturation des autres (E7).
+		m.set_shader_parameter("attack_dim", 1.0 if not _attack_targets.is_empty() else 0.0)
+		m.set_shader_parameter("territory_pattern", ov_pattern)  # motifs daltoniens (E10)
+		# reduced_motion (E10) : fige les pulsations du plateau (télégraphe/attaque).
+		m.set_shader_parameter("motion_scale",
+			0.0 if bool(SettingsManager.get_comfort("reduced_motion")) else 1.0)
 
 	# Cadre actif (G5) : mémorisé pour la caméra — Rect2() vide sur la carte COMPLÈTE (le
 	# cadrage historique plein plateau est alors conservé, non-régression classic).
@@ -544,8 +680,17 @@ func _clear_own_relief(tid: String) -> void:
 # `contaminated` (défaut false) pilote l'alerte ☢ ; `forecast` (défaut false) le ⚠ or du
 # télégraphe (G1 §8.62) ; repassés à chaque rafraîchissement → un territoire qui quitte la zone
 # (ou n'est plus annoncé) est automatiquement réinitialisé (☢/⚠ retirés).
+# Initiale (majuscule) du pseudo d'un joueur pour la redondance texte du badge daltonien (E10).
+func _owner_initial(pid: int) -> String:
+	var p = GameState.players.get(str(pid), {})
+	if typeof(p) == TYPE_DICTIONARY:
+		var uname := str(p.get("username", ""))
+		if uname != "":
+			return uname.substr(0, 1).to_upper()
+	return str(pid) if pid >= 0 else "IA"
+
 func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool = false,
-		pending: int = 0, forecast: bool = false) -> void:
+		pending: int = 0, forecast: bool = false, initial: String = "") -> void:
 	var pos := get_territory_position(tid)
 	if pos == Vector2.INF:
 		return
@@ -561,7 +706,7 @@ func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool =
 	# Ré-affiche un badge masqué par un passage hors-carte (changement de carte, G5 §8.71).
 	badge.visible = true
 	badge.global_position = pos
-	badge.set_data(troops, accent, contaminated, pending, forecast)
+	badge.set_data(troops, accent, contaminated, pending, forecast, initial)
 
 # Position monde (espace du SubViewport) du centre d'un territoire — utilisée par la
 # caméra tactique pour cadrer les combats. Centre = centroïde du CollisionPolygon2D si
@@ -614,3 +759,76 @@ func _unhandled_input(event: InputEvent) -> void:
 # Wrapper public sur _contaminated_set (modèle cluster §8.27).
 func is_contaminated(tid: String) -> bool:
 	return _contaminated_set().has(tid)
+
+# Flash radial de CONQUÊTE (E9 §8.81) : halo 0,5 s à la teinte accent du conquérant sur le
+# territoire pris (shader conquest_flash confiné au Polygon2D de remplissage — pattern §8.30).
+const ConquestFlashShader: Shader = preload("res://shaders/conquest_flash.gdshader")
+
+func conquest_flash(tid: String, accent: Color) -> void:
+	var node = _nodes.get(tid)
+	if node == null:
+		return
+	var fill := _ensure_fill(tid, node)
+	if fill == null:
+		return
+	var mat := ShaderMaterial.new()
+	mat.shader = ConquestFlashShader
+	mat.set_shader_parameter("flash_color", Color(accent.r, accent.g, accent.b, 0.85))
+	mat.set_shader_parameter("progress", 0.0)
+	fill.material = mat
+	fill.color = Color(accent.r, accent.g, accent.b, 0.0)
+	fill.visible = true
+	var tw := fill.create_tween()
+	tw.tween_method(func(v: float): mat.set_shader_parameter("progress", v), 0.0, 1.0, 0.5)
+	tw.tween_callback(func() -> void:
+		fill.material = null
+		fill.visible = false)
+
+# Flotteur « tic de zone » (E9 §8.81) : « -1 » vert toxique sur un territoire touché par la
+# contamination. Réutilise le calque de badges (BadgeLayer) posé sur le plateau.
+func spawn_zone_tick(tid: String) -> void:
+	# Réglage damage_numbers (E10 §8.82) : les flotteurs de dégâts (zone comprise) sont masquables.
+	if not bool(SettingsManager.get_comfort("damage_numbers")):
+		return
+	var pos := get_territory_position(tid)
+	if pos == Vector2.INF:
+		return
+	if _badge_layer == null or not is_instance_valid(_badge_layer):
+		_badge_layer = Node2D.new()
+		_badge_layer.name = "BadgeLayer"
+		add_child(_badge_layer)
+	var lbl := Label.new()
+	lbl.text = "-1"
+	lbl.add_theme_font_size_override("font_size", 30)
+	lbl.add_theme_color_override("font_color", Color("7fff00"))
+	lbl.add_theme_constant_override("outline_size", 5)
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_badge_layer.add_child(lbl)
+	lbl.global_position = pos + Vector2(-14, -60)
+	var tw := lbl.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(lbl, "global_position:y", lbl.global_position.y - 60.0, 1.1)
+	tw.tween_property(lbl, "modulate:a", 0.0, 1.1)
+	tw.chain().tween_callback(lbl.queue_free)
+
+# Flash bref d'un territoire (E4 §8.76 — clic d'une entrée du Journal de Guerre) : teinte accent
+# du propriétaire, 0,4 s. Réutilise le Polygon2D de remplissage legacy (_ensure_fill — inutilisé
+# depuis l'overlay « vraies frontières » §8.51) comme calque de flash ponctuel.
+func flash_territory(tid: String) -> void:
+	var node = _nodes.get(tid)
+	if node == null:
+		return
+	var fill := _ensure_fill(tid, node)
+	if fill == null:
+		return
+	var accent: Color = NEUTRAL_COLOR
+	var t: Dictionary = GameState.territories.get(tid, {})
+	var o = t.get("owner_id")
+	if o != null:
+		accent = get_player_color(int(o))
+	fill.material = null
+	fill.color = Color(accent.r, accent.g, accent.b, 0.55)
+	fill.visible = true
+	var tw := fill.create_tween()
+	tw.tween_property(fill, "color:a", 0.0, 0.4)
+	tw.tween_callback(func() -> void: fill.visible = false)

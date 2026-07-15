@@ -22,6 +22,27 @@ signal deploy_confirmed
 # Émis quand le joueur envoie un message de chat (§8.33). channel ∈ {"general","prive"} ; pour le
 # canal privé, target_id = id du destinataire choisi (sinon -1). main.gd relaie à NetworkManager.
 signal chat_send_requested(channel: String, text: String, target_id: int)
+# Émis au clic d'une ligne du Roster de Guerre (E1 §8.73) : main.gd ouvre l'inspecteur héros du
+# joueur et focalise la caméra sur son territoire le plus garni (le HUD reste une View pure §6.1).
+signal roster_player_clicked(player_id: int)
+# Émis au clic d'une entrée [url=<tid>] du Journal de Guerre (E4 §8.76) : main.gd focalise la
+# caméra sur le territoire et le fait flasher — le journal devient un outil de navigation.
+signal log_territory_clicked(territory_id: String)
+# Émis au clic du bouton « RÉ-ASSAUT » (E7 §8.79) : main.gd rejoue le dernier assaut.
+signal reassault_pressed
+# Émis par les raccourcis de quantité +1/+5/MAX (E7 §8.79) : delta ∈ {1, 5, -1=MAX}. main.gd
+# ajuste %AmountSpin (mouvement) ou le sens du tampon de déploiement selon la phase.
+signal amount_quick(delta: int)
+
+# Roster de Guerre + brique identité (E1 §8.73) : roster permanent des belligérants inséré en
+# tête du panneau latéral ; player_chip réutilisé par l'Inspecteur de Territoire (propriétaire).
+const WarRosterScene := preload("res://scenes/components/war_roster.tscn")
+const PlayerChipScene := preload("res://scenes/components/player_chip.tscn")
+# Kill feed (E4 §8.76) : surimpression des entrées majeures, coin haut-droit hors panneaux.
+const KillFeedScene := preload("res://scenes/components/kill_feed.tscn")
+# Helpers partagés posés au lot E1 (dégradé de santé pv_color + _tint_progress) — réutilisés par
+# l'Intel : GUERRE (E5 §8.77) pour les barres de ratio.
+const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
 
 # Teinte des vignettes de cartes (refonte : plus de cartes spéciales, juste un nombre de troupes).
 const CARD_TINT := Color("2f7d8c")  # cyan-acier sombre (renforts) — charte Warzone Command
@@ -82,6 +103,10 @@ var _local_color: Color = Color.WHITE
 # Gros bouton « CONFIRMER LE DÉPLOIEMENT » (construit par code, inséré dans la barre d'action du
 # BottomCenterWidget). Visible/actif uniquement quand le tampon atteint le quota exact (§8.26).
 var _confirm_btn: Button = null
+# Ré-assaut (E7 §8.79) : bouton « ⚔ RÉ-ASSAUT (S ➜ C) » près de « Fin de Phase ».
+var _reassault_btn: Button = null
+# Pulse « aucune action possible » sur %NextPhaseButton (E7) : état courant.
+var _next_phase_pulse := false
 
 # Panneau latéral rétractable (§8.29) : slide horizontal de SidePanelWidget via Tween natif.
 var _side_tween: Tween
@@ -95,6 +120,16 @@ var _fade_tween: Tween
 # Compte à rebours de la PHASE courante : 90 s en Phase 0 / 90 s en Attaque / 60 s autres phases /
 # 0 = hors tour minuté (initiative, fin de partie → "--:--"). Pilote _process ; posé par update_display.
 var _turn_limit: float = 0.0
+# --- Chrono SERVEUR (E3 §8.75) : quand le serveur diffuse son échéance (turn_timer/timer_update),
+# %TimerLabel affiche deadline_epoch − (horloge locale + offset) — le rebours est alors EXACTEMENT
+# celui qui déclenche le timeout serveur (reconnexion comprise). L'estimation locale historique
+# (_turn_limit/_phase_turn_limit/add_time_to_timer) DEVIENT le repli legacy (serveur antérieur). ---
+var _srv_active := false
+var _srv_deadline_epoch: float = -1.0
+var _srv_offset: float = 0.0   # server_time − horloge locale (immunise une horloge PC fausse)
+# Pré-alerte AFK (E3) : sous AFK_ALERT_SECONDS sur NOTRE tour, chrono pulsé rouge + tic sonore/s.
+const AFK_ALERT_SECONDS := 15
+var _last_tick_second := -1
 # Time Bank (§8.33) : cumul (s) crédité à la phase d'Attaque COURANTE par add_time_to_timer (≤ 90 s).
 # Conservé d'un refresh à l'autre tant que la phase ne change pas → update_display le ré-applique sans
 # l'écraser ; purgé au changement de phase (nouvelle signature _turn_key).
@@ -115,12 +150,42 @@ var _intel_tween: Tween
 # Télégraphe de zone (G1 §8.62) : ligne d'état PERMANENTE « ☢ PROCHAINE ZONE : … » (or), créée
 # par code sous l'objectif secret (BottomVBox) — pattern _build_confirm_button (pas de retouche .tscn).
 var _forecast_label: Label = null
+# Tracker d'objectif vivant (E6 §8.78) : conteneur de mini-lignes (barre + libellé) créé sous
+# %ObjectiveLabel. ≥ 80 % → pulse OR (proche de la victoire).
+var _objective_tracker: VBoxContainer = null
+var _objective_pulse := false
 # Prévision de combat (G4 §8.63) : ligne « PRÉVISION : victoire NN % … » créée par code sous
 # l'instruction (TopCenterWidget), visible uniquement au survol d'une cible valide en Phase 3.
 var _odds_label: Label = null
 # Tiroir « INTEL : FACTIONS » (§2) — état ouvert/fermé + Tween de fondu (miroir du tiroir Zone).
 var _factions_intel_open := false
 var _factions_intel_tween: Tween
+# Tiroir « INTEL : GUERRE » (E5 §8.77) — 3ᵉ tiroir, construit PAR CODE (insertion relative dans
+# IntelWidget après le tiroir Factions — piège n° 5 évité : aucun nouveau nœud %).
+var _war_intel_open := false
+var _war_intel_tween: Tween
+var _war_intel_btn: Button = null
+var _war_intel_panel: PanelContainer = null
+var _war_intel_players: VBoxContainer = null
+var _war_intel_continents: VBoxContainer = null
+# Roster de Guerre (E1 §8.73) : instance insérée en tête du SideVBox, rafraîchie par update_display.
+var _war_roster: Control = null
+# --- Journal de Guerre 2.0 (E4 §8.76) : flux structuré {category, icon, rich_text, tid, major},
+# filtrable (chips TOUS/⚔/☢/🃏/⚙) et cliquable ([url=<tid>] → caméra). Toute entrée passe par
+# add_feed_entries ; add_log (legacy) y route ses textes en catégorie system — AUCUNE perte. ---
+const FEED_MAX := 200
+var _feed_entries: Array = []
+var _feed_filter := "all"
+var _kill_feed: Control = null
+# Toast défensif (E4) : panneau furtif « ⚠ X ATTAQUÉ PAR Y » — le plus récent remplace l'ancien.
+var _defense_toast: PanelContainer = null
+var _toast_tween: Tween = null
+# Bandeau de combat compact (E8 §8.80, mode "bandeau") : combats où je ne suis pas impliqué.
+var _combat_banner: PanelContainer = null
+var _combat_banner_tween: Tween = null
+# Brique identité du propriétaire dans l'Inspecteur de Territoire (E1) — créée paresseusement,
+# insérée juste après %InspectorOwner (le label nu ne sert plus qu'au cas NEUTRE).
+var _inspector_chip: Control = null
 # Inspecteur Tactique de Territoire (§1) — Tween de fondu d'apparition/disparition.
 var _inspector_tween: Tween
 
@@ -158,6 +223,8 @@ func _ready() -> void:
 	# passifs des factions en jeu (data-driven ; alimenté par main.gd -> set_factions_intel).
 	%IntelFactionsToggleButton.pressed.connect(_toggle_factions_intel)
 	%IntelFactionsPanel.visible = false
+	# Tiroir « INTEL : GUERRE » (E5 §8.77) : 3ᵉ tiroir — rapports de force complets.
+	_build_war_intel()
 	# Inspecteur Tactique de Territoire (§1) : panneau flottant bas-droite, ouvert au clic d'un
 	# territoire (main.gd -> set_territory_inspector), refermé au clic dans le vide (board_cleared) ou ✕.
 	%InspectorClose.pressed.connect(hide_territory_inspector)
@@ -177,30 +244,116 @@ func _ready() -> void:
 	_build_player_inspector()
 	_setup_chat_tabs()
 	_build_chat_input()
+	_build_war_roster()
+	_build_feed_filters()
+	_build_kill_feed()
+	_build_reassault_button()
+	_build_amount_shortcuts()
+	# Clic d'une entrée [url=<tid>] du journal (E4 §8.76) → remonte au contrôleur (caméra).
+	%LogText.meta_clicked.connect(func(meta) -> void: log_territory_clicked.emit(str(meta)))
 	# Chat de salle CÂBLÉ au réseau (§8.33) : main.gd relaie chat_send_requested -> NetworkManager
 	# et route les messages reçus vers add_chat_message. 2 canaux (Général / Privé).
 	add_chat_message("general", "[i]— Canal général ouvert. —[/i]")
 	add_chat_message("prive", "[i]— Aucune transmission privée. —[/i]")
 
-# Compte à rebours du tour courant, affiché MM:SS. Le serveur ne transmet pas d'échéance (§8.31) :
-# on décompte localement depuis _turn_limit (90 s Phase 0 / 60 s tour), remis à zéro au changement
-# de tour par update_display(). _turn_limit == 0 → hors tour minuté → "--:--".
+# Compte à rebours du tour courant, affiché MM:SS. Mode SERVEUR (E3 §8.75) : rebours calé sur
+# l'échéance diffusée (deadline_epoch − horloge locale corrigée de l'offset). Mode LEGACY (serveur
+# antérieur, §9.2) : décompte local depuis _turn_limit (90 s Phase 0 / 60 s tour), remis à zéro au
+# changement de tour par update_display(). Hors tour minuté → "--:--".
 func _process(delta: float) -> void:
+	# reduced_motion (E10 §8.82) : coupe les pulses d'UI (objectif E6, phase E7) — état figé lisible.
+	var still: bool = bool(SettingsManager.get_comfort("reduced_motion"))
+	# Tracker d'objectif (E6 §8.78) : pulse OR discret quand on est à ≥ 80 % de la victoire.
+	if _objective_pulse and not still and _objective_tracker != null and is_instance_valid(_objective_tracker):
+		var g := 0.72 + 0.28 * absf(sin(float(Time.get_ticks_msec()) / 340.0))
+		_objective_tracker.modulate = Color(1.0, 1.0, g)
+	# Coup de pouce de phase (E7 §8.79) : pulse OR de « Fin de Phase » quand rien n'est jouable.
+	if _next_phase_pulse and not still:
+		var p := 0.7 + 0.3 * absf(sin(float(Time.get_ticks_msec()) / 300.0))
+		%NextPhaseButton.modulate = Color(ACCENT_GOLD.r, ACCENT_GOLD.g, ACCENT_GOLD.b, 1.0).lerp(
+			Color(1, 1, 1, 1), 1.0 - p)
+	elif _next_phase_pulse and still:
+		%NextPhaseButton.modulate = ACCENT_GOLD   # état figé mais distinct (accessibilité)
+	if _srv_active:
+		var remaining_f := _srv_deadline_epoch - (Time.get_unix_time_from_system() + _srv_offset)
+		_render_remaining(int(ceil(maxf(0.0, remaining_f))))
+		return
 	if _turn_limit <= 0.0:
 		if _timer_urgent:
 			_timer_urgent = false
 			%TimerLabel.add_theme_color_override("font_color", TIMER_COLOR)
+		%TimerLabel.modulate.a = 1.0
 		%TimerLabel.text = "--:--"
 		return
 	_elapsed += delta
-	var remaining := int(ceil(maxf(0.0, _turn_limit - _elapsed)))
+	_render_remaining(int(ceil(maxf(0.0, _turn_limit - _elapsed))))
+
+# Rendu partagé du rebours (modes serveur ET legacy) : MM:SS, urgence rouge, et pré-alerte AFK
+# (E3) — sous 15 s sur NOTRE tour : pulse + tic sonore discret à chaque seconde (l'abandon auto
+# §8.31 ne doit JAMAIS surprendre).
+func _render_remaining(remaining: int) -> void:
 	%TimerLabel.text = "%02d:%02d" % [floori(remaining / 60.0), remaining % 60]
-	# Bascule en rouge dans les dernières secondes (urgence), une seule fois au franchissement.
-	var urgent := remaining <= TIMER_URGENT_SECONDS
+	var my_turn: bool = GameState.stage == "playing" \
+		and int(GameState.current_player_id) == int(AuthManager.user_id)
+	var alert: bool = my_turn and remaining > 0 and remaining <= AFK_ALERT_SECONDS
+	var urgent: bool = remaining <= TIMER_URGENT_SECONDS or alert
 	if urgent != _timer_urgent:
 		_timer_urgent = urgent
 		%TimerLabel.add_theme_color_override(
 			"font_color", TIMER_URGENT_COLOR if urgent else TIMER_COLOR)
+	if alert:
+		# Pulse doux (sinus) — coupé net dès la sortie d'alerte.
+		%TimerLabel.modulate.a = 0.62 + 0.38 * absf(sin(float(Time.get_ticks_msec()) / 260.0))
+		if remaining != _last_tick_second:
+			_last_tick_second = remaining
+			AudioManager.play_sfx("timer_tick")
+	else:
+		%TimerLabel.modulate.a = 1.0
+		_last_tick_second = -1
+
+# --- API du chrono SERVEUR (E3 §8.75), pilotée par update_display() et main._on_timer_update ---
+
+func apply_server_timer(deadline_epoch: float, server_time: float) -> void:
+	if deadline_epoch <= 0.0:
+		clear_server_timer()
+		return
+	if server_time > 0.0:
+		_srv_offset = server_time - Time.get_unix_time_from_system()
+	_srv_deadline_epoch = deadline_epoch
+	_srv_active = true
+
+func clear_server_timer() -> void:
+	_srv_active = false
+	_srv_deadline_epoch = -1.0
+
+# Message léger timer_update (relayé par main.gd). reason == "time_bank" → le delta entre la
+# nouvelle échéance et l'ancienne devient un flotteur « +N s » or près du chrono (§8.33 visible).
+func apply_timer_update(deadline_epoch: float, reason: String, server_time: float) -> void:
+	if reason == "time_bank" and _srv_active and _srv_deadline_epoch > 0.0:
+		show_time_bank_gain(int(round(deadline_epoch - _srv_deadline_epoch)))
+	apply_server_timer(deadline_epoch, server_time)
+
+# Flotteur « +N s » OR près du chrono (E3) : le gain de Time Bank (§8.33) devient VISIBLE.
+func show_time_bank_gain(seconds: int) -> void:
+	if seconds <= 0:
+		return
+	var lbl := Label.new()
+	lbl.text = "+%d s" % seconds
+	lbl.add_theme_font_size_override("font_size", 20)
+	lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+	lbl.add_theme_constant_override("outline_size", 4)
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(lbl)
+	var anchor: Control = %TimerLabel
+	lbl.global_position = anchor.global_position + Vector2(anchor.size.x + 10.0, -2.0)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(lbl, "position:y", lbl.position.y - 34.0, 1.1) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	var fade := create_tween()
+	fade.tween_interval(0.7)
+	fade.tween_property(lbl, "modulate:a", 0.0, 0.4)
+	fade.tween_callback(lbl.queue_free)
 
 # Budget du rebours pour la phase de JEU courante (miroir de router._playing_phase_budget) : la phase
 # d'Attaque (3) part de 90 s et s'étend par la Time Bank (_turn_bonus) jusqu'à 180 s ; toute autre
@@ -218,6 +371,10 @@ func _phase_turn_limit() -> float:
 # jamais l'échéance autorisée. No-op hors d'un tour minuté (_turn_limit <= 0) : la bank n'a de sens
 # qu'en jeu (et en pratique seules les attaques, donc la phase 3, la créditent).
 func add_time_to_timer(seconds: int) -> void:
+	# Mode chrono SERVEUR (E3 §8.75) : le +10 s arrive par le message `timer_update`
+	# (reason "time_bank") avec la NOUVELLE échéance — le crédit local serait un double comptage.
+	if _srv_active:
+		return
 	if seconds <= 0 or _turn_limit <= 0.0:
 		return
 	# On accumule dans _turn_bonus (borné au plafond Attaque) puis on recalcule _turn_limit via le
@@ -306,6 +463,76 @@ func hide_forecast() -> void:
 # Active/désactive le bouton « Fin de Phase » (verrou anti double-envoi piloté par main.gd, §8.48).
 func set_pass_enabled(enabled: bool) -> void:
 	%NextPhaseButton.disabled = not enabled
+
+# =========================================================
+# Commandement fluide (E7 §8.79) — ré-assaut, raccourcis quantité, coup de pouce de phase
+# =========================================================
+
+# Bouton « ⚔ RÉ-ASSAUT » construit par code et inséré juste avant « Fin de Phase » (pattern
+# _build_confirm_button). Masqué par défaut ; piloté par set_reassault (main.gd).
+func _build_reassault_button() -> void:
+	_reassault_btn = Button.new()
+	_reassault_btn.visible = false
+	_reassault_btn.add_theme_font_size_override("font_size", 16)
+	_reassault_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("d6453f").darkened(0.35)
+	style.border_color = Color("d6453f")
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(0)
+	style.set_content_margin_all(8)
+	var hover := style.duplicate()
+	hover.bg_color = Color("d6453f").darkened(0.1)
+	_reassault_btn.add_theme_stylebox_override("normal", style)
+	_reassault_btn.add_theme_stylebox_override("hover", hover)
+	_reassault_btn.add_theme_stylebox_override("pressed", hover)
+	_reassault_btn.add_theme_color_override("font_color", Color("f0e6d2"))
+	_reassault_btn.pressed.connect(func() -> void:
+		AudioManager.play_sfx("click")
+		reassault_pressed.emit())
+	var row := %NextPhaseButton.get_parent()
+	row.add_child(_reassault_btn)
+	row.move_child(_reassault_btn, %NextPhaseButton.get_index())
+
+# Pilote le bouton « RÉ-ASSAUT » : active=false → masqué ; sinon libellé « ⚔ RÉ-ASSAUT (S ➜ C) ».
+func set_reassault(active: bool, source_name: String = "", target_name: String = "") -> void:
+	if _reassault_btn == null:
+		return
+	_reassault_btn.visible = active
+	if active:
+		_reassault_btn.text = "⚔ RÉ-ASSAUT (%s ➜ %s)" % [source_name, target_name]
+
+# Raccourcis de quantité +1 / +5 / MAX accolés à %AmountSpin (E7 §8.79). Émettent amount_quick
+# (delta 1 / 5 / -1=MAX) ; main.gd applique selon la phase (spin de mouvement ou tampon).
+func _build_amount_shortcuts() -> void:
+	var spin: Control = %AmountSpin
+	var row := spin.get_parent()
+	var defs := [["+1", 1], ["+5", 5], ["MAX", -1]]
+	var idx := spin.get_index() + 1
+	for d in defs:
+		var b := Button.new()
+		b.text = str(d[0])
+		b.custom_minimum_size = Vector2(38, 0)
+		b.focus_mode = Control.FOCUS_NONE
+		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		b.add_theme_font_size_override("font_size", 12)
+		var delta := int(d[1])
+		b.pressed.connect(func() -> void:
+			AudioManager.play_sfx("click")
+			amount_quick.emit(delta))
+		row.add_child(b)
+		row.move_child(b, idx)
+		idx += 1
+
+# Coup de pouce de phase (E7 §8.79) : %NextPhaseButton pulse OR + tooltip quand AUCUNE action
+# n'est possible dans la phase courante (calcul local main.gd — le serveur reste seul juge §8.48).
+func pulse_next_phase(on: bool) -> void:
+	_next_phase_pulse = on
+	if not on:
+		%NextPhaseButton.modulate = Color(1, 1, 1, 1)
+		%NextPhaseButton.tooltip_text = ""
+	else:
+		%NextPhaseButton.tooltip_text = tr("CMD_NO_ACTION")
 
 # Identité du joueur LOCAL (pseudo + couleur de faction) — appelée par main.gd à chaque refresh.
 # Colore le pseudo dans la TopBar avec la couleur de la faction du joueur (charte §8.23).
@@ -417,6 +644,71 @@ func _ensure_forecast_label() -> void:
 	parent.add_child(_forecast_label)
 	parent.move_child(_forecast_label, anchor.get_index() + 1)
 
+# =========================================================
+# Tracker d'objectif vivant (E6 §8.78) — jauge de progression sous l'objectif secret
+# =========================================================
+# Conteneur créé paresseusement et inséré juste APRÈS %ObjectiveLabel (pattern _ensure_forecast_label,
+# ancrage relatif — piège n° 6). Alimenté par main.gd (set_objective_progress, View pure §6.1).
+
+func _ensure_objective_tracker() -> void:
+	if _objective_tracker != null and is_instance_valid(_objective_tracker):
+		return
+	_objective_tracker = VBoxContainer.new()
+	_objective_tracker.name = "ObjectiveTracker"
+	_objective_tracker.add_theme_constant_override("separation", 1)
+	var anchor: Control = %ObjectiveLabel
+	var parent := anchor.get_parent()
+	parent.add_child(_objective_tracker)
+	parent.move_child(_objective_tracker, anchor.get_index() + 1)
+
+# Alimente le tracker. data = objective_tracker.progress(objective, ctx) résolu par main.gd :
+# { lines: Array[{label, ratio, done}], best_ratio: float, done: bool } + tooltip (description
+# complète). Vide → tracker masqué (pas d'objectif / partie non lancée).
+func set_objective_progress(data: Dictionary, tooltip: String = "") -> void:
+	_ensure_objective_tracker()
+	var lines: Array = data.get("lines", [])
+	for c in _objective_tracker.get_children():
+		_objective_tracker.remove_child(c)
+		c.queue_free()
+	if lines.is_empty():
+		_objective_tracker.visible = false
+		return
+	_objective_tracker.visible = true
+	var multi: bool = lines.size() > 1
+	for i in range(lines.size()):
+		var l: Dictionary = lines[i]
+		var done: bool = bool(l.get("done", false))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 5)
+		# Séparateur « OU » entre les deux volets d'un objectif double (§8.61).
+		if multi and i > 0:
+			var sep := Label.new()
+			sep.text = tr("OBJ_OR")
+			sep.add_theme_font_size_override("font_size", 10)
+			sep.add_theme_color_override("font_color", HERO_MUTED)
+			_objective_tracker.add_child(sep)
+		var bar := ProgressBar.new()
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(80, 7)
+		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		bar.max_value = 1.0
+		bar.value = float(l.get("ratio", 0.0))
+		_tint_progress(bar, Color("46b58a") if done else ACCENT_GOLD)
+		row.add_child(bar)
+		var lbl := Label.new()
+		lbl.text = ("✔ " if done else "") + str(l.get("label", ""))
+		lbl.add_theme_font_size_override("font_size", 12)
+		lbl.add_theme_color_override("font_color", Color("46b58a") if done else Color("c8cdd6"))
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(lbl)
+		_objective_tracker.add_child(row)
+	if tooltip != "":
+		_objective_tracker.tooltip_text = tooltip
+	# ≥ 80 % (ou accompli) → pulse OR discret : proche de la victoire (piloté dans _process).
+	_objective_pulse = float(data.get("best_ratio", 0.0)) >= 0.8 or bool(data.get("done", false))
+	if not _objective_pulse:
+		_objective_tracker.modulate = Color(1, 1, 1, 1)
+
 # Alimente la ligne du télégraphe. `names` = noms lisibles des territoires annoncés (Array[String],
 # résolus par main.gd). Vide → mention neutre (serveur antérieur au télégraphe / partie non lancée).
 func set_zone_forecast(names: Array) -> void:
@@ -489,16 +781,235 @@ func set_factions_intel(entries: Array) -> void:
 		list.add_child(card)
 
 # =========================================================
+# Tiroir « INTEL : GUERRE » (E5 §8.77) — rapports de force complets (War Room)
+# =========================================================
+# 3ᵉ tiroir, construit PAR CODE et inséré dans IntelWidget APRÈS le tiroir Factions (insertion
+# relative — aucun nouveau nœud % dans la scène, pièges n° 5/6). Mêmes anims/styles que les deux
+# tiroirs existants ; alimenté par main.gd → set_war_intel (View pure §6.1).
+
+func _build_war_intel() -> void:
+	var widget := %IntelFactionsPanel.get_parent()
+	_war_intel_btn = Button.new()
+	_war_intel_btn.text = tr("INTEL_WAR_BTN") + " ▸"
+	_war_intel_btn.custom_minimum_size = Vector2(150, 0)
+	_war_intel_btn.size_flags_horizontal = 0
+	_war_intel_btn.tooltip_text = tr("INTEL_WAR_TOOLTIP")
+	_war_intel_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	# Style « ghost » des toggles Intel (répliqué par code — les SubResources vivent dans la scène).
+	var ghost := StyleBoxFlat.new()
+	ghost.bg_color = Color(0.05, 0.05, 0.07, 0.35)
+	ghost.border_color = Color(ACCENT_CYAN, 0.55)
+	ghost.set_border_width_all(1)
+	ghost.set_corner_radius_all(0)
+	ghost.set_content_margin_all(6)
+	var ghost_hover := ghost.duplicate()
+	ghost_hover.bg_color = Color(ACCENT_CYAN, 0.14)
+	ghost_hover.border_color = ACCENT_CYAN
+	_war_intel_btn.add_theme_stylebox_override("normal", ghost)
+	_war_intel_btn.add_theme_stylebox_override("hover", ghost_hover)
+	_war_intel_btn.add_theme_stylebox_override("pressed", ghost_hover)
+	_war_intel_btn.add_theme_color_override("font_color", Color("eef3f7"))
+	_war_intel_btn.add_theme_color_override("font_hover_color", ACCENT_CYAN)
+	_war_intel_btn.add_theme_color_override("font_pressed_color", ACCENT_CYAN)
+	_war_intel_btn.add_theme_font_size_override("font_size", 14)
+	_war_intel_btn.pressed.connect(_toggle_war_intel)
+	_war_intel_btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	_war_intel_btn.pressed.connect(func() -> void: AudioManager.play_sfx("click"))
+
+	_war_intel_panel = PanelContainer.new()
+	_war_intel_panel.visible = false
+	_war_intel_panel.custom_minimum_size = Vector2(252, 0)
+	_war_intel_panel.add_theme_stylebox_override("panel", _hero_panel_style())
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	_war_intel_panel.add_child(col)
+	var title := Label.new()
+	title.text = tr("WARROOM_TITLE")
+	title.add_theme_color_override("font_color", ACCENT_CYAN)
+	title.add_theme_font_size_override("font_size", 15)
+	col.add_child(title)
+	_war_intel_players = VBoxContainer.new()
+	_war_intel_players.add_theme_constant_override("separation", 5)
+	col.add_child(_war_intel_players)
+	var sep := HSeparator.new()
+	col.add_child(sep)
+	var ctitle := Label.new()
+	ctitle.text = tr("WARROOM_CONTINENTS")
+	ctitle.add_theme_color_override("font_color", HERO_MUTED)
+	ctitle.add_theme_font_size_override("font_size", 11)
+	col.add_child(ctitle)
+	_war_intel_continents = VBoxContainer.new()
+	_war_intel_continents.add_theme_constant_override("separation", 2)
+	col.add_child(_war_intel_continents)
+
+	# Insertion APRÈS le tiroir Factions (le widget est un VBox : bouton puis panneau).
+	widget.add_child(_war_intel_btn)
+	widget.move_child(_war_intel_btn, %IntelFactionsPanel.get_index() + 1)
+	widget.add_child(_war_intel_panel)
+	widget.move_child(_war_intel_panel, _war_intel_btn.get_index() + 1)
+
+func _toggle_war_intel() -> void:
+	_war_intel_open = not _war_intel_open
+	_war_intel_btn.text = tr("INTEL_WAR_BTN") + (" ▾" if _war_intel_open else " ▸")
+	if _war_intel_tween and _war_intel_tween.is_valid():
+		_war_intel_tween.kill()
+	if _war_intel_open:
+		_war_intel_panel.modulate.a = 0.0
+		_war_intel_panel.visible = true
+		_war_intel_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		_war_intel_tween.tween_property(_war_intel_panel, "modulate:a", 1.0, 0.2)
+	else:
+		_war_intel_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		_war_intel_tween.tween_property(_war_intel_panel, "modulate:a", 0.0, 0.15)
+		_war_intel_tween.tween_callback(func() -> void: _war_intel_panel.visible = false)
+
+# Alimente la War Room (E5). rows = war_room.player_rows (tri territoires desc) ; continents =
+# war_room.continent_rows. Reconstruction complète (pattern set_factions_intel).
+func set_war_intel(rows: Array, continents: Array) -> void:
+	if _war_intel_players == null:
+		return
+	for c in _war_intel_players.get_children():
+		c.queue_free()
+	var max_threat := 1
+	for r in rows:
+		max_threat = maxi(max_threat, int(r.get("threat", 0)))
+	for r in rows:
+		_war_intel_players.add_child(_make_war_row(r, max_threat))
+	for c in _war_intel_continents.get_children():
+		c.queue_free()
+	for cr in continents:
+		_war_intel_continents.add_child(_make_continent_row(cr))
+
+# Carte joueur (2 lignes) : [chip | 🏴 n | barre de menace] puis [compteurs compacts | ratio].
+func _make_war_row(r: Dictionary, max_threat: int) -> Control:
+	var card := VBoxContainer.new()
+	card.add_theme_constant_override("separation", 1)
+	var line1 := HBoxContainer.new()
+	line1.add_theme_constant_override("separation", 5)
+	var chip := PlayerChipScene.instantiate()
+	chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line1.add_child(chip)
+	chip.setup(int(r.get("pid", 0)), true)
+	var terr := Label.new()
+	terr.text = "🏴%d" % int(r.get("territories", 0))
+	terr.add_theme_font_size_override("font_size", 12)
+	terr.add_theme_color_override("font_color", Color("eef3f7"))
+	terr.tooltip_text = tr("ROSTER_TERR_TOOLTIP")
+	terr.mouse_filter = Control.MOUSE_FILTER_PASS
+	line1.add_child(terr)
+	# Indice de menace (barre discrète, AUCUN effet gameplay) : territoires×2 + kills − pertes
+	# + éliminations×5 — normalisé sur le max de la table (formule documentée, tooltip).
+	var threat := ProgressBar.new()
+	threat.show_percentage = false
+	threat.custom_minimum_size = Vector2(34, 6)
+	threat.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	threat.max_value = float(max_threat)
+	threat.value = float(maxi(int(r.get("threat", 0)), 0))
+	threat.mouse_filter = Control.MOUSE_FILTER_PASS
+	threat.tooltip_text = tr("WARROOM_THREAT_TOOLTIP") % int(r.get("threat", 0))
+	RosterHelpers._tint_progress(threat, ACCENT_GOLD)
+	line1.add_child(threat)
+	card.add_child(line1)
+
+	var line2 := HBoxContainer.new()
+	line2.add_theme_constant_override("separation", 5)
+	var stats := Label.new()
+	stats.text = "⚔%d ☠%d 🚩%d 🎯%d 💥%d(💀%d) ☢%d" % [
+		int(r.get("kills", 0)), int(r.get("losses", 0)), int(r.get("conquests", 0)),
+		int(r.get("eliminations", 0)), int(r.get("hero_damage", 0)),
+		int(r.get("hero_kills", 0)), int(r.get("zone_deaths", 0))]
+	stats.add_theme_font_size_override("font_size", 11)
+	stats.add_theme_color_override("font_color", Color("c8cdd6"))
+	stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats.tooltip_text = tr("WARROOM_LEGEND")
+	stats.mouse_filter = Control.MOUSE_FILTER_PASS
+	line2.add_child(stats)
+	# Ratio kills/(kills+pertes) : barre horizontale vert→rouge (dégradé E1 réutilisé).
+	var ratio := float(r.get("ratio", 0.5))
+	var rbar := ProgressBar.new()
+	rbar.show_percentage = false
+	rbar.custom_minimum_size = Vector2(46, 6)
+	rbar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	rbar.max_value = 1.0
+	rbar.value = ratio
+	rbar.mouse_filter = Control.MOUSE_FILTER_PASS
+	rbar.tooltip_text = tr("WARROOM_RATIO_TOOLTIP") % [int(r.get("kills", 0)), int(r.get("losses", 0))]
+	RosterHelpers._tint_progress(rbar, RosterHelpers.pv_color(ratio))
+	line2.add_child(rbar)
+	card.add_child(line2)
+	return card
+
+# Ligne de continent : « CONTRÔLÉ par <chip> » si un joueur possède TOUT, sinon « CONTESTÉ x/y »
+# avec le leader en chip atténuée.
+func _make_continent_row(cr: Dictionary) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 5)
+	var name_lbl := Label.new()
+	name_lbl.text = str(cr.get("name", "?")).to_upper()
+	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_lbl.add_theme_color_override("font_color", Color("c8cdd6"))
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	row.add_child(name_lbl)
+	var owner = cr.get("owner", null)
+	if owner != null:
+		var tag := Label.new()
+		tag.text = tr("WARROOM_CONTROLLED")
+		tag.add_theme_font_size_override("font_size", 10)
+		tag.add_theme_color_override("font_color", ACCENT_GOLD)
+		row.add_child(tag)
+		var chip := PlayerChipScene.instantiate()
+		row.add_child(chip)
+		chip.setup(int(owner), true)
+	else:
+		var tag := Label.new()
+		tag.text = tr("WARROOM_CONTESTED") % [int(cr.get("held", 0)), int(cr.get("total", 0))]
+		tag.add_theme_font_size_override("font_size", 10)
+		tag.add_theme_color_override("font_color", HERO_MUTED)
+		row.add_child(tag)
+		var leader = cr.get("leader_pid", null)
+		if leader != null:
+			var chip := PlayerChipScene.instantiate()
+			chip.modulate = Color(1, 1, 1, 0.6)
+			row.add_child(chip)
+			chip.setup(int(leader), true)
+	return row
+
+# =========================================================
 # Inspecteur Tactique de Territoire (§1) — lecteur flottant bas-droite
 # =========================================================
 # Ouvert au clic d'un territoire (main.gd résout les données, le HUD reste une View). data =
-# { name, owner_name, owner_color: Color, troops: int, contaminated: bool }.
+# { name, owner_name, owner_color: Color, owner_id: int|null (E1), troops: int, contaminated: bool }.
+
+# Brique identité du propriétaire (E1 §8.73) : créée paresseusement et insérée juste APRÈS
+# %InspectorOwner dans son conteneur (pattern _ensure_forecast_label — insertion relative).
+func _ensure_inspector_chip() -> void:
+	if _inspector_chip != null and is_instance_valid(_inspector_chip):
+		return
+	_inspector_chip = PlayerChipScene.instantiate()
+	var anchor: Control = %InspectorOwner
+	var parent := anchor.get_parent()
+	parent.add_child(_inspector_chip)
+	parent.move_child(_inspector_chip, anchor.get_index() + 1)
 
 func set_territory_inspector(data: Dictionary) -> void:
 	%InspectorName.text = str(data.get("name", "—")).to_upper()
 	var owner_col: Color = data.get("owner_color", Color("8a97a5"))
-	%InspectorOwner.text = str(data.get("owner_name", "—"))
-	%InspectorOwner.add_theme_color_override("font_color", owner_col)
+	# E1 §8.73 : propriétaire présenté par player_chip (pastille couleur plateau + pseudo + faction)
+	# dès qu'il y en a un — y compris un BOT (id NÉGATIF, G2 §8.72). Le label nu ne sert plus qu'au
+	# cas NEUTRE (owner_id null) et aux appels legacy sans owner_id (rétro-compat).
+	var owner_id = data.get("owner_id", null)
+	if owner_id != null:
+		_ensure_inspector_chip()
+		_inspector_chip.visible = true
+		_inspector_chip.setup(int(owner_id), true)
+		%InspectorOwner.visible = false
+	else:
+		if _inspector_chip != null and is_instance_valid(_inspector_chip):
+			_inspector_chip.visible = false
+		%InspectorOwner.visible = true
+		%InspectorOwner.text = str(data.get("owner_name", "—"))
+		%InspectorOwner.add_theme_color_override("font_color", owner_col)
 	%InspectorTroops.text = str(int(data.get("troops", 0)))
 	%InspectorStatus.text = "☢ CONTAMINÉ" if bool(data.get("contaminated", false)) else ""
 	var insp: Control = %TerritoryInspector
@@ -649,6 +1160,21 @@ func hide_hero_panel() -> void:
 	if _hero_panel != null:
 		_hero_panel.visible = false
 
+# Douleur du héros (E9 §8.81) : pulse rouge 0,3 s sur le liseré de la fiche héros quand NOTRE
+# héros encaisse. Piloté par main.gd (VFX gérés par le réglage reduced_motion E10, côté appelant).
+func pulse_hero_pain() -> void:
+	if _hero_panel == null or not _hero_panel.visible:
+		return
+	var painful := _hero_panel_style()
+	painful.border_color = HERO_DANGER
+	painful.set_border_width_all(3)
+	_hero_panel.add_theme_stylebox_override("panel", painful)
+	var tw := _hero_panel.create_tween()
+	tw.tween_interval(0.3)
+	tw.tween_callback(func() -> void:
+		if _hero_panel != null and is_instance_valid(_hero_panel):
+			_hero_panel.add_theme_stylebox_override("panel", _hero_panel_style()))
+
 # Recolore le remplissage d'une ProgressBar (fill stylebox) à la couleur donnée.
 func _tint_progress(bar: ProgressBar, col: Color) -> void:
 	var fill := StyleBoxFlat.new()
@@ -771,20 +1297,155 @@ func set_deploy_confirm(active: bool, total: int = 0, quota: int = 0) -> void:
 	_confirm_btn.disabled = (total != quota)
 	_confirm_btn.text = "✔ CONFIRMER (%d/%d)" % [total, quota]
 
-# Journal militaire (panneau latéral) : historique horodaté des conquêtes / évènements.
-# Le RichTextLabel accepte le BBCode avancé (§8.29) : on peut préfixer une icône via [img] et le
-# texte peut contenir des pseudos colorés à l'accent_color du joueur (voir color_pseudo()).
+# =========================================================
+# Journal de Guerre 2.0 (E4 §8.76) — flux structuré, filtres, kill feed, toasts
+# =========================================================
+
+# Journal militaire (panneau latéral). LEGACY conservé : tout texte brut devient une entrée
+# `system` du flux structuré (filtrable comme le reste — AUCUNE perte d'info).
 func add_log(text: String, icon_path: String = "") -> void:
-	_log_count += 1
-	var prefix := "[color=#8a8f7a][%03d][/color] " % _log_count
+	var rich := text
 	if icon_path != "":
-		prefix += "[img=18]%s[/img] " % icon_path
-	%LogText.append_text(prefix + text + "\n")
+		rich = "[img=18]%s[/img] %s" % [icon_path, text]
+	add_feed_entries([{"category": "system", "icon": "⚙", "rich_text": rich,
+		"tid": "", "major": false}])
+
+# Ajoute des entrées structurées (war_feed.parse — E4) au flux : numérotation à l'AJOUT (stable
+# à travers les filtres), rendu incrémental si l'entrée passe le filtre courant, plafond FEED_MAX.
+func add_feed_entries(entries: Array) -> void:
+	for e in entries:
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		_log_count += 1
+		e["_num"] = _log_count
+		_feed_entries.append(e)
+		if _feed_entries.size() > FEED_MAX:
+			_feed_entries.pop_front()
+		if _feed_matches(e):
+			%LogText.append_text(_feed_line(e) + "\n")
+
+func _feed_matches(e: Dictionary) -> bool:
+	return _feed_filter == "all" or str(e.get("category", "system")) == _feed_filter
+
+# Ligne BBCode d'une entrée : numéro acier + texte, le tout enveloppé [url=<tid>] si l'entrée
+# pointe un territoire (clic → caméra, meta_clicked).
+func _feed_line(e: Dictionary) -> String:
+	var txt := str(e.get("rich_text", ""))
+	var tid := str(e.get("tid", ""))
+	if tid != "":
+		txt = "[url=%s]%s[/url]" % [tid, txt]
+	return "[color=#8a8f7a][%03d][/color] %s" % [int(e.get("_num", 0)), txt]
+
+# Re-rendu COMPLET du journal selon le filtre courant (changement de chip).
+func _rerender_feed() -> void:
+	%LogText.clear()
+	for e in _feed_entries:
+		if _feed_matches(e):
+			%LogText.append_text(_feed_line(e) + "\n")
+
+# Rangée de chips de filtre TOUS / ⚔ / ☢ / 🃏 / ⚙ (ButtonGroup — pattern %ChatIconBar §8.29),
+# insérée juste AU-DESSUS de %LogText (insertion relative, piège n° 6).
+func _build_feed_filters() -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var group := ButtonGroup.new()
+	var defs := [["all", "TOUS"], ["combat", "⚔"], ["zone", "☢"], ["cards", "🃏"], ["system", "⚙"]]
+	for d in defs:
+		var b := Button.new()
+		b.text = str(d[1])
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = str(d[0]) == "all"
+		b.custom_minimum_size = Vector2(38, 26)
+		b.add_theme_font_size_override("font_size", 13)
+		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		b.tooltip_text = tr("FEED_FILTER_TOOLTIP")
+		var key := str(d[0])
+		b.pressed.connect(func() -> void:
+			_feed_filter = key
+			AudioManager.play_sfx("click")
+			_rerender_feed())
+		row.add_child(b)
+	var parent := %LogText.get_parent()
+	parent.add_child(row)
+	parent.move_child(row, %LogText.get_index())
+
+# Kill feed (E4) : instancié coin haut-droit, À GAUCHE du panneau latéral (320 px) — hors panneaux.
+func _build_kill_feed() -> void:
+	_kill_feed = KillFeedScene.instantiate()
+	add_child(_kill_feed)
+	_kill_feed.anchor_left = 1.0
+	_kill_feed.anchor_right = 1.0
+	_kill_feed.offset_left = -652.0
+	_kill_feed.offset_right = -332.0
+	_kill_feed.offset_top = 72.0
+	_kill_feed.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_kill_feed.grow_vertical = Control.GROW_DIRECTION_END
+
+func push_kill_feed(rich_text: String) -> void:
+	if _kill_feed != null and is_instance_valid(_kill_feed):
+		_kill_feed.push_entry(rich_text)
+
+# Toast défensif (E4) : « ⚠ ONTARIO ATTAQUÉ PAR X — pertes : N » quand un territoire à NOUS est
+# frappé pendant le tour d'un AUTRE. Panneau furtif haut-centre (sous le bandeau E3), liseré
+# rouge — le plus récent REMPLACE l'ancien (jamais d'empilement).
+func show_defense_toast(rich_text: String) -> void:
+	if _defense_toast == null or not is_instance_valid(_defense_toast):
+		_defense_toast = PanelContainer.new()
+		_defense_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color(0.058824, 0.07451, 0.094118, 0.92)
+		style.border_color = Color("d6453f")
+		style.set_border_width_all(0)
+		style.border_width_left = 3
+		style.border_width_right = 3
+		style.set_corner_radius_all(0)
+		style.set_content_margin_all(8)
+		_defense_toast.add_theme_stylebox_override("panel", style)
+		var rtl := RichTextLabel.new()
+		rtl.name = "ToastText"
+		rtl.bbcode_enabled = true
+		rtl.fit_content = true
+		rtl.scroll_active = false
+		rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
+		rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rtl.add_theme_font_size_override("normal_font_size", 16)
+		_defense_toast.add_child(rtl)
+		add_child(_defense_toast)
+	var text_node: RichTextLabel = _defense_toast.get_node("ToastText")
+	text_node.clear()
+	text_node.append_text(rich_text)
+	if _toast_tween and _toast_tween.is_valid():
+		_toast_tween.kill()
+	_defense_toast.visible = true
+	_defense_toast.modulate.a = 0.0
+	_defense_toast.reset_size()
+	_defense_toast.position = Vector2((size.x - _defense_toast.size.x) / 2.0, 112.0)
+	_toast_tween = create_tween()
+	_toast_tween.tween_property(_defense_toast, "modulate:a", 1.0, 0.18)
+	_toast_tween.tween_interval(3.2)
+	_toast_tween.tween_property(_defense_toast, "modulate:a", 0.0, 0.35)
+	_toast_tween.tween_callback(func() -> void: _defense_toast.visible = false)
 
 # Renvoie un pseudo colorisé à l'accent_color du joueur (BBCode), à embarquer dans add_log /
 # add_chat_message. Ex. : hud.add_log("%s attaque" % hud.color_pseudo(nom, accent)).
 func color_pseudo(pseudo: String, accent: Color) -> String:
 	return "[color=#%s]%s[/color]" % [accent.to_html(false), pseudo]
+
+# =========================================================
+# Roster de Guerre (E1 §8.73) — panneau permanent des belligérants
+# =========================================================
+# Instancié PAR CODE en tête du SideVBox (au-dessus des comms/chat) — insertion RELATIVE dans le
+# conteneur existant, aucune retouche de main.tscn (piège n° 6 PLAN_EXPERIENCE, pattern
+# _build_confirm_button). Le clic d'une ligne REMONTE au contrôleur via roster_player_clicked.
+func _build_war_roster() -> void:
+	_war_roster = WarRosterScene.instantiate()
+	var side_vbox := %ChatTabs.get_parent()
+	side_vbox.add_child(_war_roster)
+	side_vbox.move_child(_war_roster, 0)
+	_war_roster.player_clicked.connect(
+		func(pid: int) -> void: roster_player_clicked.emit(pid))
 
 # Chat à onglets-icônes. channel ∈ {"general", "prive"} ; text accepte le BBCode (déjà échappé
 # côté main.gd pour le texte des joueurs — anti-injection BBCode, §8.33).
@@ -806,13 +1467,26 @@ func update_display() -> void:
 		_elapsed = 0.0
 		_turn_bonus = 0.0
 
-	# Durée du rebours (§8.31, révisé) : 90 s en Phase 0 (placement) ; en jeu, budget PAR PHASE via
-	# _phase_turn_limit() (90 s en Attaque + Time Bank jusqu'à 180 s, 60 s sinon) ; sinon caché. On
-	# RECALCULE depuis _turn_bonus (et non une valeur figée) pour que le bonus crédité SURVIVE au refresh.
-	match stage:
-		"placement": _turn_limit = PHASE0_TIME
-		"playing": _turn_limit = _phase_turn_limit()
-		_: _turn_limit = 0.0
+	# Chrono SERVEUR prioritaire (E3 §8.75) : un état portant server_time vient d'un serveur qui
+	# diffuse son échéance — turn_timer null = AUCUN rebours à afficher (tour de bot / hors
+	# minuterie). Sans server_time (VPS pas encore redéployé), REPLI legacy : estimation locale
+	# historique ci-dessous, intacte (client défensif §9.2).
+	if GameState.server_time > 0.0:
+		if GameState.turn_timer.is_empty():
+			clear_server_timer()
+			_turn_limit = 0.0
+		else:
+			apply_server_timer(float(GameState.turn_timer.get("deadline_epoch", 0.0)),
+				GameState.server_time)
+	else:
+		clear_server_timer()
+		# Durée du rebours (§8.31, révisé) : 90 s en Phase 0 (placement) ; en jeu, budget PAR PHASE
+		# via _phase_turn_limit() (90 s en Attaque + Time Bank jusqu'à 180 s, 60 s sinon) ; sinon
+		# caché. On RECALCULE depuis _turn_bonus pour que le bonus crédité SURVIVE au refresh.
+		match stage:
+			"placement": _turn_limit = PHASE0_TIME
+			"playing": _turn_limit = _phase_turn_limit()
+			_: _turn_limit = 0.0
 
 	if stage == "playing":
 		%PhaseLabel.text = "PHASE : " + _phase_name(GameState.current_phase).to_upper()
@@ -838,6 +1512,11 @@ func update_display() -> void:
 	%ObjectiveLabel.text = "🎯 OBJECTIF : " + str(obj.get("description", "(secret)"))
 
 	_refresh_cards()
+
+	# Roster de Guerre (E1 §8.73) : rafraîchi à chaque état reçu — AUCUN nouveau flux réseau
+	# (update_display est déjà invoqué par main._refresh() à chaque game_state_updated).
+	if _war_roster != null and is_instance_valid(_war_roster):
+		_war_roster.refresh()
 
 # =========================================================
 # Onglets de chat par ICÔNES (§8.29)
@@ -966,6 +1645,80 @@ func set_chat_targets(entries: Array) -> void:
 				break
 
 # =========================================================
+# Bandeau de combat compact (E8 §8.80) — combats où je ne suis pas impliqué
+# =========================================================
+# data = { atk_pid, def_pid, atk_rolls, def_rolls, atk_losses, def_losses, hero_damage,
+#          hero_died, conquered }. Panneau haut-centre 2,2 s (piloté par main.gd, la durée
+# d'attente vit côté contrôleur — file _combat_animating). Chips E1 + dés figés + pertes.
+func show_combat_banner(data: Dictionary) -> void:
+	if _combat_banner == null or not is_instance_valid(_combat_banner):
+		_combat_banner = PanelContainer.new()
+		_combat_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color(0.058824, 0.07451, 0.094118, 0.92)
+		style.border_color = Color(ACCENT_CYAN, 0.5)
+		style.set_border_width_all(0)
+		style.border_width_bottom = 2
+		style.set_corner_radius_all(0)
+		style.set_content_margin_all(8)
+		_combat_banner.add_theme_stylebox_override("panel", style)
+		add_child(_combat_banner)
+	for c in _combat_banner.get_children():
+		_combat_banner.remove_child(c)
+		c.queue_free()
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	_combat_banner.add_child(row)
+	# Camp attaquant (chip) + dés figés.
+	var atk_chip := PlayerChipScene.instantiate()
+	row.add_child(atk_chip)
+	atk_chip.setup(int(data.get("atk_pid", 0)), true)
+	row.add_child(_banner_dice_label(data.get("atk_rolls", []), ACCENT_CYAN))
+	var vs := Label.new()
+	vs.text = "⚔"
+	vs.add_theme_font_size_override("font_size", 16)
+	row.add_child(vs)
+	row.add_child(_banner_dice_label(data.get("def_rolls", []), Color("d6453f")))
+	var def_chip := PlayerChipScene.instantiate()
+	row.add_child(def_chip)
+	def_chip.setup(int(data.get("def_pid", 0)), true)
+	# Pertes + dégâts héros + issue.
+	var summary := Label.new()
+	var txt := "  −%d / −%d" % [int(data.get("atk_losses", 0)), int(data.get("def_losses", 0))]
+	if int(data.get("hero_damage", 0)) > 0:
+		txt += "  ♥−%d" % int(data.get("hero_damage", 0))
+	if bool(data.get("hero_died", false)):
+		txt += "  💀"
+	elif bool(data.get("conquered", false)):
+		txt += "  🏴"
+	summary.text = txt
+	summary.add_theme_font_size_override("font_size", 14)
+	summary.add_theme_color_override("font_color", Color("c8cdd6"))
+	row.add_child(summary)
+
+	if _combat_banner_tween and _combat_banner_tween.is_valid():
+		_combat_banner_tween.kill()
+	_combat_banner.visible = true
+	_combat_banner.modulate.a = 0.0
+	_combat_banner.reset_size()
+	_combat_banner.position = Vector2((size.x - _combat_banner.size.x) / 2.0, 96.0)
+	_combat_banner_tween = create_tween()
+	_combat_banner_tween.tween_property(_combat_banner, "modulate:a", 1.0, 0.18)
+	_combat_banner_tween.tween_interval(1.7)
+	_combat_banner_tween.tween_property(_combat_banner, "modulate:a", 0.0, 0.3)
+	_combat_banner_tween.tween_callback(func() -> void: _combat_banner.visible = false)
+
+func _banner_dice_label(rolls: Array, col: Color) -> Label:
+	var parts: Array = []
+	for r in rolls:
+		parts.append(str(int(r)))
+	var lbl := Label.new()
+	lbl.text = "[%s]" % " ".join(PackedStringArray(parts))
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_color_override("font_color", col)
+	return lbl
+
+# =========================================================
 # Panneau latéral rétractable (§8.29) — slide horizontal (Tween natif)
 # =========================================================
 
@@ -1091,6 +1844,10 @@ func _make_card_button(value: int, index: int, playable: bool = true) -> Control
 	card.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
 	card.pressed.connect(func() -> void: AudioManager.play_sfx("click"))
 	return card
+
+# Alias PUBLIC du libellé de phase (E3 : consommé par les bandeaux de tour/phase de main.gd).
+func phase_name(phase: int) -> String:
+	return _phase_name(phase)
 
 func _phase_name(phase: int) -> String:
 	match phase:

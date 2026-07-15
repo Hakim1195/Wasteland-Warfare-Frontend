@@ -70,6 +70,27 @@ func _ready() -> void:
 	_sfx["impact"] = _load_override("sfx", "impact")
 	if _sfx["impact"] == null: _sfx["impact"] = _make_impact()
 
+	# --- Hooks sensoriels (E9 §8.81) : 10 SFX aux moments qui comptent. Replis SYNTHÉTISÉS
+	#     distincts (fréquences/durées documentées) — aucun asset requis pour livrer ; Hakim
+	#     remplace en déposant assets/audio/sfx/<nom>.{ogg,wav,mp3} (mécanique _load_override).
+	#     dice_lock / hit_troops = alias du feedback de combat existant (même événement). ---
+	_register_sfx("your_turn", func(): return _make_chord(523.0, 784.0, 0.34))    # quinte triomphale (do→sol)
+	_register_sfx("dice_lock", func(): return _make_die_lock())                    # claque sèche du dé
+	_register_sfx("hit_troops", func(): return _make_impact())                     # impact sourd de pertes
+	_register_sfx("hero_hit", func(): return _make_blip(320.0, 0.10, 0.22))        # coup grave encaissé
+	_register_sfx("hero_down", func(): return _make_chord(300.0, 150.0, 0.55))     # chute dramatique (permadeath)
+	_register_sfx("conquest", func(): return _make_chord(440.0, 880.0, 0.30))      # fanfare courte (octave)
+	_register_sfx("zone_alarm", func(): return _make_blip(760.0, 0.24, 0.18))      # alerte toxique aiguë
+	_register_sfx("under_attack", func(): return _make_blip(220.0, 0.18, 0.22))    # alerte défensive grave
+	_register_sfx("card_draw", func(): return _make_blip(1180.0, 0.06, 0.13))      # bruissement de pioche
+	_register_sfx("timer_tick", func(): return _make_blip(880.0, 0.035, 0.10))     # tic discret d'AFK
+
+# Enregistre un SFX par nom : vrai fichier prioritaire (assets/audio/sfx/<nom>), sinon repli
+# synthétisé (Callable() -> AudioStreamWAV). Factorise le pattern _load_override / _make_*.
+func _register_sfx(sfx_name: String, synth: Callable) -> void:
+	var override := _load_override("sfx", sfx_name)
+	_sfx[sfx_name] = override if override != null else synth.call()
+
 
 # Joue un SFX par nom (silencieux si inconnu). Round-robin sur le pool.
 func play_sfx(sfx_name: String) -> void:

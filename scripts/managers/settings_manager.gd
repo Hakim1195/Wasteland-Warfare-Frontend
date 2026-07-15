@@ -16,8 +16,23 @@ extends Node
 
 signal audio_changed(bus: String, value: float)
 signal display_changed()
+# Réglages de CONFORT (E8 combat_display §8.80 / E10 accessibilité §8.82) : une clé, un défaut,
+# un signal de changement (même contrat que get_volume/set_volume). Consommés à la volée par le
+# HUD/le plateau (aucun redémarrage requis).
+signal comfort_changed(key: String, value)
 
 const _CONFIG_PATH := "user://settings.cfg"
+
+# Défauts des réglages de confort (persistés dans la section [comfort]). Le TYPE du défaut fixe
+# la coercition à la relecture (bool/float/String).
+const COMFORT_DEFAULTS := {
+	"combat_display": "cinematique",   # E8 : cinematique / rapide / bandeau
+	"reduced_motion": false,           # E10 : coupe VFX/pulses/particules
+	"colorblind_mode": false,          # E10 : palette Okabe-Ito + motifs
+	"ui_scale": 1.0,                   # E10 : 0.9 / 1.0 / 1.15 / 1.3
+	"damage_numbers": true,            # E10 : flotteurs de dégâts
+}
+var _comfort := {}
 
 # Clé interne -> nom du bus audio (default_bus_layout.tres). Lecture défensive : si le
 # bus n'existe pas (layout absent), on ignore proprement (pas d'erreur « Invalid bus »).
@@ -40,6 +55,7 @@ var _resolution_index := DEFAULT_RESOLUTION_INDEX
 func _ready() -> void:
 	_load()
 	_apply_all()
+	_apply_ui_scale()
 
 # --- Lecture publique (la Vue initialise ses contrôles depuis le manager) ---
 func get_volume(bus: String) -> float:
@@ -50,6 +66,37 @@ func is_fullscreen() -> bool:
 
 func get_resolution_index() -> int:
 	return _resolution_index
+
+# --- Confort (E8/E10) : lecture / écriture générique typée -------------------
+func get_comfort(key: String):
+	return _comfort.get(key, COMFORT_DEFAULTS.get(key))
+
+func set_comfort(key: String, value) -> void:
+	if not COMFORT_DEFAULTS.has(key):
+		return
+	# Coercition sur le type du défaut (un ConfigFile relit parfois en Variant élargi).
+	var def = COMFORT_DEFAULTS[key]
+	if typeof(def) == TYPE_BOOL:
+		value = bool(value)
+	elif typeof(def) == TYPE_FLOAT:
+		value = float(value)
+	else:
+		value = str(value)
+	_comfort[key] = value
+	_save()
+	# ui_scale (E10 §8.82) : appliqué immédiatement à l'échelle de contenu de la fenêtre.
+	if key == "ui_scale":
+		_apply_ui_scale()
+	comfort_changed.emit(key, value)
+
+# Applique le facteur d'échelle d'interface (E10 §8.82) : content_scale_factor de la fenêtre —
+# agrandit TOUTE l'UI (menus + HUD). Ignoré en headless (validation CLI).
+func _apply_ui_scale() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var w := get_window()
+	if w != null:
+		w.content_scale_factor = float(get_comfort("ui_scale"))
 
 # Libellés « L × H » pour le sélecteur de résolution (numériques → pas de traduction).
 func resolution_labels() -> PackedStringArray:
@@ -149,6 +196,9 @@ func _load() -> void:
 		_volumes[bus] = clampf(float(cfg.get_value("audio", bus, _volumes[bus])), 0.0, 1.0)
 	_fullscreen = bool(cfg.get_value("display", "fullscreen", _fullscreen))
 	_resolution_index = clampi(int(cfg.get_value("display", "resolution_index", _resolution_index)), 0, RESOLUTIONS.size() - 1)
+	# Confort (E8/E10) : relecture typée par le défaut de chaque clé.
+	for key in COMFORT_DEFAULTS:
+		_comfort[key] = cfg.get_value("comfort", key, COMFORT_DEFAULTS[key])
 
 func _save() -> void:
 	var cfg := ConfigFile.new()
@@ -157,4 +207,6 @@ func _save() -> void:
 		cfg.set_value("audio", bus, _volumes[bus])
 	cfg.set_value("display", "fullscreen", _fullscreen)
 	cfg.set_value("display", "resolution_index", _resolution_index)
+	for key in COMFORT_DEFAULTS:
+		cfg.set_value("comfort", key, _comfort.get(key, COMFORT_DEFAULTS[key]))
 	cfg.save(_CONFIG_PATH)

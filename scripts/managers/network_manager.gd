@@ -9,6 +9,9 @@ signal lobby_error(message: String)
 # Émis après chaque mise à jour de l'état de jeu reçue du serveur. L'UI (HUD, plateau)
 # s'y abonne au lieu de lire le réseau en direct (Règle d'Or §6.1 : découplage par signaux).
 signal game_state_updated
+# Chrono SERVEUR (E3 §8.75) : échéance epoch + budget + raison ("turn_start"/"phase_change"/
+# "time_bank") + horloge serveur (offset client). Émis à chaque message léger `timer_update`.
+signal timer_updated(deadline_epoch: float, budget_seconds: int, reason: String, server_time: float)
 # Émis pour chaque évènement de jeu renvoyé par le moteur (résultat de combat, déploiement…).
 signal game_event(event: Dictionary)
 # Émis quand le serveur refuse une action (ex: "Ce n'est pas votre tour").
@@ -21,6 +24,10 @@ signal lobby_state_updated(players: Array, ready: Array, usernames: Dictionary)
 # Échéance UNIX (s) du remplissage IA (G2 §8.72), lue par waiting_room.gd ; -1 = aucun fill armé.
 # Propriété (et non 4ᵉ arg du signal) pour ne pas casser les écouteurs existants de lobby_state.
 var last_bot_fill_at: float = -1.0
+# Révélation des objectifs de fin de partie (E11 §8.83) — bloc PUBLIC du game_over :
+# [{ player_id, username, description, completed }] ordonné par rankings. [] avant la fin
+# (ou serveur antérieur) ; consommé par le Rapport Post-Op (podium).
+var last_objectives_reveal: Array = []
 # Émis quand la partie démarre (l'état initial est déjà appliqué à GameState).
 signal game_started_signal
 # Émis quand un joueur verrouille sa faction pendant le Draft (CONTEXTE.md §3, étape de sélection).
@@ -225,6 +232,11 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# La victoire est déjà gérée via winner_id dans l'état ; ici on relaie le RÉSULTAT
 			# ÉCONOMIQUE (points/XP/Coins, §8.47) pour le Rapport Post-Op animé. Piège JSON §5 :
 			# les ids/nombres arrivent en float → int() ; les clés de match_rewards restent string.
+			# E11 §8.83 : match_rewards est désormais REDACTÉ par destinataire (notre seule clé) —
+			# le code ci-dessous piochait déjà sa propre clé, rien ne change. Le bloc PUBLIC
+			# objectives_reveal est mémorisé en propriété (signal inchangé, pattern last_bot_fill_at).
+			var reveal = msg.get("objectives_reveal", [])
+			last_objectives_reveal = reveal if typeof(reveal) == TYPE_ARRAY else []
 			var rewards: Dictionary = msg.get("match_rewards", {})
 			last_match_rewards = rewards
 			game_event.emit({"event_type": "game_over", "winner_id": msg.get("winner_id"),
@@ -267,6 +279,14 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# Espionnage (Chasseurs d Ombres) : message PRIVE recu uniquement par l espion.
 			# Piege des ids JSON : target_player_id arrive en float -> int().
 			spy_result.emit(int(msg.get("target_player_id", -1)), str(msg.get("description", "")))
+		"timer_update":
+			# Chrono SERVEUR (E3 §8.75) : (ré)armement de minuterie ou extension Time Bank.
+			# reason ∈ {"turn_start", "phase_change", "time_bank"}. main.gd relaie au HUD.
+			timer_updated.emit(
+				float(msg.get("deadline_epoch", 0.0)),
+				int(msg.get("budget_seconds", 0)),
+				str(msg.get("reason", "")),
+				float(msg.get("server_time", 0.0)))
 		"chat_message":
 			# Chat de salle (§8.33) : relais serveur estampillé. Ids JSON en float -> int() (piège §5).
 			chat_message_received.emit(

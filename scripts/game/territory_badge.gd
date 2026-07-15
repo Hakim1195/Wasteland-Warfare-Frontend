@@ -46,11 +46,16 @@ var _forecast: bool = false
 # Label ⚠ créé PAR CODE au premier besoin (pas de retouche du .tscn) : clone du RadLabel (hérite
 # de sa police symboles), repositionné SOUS le chiffre, teinté or.
 var _forecast_label: Label = null
+# Initiale du pseudo (E10 §8.82 — mode daltonien) : redondance TEXTE de l'identité du propriétaire,
+# affichée en pastille de coin. "" = mode normal (aucune initiale).
+var _initial: String = ""
+var _initial_label: Label = null
 
 func _ready() -> void:
 	_apply_text()
 	_apply_contamination()
 	_apply_forecast()
+	_apply_initial()
 	queue_redraw()
 
 # Met à jour le badge : nombre de troupes, couleur de bordure (accent de faction), état de
@@ -58,10 +63,11 @@ func _ready() -> void:
 # ANNONCE de prochaine zone (`forecast` → ⚠ or, télégraphe G1 §8.62).
 # Défauts → rétro-compatible avec d'anciens appels à 2/3/4 arguments.
 func set_data(troops: int, accent: Color, contaminated: bool = false, pending: int = 0,
-		forecast: bool = false) -> void:
+		forecast: bool = false, initial: String = "") -> void:
 	_border_color = accent
 	_contaminated = contaminated
 	_forecast = forecast
+	_initial = initial
 	_has_pending = pending > 0
 	if _has_pending:
 		_troops_text = "%d+%d" % [troops, pending]
@@ -71,7 +77,26 @@ func set_data(troops: int, accent: Color, contaminated: bool = false, pending: i
 		_apply_text()
 		_apply_contamination()
 		_apply_forecast()
+		_apply_initial()
 	queue_redraw()
+
+# Initiale du propriétaire (E10 daltonien) : pastille en coin haut-gauche, créée paresseusement
+# (clone du chiffre pour la police), masquée en mode normal.
+func _apply_initial() -> void:
+	if _initial != "" and _initial_label == null and _label != null:
+		_initial_label = _label.duplicate()
+		_initial_label.name = "InitialLabel"
+		_initial_label.add_theme_font_size_override("font_size", 22)
+		_initial_label.offset_left = -64.0
+		_initial_label.offset_top = -64.0
+		_initial_label.offset_right = -24.0
+		_initial_label.offset_bottom = -24.0
+		add_child(_initial_label)
+	if _initial_label != null:
+		_initial_label.visible = _initial != ""
+		if _initial != "":
+			_initial_label.text = _initial
+			_initial_label.add_theme_color_override("font_color", _border_color.lightened(0.3))
 
 func _apply_text() -> void:
 	if _label:

@@ -31,6 +31,13 @@ var client_version: String = "1.0.0"
 # gris (race condition au lancement). Avec ce défaut, board retombe proprement sur un cluster vide.
 var contamination_zone: Dictionary = {}
 
+# Chrono SERVEUR (E3 §8.75) : `turn_timer` = { deadline_epoch, budget_seconds, time_bank_cap }
+# diffusé dans CHAQUE état ({} si null — tour de bot / hors minuterie / serveur antérieur) ;
+# `server_time` = horloge murale du serveur à l'émission (0.0 = serveur antérieur → le HUD
+# retombe sur son estimation locale historique, client défensif §9.2).
+var turn_timer: Dictionary = {}
+var server_time: float = 0.0
+
 # « Mémoire Tactique » (§8.35 CONTRAT_RESEAU / §8.36 FRONTEND) : statistiques GLOBALES PUBLIQUES de
 # la partie, diffusées intégralement par le serveur (non rédigées). Modèle backend `GameStatistics` :
 #   - zone_kills_by_player : { "<player_id>": <kills> } — clés STR en JSON (§5), valeurs en float.
@@ -64,6 +71,10 @@ func update_from_json(state_data: Dictionary):
 	contamination_zone = state_data.get("contamination_zone", {})
 	# « Mémoire Tactique » (§8.35) : statistiques globales publiques (alimente le tiroir Intel, §8.36).
 	statistics = state_data.get("statistics", {})
+	# Chrono SERVEUR (E3 §8.75) : turn_timer peut être null (bot / hors minuterie) → {}.
+	var tt = state_data.get("turn_timer", null)
+	turn_timer = tt if typeof(tt) == TYPE_DICTIONARY else {}
+	server_time = float(state_data.get("server_time", 0.0))
 	# Le rafraîchissement de l'UI est piloté par le contrôleur d'arène (main.gd) via le
 	# signal NetworkManager.game_state_updated — l'état ne connaît pas l'UI (Règle d'Or §6.1).
 

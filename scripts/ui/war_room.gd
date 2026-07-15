@@ -1,0 +1,102 @@
+extends RefCounted
+
+# WAR ROOM (E5 §8.77) — module de calcul PUR de l'Intel de guerre : agrège les 8 compteurs
+# publics de GameState.statistics (§8.35/§8.47) + l'état des territoires en lignes prêtes à
+# afficher, et synthétise le contrôle des continents (bonus §4.2 enfin visualisés). Aucun nœud,
+# aucun autoload — testable par asserts (pattern G4). Clés de statistics = STRINGS après JSON
+# (piège §5) : accès systématique via str(int(pid)).
+
+# Indice de menace (E5 — AUCUN effet gameplay, simple tri/visualisation) :
+#   territoires × 2 + kills − pertes + éliminations × 5
+static func threat_index(territory_count: int, kills: int, losses: int, eliminations: int) -> int:
+	return territory_count * 2 + kills - losses + eliminations * 5
+
+# Nombre de territoires possédés par un joueur (comptage direct de l'état public `territories`).
+# Exposé ici aussi (miroir de war_roster.territory_count) pour que les consommateurs de WarRoom —
+# tracker d'objectif E6, podium E11 — n'aient qu'un seul module de stats à importer.
+static func territory_count(territories: Dictionary, pid: int) -> int:
+	var n := 0
+	for tid in territories:
+		var t = territories[tid]
+		if typeof(t) == TYPE_DICTIONARY:
+			var o = t.get("owner_id")
+			if o != null and int(o) == pid:
+				n += 1
+	return n
+
+# Lecture d'un compteur ventilé par joueur ({ "<pid>": n } — clés string, valeurs float JSON).
+static func stat_of(statistics: Dictionary, key: String, pid: int) -> int:
+	var d = statistics.get(key, {})
+	if typeof(d) != TYPE_DICTIONARY:
+		return 0
+	return int(d.get(str(int(pid)), 0))
+
+# Une ligne par joueur, TRIÉE par territoires possédés décroissants (à égalité : pid croissant,
+# ordre stable §5). Toutes les valeurs sont des int prêts à afficher.
+static func player_rows(players: Dictionary, territories: Dictionary,
+		statistics: Dictionary) -> Array:
+	var rows: Array = []
+	for k in players.keys():
+		var pid := int(k)
+		var terr_n := 0
+		for tid in territories:
+			var t = territories[tid]
+			if typeof(t) == TYPE_DICTIONARY:
+				var o = t.get("owner_id")
+				if o != null and int(o) == pid:
+					terr_n += 1
+		var kills := stat_of(statistics, "combat_kills_by_player", pid)
+		var losses := stat_of(statistics, "losses_by_player", pid)
+		var elims := stat_of(statistics, "eliminations_by_player", pid)
+		rows.append({
+			"pid": pid,
+			"territories": terr_n,
+			"kills": kills,
+			"losses": losses,
+			# Ratio kills/(kills+pertes) ∈ [0..1] — 0,5 si aucun échange (barre neutre).
+			"ratio": (float(kills) / float(kills + losses)) if (kills + losses) > 0 else 0.5,
+			"conquests": stat_of(statistics, "conquests_by_player", pid),
+			"eliminations": elims,
+			"hero_damage": stat_of(statistics, "hero_damage_by_player", pid),
+			"hero_kills": stat_of(statistics, "hero_kills_by_player", pid),
+			"zone_deaths": stat_of(statistics, "zone_kills_by_player", pid),
+			"threat": threat_index(terr_n, kills, losses, elims),
+		})
+	rows.sort_custom(func(a, b) -> bool:
+		if int(a["territories"]) != int(b["territories"]):
+			return int(a["territories"]) > int(b["territories"])
+		return int(a["pid"]) < int(b["pid"]))
+	return rows
+
+# Synthèse des continents : `continents` = { cid: { "name": String, "tids": Array } } (résolu par
+# le contrôleur depuis MapData.get_map(map_id).continent_territories — carte courante G5).
+# Retour (ordre d'itération des clés) : { "name", "total", "held" (du leader), "owner" (pid si
+# TOUT le continent est à lui, sinon null), "leader_pid" (pid|null si aucun territoire possédé) }.
+static func continent_rows(territories: Dictionary, continents: Dictionary) -> Array:
+	var out: Array = []
+	for cid in continents.keys():
+		var cdef: Dictionary = continents[cid]
+		var tids: Array = cdef.get("tids", [])
+		var counts: Dictionary = {}
+		for tid in tids:
+			var t = territories.get(str(tid), null)
+			if typeof(t) != TYPE_DICTIONARY:
+				continue
+			var o = t.get("owner_id")
+			if o != null:
+				counts[int(o)] = int(counts.get(int(o), 0)) + 1
+		var leader_pid = null
+		var leader_held := 0
+		for pid in counts.keys():
+			if int(counts[pid]) > leader_held \
+					or (int(counts[pid]) == leader_held and leader_pid != null and int(pid) < int(leader_pid)):
+				leader_pid = int(pid)
+				leader_held = int(counts[pid])
+		out.append({
+			"name": str(cdef.get("name", cid)),
+			"total": tids.size(),
+			"held": leader_held,
+			"owner": leader_pid if (leader_pid != null and leader_held == tids.size() and tids.size() > 0) else null,
+			"leader_pid": leader_pid,
+		})
+	return out

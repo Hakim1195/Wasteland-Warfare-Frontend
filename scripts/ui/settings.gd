@@ -90,6 +90,10 @@ func _ready() -> void:
 	# Langue : on réutilise tel quel le sélecteur mutualisé (R4), câblé sur LocaleManager.
 	_mount_language_selector()
 
+	# Section CONFORT (E10 §8.82) : réglages d'accessibilité construits PAR CODE (aucune retouche
+	# .tscn) et appendus au RootVBox — pilotés par SettingsManager.get_comfort/set_comfort.
+	_build_comfort_section()
+
 	_set_status(tr("SETTINGS_STATUS"))
 
 # --- Audio : sliders de volume ---------------------------------------------
@@ -299,6 +303,94 @@ func _style_logout_button(btn: Button) -> void:
 	btn.add_theme_color_override("font_hover_color", TEXT)   # blanc froid au survol (sur fond rouge)
 	btn.add_theme_color_override("font_pressed_color", TEXT)
 	btn.add_theme_color_override("font_focus_color", DANGER)
+
+# =========================================================
+# Section CONFORT (E10 §8.82) — accessibilité, construite par code
+# =========================================================
+func _build_comfort_section() -> void:
+	# RootVBox = ancêtre commun des rows (via un nœud @export fiable).
+	var root := resolution_box.get_parent().get_parent()
+	root.add_child(HSeparator.new())
+	var eyebrow := Label.new()
+	eyebrow.text = tr("SETTINGS_COMFORT_EYEBROW")
+	eyebrow.add_theme_font_override("font", _font)
+	eyebrow.add_theme_font_size_override("font_size", 14)
+	eyebrow.add_theme_color_override("font_color", ACCENT)
+	root.add_child(eyebrow)
+
+	# combat_display : 3 segments (E8).
+	root.add_child(_comfort_segments("SETTINGS_COMBAT_DISPLAY", "combat_display",
+		[["cinematique", "CINÉMATIQUE"], ["rapide", "RAPIDE"], ["bandeau", "BANDEAU"]]))
+	# ui_scale : 4 segments numériques.
+	root.add_child(_comfort_segments("SETTINGS_UI_SCALE", "ui_scale",
+		[[0.9, "90 %"], [1.0, "100 %"], [1.15, "115 %"], [1.3, "130 %"]]))
+	# Bascules booléennes.
+	root.add_child(_comfort_toggle("SETTINGS_REDUCED_MOTION", "reduced_motion"))
+	root.add_child(_comfort_toggle("SETTINGS_COLORBLIND", "colorblind_mode"))
+	root.add_child(_comfort_toggle("SETTINGS_DAMAGE_NUMBERS", "damage_numbers"))
+
+# Rangée « libellé + segments » : un bouton par valeur, le courant actif. `values` =
+# Array[[valeur, libellé]]. La valeur peut être String (combat_display) ou float (ui_scale).
+func _comfort_segments(label_key: String, comfort_key: String, values: Array) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.add_child(_comfort_label(label_key))
+	var seg_wrap := HBoxContainer.new()
+	seg_wrap.add_theme_constant_override("separation", 4)
+	var current = SettingsManager.get_comfort(comfort_key)
+	var buttons: Array[Button] = []
+	for v in values:
+		var btn := Button.new()
+		btn.text = str(v[1])
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		_style_segment(btn, _same_value(current, v[0]))
+		var val = v[0]
+		btn.pressed.connect(func() -> void:
+			AudioManager.play_sfx("click")
+			SettingsManager.set_comfort(comfort_key, val)
+			for i in range(values.size()):
+				_style_segment(buttons[i], _same_value(values[i][0], val)))
+		buttons.append(btn)
+		seg_wrap.add_child(btn)
+	row.add_child(seg_wrap)
+	return row
+
+# Rangée « libellé + ON/OFF » pour un réglage booléen.
+func _comfort_toggle(label_key: String, comfort_key: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.add_child(_comfort_label(label_key))
+	var btn := Button.new()
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.custom_minimum_size = Vector2(90, 0)
+	var on: bool = bool(SettingsManager.get_comfort(comfort_key))
+	btn.text = tr("SETTINGS_ON") if on else tr("SETTINGS_OFF")
+	_style_segment(btn, on)
+	btn.pressed.connect(func() -> void:
+		AudioManager.play_sfx("click")
+		var new_on: bool = not bool(SettingsManager.get_comfort(comfort_key))
+		SettingsManager.set_comfort(comfort_key, new_on)
+		btn.text = tr("SETTINGS_ON") if new_on else tr("SETTINGS_OFF")
+		_style_segment(btn, new_on))
+	row.add_child(btn)
+	return row
+
+func _comfort_label(key: String) -> Label:
+	var lbl := Label.new()
+	lbl.text = tr(key)
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 15)
+	lbl.add_theme_color_override("font_color", TEXT)
+	lbl.custom_minimum_size = Vector2(240, 0)
+	return lbl
+
+# Égalité de valeur robuste String/float (les segments mixent les deux types).
+func _same_value(a, b) -> bool:
+	if typeof(a) == TYPE_FLOAT or typeof(b) == TYPE_FLOAT:
+		return absf(float(a) - float(b)) < 0.001
+	return str(a) == str(b)
 
 func _set_status(text: String) -> void:
 	if status_label:

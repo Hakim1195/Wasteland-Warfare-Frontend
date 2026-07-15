@@ -13,6 +13,17 @@ extends Node
 const SplitScreenVSScene := preload("res://scenes/game/split_screen_vs.tscn")
 # Écran de Rapport Post-Opération (§4 Warzone Command), instancié en surcouche à la fin de partie.
 const OperationReportScene := preload("res://scenes/game/operation_report.tscn")
+# Script du rapport (E11 §8.83) : helpers statiques (titres honorifiques, médailles) appelés par
+# le contrôleur pour résoudre les lignes du podium.
+const OperationReportScript := preload("res://scripts/game/operation_report.gd")
+# Bandeau de tour/phase (E3 §8.75) : stinger haut-centre non bloquant.
+const PhaseBannerScene := preload("res://scenes/components/phase_banner.tscn")
+# Journal de Guerre 2.0 (E4 §8.76) : module de parsing PUR des évènements → entrées structurées.
+const WarFeed := preload("res://scripts/ui/war_feed.gd")
+# War Room (E5 §8.77) : module de calcul PUR de l'Intel de guerre (8 compteurs + continents).
+const WarRoom := preload("res://scripts/ui/war_room.gd")
+# Tracker d'objectif vivant (E6 §8.78) : module de calcul PUR de la progression de l'objectif.
+const ObjectiveTracker := preload("res://scripts/ui/objective_tracker.gd")
 
 @onready var button = $Button
 # Depuis la refonte HUD RTS (§8.29), le SubViewport du plateau est le 1ᵉʳ enfant de Main (plateau
@@ -30,6 +41,11 @@ var _victory_shown: bool = false
 # game_over arrive APRÈS son ouverture (l'état winner_id et la clôture sont 2 messages distincts).
 var _match_rewards: Dictionary = {}
 var _report_node: Control = null
+# Classement de la partie (E11 §8.83) : rankings du game_over (liste de pids, gagnant en tête) —
+# consommé par le podium du Rapport Post-Op. [] tant que la clôture n'est pas reçue.
+var _match_rankings: Array = []
+# Pont missions (E11) : un seul fetch par fin de partie.
+var _missions_fetched_for_report := false
 # Vrai pendant l'animation Split-Screen VS : le rafraîchissement du plateau est alors différé
 # (_refresh_pending) pour figer la mise à jour visuelle des troupes jusqu'à la fin du combat.
 var _combat_animating: bool = false
@@ -38,6 +54,10 @@ var _refresh_pending: bool = false
 # pour retrouver le propriétaire PRÉ-combat du territoire défenseur : l'état reçu avec
 # attack_result est déjà post-combat (en cas de conquête, l'owner a déjà basculé).
 var _displayed_owners: Dictionary = {}
+# tid -> garnison telle qu'AFFICHÉE (même snapshot) — E2 §8.74 : le VS affiche « avant ➜ après »
+# par camp ; l'« avant » exact vient d'ici (l'état reçu est déjà post-combat, et le reconstruire
+# par after+pertes serait FAUX en cas de conquête — troupes déplacées en plus des pertes).
+var _displayed_garrisons: Dictionary = {}
 # Déplacement post-conquête (CONTEXTE.md §8.23) : pendant l'attente du choix du joueur, le jeu
 # local est FIGÉ (_awaiting_conquer_move) et le contexte de la conquête (from/to/min/max) mémorisé.
 var _awaiting_conquer_move: bool = false
@@ -85,6 +105,22 @@ var _faction_mods_cache: Dictionary = {}
 # réel de l'inspecteur (les PV/PP de la cible changent après un combat). Voir _refresh_enemy_inspector.
 var _inspected_enemy_id: int = -1
 
+# Bandeaux de tour/phase (E3 §8.75) : instance + mémoire de détection des changements.
+var _phase_banner = null
+var _banner_turn_key := ""
+var _banner_phase := -1
+
+# Ré-assaut en un clic (E7 §8.79) : dernière attaque {source, target} pour rejouer le MÊME assaut
+# tant qu'il reste légal (source ≥ 2, cible toujours ennemie, Phase 3, notre tour, non conclusif).
+var _last_attack: Dictionary = {}
+
+# Rythme des combats (E8 §8.80) : paire (source→cible) du DERNIER combat animé → à partir du 2ᵉ
+# assaut consécutif sur la MÊME paire, le VS passe en version condensée (~1,2 s), même en cinématique.
+var _last_combat_pair: String = ""
+
+# SFX zone_alarm (E9 §8.81) : signature du dernier télégraphe joué (évite le rejeu à chaque refresh).
+var _last_zone_alarm_sig: String = ""
+
 func _ready():
 	button.pressed.connect(_on_debug_init)
 
@@ -116,6 +152,18 @@ func _ready():
 	hud.card_played.connect(_on_card_played)
 	hud.abandon_pressed.connect(_on_abandon_pressed)
 	hud.deploy_confirmed.connect(_on_deploy_confirmed)
+	# Roster de Guerre (E1 §8.73) : clic d'une ligne → inspecteur héros + focus caméra.
+	hud.roster_player_clicked.connect(_on_roster_player_clicked)
+	# Chrono SERVEUR (E3 §8.75) : messages légers timer_update → HUD (échéance + Time Bank).
+	NetworkManager.timer_updated.connect(_on_timer_update)
+	# Journal de Guerre 2.0 (E4 §8.76) : clic d'une entrée [url=<tid>] → focus caméra + flash.
+	hud.log_territory_clicked.connect(_on_log_territory_clicked)
+	# Commandement fluide (E7 §8.79) : ré-assaut + raccourcis de quantité.
+	hud.reassault_pressed.connect(_on_reassault_pressed)
+	hud.amount_quick.connect(_on_amount_quick)
+	# Bandeau de tour/phase (E3) : stinger haut-centre, déclenché par _maybe_show_banner().
+	_phase_banner = PhaseBannerScene.instantiate()
+	add_child(_phase_banner)
 
 	# Fenêtre de déplacement post-conquête (déclarée dans main.tscn, masquée par défaut).
 	%ConquerSlider.value_changed.connect(_on_conquer_slider_changed)
@@ -141,6 +189,14 @@ func _ready():
 # =========================================================
 # Accès / helpers d'état
 # =========================================================
+
+# Annulation au clavier (E7 §8.79) : ESC (action ui_cancel, mappée par défaut) = désélection de
+# la source d'attaque/mouvement — équivalent d'un clic dans le vide (réutilise _clear_source).
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and _source != "":
+		_clear_source()
+		_update_instruction()
+		get_viewport().set_input_as_handled()
 
 func _my_id() -> int:
 	return AuthManager.user_id
@@ -197,8 +253,14 @@ func _on_territory_clicked(tid: String):
 		return
 	# Phases de déploiement (placement initial OU renforts Phase 2) : le clic gauche ALIMENTE le
 	# tampon local (+1) au lieu d'envoyer au serveur — l'envoi se fait au clic « Confirmer » (§8.26).
+	# Raccourcis quantité (E7 §8.79) : Shift = +5, Ctrl = MAX (tout le stock restant) sur le clic.
 	if _in_deploy_mode():
-		_buffer_add(tid, 1)
+		var step := 1
+		if Input.is_key_pressed(KEY_CTRL):
+			step = maxi(1, _deploy_quota() - _pending_total())
+		elif Input.is_key_pressed(KEY_SHIFT):
+			step = 5
+		_buffer_add(tid, step)
 		return
 	if GameState.stage == "placement":
 		hud.add_log("⏳ Pas votre tour de placement.")
@@ -250,12 +312,68 @@ func _do_attack_click(tid: String):
 		# les jets de dés n'existent que dans la réponse du moteur.
 		# Cible ennemie : on attaque avec le max de dés possibles (1-3).
 		var dice = clampi(_garrison(_source) - 1, 1, 3)
+		# Ré-assaut (E7 §8.79) : on mémorise ce couple pour rejouer l'assaut d'un clic.
+		_last_attack = {"source": _source, "target": tid}
 		NetworkManager.send_action("attack_territory", {
 			"attacker_territory_id": _source,
 			"defender_territory_id": tid,
 			"attacker_dice": dice,
 		})
 		_clear_source()
+
+# =========================================================
+# Commandement fluide (E7 §8.79) — ré-assaut, raccourcis quantité, ESC
+# =========================================================
+
+# Ré-assaut d'un clic : rejoue le DERNIER assaut si toujours légal (re-testé à chaque état reçu
+# par _refresh_reassault). Le serveur re-valide de toute façon.
+func _on_reassault_pressed() -> void:
+	if not _reassault_legal():
+		return
+	var src := str(_last_attack.get("source", ""))
+	var tgt := str(_last_attack.get("target", ""))
+	var dice = clampi(_garrison(src) - 1, 1, 3)
+	NetworkManager.send_action("attack_territory", {
+		"attacker_territory_id": src, "defender_territory_id": tgt, "attacker_dice": dice})
+
+# Le dernier assaut est-il encore rejouable ? Source à moi ≥ 2, cible toujours ennemie et
+# adjacente, Phase 3, notre tour, aucune fenêtre bloquante.
+func _reassault_legal() -> bool:
+	if _last_attack.is_empty() or not _is_playing_my_turn() \
+			or int(GameState.current_phase) != 3 or _input_blocked():
+		return false
+	var src := str(_last_attack.get("source", ""))
+	var tgt := str(_last_attack.get("target", ""))
+	if _owner(src) != _my_id() or _garrison(src) < 2:
+		return false
+	var to = _terr(tgt).get("owner_id")
+	if to == null or int(to) == _my_id():
+		return false
+	return MapData.are_adjacent(src, tgt, GameState.map_id)
+
+# Rafraîchit le bouton « RÉ-ASSAUT » selon la légalité courante (appelé depuis _refresh).
+func _refresh_reassault() -> void:
+	if _reassault_legal():
+		hud.set_reassault(true, _territory_name(str(_last_attack.get("source", ""))),
+			_territory_name(str(_last_attack.get("target", ""))))
+	else:
+		hud.set_reassault(false)
+
+# Raccourci de quantité (E7 §8.79) : en Phase 4 (mouvement) ajuste %AmountSpin (+1/+5/MAX = tout
+# le stock déplaçable de la source sélectionnée). Hors mouvement, sans effet ciblé (les
+# déploiements passent par le clic-territoire Shift/Ctrl).
+func _on_amount_quick(delta: int) -> void:
+	if GameState.stage != "playing" or int(GameState.current_phase) != 4:
+		return
+	var spin: SpinBox = hud.get_node("%AmountSpin")
+	if delta < 0:
+		# MAX : garnison de la source − 1 (au moins 1 doit rester), sinon le plafond du spin.
+		var maxv := int(spin.max_value)
+		if _source != "":
+			maxv = maxi(1, _garrison(_source) - 1)
+		spin.value = maxv
+	else:
+		spin.value = min(spin.value + delta, spin.max_value)
 
 func _do_move_click(tid: String):
 	if _source == "":
@@ -286,12 +404,28 @@ func _do_move_click(tid: String):
 func _select_source(tid: String):
 	_source = tid
 	board.set_selected_source(tid)
+	# Surlignage des cibles valides (E7 §8.79) : en Phase 3, on éclaire les cibles légales
+	# (adjacentes ennemies) d'un liseré cramoisi + on désature le reste. Aucun effet hors Phase 3.
+	if GameState.stage == "playing" and int(GameState.current_phase) == 3:
+		board.set_attack_context(tid, _valid_attack_targets(tid))
 
 func _clear_source():
 	_source = ""
 	board.set_selected_source("")
+	board.clear_attack_context()
 	# Prévision de combat (G4 §8.63) : plus de source → plus de prévision affichable.
 	hud.hide_forecast()
+
+# Cibles d'attaque LÉGALES depuis une source (E7 §8.79) : territoires ADJACENTS (carte courante
+# G5) appartenant à un AUTRE joueur. Mêmes règles que le serveur re-valide (§4.2). La garnison
+# ≥ 2 est une contrainte de la SOURCE (vérifiée à sa sélection), pas des cibles.
+func _valid_attack_targets(source_tid: String) -> Array:
+	var out: Array = []
+	for tid in MapData.neighbors_of(source_tid, GameState.map_id):
+		var o = _terr(str(tid)).get("owner_id")
+		if o != null and int(o) != _my_id():
+			out.append(str(tid))
+	return out
 
 # =========================================================
 # Prévision de combat (G4 §8.63) — survol d'une cible en Phase 3
@@ -336,9 +470,12 @@ func _on_territory_hovered(tid: String) -> void:
 	var def_mods := _faction_modifiers(str(def_state.get("faction", "")))
 	var odds := CombatOdds.conquest_probability(att_units, def_units, atk_mods, def_mods)
 	hud.show_forecast(float(odds.get("win_prob", 0.0)), float(odds.get("exp_att_losses", 0.0)))
+	# Flèche d'intention (E7 §8.79) : source → cible survolée (complète la prévision G4).
+	board.set_intent_arrow(tid)
 
 func _on_territory_unhovered(_tid: String) -> void:
 	hud.hide_forecast()
+	board.clear_intent_arrow()
 
 # Modificateurs de faction par id (miroir du registre backend §4.3), lus du .tres et mis en cache.
 # Même scan robuste export-safe que _faction_info (.remap, duck-typing). {} si faction inconnue.
@@ -397,8 +534,9 @@ func _pending_total() -> int:
 		s += int(v)
 	return s
 
-# Ajoute (delta=+1) ou retire (delta=-1) une troupe en attente sur un territoire ALLIÉ, sans
-# dépasser le quota. Met à jour le plateau (badge "+X") et l'état du bouton « Confirmer ».
+# Ajoute (delta>0 : +N, BORNÉ au stock restant — E7 §8.79 : Shift=+5, Ctrl=MAX) ou retire
+# (delta<0 : −1) des troupes en attente sur un territoire ALLIÉ, sans dépasser le quota. Met à
+# jour le plateau (badge "+X") et l'état du bouton « Confirmer ».
 func _buffer_add(tid: String, delta: int) -> void:
 	if _owner(tid) != _my_id():
 		if delta > 0:
@@ -406,10 +544,11 @@ func _buffer_add(tid: String, delta: int) -> void:
 		return
 	var cur := int(pending_deployments.get(tid, 0))
 	if delta > 0:
-		if _pending_total() >= _deploy_quota():
+		var remaining := _deploy_quota() - _pending_total()
+		if remaining <= 0:
 			hud.add_log("⛔ Quota atteint (%d troupe(s))." % _deploy_quota())
 			return
-		cur += 1
+		cur += mini(delta, remaining)   # +1 / +5 / MAX (jamais au-delà du stock)
 	else:
 		cur -= 1
 	if cur <= 0:
@@ -549,12 +688,18 @@ func _deferred_refresh():
 	_refresh()
 
 func _on_game_event(event):
-	hud.add_log(_format_event(event))
-	# Messages système DIFFUSÉS attachés à l'évènement (ex. immunité du Culte de l'Isotope, §8.3) :
-	# journalisés tels quels (BBCode autorisé, le journal est un RichTextLabel).
-	if typeof(event) == TYPE_DICTIONARY:
-		for m in event.get("system_messages", []):
-			hud.add_log(str(m))
+	# Journal de Guerre 2.0 (E4 §8.76) : parsing structuré (war_feed — catégories, [url=<tid>],
+	# system_messages embarqués) + tics de zone DÉRIVÉS + kill feed (entrées majeures) + toast
+	# défensif. Remplace l'ancien add_log(_format_event) — le texte legacy reste le repli (ctx).
+	var entries: Array = WarFeed.parse(event, _feed_ctx(event))
+	entries.append_array(WarFeed.zone_entries(_derive_zone_ticks(event)))
+	hud.add_feed_entries(entries)
+	for e in entries:
+		if typeof(e) == TYPE_DICTIONARY and bool(e.get("major", false)):
+			hud.push_kill_feed(str(e.get("rich_text", "")))
+	_maybe_defense_toast(event)
+	# Feedback sensoriel (E9 §8.81) : SFX + VFX ponctuels aux moments qui comptent.
+	_play_event_feedback(event)
 	# Phase 0 (§8.31) : suivi du compteur « X/Y joueurs ont validé » pour l'affichage d'attente
 	# (le rafraîchissement d'état différé qui suit appellera _update_instruction avec ces valeurs).
 	if typeof(event) == TYPE_DICTIONARY and str(event.get("event_type", "")) == "blind_deploy_submitted":
@@ -707,11 +852,13 @@ func _on_spy_target_chosen(target_id: int) -> void:
 	%SpyDialog.visible = false
 	_awaiting_spy = false
 
-# Réponse PRIVÉE du serveur à l'espionnage (reçue uniquement par l'espion, §8.3). On l'affiche
-# en VIOLET dans le chat "Privé" (et dans le journal militaire) — le secret n'est pas diffusé.
+# Réponse PRIVÉE du serveur à l'espionnage (reçue uniquement par l'espion, §8.3). Affichée dans
+# le chat "Privé" ET le journal militaire — le secret n'est pas diffusé. Unification E1 : pseudo
+# de la cible en couleur plateau (_bb_pseudo) ; la description est ÉCHAPPÉE (elle peut contenir
+# le pseudo d'un joueur — objectif « éliminer X » — donc des « [ » hostiles, piège n° 1).
 func _on_spy_result(target_player_id: int, description: String) -> void:
-	var line := "[color=purple]L'objectif de %s est : %s[/color]" % [
-		_display_name(target_player_id), description]
+	var line := "🕵 L'objectif de %s est : [color=#c9a0ff]%s[/color]" % [
+		_bb_pseudo(target_player_id), str(description).replace("[", "[lb]")]
 	hud.add_chat_message("prive", line)
 	hud.add_log(line)
 
@@ -777,6 +924,15 @@ func _display_name(pid: int) -> String:
 	if is_bot:
 		return "[IA] Bot %d" % absi(pid)
 	return "Joueur %d" % GameState.player_number(pid)
+
+# Pseudo PRÊT pour le BBCode (journal militaire / chat) — unification E1 §8.73 : résolu
+# (_display_name), échappé « [ » → « [lb] » (anti-injection §8.33 ; le préfixe [IA] des bots
+# reste rendu tel quel) puis colorisé à la couleur PLATEAU du joueur (board.get_player_color,
+# source unique). Généralisation du pattern historique de _on_chat_message : TOUT pseudo injecté
+# dans un RichTextLabel passe par ici.
+func _bb_pseudo(pid) -> String:
+	var pseudo := _display_name(int(pid)).replace("[", "[lb]")
+	return hud.color_pseudo(pseudo, board.get_player_color(int(pid)))
 
 # Infos de faction du joueur LOCAL (nom + description du pouvoir) lues de son .tres, pour le tooltip
 # du HUD. Scanne resources/factions/*.tres avec la même robustesse que board._load_faction_accents
@@ -859,23 +1015,30 @@ func _extract_power(desc: String) -> String:
 # Inspecteur Tactique de Territoire (§1) : résout les données publiques du territoire cliqué et les
 # pousse au HUD (View pure). Propriétaire neutre -> « NEUTRE » gris acier.
 func _push_inspector(tid: String) -> void:
-	var owner_id := _owner(tid)
+	# Propriétaire RÉEL du territoire : seul null = NEUTRE. owner_id peut être NÉGATIF (bot
+	# G2 §8.72) — l'ancien test `>= 0` classait à tort les territoires de bots comme neutres.
+	var raw_owner = _terr(tid).get("owner_id")
+	var has_owner: bool = raw_owner != null
+	var owner_id: int = int(raw_owner) if has_owner else -1
 	var owner_name := "NEUTRE"
 	var owner_color := Color("8a97a5")
-	if owner_id >= 0:
+	if has_owner:
 		owner_name = _display_name(owner_id)
 		owner_color = board.get_player_color(owner_id)
 	hud.set_territory_inspector({
 		"name": _territory_name(tid),
 		"owner_name": owner_name,
 		"owner_color": owner_color,
+		# E1 §8.73 : l'Inspecteur présente le propriétaire en player_chip (couleur plateau +
+		# pseudo + faction) ; null = neutre → le HUD garde son label nu.
+		"owner_id": owner_id if has_owner else null,
 		"troops": _garrison(tid),
 		"contaminated": board.is_contaminated(tid),
 	})
 	# Inspection adverse (sprint RPG, Objectif 5b) : si le territoire appartient à un AUTRE joueur
 	# doté d'un héros, on pousse ses stats de héros (PUBLIQUES, aucune redaction). Sinon on masque
 	# l'inspecteur adverse (territoire neutre, vide, ou à soi).
-	if owner_id >= 0 and owner_id != _my_id() and GameState.has_hero(owner_id):
+	if has_owner and owner_id != _my_id() and GameState.has_hero(owner_id):
 		_inspected_enemy_id = owner_id  # mémorisé pour le rafraîchissement temps réel (_refresh)
 		hud.set_player_inspector({
 			"pseudo": owner_name,
@@ -890,6 +1053,34 @@ func _push_inspector(tid: String) -> void:
 func _on_board_cleared_inspector() -> void:
 	_inspected_enemy_id = -1
 	hud.hide_player_inspector()
+
+# Clic d'une ligne du Roster de Guerre (E1 §8.73) : ouvre l'inspecteur héros du joueur (existant,
+# réutilisé tel quel — suivi temps réel via _inspected_enemy_id) et focalise la caméra tactique
+# sur son territoire le plus garni (même cinétique + retour que le focus de combat).
+func _on_roster_player_clicked(pid: int) -> void:
+	if pid != _my_id() and GameState.has_hero(pid):
+		_inspected_enemy_id = pid
+		hud.set_player_inspector({
+			"pseudo": _display_name(pid),
+			"color": board.get_player_color(pid),
+			"hero": GameState.hero_of(pid),
+		})
+	# Territoire le plus garni du joueur — aucun territoire (éliminé rasé) → pas de focus.
+	var best_tid := ""
+	var best_garrison := -1
+	for tid in GameState.territories:
+		var t: Dictionary = GameState.territories.get(tid, {})
+		var o = t.get("owner_id")
+		if o != null and int(o) == pid and int(t.get("garrison", 0)) > best_garrison:
+			best_garrison = int(t.get("garrison", 0))
+			best_tid = str(tid)
+	if best_tid == "":
+		return
+	var pos: Vector2 = board.get_territory_position(best_tid)
+	if pos == Vector2.INF:
+		return
+	camera.focus_on_combat(pos, pos)
+	get_tree().create_timer(2.5).timeout.connect(camera.reset_view)
 
 # Rafraîchit en TEMPS RÉEL l'inspecteur héros adverse ouvert (PV/PP changent après un combat) : re-pousse
 # les stats publiques de la cible suivie à chaque mise à jour d'état. Appelé depuis _refresh.
@@ -963,11 +1154,76 @@ func _push_intel() -> void:
 	var zone: Dictionary = GameState.contamination_zone if typeof(GameState.contamination_zone) == TYPE_DICTIONARY else {}
 	var forecast_names: Array = []
 	var next_tids = zone.get("next_territories", [])
+	var mine_targeted := false
 	if typeof(next_tids) == TYPE_ARRAY:
 		for tid in next_tids:
 			var info: Dictionary = MapData.TERRITORIES.get(str(tid), {})
 			forecast_names.append(str(info.get("name", tid)))
+			if _owner(str(tid)) == _my_id():
+				mine_targeted = true
 	hud.set_zone_forecast(forecast_names)
+	# SFX zone_alarm (E9 §8.81) : le télégraphe annonce la PROCHAINE zone sur AU MOINS un de MES
+	# territoires. Joué une seule fois par nouveau télégraphe (signature) — pas à chaque refresh.
+	var sig := ",".join(PackedStringArray(forecast_names))
+	if mine_targeted and sig != _last_zone_alarm_sig:
+		AudioManager.play_sfx("zone_alarm")
+	_last_zone_alarm_sig = sig
+
+# War Room (E5 §8.77) : agrège les 8 compteurs publics de GameState.statistics + territoires
+# (module pur WarRoom) et la synthèse des continents DE LA CARTE COURANTE (G5 :
+# MapData.get_map(map_id).continent_territories), puis pousse au HUD (View pure §6.1).
+func _push_war_intel() -> void:
+	var rows: Array = WarRoom.player_rows(
+		GameState.players, GameState.territories, GameState.statistics)
+	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
+	var continents: Dictionary = {}
+	for cid in cont_terrs.keys():
+		continents[cid] = {
+			"name": str(MapData.CONTINENTS.get(cid, {}).get("name", cid)),
+			"tids": cont_terrs[cid],
+		}
+	hud.set_war_intel(rows, WarRoom.continent_rows(GameState.territories, continents))
+
+# Tracker d'objectif vivant (E6 §8.78) : résout le CONTEXTE public (mes territoires, mes
+# continents entièrement possédés, statut de la cible d'élimination) et pousse la progression
+# au HUD (module pur ObjectiveTracker). Notre propre objectif porte type/params/description
+# (§4.4) — aucune fuite : le nom de la cible est déjà dans notre description.
+func _push_objective_tracker() -> void:
+	var obj: Dictionary = GameState.objectives.get(str(_my_id()), {})
+	if typeof(obj) != TYPE_DICTIONARY or obj.is_empty():
+		hud.set_objective_progress({})
+		return
+	# Mes continents ENTIÈREMENT possédés (réutilise la synthèse E5, carte courante G5).
+	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
+	var my_continents := 0
+	for cid in cont_terrs.keys():
+		var tids: Array = cont_terrs[cid]
+		if tids.is_empty():
+			continue
+		var all_mine := true
+		for tid in tids:
+			var t: Dictionary = GameState.territories.get(str(tid), {})
+			var o = t.get("owner_id")
+			if o == null or int(o) != _my_id():
+				all_mine = false
+				break
+		if all_mine:
+			my_continents += 1
+	# Cible d'élimination (volet kill de l'objectif double) : id au 1er niveau des params (§8.61).
+	var target_id := int(obj.get("params", {}).get("target_id", -9999))
+	var target_alive := true
+	if GameState.players.has(str(target_id)):
+		var tp: Dictionary = GameState.players.get(str(target_id), {})
+		target_alive = str(tp.get("status", "alive")) != "eliminated" and not bool(tp.get("is_dead", false))
+	var ctx := {
+		"owned_count": WarRoom.territory_count(GameState.territories, _my_id()),
+		"continents_owned": my_continents,
+		"target_alive": target_alive,
+		"target_name": _display_name(target_id) if target_id != -9999 else "cible",
+	}
+	var data := ObjectiveTracker.progress(obj, ctx)
+	var tooltip := str(obj.get("description", "")) + "\n" + tr("OBJ_LAST_SURVIVOR_HINT")
+	hud.set_objective_progress(data, tooltip)
 
 # =========================================================
 # Résolution visuelle des combats (Split-Screen VS)
@@ -980,9 +1236,6 @@ func _play_combat_resolution(event: Dictionary) -> void:
 	if _combat_animating:
 		return # garde anti-empilement (un seul duel à l'écran)
 	_combat_animating = true
-	# Le Split-Screen VS sacralise l'affrontement des héros : on efface le HUD flottant pendant
-	# le duel (fondu 0,5 s, §8.29). La scène VS est enfant de Main (hors HUD) → elle reste visible.
-	hud.fade_ui_for_combat(true)
 
 	var atk_tid := str(event.get("attacker_territory_id", ""))
 	var def_tid := str(event.get("defender_territory_id", ""))
@@ -991,10 +1244,44 @@ func _play_combat_resolution(event: Dictionary) -> void:
 	var atk_owner = _displayed_owners.get(atk_tid, _owner(atk_tid))
 	var def_owner = _displayed_owners.get(def_tid, _owner(def_tid))
 
+	# Rythme des combats (E8 §8.80). Mode par implication (réglage combat_display) :
+	#   cinematique = plein écran pour TOUS ; rapide = plein écran pré-accéléré ×2,5 ;
+	#   bandeau = pour les combats où JE ne suis NI attaquant NI défenseur → bandeau compact
+	#             (pas de plein écran) ; mes propres combats restent plein écran.
+	var am_participant: bool = int(atk_owner) == _my_id() or int(def_owner) == _my_id()
+	var mode := str(SettingsManager.get_comfort("combat_display"))
+	# Chaîne de ré-assaut (E7) : 2ᵉ+ assaut consécutif sur la MÊME paire → version condensée.
+	var pair := "%s>%s" % [atk_tid, def_tid]
+	var condensed := pair == _last_combat_pair
+	_last_combat_pair = pair
+
+	if mode == "bandeau" and not am_participant:
+		# Bandeau compact (E8) : passe dans la MÊME file _combat_animating (durée plus courte) —
+		# AUCUN état ne se peint pendant une résolution (piège n° 4). HUD non masqué.
+		await _play_combat_banner(event, atk_owner, def_owner)
+		_combat_animating = false
+		if _refresh_pending:
+			_refresh_pending = false
+			_refresh()
+		return
+
+	# Le Split-Screen VS sacralise l'affrontement des héros : on efface le HUD flottant pendant
+	# le duel (fondu 0,5 s, §8.29). La scène VS est enfant de Main (hors HUD) → elle reste visible.
+	hud.fade_ui_for_combat(true)
+
 	var vs_screen := SplitScreenVSScene.instantiate()
 	add_child(vs_screen) # dernier enfant de Main -> dessiné au-dessus du HUD (surcouche)
 	# §3 Warzone : on transmet les pertes + le Time Bank. local_is_attacker = c'est NOTRE tour
 	# (l'attaquant est toujours le joueur courant) → seul l'attaquant local voit « TIME BANK +10s ».
+	# Garnisons « avant ➜ après » (E2 §8.74) : avant = snapshot AFFICHÉ pré-combat (exact même
+	# en cas de conquête) ; après = état courant (déjà post-combat). Repli avant = après + pertes
+	# (1er combat avant tout _refresh — jamais le cas en pratique, garde-fou).
+	var atk_g_after := _garrison(atk_tid)
+	var def_g_after := _garrison(def_tid)
+	var atk_g_before := int(_displayed_garrisons.get(atk_tid,
+		atk_g_after + int(event.get("attacker_losses", 0))))
+	var def_g_before := int(_displayed_garrisons.get(def_tid,
+		def_g_after + int(event.get("defender_losses", 0))))
 	vs_screen.start_combat_resolution(
 		_faction_of_player(atk_owner), _faction_of_player(def_owner),
 		event.get("attacker_rolls", []), event.get("defender_rolls", []),
@@ -1007,6 +1294,26 @@ func _play_combat_resolution(event: Dictionary) -> void:
 			# joueurs voient le skin de l'autre dans le Split-Screen VS (moment vitrine).
 			"attacker_skin": _equipped_skin_of(atk_owner),
 			"defender_skin": _equipped_skin_of(def_owner),
+			# --- E2 §8.74 : le combat raconte les HÉROS (Dictionary rétro-compatible). ---
+			"attacker_pid": int(atk_owner), "defender_pid": int(def_owner),
+			# Pseudo transmis SEULEMENT si le joueur existe (un owner -1 « neutre » afficherait
+			# sinon « [IA] Bot 1 ») ; pseudo vide → le VS garde ses rôles legacy (rétro-compat).
+			"attacker_name": _display_name(int(atk_owner)) \
+				if GameState.players.has(str(int(atk_owner))) else "",
+			"defender_name": _display_name(int(def_owner)) \
+				if GameState.players.has(str(int(def_owner))) else "",
+			"attacker_color": board.get_player_color(int(atk_owner)),
+			"defender_color": board.get_player_color(int(def_owner)),
+			# ⚠️ hero_of reflète l'état POST-combat : les PV pré-duel du défenseur se
+			# reconstituent par defender_pv + damage (champs du duel) — jamais d'état antérieur.
+			"attacker_hero": GameState.hero_of(int(atk_owner)),
+			"defender_hero": GameState.hero_of(int(def_owner)),
+			"hero_duel": event.get("hero_duel"),  # null si héros non initialisés (§8.61)
+			"attacker_garrison_before": atk_g_before, "attacker_garrison_after": atk_g_after,
+			"defender_garrison_before": def_g_before, "defender_garrison_after": def_g_after,
+			# Rythme (E8 §8.80) : "rapide" démarre pré-accéléré ; chaîne de ré-assaut = condensé.
+			"speed": 2.5 if mode == "rapide" else 1.0,
+			"condensed": condensed,
 		})
 	await vs_screen.animation_finished
 
@@ -1016,6 +1323,23 @@ func _play_combat_resolution(event: Dictionary) -> void:
 	if _refresh_pending:
 		_refresh_pending = false
 		_refresh()
+
+# Bandeau compact d'un combat où JE ne suis pas impliqué (E8 §8.80, mode "bandeau") : ~2,2 s
+# haut-centre — chips E1 des deux camps, dés figés, pertes, -PV héros. Le kill feed E4 complète.
+# Passe dans la MÊME file _combat_animating (durée courte) — aucun état ne se peint pendant.
+func _play_combat_banner(event: Dictionary, atk_owner, def_owner) -> void:
+	var duel = event.get("hero_duel")
+	hud.show_combat_banner({
+		"atk_pid": int(atk_owner), "def_pid": int(def_owner),
+		"atk_rolls": event.get("attacker_rolls", []),
+		"def_rolls": event.get("defender_rolls", []),
+		"atk_losses": int(event.get("attacker_losses", 0)),
+		"def_losses": int(event.get("defender_losses", 0)),
+		"hero_damage": int(duel.get("damage", 0)) if typeof(duel) == TYPE_DICTIONARY else 0,
+		"hero_died": bool(duel.get("hero_died", false)) if typeof(duel) == TYPE_DICTIONARY else false,
+		"conquered": bool(event.get("conquered", false)),
+	})
+	await get_tree().create_timer(2.2).timeout
 
 # Id de faction d'un joueur (clé "faction" du PlayerState diffusé par le serveur).
 # Les clés de GameState.players sont des STRINGS (JSON) et pid peut être un float : on
@@ -1066,7 +1390,8 @@ func _on_game_error(message: String):
 # déclenché par network_manager (game_state_updated émis dans le même message) : ici on
 # journalise, et si c'est NOUS on verrouille le bouton d'abandon (anti double-envoi).
 func _on_player_abandoned(player_id: int) -> void:
-	hud.add_log("[color=red]%s a abandonné ! Défense automatique activée.[/color]" % _display_name(player_id))
+	# Unification E1 : pseudo en couleur plateau (échappé), reste de la ligne en rouge charte.
+	hud.add_log("🏳 %s [color=#d6453f]a abandonné ! Défense automatique activée.[/color]" % _bb_pseudo(player_id))
 	if player_id == _my_id():
 		hud.lock_abandon_button()
 
@@ -1107,16 +1432,28 @@ func _refresh():
 	_push_intel()
 	# Tiroir « INTEL : FACTIONS » (§2) : pouvoirs passifs des factions en jeu (résolus, View pure).
 	_push_factions_intel()
+	# Tiroir « INTEL : GUERRE » (E5 §8.77) : rapports de force complets (War Room).
+	_push_war_intel()
+	# Tracker d'objectif vivant (E6 §8.78) : jauge de progression sous l'objectif secret.
+	_push_objective_tracker()
 	# Destinataires du chat privé (§8.33) : autres joueurs résolus en pseudo.
 	_push_chat_targets()
 	_update_instruction()
+	# Bandeaux de tour/phase (E3 §8.75) : stinger sur chaque changement détecté.
+	_maybe_show_banner()
 	# Bouton « CONFIRMER LE DÉPLOIEMENT » : visible/activé selon le mode déploiement et le quota.
 	_refresh_confirm_state()
-	# Snapshot des propriétaires tels qu'affichés à l'écran : lu par _play_combat_resolution
-	# pour identifier le défenseur PRÉ-combat (l'état réseau, lui, est déjà post-combat).
+	# Commandement fluide (E7 §8.79) : légalité du ré-assaut re-testée + coup de pouce de phase.
+	_refresh_reassault()
+	hud.pulse_next_phase(_no_action_possible())
+	# Snapshot des propriétaires ET garnisons tels qu'affichés à l'écran : lu par
+	# _play_combat_resolution pour identifier le défenseur et les garnisons PRÉ-combat
+	# (l'état réseau, lui, est déjà post-combat). Garnisons : E2 §8.74 (« avant ➜ après »).
 	_displayed_owners.clear()
+	_displayed_garrisons.clear()
 	for tid in GameState.territories:
 		_displayed_owners[tid] = _owner(tid)
+		_displayed_garrisons[tid] = _garrison(tid)
 	# Pop-ups des factions à états bloquants (§8.3) : affichées/masquées selon NOTRE état serveur
 	# (pending_eclipse_choice / pending_spy_choice). Idempotent — sans effet pour les autres tours.
 	_maybe_prompt_eclipse()
@@ -1125,6 +1462,162 @@ func _refresh():
 	_maybe_show_spectator()
 	if GameState.winner_id != null:
 		_show_victory()
+
+# =========================================================
+# Journal de Guerre 2.0 (E4 §8.76) — contexte de parsing, zone dérivée, toast, caméra
+# =========================================================
+
+# Feedback sensoriel (E9 §8.81) : SFX aux moments clés + VFX ponctuels (flash de conquête, tics
+# de zone, douleur du héros). Les VFX obéissent au réglage reduced_motion (E10) ; les SFX non
+# (ils passent par le bus SFX, coupé via le volume). Appelé pour CHAQUE game_event.
+func _vfx_enabled() -> bool:
+	return not bool(SettingsManager.get_comfort("reduced_motion"))
+
+func _play_event_feedback(event) -> void:
+	if typeof(event) != TYPE_DICTIONARY:
+		return
+	match str(event.get("event_type", "")):
+		"attack_result":
+			var atk_tid := str(event.get("attacker_territory_id", ""))
+			var def_tid := str(event.get("defender_territory_id", ""))
+			# Douleur du héros (VFX) : NOTRE héros défenseur encaisse des dégâts.
+			var duel = event.get("hero_duel")
+			if typeof(duel) == TYPE_DICTIONARY and int(duel.get("damage", 0)) > 0 \
+					and int(_displayed_owners.get(def_tid, -9999)) == _my_id():
+				if _vfx_enabled():
+					hud.pulse_hero_pain()
+			# Conquête : fanfare + flash radial à l'accent du conquérant.
+			if bool(event.get("conquered", false)):
+				AudioManager.play_sfx("conquest")
+				if _vfx_enabled():
+					var conqueror := int(_displayed_owners.get(atk_tid, _owner(atk_tid)))
+					board.conquest_flash(def_tid, board.get_player_color(conqueror))
+		"card_played", "card_kept":
+			AudioManager.play_sfx("card_draw")
+	# Tics de zone (VFX) : flotteur -1 vert sur CHAQUE territoire touché (mêmes ticks dérivés
+	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_intel).
+	if _vfx_enabled():
+		for t in _derive_zone_ticks(event):
+			if typeof(t) == TYPE_DICTIONARY:
+				board.spawn_zone_tick(str(t.get("tid", "")))
+
+# Contexte de résolution injecté à war_feed.parse : pseudos BBCode (E1), noms de territoires,
+# texte legacy en repli, et propriétaires PRÉ-combat pour attack_result (l'état reçu est déjà
+# post-combat — même source que le VS, _displayed_owners).
+func _feed_ctx(event) -> Dictionary:
+	var ctx := {
+		"bb": Callable(self, "_bb_pseudo"),
+		"tname": Callable(self, "_territory_name"),
+		"fallback": _format_event(event),
+	}
+	if typeof(event) == TYPE_DICTIONARY and str(event.get("event_type", "")) == "attack_result":
+		var atk_tid := str(event.get("attacker_territory_id", ""))
+		var def_tid := str(event.get("defender_territory_id", ""))
+		var atk_pid := int(_displayed_owners.get(atk_tid, _owner(atk_tid)))
+		var def_pid := int(_displayed_owners.get(def_tid, _owner(def_tid)))
+		ctx["atk_pid"] = atk_pid if GameState.players.has(str(atk_pid)) else -9999
+		ctx["def_pid"] = def_pid if GameState.players.has(str(def_pid)) else -9999
+	return ctx
+
+# Dégâts de zone DÉRIVÉS (E4 §8.76) : le serveur n'itemise pas les « −1 » de contamination — on
+# les déduit en comparant la garnison AFFICHÉE (snapshot pré-évènement, même mécanique que
+# _displayed_owners) à l'état reçu, pour les seuls territoires de la zone COURANTE, sur les
+# évènements de TOUR (les dégâts s'appliquent à l'entame du tour, engine._end_turn). Les combats
+# passent par attack_result (exclu) → aucune confusion possible.
+func _derive_zone_ticks(event) -> Array:
+	if typeof(event) != TYPE_DICTIONARY:
+		return []
+	var etype := str(event.get("event_type", ""))
+	if etype != "turn_passed" and etype != "turn_timeout" and etype != "blind_deploy_resolved":
+		return []
+	var zone: Dictionary = GameState.contamination_zone \
+		if typeof(GameState.contamination_zone) == TYPE_DICTIONARY else {}
+	var tids = zone.get("territories", [])
+	if typeof(tids) != TYPE_ARRAY:
+		return []
+	var ticks: Array = []
+	for tid in tids:
+		var key := str(tid)
+		if not _displayed_garrisons.has(key):
+			continue
+		var before := int(_displayed_garrisons.get(key, 0))
+		if _garrison(key) < before:
+			ticks.append({"tid": key, "name": _territory_name(key),
+				"ravaged": _garrison(key) <= 0 and _terr(key).get("owner_id") == null})
+	return ticks
+
+# Toast défensif (E4 §8.76) : un attack_result frappe un territoire à NOUS pendant le tour d'un
+# AUTRE → toast + SFX (les données sont déjà diffusées à tous — pure mise en scène locale).
+func _maybe_defense_toast(event) -> void:
+	if typeof(event) != TYPE_DICTIONARY or str(event.get("event_type", "")) != "attack_result":
+		return
+	if int(GameState.current_player_id) == _my_id():
+		return
+	var def_tid := str(event.get("defender_territory_id", ""))
+	if int(_displayed_owners.get(def_tid, -9999)) != _my_id():
+		return
+	var atk_tid := str(event.get("attacker_territory_id", ""))
+	var atk_owner := int(_displayed_owners.get(atk_tid, _owner(atk_tid)))
+	var line: String
+	if bool(event.get("conquered", false)):
+		line = tr("TOAST_TERRITORY_LOST") % [_territory_name(def_tid).to_upper(), _bb_pseudo(atk_owner)]
+	else:
+		line = tr("TOAST_UNDER_ATTACK") % [_territory_name(def_tid).to_upper(), _bb_pseudo(atk_owner),
+			int(event.get("defender_losses", 0))]
+	hud.show_defense_toast(line)
+	AudioManager.play_sfx("under_attack")
+
+# Clic d'une entrée [url=<tid>] du journal (E4) : focus caméra + flash bref du territoire —
+# le journal devient un outil de NAVIGATION.
+func _on_log_territory_clicked(tid: String) -> void:
+	var pos: Vector2 = board.get_territory_position(tid)
+	if pos == Vector2.INF:
+		return
+	board.flash_territory(tid)
+	camera.focus_on_combat(pos, pos)
+	get_tree().create_timer(2.5).timeout.connect(camera.reset_view)
+
+# =========================================================
+# Chrono SERVEUR & bandeaux de tour/phase (E3 §8.75)
+# =========================================================
+
+# Message léger timer_update : pousse l'échéance serveur au HUD (le flotteur « +N s » du gain de
+# Time Bank est géré par hud.apply_timer_update, qui connaît l'échéance précédente).
+func _on_timer_update(deadline_epoch: float, _budget_seconds: int, reason: String,
+		server_time: float) -> void:
+	hud.apply_timer_update(deadline_epoch, reason, server_time)
+
+# Stinger de tour/phase — détection de changement sur l'état reçu (appelé par _refresh, donc
+# JAMAIS pendant une résolution de combat : le refresh y est différé, piège n° 4). Priorité :
+# nouveau tour (« À VOUS DE JOUER » / « TOUR DE X ») > nouvelle phase (« PHASE : X »).
+func _maybe_show_banner() -> void:
+	if _phase_banner == null:
+		return
+	if GameState.stage != "playing" or GameState.winner_id != null:
+		_banner_turn_key = ""
+		_banner_phase = -1
+		return
+	var cur_pid := int(GameState.current_player_id)
+	var turn_key := "%s|%s" % [str(GameState.current_turn), str(cur_pid)]
+	var phase := int(GameState.current_phase)
+	if turn_key != _banner_turn_key:
+		_banner_turn_key = turn_key
+		_banner_phase = phase
+		if cur_pid == _my_id():
+			_phase_banner.show_banner(tr("BANNER_YOUR_TURN"), Color("e0b249"))
+			AudioManager.play_sfx("your_turn")
+			# Fenêtre en arrière-plan → attire l'attention (barre des tâches) : on ne rate
+			# plus jamais le début de son tour.
+			if not get_window().has_focus():
+				DisplayServer.window_request_attention()
+		else:
+			_phase_banner.show_banner(tr("BANNER_TURN_OF") % _display_name(cur_pid).to_upper(),
+				board.get_player_color(cur_pid))
+		return
+	if phase != _banner_phase:
+		_banner_phase = phase
+		_phase_banner.show_banner(tr("BANNER_PHASE") % hud.phase_name(phase).to_upper(),
+			Color("36c5d9"))
 
 # =========================================================
 # Mode OBSERVATEUR (G3 §8.70) — bandeau K.I.A. + caméra libre + re-queue
@@ -1210,25 +1703,144 @@ func _show_operation_report() -> void:
 	report.back_to_lobby.connect(_on_back_to_lobby)
 	# « ⟳ REJOUER » du débriefing (G3 §8.70) : re-queue en 1 clic pour TOUS les joueurs.
 	report.requeue_requested.connect(_on_spectator_requeue)
+	# Inspection du champ de bataille (E11 §8.83) : rapport/flou masqués → caméra LIBRE sur
+	# l'état final (zéro réseau) ; retour → caméra pilotée à nouveau.
+	report.battlefield_inspect.connect(func(on: bool) -> void: camera.set_free_navigation(on))
 	if not NetworkManager.requeue_failed.is_connected(_on_requeue_failed):
 		NetworkManager.requeue_failed.connect(_on_requeue_failed)
 	# Récompenses du joueur LOCAL (Économie §8.47) : déjà reçues via match_over → animées d'emblée ;
 	# sinon vides ici, et poussées plus tard par _on_match_over (course réseau état/clôture).
-	report.populate({
+	# E11 : + podium (si le classement est déjà connu), timeline de domination et stats perso.
+	var data := {
 		"title": title,
 		"title_color": title_color,
 		"stagnation": stagnation,
 		"attrition": attrition,
 		"worst_pseudo": worst_pseudo,
 		"rewards": _local_rewards(),
-	})
+		"timeline": _timeline_series(),
+		"my_stats": _my_match_stats(),
+	}
+	if not _match_rankings.is_empty():
+		data["podium"] = _podium_rows()
+	report.populate(data)
+	if not _match_rankings.is_empty():
+		_fetch_missions_for_report()
 
 # Fin de partie (Économie §8.47) : on mémorise les gains diffusés et, si le Rapport Post-Op est DÉJÀ
 # affiché (game_over reçu après l'état winner_id), on lui pousse les récompenses du joueur local.
-func _on_match_over(_winner_id: int, _match_type: String, _rankings: Array, match_rewards: Dictionary) -> void:
+# E11 §8.83 : rankings ENFIN consommé (podium + objectifs révélés) + pont missions.
+func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match_rewards: Dictionary) -> void:
 	_match_rewards = match_rewards
+	_match_rankings = rankings if typeof(rankings) == TYPE_ARRAY else []
 	if _report_node != null and is_instance_valid(_report_node):
 		_report_node.populate_rewards(_local_rewards())
+		if not _match_rankings.is_empty():
+			_report_node.populate_podium(_podium_rows())
+			_fetch_missions_for_report()
+
+# =========================================================
+# Débriefing 2.0 (E11 §8.83) — résolveurs du Rapport Post-Op (View pure §6.1)
+# =========================================================
+
+# Lignes du podium : classement (rankings), objectifs révélés (bloc PUBLIC objectives_reveal),
+# titres honorifiques (formules statiques du rapport, départage pid croissant), stats publiques
+# de partie — et MES points de match seuls (redaction serveur : ceux des autres sont inconnus).
+func _podium_rows() -> Array:
+	var reveal_by_pid := {}
+	for r in NetworkManager.last_objectives_reveal:
+		if typeof(r) == TYPE_DICTIONARY:
+			reveal_by_pid[int(r.get("player_id", -9999))] = r
+	var pids: Array = []
+	for p in _match_rankings:
+		pids.append(int(p))
+	var titles: Dictionary = OperationReportScript.honor_titles(GameState.statistics, pids)
+	var my_rewards := _local_rewards()
+	var rows: Array = []
+	for i in range(pids.size()):
+		var pid := int(pids[i])
+		var rev: Dictionary = reveal_by_pid.get(pid, {})
+		rows.append({
+			"pid": pid,
+			"medal": OperationReportScript.medal_for(i),
+			"titles": titles.get(pid, []),
+			"objective": str(rev.get("description", "")),
+			"completed": bool(rev.get("completed", false)),
+			"has_reveal": not rev.is_empty(),
+			"kills": WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", pid),
+			"conquests": WarRoom.stat_of(GameState.statistics, "conquests_by_player", pid),
+			"eliminations": WarRoom.stat_of(GameState.statistics, "eliminations_by_player", pid),
+			"points": int(my_rewards.get("match_points", -1)) if pid == _my_id() else -1,
+		})
+	return rows
+
+# Séries de la timeline de domination (statistics.territory_history, diffusé AVANT le game_over).
+# Historique absent/trop court (serveur antérieur, partie éclair) → [] (section masquée §9.2).
+func _timeline_series() -> Array:
+	var history = GameState.statistics.get("territory_history", [])
+	if typeof(history) != TYPE_ARRAY or history.size() < 2:
+		return []
+	var series: Array = []
+	for k in GameState.players:
+		var pid := int(k)
+		var pts: Array = []
+		for snap in history:
+			if typeof(snap) == TYPE_DICTIONARY:
+				pts.append(int(snap.get(str(pid), 0)))
+		series.append({"color": board.get_player_color(pid), "points": pts})
+	return series
+
+# Stats personnelles de la partie (colonne MA PERFORMANCE) + état final de MON héros.
+func _my_match_stats() -> Dictionary:
+	var pid := _my_id()
+	var s: Dictionary = GameState.statistics
+	var hero: Dictionary = GameState.hero_of(pid)
+	var hero_line := ""
+	if int(hero.get("pv_max", 0)) > 0:
+		if bool(hero.get("is_dead", false)):
+			hero_line = tr("REPORT_HERO_DOWN")
+		else:
+			hero_line = "PV %d/%d · PP %+d · NIV %d" % [
+				int(hero.get("pv_current", 0)), int(hero.get("pv_max", 0)),
+				int(hero.get("pp_current", 0)), int(hero.get("level", 1))]
+	return {
+		"kills": WarRoom.stat_of(s, "combat_kills_by_player", pid),
+		"losses": WarRoom.stat_of(s, "losses_by_player", pid),
+		"conquests": WarRoom.stat_of(s, "conquests_by_player", pid),
+		"eliminations": WarRoom.stat_of(s, "eliminations_by_player", pid),
+		"cards_played": WarRoom.stat_of(s, "cards_played_by_player", pid),
+		"hero_damage": WarRoom.stat_of(s, "hero_damage_by_player", pid),
+		"hero_kills": WarRoom.stat_of(s, "hero_kills_by_player", pid),
+		"zone_deaths": WarRoom.stat_of(s, "zone_kills_by_player", pid),
+		"hero_line": hero_line,
+	}
+
+# Pont missions (M2 §8.65 — E11) : un fetch UNIQUE après le game_over, résumé poussé au rapport
+# au moment exact où le joueur est réceptif (boucle de rétention).
+func _fetch_missions_for_report() -> void:
+	if _missions_fetched_for_report:
+		return
+	_missions_fetched_for_report = true
+	if not NetworkManager.missions_loaded.is_connected(_on_report_missions):
+		NetworkManager.missions_loaded.connect(_on_report_missions)
+	NetworkManager.fetch_missions()
+
+func _on_report_missions(data: Dictionary) -> void:
+	if _report_node == null or not is_instance_valid(_report_node):
+		return
+	var all_missions: Array = []
+	var daily = data.get("daily", [])
+	var weekly = data.get("weekly", [])
+	if typeof(daily) == TYPE_ARRAY:
+		all_missions.append_array(daily)
+	if typeof(weekly) == TYPE_ARRAY:
+		all_missions.append_array(weekly)
+	var progressed := 0
+	for m in all_missions:
+		if typeof(m) == TYPE_DICTIONARY and int(m.get("progress", 0)) > 0 \
+				and not bool(m.get("claimed", false)):
+			progressed += 1
+	_report_node.set_missions_summary(progressed, int(data.get("claimable_count", 0)))
 
 # Récompenses du joueur LOCAL depuis le cache (repli sur le dernier reçu par NetworkManager). {} si
 # absentes (le rapport s'affiche alors sans bloc Récompenses, sans bloquer le débriefing).
@@ -1293,6 +1905,26 @@ func _update_instruction():
 		_:
 			hud.set_instruction("")
 
+# Coup de pouce de phase (E7 §8.79) : AUCUNE action possible dans la phase courante ? (Phase 3 :
+# pas une seule attaque légale ; Phase 4 : pas un seul mouvement légal.) Calcul LOCAL, indicatif —
+# le serveur reste seul juge (§8.48). Faux hors de notre tour / hors phases 3-4 (rien à signaler).
+func _no_action_possible() -> bool:
+	if not _is_playing_my_turn() or _input_blocked() or GameState.winner_id != null:
+		return false
+	var phase := int(GameState.current_phase)
+	if phase != 3 and phase != 4:
+		return false
+	for tid in GameState.territories:
+		if _owner(str(tid)) != _my_id() or _garrison(str(tid)) < 2:
+			continue
+		for n in MapData.neighbors_of(str(tid), GameState.map_id):
+			var o = _terr(str(n)).get("owner_id")
+			if phase == 3 and o != null and int(o) != _my_id():
+				return false  # au moins une attaque possible
+			if phase == 4 and o != null and int(o) == _my_id():
+				return false  # au moins un mouvement allié possible
+	return true
+
 # Nombre de territoires ciblés par un évènement de déploiement en masse (§8.26).
 func _deployments_count(e: Dictionary) -> int:
 	var d = e.get("deployments", {})
@@ -1330,7 +1962,7 @@ func _format_event(e) -> String:
 				" (délai écoulé)" if e.get("forced") else "")
 		"turn_timeout":
 			# Minuterie de tour expirée (60 s) : le serveur a passé le tour d'office (§8.31).
-			return "⏰ Temps écoulé — tour de %s passé d'office." % _display_name(int(e.get("player_id", -1)))
+			return "⏰ Temps écoulé — tour de %s passé d'office." % _bb_pseudo(int(e.get("player_id", -1)))
 		"initial_units_placed":
 			# Déploiement en masse (§8.26) : `deployments` = dict {tid: nb} ; l'ancien format
 			# unitaire (territory_id/amount) reste affichable proprement.
@@ -1365,7 +1997,7 @@ func _format_event(e) -> String:
 			return "🌍 " + str(e.get("message", "Partie initialisée."))
 		"game_over":
 			return "🏁 Partie terminée — vainqueur : %s (%s)" % [
-				_display_name(int(e.get("winner_id", -1))), str(e.get("match_type"))]
+				_bb_pseudo(int(e.get("winner_id", -1))), str(e.get("match_type"))]
 		_:
 			return str(e.get("event_type", e))
 
