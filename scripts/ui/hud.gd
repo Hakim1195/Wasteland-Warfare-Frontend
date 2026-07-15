@@ -818,7 +818,7 @@ func _build_war_intel() -> void:
 
 	_war_intel_panel = PanelContainer.new()
 	_war_intel_panel.visible = false
-	_war_intel_panel.custom_minimum_size = Vector2(252, 0)
+	_war_intel_panel.custom_minimum_size = Vector2(300, 0)
 	_war_intel_panel.add_theme_stylebox_override("panel", _hero_panel_style())
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 6)
@@ -829,7 +829,7 @@ func _build_war_intel() -> void:
 	title.add_theme_font_size_override("font_size", 15)
 	col.add_child(title)
 	_war_intel_players = VBoxContainer.new()
-	_war_intel_players.add_theme_constant_override("separation", 5)
+	_war_intel_players.add_theme_constant_override("separation", 8)
 	col.add_child(_war_intel_players)
 	var sep := HSeparator.new()
 	col.add_child(sep)
@@ -839,7 +839,7 @@ func _build_war_intel() -> void:
 	ctitle.add_theme_font_size_override("font_size", 11)
 	col.add_child(ctitle)
 	_war_intel_continents = VBoxContainer.new()
-	_war_intel_continents.add_theme_constant_override("separation", 2)
+	_war_intel_continents.add_theme_constant_override("separation", 3)
 	col.add_child(_war_intel_continents)
 
 	# Insertion APRÈS le tiroir Factions (le widget est un VBox : bouton puis panneau).
@@ -880,64 +880,132 @@ func set_war_intel(rows: Array, continents: Array) -> void:
 	for cr in continents:
 		_war_intel_continents.add_child(_make_continent_row(cr))
 
-# Carte joueur (2 lignes) : [chip | 🏴 n | barre de menace] puis [compteurs compacts | ratio].
+# Carte joueur (E-visuel) : en-tête [chip | 🏴 terr | barre MENACE étiquetée] puis une GRILLE de
+# pastilles ÉTIQUETÉES (ligne 1 = Combat, ligne 2 = Héros/Zone) et le ratio V/D chiffré. Chaque
+# pastille porte son tooltip → fini la « soupe d'emojis » compressée, tout est lisible sans survol.
 func _make_war_row(r: Dictionary, max_threat: int) -> Control:
 	var card := VBoxContainer.new()
-	card.add_theme_constant_override("separation", 1)
-	var line1 := HBoxContainer.new()
-	line1.add_theme_constant_override("separation", 5)
+	card.add_theme_constant_override("separation", 4)
+
+	# ---- En-tête : identité + territoires + menace labellisée ----
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
 	var chip := PlayerChipScene.instantiate()
 	chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	line1.add_child(chip)
+	head.add_child(chip)
 	chip.setup(int(r.get("pid", 0)), true)
 	var terr := Label.new()
 	terr.text = "🏴%d" % int(r.get("territories", 0))
 	terr.add_theme_font_size_override("font_size", 12)
 	terr.add_theme_color_override("font_color", Color("eef3f7"))
+	terr.add_theme_font_override("font", RosterHelpers._mono_font())
 	terr.tooltip_text = tr("ROSTER_TERR_TOOLTIP")
 	terr.mouse_filter = Control.MOUSE_FILTER_PASS
-	line1.add_child(terr)
-	# Indice de menace (barre discrète, AUCUN effet gameplay) : territoires×2 + kills − pertes
-	# + éliminations×5 — normalisé sur le max de la table (formule documentée, tooltip).
+	head.add_child(terr)
+	# Barre de MENACE ÉTIQUETÉE (indice indicatif, AUCUN effet gameplay) : territoires×2 + kills
+	# − pertes + éliminations×5, normalisé sur le max de la table (formule en tooltip).
+	var threat_lbl := Label.new()
+	threat_lbl.text = tr("WARROOM_LBL_THREAT")
+	threat_lbl.add_theme_font_size_override("font_size", 9)
+	threat_lbl.add_theme_color_override("font_color", HERO_MUTED)
+	threat_lbl.tooltip_text = tr("WARROOM_THREAT_TOOLTIP") % int(r.get("threat", 0))
+	head.add_child(threat_lbl)
 	var threat := ProgressBar.new()
 	threat.show_percentage = false
-	threat.custom_minimum_size = Vector2(34, 6)
+	threat.custom_minimum_size = Vector2(40, 6)
 	threat.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	threat.max_value = float(max_threat)
 	threat.value = float(maxi(int(r.get("threat", 0)), 0))
 	threat.mouse_filter = Control.MOUSE_FILTER_PASS
 	threat.tooltip_text = tr("WARROOM_THREAT_TOOLTIP") % int(r.get("threat", 0))
 	RosterHelpers._tint_progress(threat, ACCENT_GOLD)
-	line1.add_child(threat)
-	card.add_child(line1)
+	head.add_child(threat)
+	card.add_child(head)
 
-	var line2 := HBoxContainer.new()
-	line2.add_theme_constant_override("separation", 5)
-	var stats := Label.new()
-	stats.text = "⚔%d ☠%d 🚩%d 🎯%d 💥%d(💀%d) ☢%d" % [
-		int(r.get("kills", 0)), int(r.get("losses", 0)), int(r.get("conquests", 0)),
-		int(r.get("eliminations", 0)), int(r.get("hero_damage", 0)),
-		int(r.get("hero_kills", 0)), int(r.get("zone_deaths", 0))]
-	stats.add_theme_font_size_override("font_size", 11)
-	stats.add_theme_color_override("font_color", Color("c8cdd6"))
-	stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stats.tooltip_text = tr("WARROOM_LEGEND")
-	stats.mouse_filter = Control.MOUSE_FILTER_PASS
-	line2.add_child(stats)
-	# Ratio kills/(kills+pertes) : barre horizontale vert→rouge (dégradé E1 réutilisé).
+	# ---- Grille de pastilles étiquetées : ligne 1 = Combat, ligne 2 = Héros/Zone ----
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 3)
+	grid.add_theme_constant_override("v_separation", 3)
+	grid.add_child(_stat_pill("⚔", "WARROOM_LBL_KILLS", int(r.get("kills", 0)), "WARROOM_TIP_KILLS"))
+	grid.add_child(_stat_pill("☠", "WARROOM_LBL_LOSSES", int(r.get("losses", 0)), "WARROOM_TIP_LOSSES"))
+	grid.add_child(_stat_pill("🚩", "WARROOM_LBL_CONQ", int(r.get("conquests", 0)), "WARROOM_TIP_CONQ"))
+	grid.add_child(_stat_pill("🎯", "WARROOM_LBL_ELIM", int(r.get("eliminations", 0)), "WARROOM_TIP_ELIM"))
+	grid.add_child(_stat_pill("💥", "WARROOM_LBL_HERODMG", int(r.get("hero_damage", 0)), "WARROOM_TIP_HERODMG"))
+	grid.add_child(_stat_pill("💀", "WARROOM_LBL_HEROKILL", int(r.get("hero_kills", 0)), "WARROOM_TIP_HEROKILL"))
+	grid.add_child(_stat_pill("☢", "WARROOM_LBL_ZONE", int(r.get("zone_deaths", 0)), "WARROOM_TIP_ZONE"))
+	card.add_child(grid)
+
+	# ---- Ratio V/D : libellé + barre (dégradé pv_color) + pourcentage chiffré ----
 	var ratio := float(r.get("ratio", 0.5))
+	var ratio_tip := tr("WARROOM_RATIO_TOOLTIP") % [int(r.get("kills", 0)), int(r.get("losses", 0))]
+	var ratio_line := HBoxContainer.new()
+	ratio_line.add_theme_constant_override("separation", 6)
+	var wl := Label.new()
+	wl.text = tr("WARROOM_LBL_WL")
+	wl.add_theme_font_size_override("font_size", 10)
+	wl.add_theme_color_override("font_color", HERO_MUTED)
+	wl.tooltip_text = ratio_tip
+	ratio_line.add_child(wl)
 	var rbar := ProgressBar.new()
 	rbar.show_percentage = false
-	rbar.custom_minimum_size = Vector2(46, 6)
+	rbar.custom_minimum_size = Vector2(0, 6)
+	rbar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rbar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	rbar.max_value = 1.0
 	rbar.value = ratio
 	rbar.mouse_filter = Control.MOUSE_FILTER_PASS
-	rbar.tooltip_text = tr("WARROOM_RATIO_TOOLTIP") % [int(r.get("kills", 0)), int(r.get("losses", 0))]
+	rbar.tooltip_text = ratio_tip
 	RosterHelpers._tint_progress(rbar, RosterHelpers.pv_color(ratio))
-	line2.add_child(rbar)
-	card.add_child(line2)
+	ratio_line.add_child(rbar)
+	var pct := Label.new()
+	pct.text = "%d%%" % int(round(ratio * 100.0))
+	pct.add_theme_font_size_override("font_size", 11)
+	pct.add_theme_color_override("font_color", Color("eef3f7"))
+	pct.add_theme_font_override("font", RosterHelpers._mono_font())
+	pct.tooltip_text = ratio_tip
+	pct.mouse_filter = Control.MOUSE_FILTER_PASS
+	ratio_line.add_child(pct)
+	card.add_child(ratio_line)
 	return card
+
+# Pastille de stat étiquetée (E-visuel) : [icône][libellé court MUET][valeur mono claire] sur un
+# fond très discret, coins droits (charte §2). Le tooltip explicatif rend la légende globale
+# facultative (elle reste néanmoins en tooltip du panneau). Remplace la « soupe d'emojis ».
+func _stat_pill(icon: String, label_key: String, value: int, tip_key: String) -> Control:
+	var pill := PanelContainer.new()
+	pill.tooltip_text = tr(tip_key)
+	pill.mouse_filter = Control.MOUSE_FILTER_PASS
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(1, 1, 1, 0.04)
+	st.set_corner_radius_all(0)
+	st.content_margin_left = 4
+	st.content_margin_right = 4
+	st.content_margin_top = 2
+	st.content_margin_bottom = 2
+	pill.add_theme_stylebox_override("panel", st)
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	pill.add_child(box)
+	var ic := Label.new()
+	ic.text = icon
+	ic.add_theme_font_size_override("font_size", 10)
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(ic)
+	var lbl := Label.new()
+	lbl.text = tr(label_key)
+	lbl.add_theme_font_size_override("font_size", 9)
+	lbl.add_theme_color_override("font_color", HERO_MUTED)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(lbl)
+	var val := Label.new()
+	val.text = str(value)
+	val.add_theme_font_size_override("font_size", 11)
+	val.add_theme_color_override("font_color", Color("eef3f7"))
+	val.add_theme_font_override("font", RosterHelpers._mono_font())
+	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(val)
+	return pill
 
 # Ligne de continent : « CONTRÔLÉ par <chip> » si un joueur possède TOUT, sinon « CONTESTÉ x/y »
 # avec le leader en chip atténuée.

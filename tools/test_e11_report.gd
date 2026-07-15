@@ -82,7 +82,34 @@ func _ready() -> void:
 	})
 	assert(not report_legacy._timeline_wrap.visible)     # pas de timeline
 	assert(report_legacy._my_stats_box.get_child_count() == 0)  # pas de stats perso
-	print("[OK] rapport LEGACY : sections masquees sans erreur (2 asserts)")
+	assert(report_legacy._tabs.get_tab_count() == 3)  # onglets toujours construits
+	print("[OK] rapport LEGACY : sections masquees sans erreur (3 asserts)")
 
-	print("[OK] TEST E11 REPORT : 16 asserts verts")
+	# 5) Détail du barème (E-visuel) : helpers PURS réconciliés + rendu dans les onglets.
+	assert(Report._breakdown_total(Report.player_points_breakdown(0, 5, 1, 2, 250)) == 57)
+	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, false)) == 118)
+	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, true)) == 147)
+	assert(Report._breakdown_total(Report.hero_xp_breakdown(25, true, 4, 1, 55)) == 278)
+	var report_detail = ReportScene.instantiate()
+	add_child(report_detail)
+	report_detail.populate({
+		"title": "VICTOIRE", "title_color": Color("e0b249"),
+		"stagnation": 0, "attrition": [], "worst_pseudo": "",
+		"rewards": {
+			"match_points": 37, "xp_earned": 118, "hero_xp_earned": 281,
+			"new_level": 3, "current_xp": 40, "levels_gained": 1, "level_up_triggered": true,
+			"coins_earned": 0, "hero_level": 4, "hero_new_level": 5,
+			"hero_xp_in_level": 10, "hero_xp_for_level": 100,
+		},
+		"xp_detail": {
+			"rank": 0, "territories_final": 5, "continents_final": 1, "conquests": 3,
+			"kills": 10, "eliminations": 2, "hero_kills": 1, "hero_damage": 55, "objective_done": true,
+		},
+	})
+	# Bloc récompenses + détail (partie SYNCHRONE) posés avant la 1re frame d'animation.
+	assert(report_detail._player_rewards_box.get_child_count() >= 2)
+	assert(report_detail._hero_progress_box.get_child_count() >= 2)
+	print("[OK] détail barème : helpers purs + rendu onglets (6 asserts)")
+
+	print("[OK] TEST E11 REPORT : 23 asserts verts")
 	get_tree().quit(0)

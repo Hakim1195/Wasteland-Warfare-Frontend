@@ -26,6 +26,9 @@ extends Control
 # Helpers de charte (§2) + composant héros 3D — préchargés (pas de class_name, prudence cache d'import).
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
+# Vue partagée des caractéristiques (SOURCE UNIQUE de STAT_ROWS + formatage) — mutualisée avec
+# faction_selection.gd (DRY : aucun libellé ni format de stat dupliqué).
+const HeroStatsView = preload("res://scripts/ui/hero_stats_view.gd")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -48,16 +51,6 @@ const FALLBACK_PATHS := [
 	"res://resources/factions/eveilles_ruche.tres",
 	"res://resources/factions/ordre_eclipse.tres",
 	"res://resources/factions/chasseurs_ombres.tres",
-]
-
-# Ordre des stats affichées : abréviation (key) + nom complet (name) + description joueur (desc) +
-# clé backend lue dans stats / stats_max (field) + type de formatage (kind). Tout est i18n (FR/EN/IT).
-const STAT_ROWS := [
-	{"key": "CHAR_STAT_PV", "name": "CHAR_STAT_PV_NAME", "desc": "CHAR_STAT_PV_DESC", "field": "pv_max", "kind": "int"},
-	{"key": "CHAR_STAT_PA", "name": "CHAR_STAT_PA_NAME", "desc": "CHAR_STAT_PA_DESC", "field": "pa", "kind": "int"},
-	{"key": "CHAR_STAT_PB", "name": "CHAR_STAT_PB_NAME", "desc": "CHAR_STAT_PB_DESC", "field": "pb", "kind": "pct"},
-	{"key": "CHAR_STAT_PP", "name": "CHAR_STAT_PP_NAME", "desc": "CHAR_STAT_PP_DESC", "field": "pp", "kind": "range"},
-	{"key": "CHAR_STAT_REGEN", "name": "CHAR_STAT_REGEN_NAME", "desc": "CHAR_STAT_REGEN_DESC", "field": "regen", "kind": "pct"},
 ]
 
 var _font: SystemFont
@@ -431,7 +424,7 @@ func _make_stats_block(hero: Dictionary) -> VBoxContainer:
 	head.add_child(_value_col(tr("CHAR_COL_MAX"), MUTED, 13))
 	box.add_child(head)
 
-	for row in STAT_ROWS:
+	for row in HeroStatsView.STAT_ROWS:
 		var item := VBoxContainer.new()
 		item.add_theme_constant_override("separation", 1)
 
@@ -445,8 +438,8 @@ func _make_stats_block(hero: Dictionary) -> VBoxContainer:
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		line.add_child(name_lbl)
-		line.add_child(_value_col(_stat_value(stats, row), TEXT, 18))
-		line.add_child(_value_col(_stat_value(stats_max, row), MUTED, 18))
+		line.add_child(_value_col(HeroStatsView.format_stat(stats, row), TEXT, 18))
+		line.add_child(_value_col(HeroStatsView.format_stat(stats_max, row), MUTED, 18))
 		item.add_child(line)
 
 		var desc := Label.new()
@@ -471,16 +464,6 @@ func _value_col(text: String, color: Color, size: int) -> Label:
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	l.custom_minimum_size = Vector2(92, 0)
 	return l
-
-# Formate une stat selon son type : entier brut, pourcentage (PB/Régén) ou intervalle [min, max] (PP).
-func _stat_value(stats: Dictionary, row: Dictionary) -> String:
-	match str(row["kind"]):
-		"pct":
-			return "%d%%" % int(round(float(stats.get(row["field"], 0.0)) * 100.0))
-		"range":
-			return "[%d, %d]" % [int(stats.get("pp_min", 0)), int(stats.get("pp_max", 0))]
-		_:
-			return str(int(stats.get(row["field"], 0)))
 
 # Ligne de palier : « NIV X » (or si franchi) ▸ bonus formaté ▸ état (✓ franchi / À VENIR).
 func _make_milestone_row(m: Dictionary) -> PanelContainer:

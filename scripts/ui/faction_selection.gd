@@ -47,6 +47,9 @@ const SLIDE_IN := 0.15
 
 # Helpers UI partagés de la charte « Warzone Command » (§2).
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
+# Vue partagée des caractéristiques du héros (SOURCE UNIQUE : STAT_ROWS + formatage + rangée de
+# pastilles) — mutualisée avec characters_screen.gd (DRY, aucun libellé/format dupliqué).
+const HeroStatsView = preload("res://scripts/ui/hero_stats_view.gd")
 # Héros 3D (SubViewport transparent) — remplace le portrait 2D quand la faction a un .glb riggé.
 # Préchargé (pas de class_name, par prudence vis-à-vis du cache d'import).
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
@@ -71,6 +74,18 @@ var _draft_deadline_at: float = -1.0
 # Non typée à dessein (appels dynamiques — pas de class_name sur le composant).
 var _hero3d = null
 
+# --- Caractéristiques du héros de la faction centrée (sprint RPG — panneau de stats du draft) ---
+# Roster reçu du backend (GET /api/v1/heroes via NetworkManager.heroes_loaded), indexé par
+# faction_id (clé = FactionData.id). Alimenté de façon ASYNCHRONE → le bloc stats affiche un
+# squelette « — » tant qu'il est vide, puis se remplit à la réception.
+var _heroes_by_faction: Dictionary = {}
+# Bloc de pastilles courant, reconstruit (queue_free + rebuild) à CHAQUE glissement — cf.
+# _render_hero_stats (R3 : aucun empilement de nœuds au fil du carrousel).
+var _stats_panel: Control = null
+# Police condensée de la charte (§2) pour les pastilles construites par code (mêmes fallbacks
+# que characters_screen ; la carte .tscn utilise déjà cette police via un SubResource).
+var _stats_font: SystemFont
+
 # --- Rotation & possession des factions PAYANTES (M3 §8.66) ---
 # Ids des factions PAYANTES (catalogue serveur, catégorie "faction") ; prix Coins par id.
 var _paid_ids: Dictionary = {}        # fid -> prix (int)
@@ -89,6 +104,11 @@ const SKINS_DIR := "res://resources/skins/"
 func _ready():
 	# Encoches biseautées sur le panneau principal (charte « Warzone Command » §2).
 	WarzoneUI.add_corner_notches(panel)
+
+	# Police des pastilles de stats (construites par code) — initialisée AVANT tout _apply_card_content.
+	_stats_font = SystemFont.new()
+	_stats_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
+	_stats_font.font_weight = 700
 
 	_load_factions()
 
@@ -127,6 +147,13 @@ func _ready():
 	NetworkManager.fetch_shop_catalog()
 	NetworkManager.fetch_shop_inventory()
 	NetworkManager.fetch_shop_rotation()
+
+	# Roster des héros (GET /api/v1/heroes) : alimente le panneau de caractéristiques du draft. Le
+	# carrousel reste PLEINEMENT fonctionnel si l'appel échoue/tarde (le bloc affiche un squelette
+	# « — » puis se remplit à la réception ; robustesse esprit FALLBACK_PATHS). Vue pure : aucune
+	# logique de jeu, on affiche les stats telles quelles depuis le payload.
+	NetworkManager.heroes_loaded.connect(_on_heroes_loaded)
+	NetworkManager.fetch_heroes()
 
 	if _factions.is_empty():
 		# Robustesse : aucune ressource trouvée -> on n'autorise pas de confirmation à vide.
@@ -232,6 +259,8 @@ func _apply_card_content() -> void:
 	faction_name_label.add_theme_color_override("font_color", f.accent_color)
 	description_label.text = _build_description(f)
 	_set_portrait(f)
+	# Caractéristiques chiffrées du héros de la faction centrée, SOUS la description (IntelColumn).
+	_render_hero_stats(f)
 	# Compteur de position toujours à jour (réactualisé à chaque glissement, pas seulement au lock).
 	if counter_label:
 		counter_label.text = "%02d / %02d" % [_index + 1, _factions.size()]
@@ -331,6 +360,44 @@ func _build_description(f) -> String:
 		for key in f.modifiers:
 			txt += "\n  • " + str(key) + " = " + str(f.modifiers[key])
 	return txt
+
+# =========================================================
+# Caractéristiques du héros (panneau de stats du draft — sprint RPG)
+# =========================================================
+
+# Reconstruit le bloc de caractéristiques du héros de la faction `f`, SOUS la description (IntelColumn).
+# Reconstruction PROPRE (queue_free + rebuild) à chaque glissement → aucun empilement de nœuds (R3).
+# Héros absent (roster asynchrone pas encore là / faction sans héros) → squelette « — » discret,
+# rempli dès l'arrivée de heroes_loaded. Robuste : no-op si la colonne d'intel n'est pas câblée.
+func _render_hero_stats(f) -> void:
+	if description_label == null:
+		return
+	var column := description_label.get_parent()
+	if column == null:
+		return
+	# Purge de l'ancien bloc (pas d'empilement au fil des glissements).
+	if _stats_panel != null and is_instance_valid(_stats_panel):
+		column.remove_child(_stats_panel)
+		_stats_panel.queue_free()
+	_stats_panel = null
+	# Correspondance faction ⇄ héros : hero.faction_id == FactionData.id (même identifiant backend).
+	var hero = _heroes_by_faction.get(str(f.id), null)
+	_stats_panel = HeroStatsView.build_compact_row(hero, _stats_font, f.accent_color)
+	column.add_child(_stats_panel)  # ajouté en dernier → rendu SOUS la description
+
+# Réception ASYNCHRONE du roster (GET /api/v1/heroes) : indexe les héros par faction_id, puis
+# re-rend le bloc de la faction COURANTE (les autres se rempliront à leur affichage). Lecture
+# défensive ; no-op hors de l'arbre ou si aucune faction n'est chargée (robustesse).
+func _on_heroes_loaded(heroes: Array) -> void:
+	if not is_inside_tree():
+		return
+	_heroes_by_faction.clear()
+	for h in heroes:
+		if h is Dictionary:
+			_heroes_by_faction[str(h.get("faction_id", ""))] = h
+	if _factions.is_empty():
+		return
+	_render_hero_stats(_factions[_index])
 
 # Monte (une seule fois) le composant héros 3D dans PortraitWrap (parent du portrait), au même
 # emplacement plein-cadre que le portrait 2D. Idempotent ; no-op si le portrait n'est pas câblé.

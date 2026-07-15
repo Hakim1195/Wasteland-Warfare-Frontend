@@ -1720,6 +1720,7 @@ func _show_operation_report() -> void:
 		"rewards": _local_rewards(),
 		"timeline": _timeline_series(),
 		"my_stats": _my_match_stats(),
+		"xp_detail": _xp_detail(),
 	}
 	if not _match_rankings.is_empty():
 		data["podium"] = _podium_rows()
@@ -1813,6 +1814,54 @@ func _my_match_stats() -> Dictionary:
 		"hero_kills": WarRoom.stat_of(s, "hero_kills_by_player", pid),
 		"zone_deaths": WarRoom.stat_of(s, "zone_kills_by_player", pid),
 		"hero_line": hero_line,
+	}
+
+# Entrées BRUTES du détail du barème (E-visuel) pour le Rapport Post-Op : tout est PUBLIC/local
+# (statistiques, territoires, continents de la carte courante, objectif révélé). Le rapport
+# reconstitue le barème (rewards.py répliqué) et RÉCONCILIE aux totaux serveur — AUCUNE requête.
+func _xp_detail() -> Dictionary:
+	var pid := _my_id()
+	var s: Dictionary = GameState.statistics
+	# Rang final (0 = 1er) : rankings si connu, sinon vainqueur → 0, à défaut 2e (réconcilié ensuite).
+	var rank := -1
+	for i in range(_match_rankings.size()):
+		if int(_match_rankings[i]) == pid:
+			rank = i
+			break
+	if rank < 0:
+		rank = 0 if int(GameState.winner_id) == pid else 1
+	# Continents ENTIÈREMENT possédés en fin de partie (même synthèse que le tracker d'objectif E6).
+	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
+	var continents_final := 0
+	for cid in cont_terrs.keys():
+		var tids: Array = cont_terrs[cid]
+		if tids.is_empty():
+			continue
+		var all_mine := true
+		for tid in tids:
+			var t: Dictionary = GameState.territories.get(str(tid), {})
+			var o = t.get("owner_id")
+			if o == null or int(o) != pid:
+				all_mine = false
+				break
+		if all_mine:
+			continents_final += 1
+	# Objectif rempli (bloc PUBLIC objectives_reveal — même source que le podium).
+	var objective_done := false
+	for r in NetworkManager.last_objectives_reveal:
+		if typeof(r) == TYPE_DICTIONARY and int(r.get("player_id", -9999)) == pid:
+			objective_done = bool(r.get("completed", false))
+			break
+	return {
+		"rank": rank,
+		"territories_final": WarRoom.territory_count(GameState.territories, pid),
+		"continents_final": continents_final,
+		"conquests": WarRoom.stat_of(s, "conquests_by_player", pid),
+		"kills": WarRoom.stat_of(s, "combat_kills_by_player", pid),
+		"eliminations": WarRoom.stat_of(s, "eliminations_by_player", pid),
+		"hero_kills": WarRoom.stat_of(s, "hero_kills_by_player", pid),
+		"hero_damage": WarRoom.stat_of(s, "hero_damage_by_player", pid),
+		"objective_done": objective_done,
 	}
 
 # Pont missions (M2 §8.65 — E11) : un fetch UNIQUE après le game_over, résumé poussé au rapport

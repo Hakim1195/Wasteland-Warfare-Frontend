@@ -124,6 +124,11 @@ static func pv_color(ratio: float) -> Color:
 		return ACCENT_GOLD.lerp(PV_GREEN, (r - 0.5) * 2.0)
 	return DANGER.lerp(ACCENT_GOLD, r * 2.0)
 
+# Réduction de défense PB en pourcentage entier (0..30) — même conversion que l'inspecteur
+# ennemi du HUD (round(pb×100)). Pur, testé (pattern G4) : sert les vitals de la carte roster.
+static func _pb_percent(pb: float) -> int:
+	return int(round(clampf(pb, 0.0, 1.0) * 100.0))
+
 # Auto-vérification debug (pattern G4 §8.63) : tri conforme à turn_order + comptes de
 # territoires exacts sur un état STUB. Build debug uniquement, une fois par session.
 static func _self_check() -> void:
@@ -143,6 +148,10 @@ static func _self_check() -> void:
 	assert(territory_count(terrs, 7) == 2)
 	assert(territory_count(terrs, 11) == 1)
 	assert(territory_count(terrs, -2) == 0)
+	# Formatage PB (réduction de défense) en pourcentage entier — vitals de la carte roster.
+	assert(_pb_percent(0.30) == 30)
+	assert(_pb_percent(0.0) == 0)
+	assert(_pb_percent(0.07) == 7)
 
 # Accès de test (script maison tools/test_e1_roster.gd) : nombre de lignes affichées.
 func debug_row_count() -> int:
@@ -178,7 +187,11 @@ func _rebuild_rows(order: Array) -> void:
 	for pid in order:
 		_rows_box.add_child(_make_row(int(pid)))
 
-# Une ligne de belligérant : [état][chip][NIV][barre PV][territoires][cartes].
+# Une carte de belligérant sur DEUX lignes (E-visuel) — « qui est qui » d'un coup d'œil :
+#   Ligne 1 (identité) : [état][chip qui s'étire][🏴 territoires][🃏 cartes][NIV n]
+#   Ligne 2 (vitals héros, indentée) : [barre PV][PV n/max][🗡 PA n][🛡 PB p%][PP ±n]
+# Les compteurs restent sur la ligne d'identité (compacts) pour laisser toute la largeur aux
+# vitals ÉTIQUETÉS de la ligne 2 (anti « soupe d'emojis » — chaque valeur porte un libellé).
 # TUTO: emplacement candidat pour un tooltip d'onboarding « lisez ici l'état de chaque ennemi ».
 func _make_row(pid: int) -> Control:
 	var p = GameState.players.get(str(pid), {})
@@ -214,14 +227,21 @@ func _make_row(pid: int) -> Control:
 	if down or abandoned:
 		row.modulate = Color(1, 1, 1, ROW_DIMMED_ALPHA)
 
-	var line := HBoxContainer.new()
-	line.add_theme_constant_override("separation", 5)
-	row.add_child(line)
+	# Carte = 2 lignes empilées (identité au-dessus, vitals dessous).
+	var card := VBoxContainer.new()
+	card.add_theme_constant_override("separation", 2)
+	row.add_child(card)
+
+	# ---------- Ligne 1 : identité ----------
+	var line1 := HBoxContainer.new()
+	line1.add_theme_constant_override("separation", 5)
+	card.add_child(line1)
 
 	# Icône d'état : ▶ (tour courant, pulsé), 💀 (héros mort / éliminé), 🏳 (abandon).
 	var marker := Label.new()
 	marker.custom_minimum_size = Vector2(16, 0)
 	marker.add_theme_font_size_override("font_size", 12)
+	marker.mouse_filter = Control.MOUSE_FILTER_PASS
 	if abandoned:
 		marker.text = "🏳"
 	elif down:
@@ -234,69 +254,118 @@ func _make_row(pid: int) -> Control:
 		var tw := marker.create_tween().set_loops()
 		tw.tween_property(marker, "modulate:a", 0.35, 0.7).set_trans(Tween.TRANS_SINE)
 		tw.tween_property(marker, "modulate:a", 1.0, 0.7).set_trans(Tween.TRANS_SINE)
-	line.add_child(marker)
+	line1.add_child(marker)
 
 	# Identité (brique unique E1) — s'étire, les compteurs restent alignés à droite.
 	var chip := PlayerChipScene.instantiate()
 	chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	line.add_child(chip)
+	line1.add_child(chip)
 	chip.setup(pid, false)
+
+	# Compteurs publics compacts : territoires possédés + cartes en main (len — public).
+	line1.add_child(_counter_label("🏴%d" % territory_count(GameState.territories, pid),
+		Color("eef3f7"), tr("ROSTER_TERR_TOOLTIP")))
+	var cards_n := 0
+	var hand = p.get("cards_in_hand", [])
+	if typeof(hand) == TYPE_ARRAY:
+		cards_n = (hand as Array).size()
+	line1.add_child(_counter_label("🃏%d" % cards_n, MUTED, tr("ROSTER_CARDS_TOOLTIP")))
 
 	# Niveau du héros (masqué si héros non initialisé — état pré-RPG, aucun « NIV » fantôme).
 	var lvl := Label.new()
 	lvl.add_theme_font_size_override("font_size", 10)
 	lvl.add_theme_color_override("font_color", ACCENT_CYAN)
 	lvl.add_theme_font_override("font", _mono_font())
+	lvl.mouse_filter = Control.MOUSE_FILTER_PASS
 	lvl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if pv_max > 0:
 		lvl.text = tr("ROSTER_LEVEL") % int(hero.get("level", 1))
-	line.add_child(lvl)
+	line1.add_child(lvl)
 
-	# Mini-barre PV du héros (dégradé vert→or→rouge, vide si abattu, absente si pré-RPG).
-	var bar := ProgressBar.new()
-	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(42, 9)
-	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	bar.mouse_filter = Control.MOUSE_FILTER_PASS
+	# ---------- Ligne 2 : vitals du héros ----------
+	# Masquée proprement si le héros n'est pas initialisé (état pré-RPG) — aucun « 0/0 » fantôme.
 	if pv_max > 0:
-		bar.max_value = float(pv_max)
-		if down:
-			bar.value = 0.0
-			bar.tooltip_text = tr("ROSTER_HERO_DOWN")
-		else:
-			bar.value = float(pv)
-			_tint_progress(bar, pv_color(float(pv) / float(pv_max)))
-			bar.tooltip_text = tr("ROSTER_PV_TOOLTIP") % [pv, pv_max]
-	else:
-		bar.visible = false
-	line.add_child(bar)
-
-	# Compteurs publics : territoires possédés + cartes en main (len(cards_in_hand) — public).
-	var terr := Label.new()
-	terr.text = "🏴%d" % territory_count(GameState.territories, pid)
-	terr.add_theme_font_size_override("font_size", 11)
-	terr.add_theme_color_override("font_color", Color("eef3f7"))
-	terr.add_theme_font_override("font", _mono_font())
-	terr.tooltip_text = tr("ROSTER_TERR_TOOLTIP")
-	terr.mouse_filter = Control.MOUSE_FILTER_PASS
-	terr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	line.add_child(terr)
-
-	var cards_n := 0
-	var hand = p.get("cards_in_hand", [])
-	if typeof(hand) == TYPE_ARRAY:
-		cards_n = (hand as Array).size()
-	var cards := Label.new()
-	cards.text = "🃏%d" % cards_n
-	cards.add_theme_font_size_override("font_size", 11)
-	cards.add_theme_color_override("font_color", MUTED)
-	cards.add_theme_font_override("font", _mono_font())
-	cards.tooltip_text = tr("ROSTER_CARDS_TOOLTIP")
-	cards.mouse_filter = Control.MOUSE_FILTER_PASS
-	cards.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	line.add_child(cards)
+		card.add_child(_make_vitals_line(hero, pv, pv_max, down))
 
 	return row
+
+# Ligne 2 de la carte : état COMPLET du héros, aéré et ÉTIQUETÉ (barre PV élargie + PV chiffrés +
+# PA/PB/PP libellés). « ABATTU » (DANGER, barre vide) si le héros est mort. Tous les labels en
+# MOUSE_FILTER_PASS → le clic de la ligne ouvre toujours l'inspecteur (signal player_clicked).
+func _make_vitals_line(hero: Dictionary, pv: int, pv_max: int, down: bool) -> Control:
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 5)
+
+	# Légère indentation sous la pastille d'identité (lecture hiérarchique, aération §2).
+	var indent := Control.new()
+	indent.custom_minimum_size = Vector2(14, 0)
+	indent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.add_child(indent)
+
+	# Barre PV élargie (dégradé vert→or→rouge, vide si abattu).
+	var bar := ProgressBar.new()
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(48, 9)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar.mouse_filter = Control.MOUSE_FILTER_PASS
+	bar.max_value = float(pv_max)
+	if down:
+		bar.value = 0.0
+		bar.tooltip_text = tr("ROSTER_HERO_DOWN")
+	else:
+		bar.value = float(pv)
+		_tint_progress(bar, pv_color(float(pv) / float(pv_max)))
+		bar.tooltip_text = tr("ROSTER_PV_TOOLTIP") % [pv, pv_max]
+	line.add_child(bar)
+
+	if down:
+		# Héros abattu : « ABATTU » en rouge — le reste des vitals n'a plus de sens.
+		var dead := _vital_label(tr("ROSTER_PV_DOWN"), DANGER, tr("ROSTER_HERO_DOWN"))
+		dead.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		line.add_child(dead)
+		return line
+
+	# PV chiffrés (visibles, plus seulement en tooltip).
+	line.add_child(_vital_label(tr("ROSTER_PV_INLINE") % [pv, pv_max], Color("eef3f7"),
+		tr("ROSTER_PV_TOOLTIP") % [pv, pv_max]))
+	# 🗡 PA (points d'attaque) — or.
+	line.add_child(_vital_label(tr("ROSTER_PA_LABEL") % int(hero.get("pa", 0)),
+		ACCENT_GOLD, tr("CHAR_STAT_PA_DESC")))
+	# 🛡 PB (réduction de dégâts en %) — cyan.
+	line.add_child(_vital_label(tr("ROSTER_PB_LABEL") % _pb_percent(float(hero.get("pb", 0.0))),
+		ACCENT_CYAN, tr("ROSTER_PB_TOOLTIP")))
+	# PP (momentum de combat) — discret, muet, poussé à droite.
+	var pp := _vital_label(tr("ROSTER_PP_LABEL") % int(hero.get("pp_current", 0)),
+		MUTED, tr("CHAR_STAT_PP_DESC"))
+	pp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pp.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	line.add_child(pp)
+	return line
+
+# Compteur mono compact de la ligne d'identité (territoires / cartes) — PASS pour laisser le clic
+# de ligne ouvrir l'inspecteur, tooltip explicatif.
+func _counter_label(text: String, col: Color, tip: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 11)
+	l.add_theme_color_override("font_color", col)
+	l.add_theme_font_override("font", _mono_font())
+	l.tooltip_text = tip
+	l.mouse_filter = Control.MOUSE_FILTER_PASS
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return l
+
+# Étiquette d'un vital de la ligne 2 (mono, PASS + tooltip) — brique unique pour PV/PA/PB/PP.
+func _vital_label(text: String, col: Color, tip: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_color_override("font_color", col)
+	l.add_theme_font_override("font", _mono_font())
+	l.tooltip_text = tip
+	l.mouse_filter = Control.MOUSE_FILTER_PASS
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return l
 
 func _on_row_input(event: InputEvent, pid: int) -> void:
 	if event is InputEventMouseButton and event.pressed \
