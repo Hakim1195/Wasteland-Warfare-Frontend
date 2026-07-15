@@ -307,12 +307,30 @@ func _handle_server_message(msg: Dictionary) -> void:
 
 # Envoi générique d'une action au moteur via WebSocket.
 # action_type ∈ {"init_game", "deploy_units", "attack_territory", "move_units", "play_card", "pass_turn"}
+# Idempotence (correctif « double déduction de PV ») : chaque action VOULUE reçoit un action_id
+# UNIQUE = nonce de session + compteur monotone. Le serveur REJETTE un doublon portant le MÊME id
+# (retransmission WS, rejeu) → une attaque rejouée ne re-résout jamais le duel des héros. Le nonce est
+# fixé une fois par session d'app (autoload persistant) : le compteur n'est jamais remis à zéro dans
+# une même exécution ET le nonce diffère d'une exécution à l'autre → aucune action légitime n'est
+# faussement rejetée, même après une reconnexion à une partie dont le serveur a gardé l'état (Redis).
+var _action_seq: int = 0
+var _action_nonce: String = ""
+
+func _next_action_id() -> String:
+	if _action_nonce == "":
+		_action_nonce = "%d-%d" % [int(Time.get_unix_time_from_system()), randi()]
+	_action_seq += 1
+	return "%s-%d" % [_action_nonce, _action_seq]
+
 func send_action(action_type: String, payload: Dictionary = {}) -> void:
 	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		print("⚠️ NETWORK: WebSocket non ouvert, action '" + action_type + "' ignorée.")
 		game_error.emit("Pas connecté au serveur temps réel.")
 		return
-	var message = {"action": action_type, "payload": payload}
+	# On DUPLIQUE la charge utile pour y injecter action_id SANS muter le dict de l'appelant.
+	var pl := payload.duplicate(true)
+	pl["action_id"] = _next_action_id()
+	var message = {"action": action_type, "payload": pl}
 	socket.send_text(JSON.stringify(message))
 
 # Demande au serveur de générer/initialiser la partie.

@@ -82,6 +82,12 @@ var _pass_in_flight: bool = false
 # quel si le serveur REFUSE le déploiement (plus de placement reperdu ni de soft-lock Phase 0).
 var _deploy_snapshot: Dictionary = {}
 var _deploy_in_flight: bool = false
+# Verrou anti double-ATTAQUE (correctif « double déduction de PV ») : vrai dès l'ENVOI d'une attaque
+# et jusqu'au retour du résultat serveur. Combiné à _combat_animating dans _input_blocked(), il garantit
+# UN seul « attack_territory » par attaque VOULUE — sinon un 2ᵉ clic (pendant l'aller-retour réseau ou
+# l'animation Split-Screen VS) déclencherait un 2ᵉ duel serveur (PV du héros déduits « une 2ᵉ fois »).
+# Levé par _on_state_updated (résultat reçu) ou _on_game_error (attaque refusée) → jamais de soft-lock.
+var _attack_in_flight: bool = false
 
 # Phase 0 — DÉPLOIEMENT AVEUGLE & SIMULTANÉ (§8.31). Le serveur MASQUE pending_blind_deploy dans
 # l'état diffusé : on suit donc LOCALEMENT le fait d'avoir soumis. Une fois vrai, le joueur ne peut
@@ -236,7 +242,11 @@ func _is_eliminated() -> bool:
 # local est alors figé, comme l'exige %ConquerDialog (§8.23) et les pop-ups de faction (§8.3).
 # DURCI (G3 §8.70) : un ÉLIMINÉ ne peut JAMAIS émettre d'action de jeu (observateur pur).
 func _input_blocked() -> bool:
-	return _awaiting_conquer_move or _awaiting_eclipse or _awaiting_spy or _is_eliminated()
+	# Combat (correctif « double déduction de PV ») : tant qu'une attaque est EN VOL (envoyée, résultat
+	# non revenu) OU que l'animation Split-Screen VS joue, on FIGE toute nouvelle action de jeu — un 2ᵉ
+	# clic d'attaque partirait sinon sur un plateau figé (pré-combat) et le serveur résoudrait un 2ᵉ duel.
+	return _awaiting_conquer_move or _awaiting_eclipse or _awaiting_spy or _is_eliminated() \
+		or _combat_animating or _attack_in_flight
 
 # =========================================================
 # Clics sur le plateau
@@ -319,6 +329,8 @@ func _do_attack_click(tid: String):
 			"defender_territory_id": tid,
 			"attacker_dice": dice,
 		})
+		# Verrou immédiat : un seul « attack_territory » en vol par attaque VOULUE (anti double-clic).
+		_attack_in_flight = true
 		_clear_source()
 
 # =========================================================
@@ -335,6 +347,7 @@ func _on_reassault_pressed() -> void:
 	var dice = clampi(_garrison(src) - 1, 1, 3)
 	NetworkManager.send_action("attack_territory", {
 		"attacker_territory_id": src, "defender_territory_id": tgt, "attacker_dice": dice})
+	_attack_in_flight = true  # même verrou anti double-envoi que l'attaque directe (ré-assaut E7 §8.79)
 
 # Le dernier assaut est-il encore rejouable ? Source à moi ≥ 2, cible toujours ennemie et
 # adjacente, Phase 3, notre tour, aucune fenêtre bloquante.
@@ -674,6 +687,9 @@ func _on_state_updated():
 	# Le serveur a répondu : on lève les verrous « action en vol » (pass / déploiement acceptés).
 	_pass_in_flight = false
 	_deploy_in_flight = false
+	# Résultat reçu : on lève le verrou anti double-attaque. Si l'event est un combat, _on_game_event
+	# pose _combat_animating juste après (même message) → le blocage reste continu jusqu'à la fin du VS.
+	_attack_in_flight = false
 	_clear_source()
 	# Rafraîchissement DIFFÉRÉ d'une frame : le serveur émet game_state_updated PUIS
 	# game_event dans le même message (network_manager.gd). Si l'évènement est un combat,
@@ -1374,6 +1390,7 @@ func _maybe_focus_combat(event) -> void:
 func _on_game_error(message: String):
 	# L'action a été refusée par le serveur → on déverrouille pour réessayer.
 	_pass_in_flight = false
+	_attack_in_flight = false  # attaque refusée (doublon, non adjacent…) : on lève le verrou (jamais de soft-lock)
 	if _deploy_in_flight:
 		_deploy_in_flight = false
 		# Refus du déploiement : on RESTAURE le tampon (et on lève le verrou aveugle de Phase 0) pour

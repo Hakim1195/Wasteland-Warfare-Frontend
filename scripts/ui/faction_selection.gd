@@ -257,7 +257,8 @@ func _apply_card_content() -> void:
 	var f = _factions[_index]
 	faction_name_label.text = f.name
 	faction_name_label.add_theme_color_override("font_color", f.accent_color)
-	description_label.text = _build_description(f)
+	# Dossier : lore + rappel du pouvoir (les modificateurs bruts ne sont plus listés — cf. §UI).
+	description_label.text = f.description
 	_set_portrait(f)
 	# Caractéristiques chiffrées du héros de la faction centrée, SOUS la description (IntelColumn).
 	_render_hero_stats(f)
@@ -352,15 +353,6 @@ func _ensure_access_banner() -> void:
 	parent.add_child(_access_banner)
 	parent.move_child(_access_banner, faction_name_label.get_index() + 1)
 
-# Construit le texte BBCode : lore + liste des modificateurs (miroir frontend du registre §4.3).
-func _build_description(f) -> String:
-	var txt: String = f.description
-	if not f.modifiers.is_empty():
-		txt += "\n\n[i]" + tr("FS_MODIFIERS_HEADER") + "[/i]"
-		for key in f.modifiers:
-			txt += "\n  • " + str(key) + " = " + str(f.modifiers[key])
-	return txt
-
 # =========================================================
 # Caractéristiques du héros (panneau de stats du draft — sprint RPG)
 # =========================================================
@@ -382,7 +374,9 @@ func _render_hero_stats(f) -> void:
 	_stats_panel = null
 	# Correspondance faction ⇄ héros : hero.faction_id == FactionData.id (même identifiant backend).
 	var hero = _heroes_by_faction.get(str(f.id), null)
-	_stats_panel = HeroStatsView.build_compact_row(hero, _stats_font, f.accent_color)
+	# Stats où ce héros domine tout le roster (repère ▲ doré) — recalculé à chaque affichage.
+	var leaders := _leader_fields_for(hero)
+	_stats_panel = HeroStatsView.build_compact_row(hero, _stats_font, f.accent_color, leaders)
 	column.add_child(_stats_panel)  # ajouté en dernier → rendu SOUS la description
 
 # Réception ASYNCHRONE du roster (GET /api/v1/heroes) : indexe les héros par faction_id, puis
@@ -398,6 +392,32 @@ func _on_heroes_loaded(heroes: Array) -> void:
 	if _factions.is_empty():
 		return
 	_render_hero_stats(_factions[_index])
+
+# Détermine les stats où le héros courant est le PLUS FORT de tout le roster (repère ▲ doré au
+# draft — aide de décision). Comparaison côté client sur le roster déjà en mémoire (Vue pure : on
+# classe des valeurs déjà fournies, aucun calcul de jeu). Renvoie la liste des champs dominés
+# (pv_max, pa, …). Roster incomplet (< 2 héros) ou héros inconnu → aucune comparaison.
+func _leader_fields_for(hero) -> Array:
+	var out := []
+	if not (hero is Dictionary) or _heroes_by_faction.size() < 2:
+		return out
+	var my_stats = hero.get("stats", {})
+	if not (my_stats is Dictionary):
+		return out
+	for r in HeroStatsView.STAT_ROWS:
+		var mine := HeroStatsView.stat_scalar(my_stats, r)
+		if mine <= 0.0:
+			continue  # stat à 0 → jamais « meilleure » (évite de tout marquer sur des données vides)
+		var best := mine
+		for other in _heroes_by_faction.values():
+			if other is Dictionary:
+				var os = other.get("stats", {})
+				if os is Dictionary:
+					best = maxf(best, HeroStatsView.stat_scalar(os, r))
+		# Leader si personne ne fait STRICTEMENT mieux (égalité au sommet incluse ; tolérance float).
+		if mine >= best - 0.0001:
+			out.append(str(r["field"]))
+	return out
 
 # Monte (une seule fois) le composant héros 3D dans PortraitWrap (parent du portrait), au même
 # emplacement plein-cadre que le portrait 2D. Idempotent ; no-op si le portrait n'est pas câblé.
