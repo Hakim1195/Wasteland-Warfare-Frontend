@@ -50,6 +50,12 @@ var _missions_fetched_for_report := false
 # (_refresh_pending) pour figer la mise à jour visuelle des troupes jusqu'à la fin du combat.
 var _combat_animating: bool = false
 var _refresh_pending: bool = false
+# File d'attente des combats (correctif « PV qui disparaissent sans raison ») : un 2ᵉ attack_result reçu
+# pendant qu'un Split-Screen VS s'anime est MIS EN FILE au lieu d'être jeté — chaque duel s'anime à son
+# tour (sinon le HUD sautait à la valeur finale sans transition, typiquement pendant un tour de bot
+# multi-attaques). Plafonnée : au-delà, on abrège (l'état diffusé reste correct, seule la narration résumée).
+var _combat_queue: Array = []
+const COMBAT_QUEUE_CAP := 6
 # tid -> owner_id tel qu'AFFICHÉ sur le plateau (snapshot du dernier _refresh). Indispensable
 # pour retrouver le propriétaire PRÉ-combat du territoire défenseur : l'état reçu avec
 # attack_result est déjà post-combat (en cas de conquête, l'owner a déjà basculé).
@@ -88,6 +94,10 @@ var _deploy_in_flight: bool = false
 # l'animation Split-Screen VS) déclencherait un 2ᵉ duel serveur (PV du héros déduits « une 2ᵉ fois »).
 # Levé par _on_state_updated (résultat reçu) ou _on_game_error (attaque refusée) → jamais de soft-lock.
 var _attack_in_flight: bool = false
+# Filet de sécurité anti soft-lock du verrou d'attaque : la « génération » garantit qu'un ancien
+# timeout ne lève PAS le verrou d'une attaque armée plus tard (cf. _arm_attack_in_flight).
+var _attack_flight_gen: int = 0
+const ATTACK_IN_FLIGHT_TIMEOUT := 8.0
 
 # Phase 0 — DÉPLOIEMENT AVEUGLE & SIMULTANÉ (§8.31). Le serveur MASQUE pending_blind_deploy dans
 # l'état diffusé : on suit donc LOCALEMENT le fait d'avoir soumis. Une fois vrai, le joueur ne peut
@@ -294,6 +304,18 @@ func _handle_play_click(tid: String):
 		_:
 			hud.add_log("Cliquez « Fin de Phase » pour avancer.")
 
+# Arme le verrou « attaque en vol » + un filet de sécurité anti soft-lock : si le résultat ne revient
+# jamais (message perdu / coupure-reconnexion), le verrou se lève après ATTACK_IN_FLIGHT_TIMEOUT. En
+# temps normal, MON attack_result lève le verrou bien avant (via _on_game_event). La génération évite
+# qu'un vieux timeout ne débloque une attaque ARMÉE ensuite (sinon on rouvrirait la fenêtre du bug).
+func _arm_attack_in_flight() -> void:
+	_attack_in_flight = true
+	_attack_flight_gen += 1
+	var gen := _attack_flight_gen
+	get_tree().create_timer(ATTACK_IN_FLIGHT_TIMEOUT).timeout.connect(func() -> void:
+		if _attack_flight_gen == gen:
+			_attack_in_flight = false)
+
 func _do_attack_click(tid: String):
 	if _source == "":
 		# Choix de la source : à moi, avec au moins 2 unités.
@@ -330,7 +352,7 @@ func _do_attack_click(tid: String):
 			"attacker_dice": dice,
 		})
 		# Verrou immédiat : un seul « attack_territory » en vol par attaque VOULUE (anti double-clic).
-		_attack_in_flight = true
+		_arm_attack_in_flight()
 		_clear_source()
 
 # =========================================================
@@ -347,7 +369,8 @@ func _on_reassault_pressed() -> void:
 	var dice = clampi(_garrison(src) - 1, 1, 3)
 	NetworkManager.send_action("attack_territory", {
 		"attacker_territory_id": src, "defender_territory_id": tgt, "attacker_dice": dice})
-	_attack_in_flight = true  # même verrou anti double-envoi que l'attaque directe (ré-assaut E7 §8.79)
+	_arm_attack_in_flight()  # même verrou anti double-envoi que l'attaque directe (ré-assaut E7 §8.79)
+	hud.set_reassault(false)  # masque le bouton dès l'envoi (anti double-clic) — _refresh le ré-affiche si légal
 
 # Le dernier assaut est-il encore rejouable ? Source à moi ≥ 2, cible toujours ennemie et
 # adjacente, Phase 3, notre tour, aucune fenêtre bloquante.
@@ -687,9 +710,11 @@ func _on_state_updated():
 	# Le serveur a répondu : on lève les verrous « action en vol » (pass / déploiement acceptés).
 	_pass_in_flight = false
 	_deploy_in_flight = false
-	# Résultat reçu : on lève le verrou anti double-attaque. Si l'event est un combat, _on_game_event
-	# pose _combat_animating juste après (même message) → le blocage reste continu jusqu'à la fin du VS.
-	_attack_in_flight = false
+	# NOTE (correctif Bug C) : on NE lève PAS ici _attack_in_flight. _on_state_updated se déclenche pour
+	# TOUT état diffusé — y compris un player_abandoned d'un AUTRE joueur pendant MON tour — ce qui
+	# rouvrirait la fenêtre d'attaque AVANT le retour de MON résultat (2ᵉ attaque → 2ᵉ duel → double PV).
+	# Le verrou est levé par _on_game_event à la réception de MON attack_result (puis _combat_animating
+	# prend le relais pour l'animation), ou par _on_game_error si l'attaque est refusée.
 	_clear_source()
 	# Rafraîchissement DIFFÉRÉ d'une frame : le serveur émet game_state_updated PUIS
 	# game_event dans le même message (network_manager.gd). Si l'évènement est un combat,
@@ -722,6 +747,10 @@ func _on_game_event(event):
 		_blind_ready = int(event.get("ready_count", _blind_ready))
 		_blind_expected = int(event.get("expected_count", _blind_expected))
 	if typeof(event) == TYPE_DICTIONARY and str(event.get("event_type", "")) == "attack_result":
+		# Correctif Bug C : MON attack_result est revenu → on lève le verrou anti double-attaque (le
+		# relais est assuré par _combat_animating que pose _play_combat_resolution juste après). Sans
+		# effet pour un combat d'un AUTRE joueur/bot (mon verrou était déjà faux) — donc inoffensif.
+		_attack_in_flight = false
 		# Time Bank (§8.33) : le serveur a déjà repoussé l'échéance du tour courant (extend_deadline,
 		# plafond 90 s). On répercute le MÊME bonus sur le rebours LOCAL du HUD AVANT de lancer le
 		# Split-Screen VS — sinon, pendant l'animation, le compteur croit le temps écoulé alors que le
@@ -1249,10 +1278,18 @@ func _push_objective_tracker() -> void:
 # FIGE la mise à jour visuelle du plateau jusqu'à la fin de l'animation. Le refresh mis en
 # attente pendant l'animation (_refresh_pending) est rejoué à la sortie.
 func _play_combat_resolution(event: Dictionary) -> void:
+	# ENTRÉE : si un combat s'anime déjà, on met celui-ci en FILE au lieu de le JETER — sa perte de PV
+	# s'animera à son tour, au lieu de « sauter » à la valeur finale sans transition (perçu comme des
+	# « PV disparus sans raison », typiquement pendant un tour de bot enchaînant plusieurs attaques).
 	if _combat_animating:
-		return # garde anti-empilement (un seul duel à l'écran)
+		if _combat_queue.size() < COMBAT_QUEUE_CAP:
+			_combat_queue.append(event.duplicate(true))
+		return
 	_combat_animating = true
+	await _do_play_combat(event)
 
+# Animation d'UN combat (déjà sous verrou _combat_animating). À la fin, draine la file via _combat_finished().
+func _do_play_combat(event: Dictionary) -> void:
 	var atk_tid := str(event.get("attacker_territory_id", ""))
 	var def_tid := str(event.get("defender_territory_id", ""))
 	# Propriétaires tels qu'AFFICHÉS avant le combat (snapshot de _refresh) : l'état courant
@@ -1275,10 +1312,7 @@ func _play_combat_resolution(event: Dictionary) -> void:
 		# Bandeau compact (E8) : passe dans la MÊME file _combat_animating (durée plus courte) —
 		# AUCUN état ne se peint pendant une résolution (piège n° 4). HUD non masqué.
 		await _play_combat_banner(event, atk_owner, def_owner)
-		_combat_animating = false
-		if _refresh_pending:
-			_refresh_pending = false
-			_refresh()
+		_combat_finished()
 		return
 
 	# Le Split-Screen VS sacralise l'affrontement des héros : on efface le HUD flottant pendant
@@ -1335,6 +1369,15 @@ func _play_combat_resolution(event: Dictionary) -> void:
 
 	# Combat lu : on rétablit le HUD flottant (fondu inverse 0,5 s, §8.29).
 	hud.fade_ui_for_combat(false)
+	_combat_finished()
+
+# Fin d'UN combat : draine la FILE (chaque duel s'anime) AVANT tout rafraîchissement. _combat_animating
+# reste vrai pendant tout le drainage → aucun état ne se peint, input figé, ordre des combats préservé.
+func _combat_finished() -> void:
+	if not _combat_queue.is_empty():
+		var next_event: Dictionary = _combat_queue.pop_front()
+		call_deferred("_do_play_combat", next_event)
+		return
 	_combat_animating = false
 	if _refresh_pending:
 		_refresh_pending = false

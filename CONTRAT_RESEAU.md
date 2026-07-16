@@ -184,13 +184,13 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
 // IDEMPOTENCE / ANTI-REJEU (correctif « double déduction de PV ») — PUBLIC, OPTIONNEL : le client PEUT
 // joindre à TOUTE action de jeu un champ `action_id` (string UNIQUE par action VOULUE, ex.
 // "<nonce_session>-<seq>"). Ex. { "action": "attack_territory", "payload": { …, "action_id": "1752505600-9931-7" } }.
-// Le serveur REJETTE (erreur privée « Action déjà traitée (doublon ignoré). ») tout message portant le
-// MÊME action_id que la DERNIÈRE action déjà résolue pour ce joueur → une attaque rejouée (double-clic
-// pendant l'animation de combat, retransmission WS, rejeu à la reconnexion) ne re-résout JAMAIS le duel
-// des héros (sinon les PV du défenseur baissaient « une 2ᵉ fois »). Deux actions DISTINCTES portent des
-// id différents → toutes deux traitées (assauts répétés légaux, §8.79). Absent (ancien client) → aucune
-// dédup. Jeton serveur `PlayerState.last_action_id` = INTERNE : jamais diffusé (retiré de l'état par
-// router._state_payload).
+// Le serveur REJETTE (erreur privée « Action déjà traitée (doublon ignoré). ») tout message dont
+// l'action_id figure dans la FENÊTRE des derniers ids déjà résolus pour ce joueur → une attaque rejouée
+// (retransmission WS, rejeu à la reconnexion, 2ᵉ socket) ne re-résout JAMAIS le duel des héros (sinon les
+// PV du défenseur baissaient « une 2ᵉ fois »), même si le rejeu arrive APRÈS une action intercalée. Deux
+// actions DISTINCTES portent des id différents → toutes deux traitées (assauts répétés légaux, §8.79).
+// Absent OU `null` (ancien client) → aucune dédup. Fenêtre serveur `PlayerState.recent_action_ids`
+// (plafonnée) = INTERNE : jamais diffusée (retirée de l'état par router._state_payload).
 // Lobby : { "action": "ready" | "unready" | "get_lobby", "payload": {} }
 // CHAT (§8.33) — forme À PLAT acceptée (contrat principal) OU enveloppe standard :
 { "type": "send_chat_message", "tab": "general", "text": "gg", "target_id": 12 } // tab: "general"|"private"; target_id requis si "private"
