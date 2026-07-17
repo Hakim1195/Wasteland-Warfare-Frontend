@@ -1,6 +1,7 @@
 extends Node
 
-# TEST E11 §8.83 (style maison) — Rapport Post-Opération 2 colonnes.
+# TEST E11 §8.83 (style maison) — Rapport Post-Opération EN ONGLETS (4 pages depuis §8.99 :
+# XP JOUEUR / XP HÉROS / CLASSEMENT / BILAN).
 # Helpers PURS (titres honorifiques départage pid, médailles) + boot du rapport avec
 # (a) payload COMPLET (podium + timeline + stats perso) et (b) payload LEGACY (sections masquées,
 # aucune erreur). Lancement :
@@ -82,8 +83,18 @@ func _ready() -> void:
 	})
 	assert(not report_legacy._timeline_wrap.visible)     # pas de timeline
 	assert(report_legacy._my_stats_box.get_child_count() == 0)  # pas de stats perso
-	assert(report_legacy._tabs.get_tab_count() == 3)  # onglets toujours construits
-	print("[OK] rapport LEGACY : sections masquees sans erreur (3 asserts)")
+	# Les 4 onglets (XP JOUEUR / XP HÉROS / CLASSEMENT / BILAN §8.99) sont TOUJOURS construits par
+	# _build_tabs(), quel que soit le payload — le 4ᵉ ne fait pas exception : payload legacy ici
+	# (aucune clé `debrief`) → le tableau BILAN reste vide, mais son onglet existe (§9.2).
+	assert(report_legacy._tabs.get_tab_count() == 4)
+	# Titre du 4ᵉ onglet : verrouille l'EXISTENCE de l'onglet BILAN (pas seulement le compte) et son
+	# titrage depuis l'i18n. Vérif au RUNTIME via tr() — ne JAMAIS grep le `.translation` compilé
+	# (hashé/compressé → faux négatif garanti).
+	assert(report_legacy._tabs.get_tab_title(3) == tr("REPORT_TAB_DEBRIEF"))
+	# … et la clé est RÉELLEMENT traduite (sans ceci, l'assert ci-dessus comparerait tr() à tr() et
+	# passerait même si la clé manquait du CSV, en repli silencieux sur son propre nom).
+	assert(tr("REPORT_TAB_DEBRIEF") != "REPORT_TAB_DEBRIEF")
+	print("[OK] rapport LEGACY : sections masquees + 4 onglets titres (5 asserts)")
 
 	# 5) Détail du barème (E-visuel) : helpers PURS réconciliés + rendu dans les onglets.
 	assert(Report._breakdown_total(Report.player_points_breakdown(0, 5, 1, 2, 250)) == 57)
@@ -111,5 +122,5 @@ func _ready() -> void:
 	assert(report_detail._hero_progress_box.get_child_count() >= 2)
 	print("[OK] détail barème : helpers purs + rendu onglets (6 asserts)")
 
-	print("[OK] TEST E11 REPORT : 23 asserts verts")
+	print("[OK] TEST E11 REPORT : 25 asserts verts")
 	get_tree().quit(0)

@@ -1814,6 +1814,7 @@ func _show_operation_report() -> void:
 	# Récompenses du joueur LOCAL (Économie §8.47) : déjà reçues via match_over → animées d'emblée ;
 	# sinon vides ici, et poussées plus tard par _on_match_over (course réseau état/clôture).
 	# E11 : + podium (si le classement est déjà connu), timeline de domination et stats perso.
+	# §8.99 : + tableau BILAN (debrief), TOUJOURS résolu (cf. commentaire de _debrief_rows).
 	var data := {
 		"title": title,
 		"title_color": title_color,
@@ -1822,6 +1823,11 @@ func _show_operation_report() -> void:
 		"worst_pseudo": worst_pseudo,
 		"rewards": _local_rewards(),
 		"timeline": _timeline_series(),
+		# §8.99 — tableau BILAN (onglet 4) : à la différence du podium (gated ci-dessous sur
+		# _match_rankings), TOUJOURS résolu : WarRoom.debrief_rows() reste correct même sans rankings
+		# encore connu (repli tri par pid, cf. war_room.gd) — la table n'a donc pas besoin d'attendre
+		# le game_over pour être utile, contrairement au podium qui EST le classement final.
+		"debrief": _debrief_rows(),
 		"my_stats": _my_match_stats(),
 		"xp_detail": _xp_detail(),
 		# §8.88 — mode classé (bloc PUBLIC du game_over, relayé en propriété par NetworkManager) :
@@ -1855,6 +1861,11 @@ func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match
 	_match_rankings = rankings if typeof(rankings) == TYPE_ARRAY else []
 	if _report_node != null and is_instance_valid(_report_node):
 		_report_node.populate_rewards(_local_rewards(), _match_is_ranked(), _has_played())
+		# §8.99 — BILAN rafraîchi INCONDITIONNELLEMENT (contrairement au podium juste en dessous) :
+		# les rankings viennent d'être mémorisés ci-dessus, mais debrief_rows() reste valide même
+		# vide (cf. commentaire de _debrief_rows) — aucune raison d'attendre pour remettre à jour
+		# les compteurs live avec les tout derniers rankings/statistics reçus.
+		_report_node.populate_debrief(_debrief_rows())
 		if not _match_rankings.is_empty():
 			_report_node.populate_podium(_podium_rows())
 			_fetch_missions_for_report()
@@ -1903,6 +1914,21 @@ func _podium_rows() -> Array:
 				if (pid == _my_id() and _match_is_ranked()) else -1,
 		})
 	return rows
+
+# Lignes du tableau BILAN (§8.99, onglet 4) — calcul délégué au module PUR WarRoom (source unique
+# des compteurs, partagée avec le HUD in-game et le podium : aucune divergence possible entre les
+# écrans). GameState.winner_id est déjà un int SÛR ici : les 2 points d'appel de cette fonction
+# (_show_operation_report, _on_match_over) sont tous deux postérieurs au garde-fou de _show_victory
+# (`if GameState.winner_id != null: _show_victory()`, :1557) — cf. aussi le fallback défensif
+# ci-dessous si jamais cette fonction était un jour appelée plus tôt.
+# ⚠️ Pas de propriété `NetworkManager.last_winner_id` (vérifié) : GameState.winner_id est la SOURCE
+# DÉJÀ UTILISÉE par le titre du rapport juste au-dessus (_show_operation_report) — la réutiliser ici
+# évite d'introduire une 2ᵉ variable qui pourrait diverger (ex. mémoriser le _winner_id du signal
+# match_over serait redondant avec un état déjà fiable et déjà consommé pour la même question).
+func _debrief_rows() -> Array:
+	var winner := int(GameState.winner_id) if GameState.winner_id != null else -1
+	return WarRoom.debrief_rows(GameState.players, GameState.territories, GameState.statistics,
+		_match_rankings, _my_id(), winner)
 
 # Séries de la timeline de domination (statistics.territory_history, diffusé AVANT le game_over).
 # Historique absent/trop court (serveur antérieur, partie éclair) → [] (section masquée §9.2).

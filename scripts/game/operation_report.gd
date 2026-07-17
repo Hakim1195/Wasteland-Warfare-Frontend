@@ -18,6 +18,10 @@ const ACCENT_CYAN := Color("36c5d9")
 const ACCENT_GOLD := Color("e0b249")
 const TEXT_MUTED := Color("8a97a5")
 const DANGER := Color("d6453f")
+# Texte primaire (blanc froid, charte §2) — jusqu'ici toujours écrit en dur (Color("eef3f7")) dans
+# ce fichier ; nommé ICI (§8.99) car le tableau BILAN en a besoin à plusieurs endroits (ligne d'un
+# belligérant vivant, non vainqueur, non « moi »).
+const TEXT_PRIMARY := Color("eef3f7")
 
 # Jauge XP + Coins réutilisable (§8.47) — instanciée par code dans le bloc « Récompenses » (animé).
 const XpCoinsBarScript = preload("res://scripts/ui/xp_coins_bar.gd")
@@ -38,11 +42,19 @@ var _player_tab: VBoxContainer = null           # onglet 1 : récompenses + dét
 var _player_rewards_box: VBoxContainer = null   # bloc récompenses animé + détail des points/XP
 var _hero_tab: VBoxContainer = null             # onglet 2 : progression héros + détail
 var _hero_progress_box: VBoxContainer = null    # bloc progression héros animé + détail
-var _ranking_tab: VBoxContainer = null          # onglet 3 : podium + timeline + récap de zone
+var _ranking_tab: VBoxContainer = null          # onglet 3 : podium + récap de zone
 var _podium_list: VBoxContainer = null
 var _timeline_wrap: VBoxContainer = null
 var _timeline_chart: TimelineChart = null
 var _my_stats_box: VBoxContainer = null
+# Onglet 4 : BILAN (§8.99) — tableau comparatif de TOUS les belligérants (gains/pertes/échange)
+# + timeline de domination, MIGRÉE ici depuis l'onglet CLASSEMENT (cf. _build_tabs).
+# Colonnes : JOUEUR · TERR · CONQ · KILLS · ÉLIM · HÉROS · UNITÉS · ZONE · ÉCHANGE. Écartés à
+# dessein (lisibilité à 700 px — chaque colonne de plus dégrade toutes les autres) : cards_played,
+# détail des continents. Données disponibles dans les lignes si besoin plus tard.
+const DEBRIEF_COLUMNS := 9
+var _debrief_tab: VBoxContainer = null
+var _debrief_grid: GridContainer = null
 var _missions_lbl: Label = null
 var _return_btn: Button = null
 # Références DIRECTES aux nœuds du récap de zone migrés dans l'onglet CLASSEMENT (E11) : le
@@ -195,10 +207,10 @@ func _build_requeue_button() -> void:
 	parent.move_child(btn, anchor.get_index())
 
 # Refonte EN ONGLETS (E-visuel) PAR CODE : un TabContainer s'insère dans ReportVBox à l'emplacement
-# de l'eyebrow d'attrition ; 3 pages (ScrollContainer > VBox) — XP JOUEUR / XP HÉROS / CLASSEMENT.
-# Les blocs EXISTANTS du récap de zone (eyebrow + stagnation + attrition) MIGRENT dans l'onglet
-# CLASSEMENT — aucune retouche .tscn (piège n° 6). Les conteneurs peuplés par populate*/set_* sont
-# simplement RE-CIBLÉS (contrat main.gd inchangé).
+# de l'eyebrow d'attrition ; 4 pages (ScrollContainer > VBox) — XP JOUEUR / XP HÉROS / CLASSEMENT /
+# BILAN (§8.99, tableau comparatif + timeline). Les blocs EXISTANTS du récap de zone (eyebrow +
+# stagnation + attrition) MIGRENT dans l'onglet CLASSEMENT — aucune retouche .tscn (piège n° 6).
+# Les conteneurs peuplés par populate*/set_* sont simplement RE-CIBLÉS (contrat main.gd inchangé).
 func _build_tabs() -> void:
 	# Poignées directes AVANT tout reparentage (le déplacement casse la résolution `%Nom`).
 	_stagnation_ref = %StagnationReport
@@ -233,7 +245,7 @@ func _build_tabs() -> void:
 	_hero_progress_box.add_theme_constant_override("separation", 6)
 	_hero_tab.add_child(_hero_progress_box)
 
-	# --- Onglet 3 : CLASSEMENT (podium + objectifs révélés + timeline + récap de zone migré) ---
+	# --- Onglet 3 : CLASSEMENT (podium + objectifs révélés + récap de zone migré) ---
 	_ranking_tab = _add_tab_page("TabRanking")
 	_ranking_tab.add_child(_eyebrow(tr("REPORT_PODIUM_EYEBROW")))
 	_podium_list = VBoxContainer.new()
@@ -246,7 +258,29 @@ func _build_tabs() -> void:
 	waiting.add_theme_font_size_override("font_size", 14)
 	_podium_list.add_child(waiting)
 
-	# Timeline de domination — MASQUÉE par défaut (serveur antérieur / historique vide, §9.2).
+	# Migration du récap de zone EXISTANT vers l'onglet CLASSEMENT (reparent préserve l'owner ; on
+	# garde de toute façon les poignées directes _stagnation_ref/_attrition_ref pour populate()).
+	for node in [eyebrow, _stagnation_ref, _attrition_ref]:
+		node.reparent(_ranking_tab)
+
+	# --- Onglet 4 : BILAN (§8.99) — tableau comparatif de TOUS les belligérants + timeline ---
+	# La timeline de domination MIGRE ici depuis l'onglet CLASSEMENT : c'est une STATISTIQUE
+	# (comment chacun a performé), pas un verdict (qui a gagné et pourquoi, laissé à l'onglet 3).
+	_debrief_tab = _add_tab_page("TabDebrief")
+	_debrief_tab.add_child(_eyebrow(tr("REPORT_DEBRIEF_EYEBROW")))
+	_debrief_grid = GridContainer.new()
+	_debrief_grid.columns = DEBRIEF_COLUMNS
+	_debrief_grid.add_theme_constant_override("h_separation", 8)
+	_debrief_grid.add_theme_constant_override("v_separation", 4)
+	_debrief_tab.add_child(_debrief_grid)
+	var legend := Label.new()
+	legend.text = tr("REPORT_DEBRIEF_LEGEND")
+	legend.add_theme_color_override("font_color", TEXT_MUTED)
+	legend.add_theme_font_size_override("font_size", 10)
+	_debrief_tab.add_child(legend)
+
+	# Timeline de domination (DÉPLACÉE depuis l'onglet CLASSEMENT) — MASQUÉE par défaut (serveur
+	# antérieur / historique vide, §9.2).
 	_timeline_wrap = VBoxContainer.new()
 	_timeline_wrap.visible = false
 	_timeline_wrap.add_theme_constant_override("separation", 4)
@@ -255,17 +289,14 @@ func _build_tabs() -> void:
 	_timeline_chart.custom_minimum_size = Vector2(0, 110)
 	_timeline_chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_timeline_wrap.add_child(_timeline_chart)
-	_ranking_tab.add_child(_timeline_wrap)
-
-	# Migration du récap de zone EXISTANT vers l'onglet CLASSEMENT (reparent préserve l'owner ; on
-	# garde de toute façon les poignées directes _stagnation_ref/_attrition_ref pour populate()).
-	for node in [eyebrow, _stagnation_ref, _attrition_ref]:
-		node.reparent(_ranking_tab)
+	_debrief_tab.add_child(_timeline_wrap)
 
 	# Titres d'onglets (à icônes — charte §2 ; traduits, posés APRÈS l'ajout des pages).
 	_tabs.set_tab_title(0, tr("REPORT_TAB_PLAYER"))
 	_tabs.set_tab_title(1, tr("REPORT_TAB_HERO"))
 	_tabs.set_tab_title(2, tr("REPORT_TAB_RANKING"))
+	_tabs.set_tab_title(3, tr("REPORT_TAB_DEBRIEF"))
+	_tabs.remove_child(_tabs.get_child(3))  # CONTRE-EPREUVE TEMPORAIRE - A RETIRER
 
 # Une page d'onglet : ScrollContainer (contenu long → défilement vertical, jamais de débordement) >
 # VBoxContainer de contenu. `id` = nom ASCII du nœud (le titre visible est posé par set_tab_title).
@@ -460,6 +491,74 @@ func _make_podium_row(r: Dictionary) -> Control:
 	card.add_child(line2)
 	return card
 
+# Tableau BILAN (§8.99) — `rows` résolues par main.gd via WarRoom.debrief_rows (module PUR) :
+# { pid, username, is_bot, is_alive, is_me, is_winner, rank, territories, conquests, kills,
+#   eliminations, hero_damage, hero_kills, losses, zone_deaths, ratio, threat }.
+# Vue PURE (Règle d'Or §6.1) : aucun calcul ici, uniquement du rendu. Clé `data["debrief"]`
+# FACULTATIVE côté populate() (§9.2) : payload legacy → cette fonction n'est jamais appelée, le
+# tableau reste vide (juste les en-têtes ne sont pas non plus posés), aucune erreur.
+func populate_debrief(rows: Array) -> void:
+	if _debrief_grid == null:
+		return
+	for c in _debrief_grid.get_children():
+		_debrief_grid.remove_child(c)
+		c.queue_free()
+	for h in ["JOUEUR", "TERR", "CONQ", "KILLS", "ÉLIM", "HÉROS", "UNITÉS", "ZONE", "ÉCHANGE"]:
+		var lbl := Label.new()
+		lbl.text = h
+		# Les 2 colonnes de PERTES en rouge : « gains vs pertes » lisible sans légende.
+		lbl.add_theme_color_override("font_color",
+			DANGER if h in ["UNITÉS", "ZONE"] else TEXT_MUTED)
+		lbl.add_theme_font_size_override("font_size", 10)
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if h == "JOUEUR" \
+			else HORIZONTAL_ALIGNMENT_RIGHT
+		_debrief_grid.add_child(lbl)
+	for r in rows:
+		_add_debrief_row(r)
+
+# Une ligne du tableau BILAN. Vainqueur → or ; moi → cyan ; éliminé → muet + ✖ ; sinon texte
+# primaire. Les colonnes UNITÉS/ZONE (pertes) restent en rouge quel que soit le tint de la ligne —
+# même logique de lecture que l'en-tête.
+func _add_debrief_row(r: Dictionary) -> void:
+	var alive := bool(r.get("is_alive", true))
+	var tint: Color = ACCENT_GOLD if bool(r.get("is_winner", false)) \
+		else (ACCENT_CYAN if bool(r.get("is_me", false)) else (TEXT_PRIMARY if alive else TEXT_MUTED))
+	var name_lbl := Label.new()
+	var tag := "[IA] " if bool(r.get("is_bot", false)) else ""
+	name_lbl.text = "%s%s%s" % [tag, str(r.get("username", "?")), "" if alive else "  ✖"]
+	name_lbl.add_theme_color_override("font_color", tint)
+	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_debrief_grid.add_child(name_lbl)
+	for key in ["territories", "conquests", "kills", "eliminations", "hero_kills",
+			"losses", "zone_deaths"]:
+		var v := Label.new()
+		v.text = str(int(r.get(key, 0)))
+		v.add_theme_color_override("font_color",
+			DANGER if key in ["losses", "zone_deaths"] else tint)
+		v.add_theme_font_override("font", RosterHelpers._mono_font())
+		v.add_theme_font_size_override("font_size", 12)
+		v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_debrief_grid.add_child(v)
+	# ÉCHANGE : ratio kills/(kills+pertes) — barre CYAN (gains) sur fond ROUGE (pertes) : lecture
+	# instantanée, sans avoir à comparer les 2 colonnes chiffrées d'à côté (cf. REPORT_DEBRIEF_LEGEND).
+	var bar := ProgressBar.new()
+	bar.show_percentage = false
+	bar.min_value = 0.0
+	bar.max_value = 1.0
+	bar.value = float(r.get("ratio", 0.5))
+	bar.custom_minimum_size = Vector2(76, 6)
+	var bar_bg := StyleBoxFlat.new()
+	bar_bg.bg_color = Color(DANGER, 0.55)
+	bar_bg.set_corner_radius_all(0)
+	var bar_fill := StyleBoxFlat.new()
+	bar_fill.bg_color = ACCENT_CYAN
+	bar_fill.set_corner_radius_all(0)
+	bar.add_theme_stylebox_override("background", bar_bg)
+	bar.add_theme_stylebox_override("fill", bar_fill)
+	_debrief_grid.add_child(bar)
+
 # Timeline de domination (E11) : series résolues par main.gd (couleur plateau + points par round).
 # Vide / absente (serveur antérieur) → section MASQUÉE, aucune erreur (§9.2).
 func set_timeline(series: Array) -> void:
@@ -521,7 +620,8 @@ func set_missions_summary(progressed: int, claimable: int) -> void:
 #   rewards: Dictionary (FACULTATIF) — gains du joueur local (game_over.match_rewards[my_id], §8.47),
 #   podium: Array (FACULTATIF, E11) — lignes résolues (populate_podium),
 #   timeline: Array (FACULTATIF, E11) — séries de domination (set_timeline),
-#   my_stats: Dictionary (FACULTATIF, E11) — stats personnelles (set_my_stats) }
+#   my_stats: Dictionary (FACULTATIF, E11) — stats personnelles (set_my_stats),
+#   debrief: Array (FACULTATIF, §8.99) — tableau BILAN, une ligne/belligérant (populate_debrief) }
 func populate(data: Dictionary) -> void:
 	%ReportTitle.text = str(data.get("title", "OPÉRATION TERMINÉE")).to_upper()
 	%ReportTitle.add_theme_color_override("font_color", data.get("title_color", ACCENT_GOLD))
@@ -562,6 +662,10 @@ func populate(data: Dictionary) -> void:
 		populate_podium(data.get("podium", []))
 	set_timeline(data.get("timeline", []))
 	set_my_stats(data.get("my_stats", {}))
+	# Tableau BILAN (§8.99, FACULTATIF) — même garde que le podium : absente → onglet 4 vide,
+	# aucune erreur (§9.2).
+	if data.has("debrief"):
+		populate_debrief(data.get("debrief", []))
 
 	# Bloc « Récompenses » animé (si les gains du joueur local sont déjà connus à l'affichage).
 	# is_ranked (§8.88, FACULTATIF) : défaut `true` = comportement legacy (points affichés).
