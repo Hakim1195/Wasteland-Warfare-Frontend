@@ -1030,7 +1030,7 @@ func _faction_info(fid: String) -> Dictionary:
 		return {"name": "", "description": "", "power": ""}
 	if _faction_full_cache.has(fid):
 		return _faction_full_cache[fid]
-	var info := {"name": "", "description": "", "power": ""}
+	var info := {"name": "", "description": "", "power": "", "hero_path": ""}
 	var dir := DirAccess.open(FACTIONS_DIR)
 	if dir != null:
 		dir.list_dir_begin()
@@ -1046,7 +1046,12 @@ func _faction_info(fid: String) -> Dictionary:
 						var res = load(full)
 						if res != null and str(res.get("id")) == fid:
 							var desc := str(res.get("description"))
-							info = {"name": str(res.get("name")), "description": desc, "power": _extract_power(desc)}
+							# §8.100 — hero_path AUSSI mis en cache (portrait du panneau héros du
+							# Rapport Post-Op). Duck-typing défensif : null si champ absent → "".
+							var hp = res.get("hero_path")
+							info = {"name": str(res.get("name")), "description": desc,
+								"power": _extract_power(desc),
+								"hero_path": str(hp) if hp != null else ""}
 							break
 			file_name = dir.get_next()
 		dir.list_dir_end()
@@ -1815,6 +1820,9 @@ func _show_operation_report() -> void:
 	# sinon vides ici, et poussées plus tard par _on_match_over (course réseau état/clôture).
 	# E11 : + podium (si le classement est déjà connu), timeline de domination et stats perso.
 	# §8.99 : + tableau BILAN (debrief), TOUJOURS résolu (cf. commentaire de _debrief_rows).
+	# §8.100 — classement EFFECTIF résolu AVANT le bloc data : rankings serveur si reçus, sinon
+	# repli LOCAL (même tri que rewards.rank_players). Sert au podium ET au tableau BILAN (rangs).
+	var eff_rankings := _effective_rankings()
 	var data := {
 		"title": title,
 		"title_color": title_color,
@@ -1823,11 +1831,9 @@ func _show_operation_report() -> void:
 		"worst_pseudo": worst_pseudo,
 		"rewards": _local_rewards(),
 		"timeline": _timeline_series(),
-		# §8.99 — tableau BILAN (onglet 4) : à la différence du podium (gated ci-dessous sur
-		# _match_rankings), TOUJOURS résolu : WarRoom.debrief_rows() reste correct même sans rankings
-		# encore connu (repli tri par pid, cf. war_room.gd) — la table n'a donc pas besoin d'attendre
-		# le game_over pour être utile, contrairement au podium qui EST le classement final.
-		"debrief": _debrief_rows(),
+		# §8.99 — tableau BILAN (onglet 4) : TOUJOURS résolu. §8.100 : ordonné par le classement
+		# EFFECTIF (serveur, sinon repli local) — mêmes rangs que le podium, aucune divergence.
+		"debrief": _debrief_rows(eff_rankings),
 		"my_stats": _my_match_stats(),
 		"xp_detail": _xp_detail(),
 		# §8.88 — mode classé (bloc PUBLIC du game_over, relayé en propriété par NetworkManager) :
@@ -1842,9 +1848,18 @@ func _show_operation_report() -> void:
 		# _on_match_over l'instant d'après. Dans ce cas, `has_played` reste false ICI : le bloc
 		# n'est pas construit maintenant, _on_match_over le fera dès son arrivée (avec le bon verdict).
 		"has_played": _has_played() and _match_over_received,
+		# §8.100 — identité du héros LOCAL (faction, portrait, niveau, état) : données 100 % locales
+		# (GameState + .tres), donc TOUJOURS résolues — l'onglet XP HÉROS n'est plus jamais vide,
+		# même si le game_over (porteur des récompenses) tarde ou se perd.
+		"hero_panel": _hero_panel_data(),
 	}
-	if not _match_rankings.is_empty():
-		data["podium"] = _podium_rows()
+	# §8.100 — CLASSEMENT TOUJOURS AFFICHÉ : rankings serveur si reçus, sinon repli LOCAL (même tri
+	# que rewards.rank_players : vainqueur, puis territoires > continents > kills). L'écran ne reste
+	# plus jamais sur « en attente du classement » alors que la partie est terminée ; le repli est
+	# marqué PROVISOIRE et remplacé dès l'arrivée du game_over (_on_match_over → populate_podium).
+	if not eff_rankings.is_empty():
+		data["podium"] = _podium_rows(eff_rankings)
+		data["podium_provisional"] = _match_rankings.is_empty()
 	report.populate(data)
 	if not _match_rankings.is_empty():
 		_fetch_missions_for_report()
@@ -1860,15 +1875,20 @@ func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match
 	_match_rewards = match_rewards
 	_match_rankings = rankings if typeof(rankings) == TYPE_ARRAY else []
 	if _report_node != null and is_instance_valid(_report_node):
-		_report_node.populate_rewards(_local_rewards(), _match_is_ranked(), _has_played())
-		# §8.99 — BILAN rafraîchi INCONDITIONNELLEMENT (contrairement au podium juste en dessous) :
-		# les rankings viennent d'être mémorisés ci-dessus, mais debrief_rows() reste valide même
-		# vide (cf. commentaire de _debrief_rows) — aucune raison d'attendre pour remettre à jour
-		# les compteurs live avec les tout derniers rankings/statistics reçus.
-		_report_node.populate_debrief(_debrief_rows())
+		# §8.100 — ORDRE DÉFENSIF : le classement (verdict serveur, ce que le joueur attend le plus)
+		# est poussé AVANT le bloc récompenses. Si une erreur runtime imprévue interrompait la chaîne
+		# des récompenses (animations, breakdown), le podium et le BILAN seraient déjà rendus — c'est
+		# l'inverse qui laissait l'écran figé sur « en attente du classement » (bug constaté).
 		if not _match_rankings.is_empty():
-			_report_node.populate_podium(_podium_rows())
+			_report_node.populate_podium(_podium_rows(_match_rankings), false)
 			_fetch_missions_for_report()
+		# §8.99 — BILAN rafraîchi INCONDITIONNELLEMENT avec les tout derniers rankings/statistics.
+		_report_node.populate_debrief(_debrief_rows(_effective_rankings()))
+		# §8.100 — le détail du barème est re-résolu AVEC le rang serveur définitif : l'ancien
+		# _xp_detail (capturé à l'ouverture du rapport, rang deviné) sous-estimait/surestimait les
+		# postes d'un non-vainqueur tant que rankings n'était pas connu.
+		_report_node.set_xp_detail(_xp_detail())
+		_report_node.populate_rewards(_local_rewards(), _match_is_ranked(), _has_played())
 
 # Partie CLASSÉE ? (§8.88) — bloc PUBLIC du game_over, relayé en propriété par le NetworkManager
 # (même pattern que last_objectives_reveal). Défaut `true` côté manager = comportement legacy d'un
@@ -1880,16 +1900,70 @@ func _match_is_ranked() -> bool:
 # Débriefing 2.0 (E11 §8.83) — résolveurs du Rapport Post-Op (View pure §6.1)
 # =========================================================
 
-# Lignes du podium : classement (rankings), objectifs révélés (bloc PUBLIC objectives_reveal),
-# titres honorifiques (formules statiques du rapport, départage pid croissant), stats publiques
-# de partie — et MES points de match seuls (redaction serveur : ceux des autres sont inconnus).
-func _podium_rows() -> Array:
+# §8.100 — classement EFFECTIF : rankings du game_over si reçus, sinon repli LOCAL calculé sur
+# l'état final (le rapport ne doit JAMAIS rester « en attente » une partie terminée). Le repli
+# reproduit le tri serveur de rewards.rank_players : vainqueur en tête, puis territoires >
+# continents > kills (décroissants ; à égalité pid croissant — départage stable).
+func _effective_rankings() -> Array:
+	if not _match_rankings.is_empty():
+		return _match_rankings
+	return _local_rankings_fallback()
+
+func _local_rankings_fallback() -> Array:
+	if GameState.winner_id == null:
+		return []
+	var winner := int(GameState.winner_id)
+	var others: Array = []
+	for k in GameState.players:
+		var pid := int(k)
+		if pid != winner:
+			others.append(pid)
+	others.sort_custom(func(a, b) -> bool:
+		var ta := WarRoom.territory_count(GameState.territories, int(a))
+		var tb := WarRoom.territory_count(GameState.territories, int(b))
+		if ta != tb:
+			return ta > tb
+		var ca := _continents_owned(int(a))
+		var cb := _continents_owned(int(b))
+		if ca != cb:
+			return ca > cb
+		var ka := WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", int(a))
+		var kb := WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", int(b))
+		if ka != kb:
+			return ka > kb
+		return int(a) < int(b))
+	return [winner] + others
+
+# Continents ENTIÈREMENT possédés par `pid` en fin de partie (même synthèse que le tracker E6).
+# Factorisé §8.100 : servait déjà à _xp_detail, requis aussi par le repli local de classement.
+func _continents_owned(pid: int) -> int:
+	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
+	var owned := 0
+	for cid in cont_terrs.keys():
+		var tids: Array = cont_terrs[cid]
+		if tids.is_empty():
+			continue
+		var all_mine := true
+		for tid in tids:
+			var t: Dictionary = GameState.territories.get(str(tid), {})
+			var o = t.get("owner_id")
+			if o == null or int(o) != pid:
+				all_mine = false
+				break
+		if all_mine:
+			owned += 1
+	return owned
+
+# Lignes du podium : classement (rankings EFFECTIFS passés par l'appelant §8.100), objectifs
+# révélés (bloc PUBLIC objectives_reveal), titres honorifiques (formules statiques du rapport,
+# départage pid croissant), stats publiques — et MES points de match seuls (redaction serveur).
+func _podium_rows(rankings: Array) -> Array:
 	var reveal_by_pid := {}
 	for r in NetworkManager.last_objectives_reveal:
 		if typeof(r) == TYPE_DICTIONARY:
 			reveal_by_pid[int(r.get("player_id", -9999))] = r
 	var pids: Array = []
-	for p in _match_rankings:
+	for p in rankings:
 		pids.append(int(p))
 	var titles: Dictionary = OperationReportScript.honor_titles(GameState.statistics, pids)
 	var my_rewards := _local_rewards()
@@ -1925,10 +1999,16 @@ func _podium_rows() -> Array:
 # DÉJÀ UTILISÉE par le titre du rapport juste au-dessus (_show_operation_report) — la réutiliser ici
 # évite d'introduire une 2ᵉ variable qui pourrait diverger (ex. mémoriser le _winner_id du signal
 # match_over serait redondant avec un état déjà fiable et déjà consommé pour la même question).
-func _debrief_rows() -> Array:
+func _debrief_rows(rankings: Array = []) -> Array:
 	var winner := int(GameState.winner_id) if GameState.winner_id != null else -1
-	return WarRoom.debrief_rows(GameState.players, GameState.territories, GameState.statistics,
-		_match_rankings, _my_id(), winner)
+	var eff: Array = rankings if not rankings.is_empty() else _match_rankings
+	var rows: Array = WarRoom.debrief_rows(GameState.players, GameState.territories,
+		GameState.statistics, eff, _my_id(), winner)
+	# §8.100 — enrichissement VUE : couleur plateau de chaque belligérant (pastille de la ligne
+	# BILAN, cf. maquette). Résolu ICI (le module WarRoom reste PUR, sans dépendance au board).
+	for r in rows:
+		r["color"] = board.get_player_color(int(r.get("pid", -9999)))
+	return rows
 
 # Séries de la timeline de domination (statistics.territory_history, diffusé AVANT le game_over).
 # Historique absent/trop court (serveur antérieur, partie éclair) → [] (section masquée §9.2).
@@ -1969,6 +2049,37 @@ func _my_match_stats() -> Dictionary:
 		"hero_kills": WarRoom.stat_of(s, "hero_kills_by_player", pid),
 		"zone_deaths": WarRoom.stat_of(s, "zone_kills_by_player", pid),
 		"hero_line": hero_line,
+		# §8.100 — flag EXPLICITE pour la couleur danger de la ligne héros : l'ancien test client
+		# `begins_with("💀")` (emoji retiré de la charte) était un couplage fragile au libellé i18n.
+		"hero_dead": bool(hero.get("is_dead", false)) and int(hero.get("pv_max", 0)) > 0,
+	}
+
+# §8.100 — identité du héros LOCAL pour l'en-tête de l'onglet XP HÉROS du Rapport Post-Op.
+# 100 % local (GameState.hero_of + .tres de faction) : résolu SANS attendre le game_over — c'est ce
+# qui garantit un onglet jamais vide. {} si pré-RPG (pv_max 0 → pas de panneau, comportement §9.2).
+func _hero_panel_data() -> Dictionary:
+	var pid := _my_id()
+	var hero: Dictionary = GameState.hero_of(pid)
+	if int(hero.get("pv_max", 0)) <= 0:
+		return {}
+	var fid := str(hero.get("faction", ""))
+	var info := _faction_info(fid)
+	var portrait: Texture2D = null
+	var hp := str(info.get("hero_path", ""))
+	if hp != "" and ResourceLoader.exists(hp):
+		var res = load(hp)
+		if res is Texture2D:
+			portrait = res
+	return {
+		"faction_name": str(info.get("name", "")),
+		"portrait": portrait,
+		"color": board.get_player_color(pid),
+		"level": int(hero.get("level", 1)),
+		"pv_current": int(hero.get("pv_current", 0)),
+		"pv_max": int(hero.get("pv_max", 0)),
+		"pa": int(hero.get("pa", 0)),
+		"pp": int(hero.get("pp_current", 0)),
+		"is_dead": bool(hero.get("is_dead", false)),
 	}
 
 # Entrées BRUTES du détail du barème (E-visuel) pour le Rapport Post-Op : tout est PUBLIC/local
@@ -1977,30 +2088,18 @@ func _my_match_stats() -> Dictionary:
 func _xp_detail() -> Dictionary:
 	var pid := _my_id()
 	var s: Dictionary = GameState.statistics
-	# Rang final (0 = 1er) : rankings si connu, sinon vainqueur → 0, à défaut 2e (réconcilié ensuite).
+	# Rang final (0 = 1er) : classement EFFECTIF (§8.100 — serveur si connu, sinon repli local, le
+	# même que le podium) ; à défaut vainqueur → 0, sinon 2e (réconcilié ensuite au total serveur).
+	var eff := _effective_rankings()
 	var rank := -1
-	for i in range(_match_rankings.size()):
-		if int(_match_rankings[i]) == pid:
+	for i in range(eff.size()):
+		if int(eff[i]) == pid:
 			rank = i
 			break
 	if rank < 0:
 		rank = 0 if int(GameState.winner_id) == pid else 1
-	# Continents ENTIÈREMENT possédés en fin de partie (même synthèse que le tracker d'objectif E6).
-	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
-	var continents_final := 0
-	for cid in cont_terrs.keys():
-		var tids: Array = cont_terrs[cid]
-		if tids.is_empty():
-			continue
-		var all_mine := true
-		for tid in tids:
-			var t: Dictionary = GameState.territories.get(str(tid), {})
-			var o = t.get("owner_id")
-			if o == null or int(o) != pid:
-				all_mine = false
-				break
-		if all_mine:
-			continents_final += 1
+	# Continents ENTIÈREMENT possédés en fin de partie (helper partagé §8.100).
+	var continents_final := _continents_owned(pid)
 	# Objectif rempli (bloc PUBLIC objectives_reveal — même source que le podium).
 	var objective_done := false
 	for r in NetworkManager.last_objectives_reveal:

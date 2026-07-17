@@ -1,10 +1,11 @@
 extends Control
 
-# RAPPORT POST-OPÉRATION (§4 Warzone Command) — débriefing after-action affiché en fin de partie.
-# Fond = flou gaussien de l'arène gelée (report_blur.gdshader) + assombrissement gunmetal ; grand
-# panneau central angulaire : titre massif, « Rapport d'Attrition » (depuis GameState.statistics,
-# résolu par main.gd), et CTA « RETOURNER AU LOBBY ». View PURE (Règle d'Or §6.1) : aucune logique
-# de jeu / réseau ici — main.gd pousse les données (populate) et gère la navigation (back_to_lobby).
+# RAPPORT POST-OPÉRATION (§4 Warzone Command, refonte RETEX §8.100) — débriefing after-action de
+# fin de partie. Fond = flou gaussien de l'arène gelée (report_blur.gdshader) + assombrissement
+# gunmetal ; grand panneau central angulaire : titre massif, 4 onglets (XP JOUEUR / XP HÉROS /
+# CLASSEMENT / BILAN — registre militaire, AUCUN emoji), CTA « RETOURNER AU LOBBY ». View PURE
+# (Règle d'Or §6.1) : aucune logique de jeu / réseau ici — main.gd résout et pousse les données
+# (populate*/set_*) et gère la navigation (back_to_lobby).
 
 signal back_to_lobby
 # Re-queue en 1 clic (G3 §8.70) : « REJOUER » depuis le débriefing — bénéficie à TOUS les joueurs
@@ -40,25 +41,34 @@ var _rewards_built := false
 var _tabs: TabContainer = null
 var _player_tab: VBoxContainer = null           # onglet 1 : récompenses + détail + stats + missions
 var _player_rewards_box: VBoxContainer = null   # bloc récompenses animé + détail des points/XP
-var _hero_tab: VBoxContainer = null             # onglet 2 : progression héros + détail
+var _hero_tab: VBoxContainer = null             # onglet 2 : identité + progression héros + détail
+var _hero_identity_box: VBoxContainer = null    # §8.100 : identité du héros — TOUJOURS peuplée
 var _hero_progress_box: VBoxContainer = null    # bloc progression héros animé + détail
-var _ranking_tab: VBoxContainer = null          # onglet 3 : podium + récap de zone
+var _ranking_tab: VBoxContainer = null          # onglet 3 : podium (le récap de zone a quitté
+												# l'onglet au §8.100 — la colonne ZONE du BILAN suffit)
 var _podium_list: VBoxContainer = null
 var _timeline_wrap: VBoxContainer = null
 var _timeline_chart: TimelineChart = null
 var _my_stats_box: VBoxContainer = null
 # Onglet 4 : BILAN (§8.99) — tableau comparatif de TOUS les belligérants (gains/pertes/échange)
-# + timeline de domination, MIGRÉE ici depuis l'onglet CLASSEMENT (cf. _build_tabs).
-# Colonnes : JOUEUR · TERR · CONQ · KILLS · ÉLIM · HÉROS · UNITÉS · ZONE · ÉCHANGE. Écartés à
-# dessein (lisibilité à 700 px — chaque colonne de plus dégrade toutes les autres) : cards_played,
-# détail des continents. Données disponibles dans les lignes si besoin plus tard.
-const DEBRIEF_COLUMNS := 9
+# + timeline de domination. Colonnes : JOUEUR · TERR · CONQ · KILLS · ÉLIM · HÉROS · UNITÉS ·
+# ZONE · ÉCHANGE. Écartés à dessein (lisibilité à 700 px) : cards_played, détail des continents.
+# §8.100 — rendu en RANGÉES HBox à colonnes de largeur FIXE (plus de GridContainer) : c'est ce
+# qui permet la rangée d'EN-TÊTES GROUPÉS « GAINS / PERTES » de la maquette (une grille ne sait
+# pas faire de cellule sur plusieurs colonnes) et la surbrillance de la ligne du vainqueur.
+const DBF_NAME_W := 176.0   # colonne JOUEUR (pastille couleur + pseudo)
+const DBF_COL_W := 46.0     # colonnes chiffrées des GAINS
+const DBF_LOSS_W := 54.0    # colonnes chiffrées des PERTES
+const DBF_BAR_W := 96.0     # colonne ÉCHANGE (barre kills / pertes)
+const ROW_PAD_L := 6.0      # marge gauche COMMUNE (en-têtes + rangées) → colonnes alignées
 var _debrief_tab: VBoxContainer = null
-var _debrief_grid: GridContainer = null
+var _debrief_eyebrow: Label = null
+var _debrief_rows_box: VBoxContainer = null
 var _missions_lbl: Label = null
 var _return_btn: Button = null
-# Références DIRECTES aux nœuds du récap de zone migrés dans l'onglet CLASSEMENT (E11) : le
-# reparentage invalide la résolution `%Nom` (unique_name_in_owner) → on garde des poignées explicites.
+# Poignées DIRECTES vers les nœuds .tscn du récap de zone — MASQUÉS depuis le §8.100 (la colonne
+# ZONE du BILAN porte l'information). Conservées : _build_player_rewards/_build_hero_progress les
+# gardent comme cible de REPLI défensif, et aucune retouche .tscn n'est nécessaire (piège n° 6).
 var _stagnation_ref: Label = null
 var _attrition_ref: VBoxContainer = null
 # Entrées BRUTES du détail (xp_detail poussé par main.gd) : rank, territoires/continents en fin,
@@ -135,8 +145,8 @@ static func _title_holder(statistics: Dictionary, key: String, pids: Array,
 	return holder
 
 # Titres honorifiques (E11 — formules EXACTES du plan, calcul CLIENT, cumul possible) :
-#   💀 BOUCHER max kills · ⚔ CONQUÉRANT max conquêtes · 🎯 FOSSOYEUR max héros abattus (si > 0)
-#   🛡 INDESTRUCTIBLE min pertes · ☢ IRRADIÉ max morts à la zone (si > 0).
+#   BOUCHER max kills · CONQUÉRANT max conquêtes · FOSSOYEUR max héros abattus (si > 0)
+#   INDESTRUCTIBLE min pertes · IRRADIÉ max morts à la zone (si > 0).
 # Retour : { pid: Array[clé i18n TITLE_*] }.
 static func honor_titles(statistics: Dictionary, pids: Array) -> Dictionary:
 	var out := {}
@@ -155,13 +165,10 @@ static func honor_titles(statistics: Dictionary, pids: Array) -> Dictionary:
 			out[holder].append(str(d[0]))
 	return out
 
-# Médaille du podium : 🥇🥈🥉 puis « 4. », « 5. »…
+# Indicatif de rang du podium (§8.100 — registre militaire, plus d'emojis) : « 01 », « 02 », …
+# Le rendu colore le « 01 » en or (vainqueur) et les suivants en acier (cf. _make_podium_row).
 static func medal_for(rank_index: int) -> String:
-	match rank_index:
-		0: return "🥇"
-		1: return "🥈"
-		2: return "🥉"
-		_: return "%d." % (rank_index + 1)
+	return "%02d" % (rank_index + 1)
 
 func _ready() -> void:
 	%BackToLobbyButton.pressed.connect(func(): back_to_lobby.emit())
@@ -174,7 +181,7 @@ func _ready() -> void:
 	if OS.is_debug_build() and not _self_checked:
 		_self_check()
 
-# Bouton « ⟳ REJOUER » (G3 §8.70), construit par code À CÔTÉ du retour lobby (aucune retouche
+# Bouton « REJOUER » (G3 §8.70), construit par code À CÔTÉ du retour lobby (aucune retouche
 # .tscn) : or (CTA de relance), anti double-clic, émet requeue_requested (main.gd décide).
 func _build_requeue_button() -> void:
 	var anchor: Button = %BackToLobbyButton
@@ -208,11 +215,12 @@ func _build_requeue_button() -> void:
 
 # Refonte EN ONGLETS (E-visuel) PAR CODE : un TabContainer s'insère dans ReportVBox à l'emplacement
 # de l'eyebrow d'attrition ; 4 pages (ScrollContainer > VBox) — XP JOUEUR / XP HÉROS / CLASSEMENT /
-# BILAN (§8.99, tableau comparatif + timeline). Les blocs EXISTANTS du récap de zone (eyebrow +
-# stagnation + attrition) MIGRENT dans l'onglet CLASSEMENT — aucune retouche .tscn (piège n° 6).
+# BILAN (§8.99, tableau comparatif + timeline). §8.100 : les blocs .tscn du récap de zone (eyebrow +
+# stagnation + attrition) sont MASQUÉS, plus reparentés — aucune retouche .tscn (piège n° 6).
 # Les conteneurs peuplés par populate*/set_* sont simplement RE-CIBLÉS (contrat main.gd inchangé).
 func _build_tabs() -> void:
-	# Poignées directes AVANT tout reparentage (le déplacement casse la résolution `%Nom`).
+	# Poignées directes posées D'ABORD (héritage E11 : un reparentage cassait la résolution `%Nom` ;
+	# depuis §8.100 on ne reparente plus, on MASQUE — les poignées restent le point d'accès unique).
 	_stagnation_ref = %StagnationReport
 	_attrition_ref = %AttritionList
 	var vbox: VBoxContainer = _attrition_ref.get_parent()
@@ -234,18 +242,30 @@ func _build_tabs() -> void:
 	_player_rewards_box = VBoxContainer.new()
 	_player_rewards_box.add_theme_constant_override("separation", 6)
 	_player_tab.add_child(_player_rewards_box)
+	# §8.100 — placeholder honnête tant que le game_over n'est pas arrivé (course réseau) : l'onglet
+	# n'est plus jamais BLANC. _build_player_rewards VIDE la boîte avant de construire (idempotent).
+	_player_rewards_box.add_child(_pending_note(tr("REPORT_REWARDS_PENDING")))
 	_player_tab.add_child(_eyebrow(tr("REPORT_MYPERF_EYEBROW")))
 	_my_stats_box = VBoxContainer.new()
 	_my_stats_box.add_theme_constant_override("separation", 3)
 	_player_tab.add_child(_my_stats_box)
 
-	# --- Onglet 2 : XP HÉROS (progression animée + détail du barème héros) ---
+	# --- Onglet 2 : XP HÉROS (identité §8.100 + progression animée + détail du barème héros) ---
 	_hero_tab = _add_tab_page("TabHero")
+	# Identité du héros (faction, portrait, niveau, état) — peuplée par populate_hero_identity()
+	# depuis des données 100 % LOCALES : visible même si les récompenses n'arrivent jamais.
+	_hero_identity_box = VBoxContainer.new()
+	_hero_identity_box.add_theme_constant_override("separation", 6)
+	_hero_tab.add_child(_hero_identity_box)
 	_hero_progress_box = VBoxContainer.new()
 	_hero_progress_box.add_theme_constant_override("separation", 6)
 	_hero_tab.add_child(_hero_progress_box)
+	_hero_progress_box.add_child(_pending_note(tr("REPORT_REWARDS_PENDING")))
 
-	# --- Onglet 3 : CLASSEMENT (podium + objectifs révélés + récap de zone migré) ---
+	# --- Onglet 3 : CLASSEMENT (podium + objectifs révélés) ---
+	# §8.100 — le récap de zone (stagnation + attrition) NE migre PLUS ici : l'information vit dans
+	# la colonne ZONE du BILAN (demande produit). Les nœuds .tscn d'origine restent dans l'arbre,
+	# simplement MASQUÉS (aucune retouche .tscn — piège n° 6 ; les poignées restent valides).
 	_ranking_tab = _add_tab_page("TabRanking")
 	_ranking_tab.add_child(_eyebrow(tr("REPORT_PODIUM_EYEBROW")))
 	_podium_list = VBoxContainer.new()
@@ -257,22 +277,19 @@ func _build_tabs() -> void:
 	waiting.add_theme_color_override("font_color", TEXT_MUTED)
 	waiting.add_theme_font_size_override("font_size", 14)
 	_podium_list.add_child(waiting)
-
-	# Migration du récap de zone EXISTANT vers l'onglet CLASSEMENT (reparent préserve l'owner ; on
-	# garde de toute façon les poignées directes _stagnation_ref/_attrition_ref pour populate()).
 	for node in [eyebrow, _stagnation_ref, _attrition_ref]:
-		node.reparent(_ranking_tab)
+		node.visible = false
 
 	# --- Onglet 4 : BILAN (§8.99) — tableau comparatif de TOUS les belligérants + timeline ---
-	# La timeline de domination MIGRE ici depuis l'onglet CLASSEMENT : c'est une STATISTIQUE
-	# (comment chacun a performé), pas un verdict (qui a gagné et pourquoi, laissé à l'onglet 3).
+	# La timeline de domination vit ici : c'est une STATISTIQUE (comment chacun a performé),
+	# pas un verdict (qui a gagné et pourquoi, laissé à l'onglet 3).
 	_debrief_tab = _add_tab_page("TabDebrief")
-	_debrief_tab.add_child(_eyebrow(tr("REPORT_DEBRIEF_EYEBROW")))
-	_debrief_grid = GridContainer.new()
-	_debrief_grid.columns = DEBRIEF_COLUMNS
-	_debrief_grid.add_theme_constant_override("h_separation", 8)
-	_debrief_grid.add_theme_constant_override("v_separation", 4)
-	_debrief_tab.add_child(_debrief_grid)
+	_debrief_eyebrow = _eyebrow(tr("REPORT_DEBRIEF_EYEBROW"))
+	_debrief_tab.add_child(_debrief_eyebrow)
+	_debrief_rows_box = VBoxContainer.new()
+	_debrief_rows_box.add_theme_constant_override("separation", 0)
+	_debrief_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_debrief_tab.add_child(_debrief_rows_box)
 	var legend := Label.new()
 	legend.text = tr("REPORT_DEBRIEF_LEGEND")
 	legend.add_theme_color_override("font_color", TEXT_MUTED)
@@ -291,12 +308,11 @@ func _build_tabs() -> void:
 	_timeline_wrap.add_child(_timeline_chart)
 	_debrief_tab.add_child(_timeline_wrap)
 
-	# Titres d'onglets (à icônes — charte §2 ; traduits, posés APRÈS l'ajout des pages).
+	# Titres d'onglets (§8.100 — texte SEUL, sans emoji ; traduits, posés APRÈS l'ajout des pages).
 	_tabs.set_tab_title(0, tr("REPORT_TAB_PLAYER"))
 	_tabs.set_tab_title(1, tr("REPORT_TAB_HERO"))
 	_tabs.set_tab_title(2, tr("REPORT_TAB_RANKING"))
 	_tabs.set_tab_title(3, tr("REPORT_TAB_DEBRIEF"))
-	_tabs.remove_child(_tabs.get_child(3))  # CONTRE-EPREUVE TEMPORAIRE - A RETIRER
 
 # Une page d'onglet : ScrollContainer (contenu long → défilement vertical, jamais de débordement) >
 # VBoxContainer de contenu. `id` = nom ASCII du nœud (le titre visible est posé par set_tab_title).
@@ -320,6 +336,40 @@ func _eyebrow(text: String) -> Label:
 	l.add_theme_color_override("font_color", ACCENT_CYAN)
 	l.add_theme_font_size_override("font_size", 14)
 	return l
+
+# Note discrète « — … — » (§8.100) : placeholder honnête des boîtes de récompenses tant que le
+# game_over n'est pas arrivé. Les constructeurs (_build_player_rewards / _build_hero_progress)
+# VIDENT leur boîte avant de poser le contenu réel — la note disparaît alors d'elle-même.
+func _pending_note(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_color_override("font_color", TEXT_MUTED)
+	l.add_theme_font_size_override("font_size", 13)
+	return l
+
+# Badge-puce or bordé (§8.100) — titres honorifiques du podium (tooltip dédié) et chip de
+# niveau du panneau héros. Remplace les libellés à emoji.
+func _title_badge(text: String, tooltip: String = "") -> Control:
+	var badge := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(ACCENT_GOLD, 0.10)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(ACCENT_GOLD, 0.65)
+	sb.content_margin_left = 6
+	sb.content_margin_right = 6
+	sb.content_margin_top = 1
+	sb.content_margin_bottom = 1
+	badge.add_theme_stylebox_override("panel", sb)
+	if tooltip != "":
+		badge.tooltip_text = tooltip
+		badge.mouse_filter = Control.MOUSE_FILTER_PASS
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_color_override("font_color", ACCENT_GOLD)
+	badge.add_child(l)
+	return badge
 
 # Thème du TabContainer : angles DROITS, liseré cyan sur l'onglet actif, gunmetal translucide (§2).
 func _style_tabs(tc: TabContainer) -> void:
@@ -355,7 +405,7 @@ func _style_tabs(tc: TabContainer) -> void:
 	tc.add_theme_color_override("font_unselected_color", TEXT_MUTED)
 	tc.add_theme_color_override("font_hovered_color", Color("eef3f7"))
 
-# Boutons d'inspection (E11) : « 🔍 INSPECTER LE CHAMP DE BATAILLE » dans la rangée de CTA +
+# Boutons d'inspection (E11) : « INSPECTER LE CHAMP DE BATAILLE » dans la rangée de CTA +
 # bouton flottant « ◀ RAPPORT » pour revenir. Masque le rapport ET le flou — le plateau final
 # reste dessous, main.gd libère la caméra (signal battlefield_inspect).
 func _build_inspect_buttons() -> void:
@@ -409,7 +459,10 @@ func _set_inspecting(on: bool) -> void:
 # Podium & classement (E11) : consomme ENFIN `rankings`. rows résolues par main.gd :
 # { pid, medal, titles: Array[clé TITLE_*], objective, completed, has_reveal, kills, conquests,
 #   eliminations, points (−1 = masqué — seuls MES points sont connus, redaction serveur) }.
-func populate_podium(rows: Array) -> void:
+# §8.100 — `provisional` : classement calculé LOCALEMENT (game_over pas encore reçu) → affiché
+# quand même (mieux qu'un écran « en attente »), avec une mention discrète ; le verdict serveur
+# le REMPLACE dès son arrivée (populate_podium re-appelé par _on_match_over, provisional=false).
+func populate_podium(rows: Array, provisional: bool = false) -> void:
 	if _podium_list == null:
 		return
 	# Retrait IMMÉDIAT (remove_child avant queue_free) : le placeholder « en attente » et un
@@ -420,34 +473,57 @@ func populate_podium(rows: Array) -> void:
 		c.queue_free()
 	for i in range(rows.size()):
 		_podium_list.add_child(_make_podium_row(rows[i]))
+	if provisional and not rows.is_empty():
+		var note := Label.new()
+		note.name = "ProvisionalNote"
+		note.text = tr("REPORT_PODIUM_PROVISIONAL")
+		note.add_theme_color_override("font_color", TEXT_MUTED)
+		note.add_theme_font_size_override("font_size", 11)
+		_podium_list.add_child(note)
 
+# Une ligne du podium (§8.100 — restylée sans emojis) : panneau à liseré gauche (OR pour le
+# vainqueur, cyan discret sinon), indicatif de rang mono « 01 », brique PlayerChip, badges de
+# titres, points ; 2e ligne = objectif révélé (✓/✕) + compteurs K·C·E en mono.
 func _make_podium_row(r: Dictionary) -> Control:
+	var is_first := str(r.get("medal", "")) == "01"
+	var wrap := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.set_content_margin_all(8)
+	sb.content_margin_left = 10
+	sb.border_width_left = 3
+	if is_first:
+		sb.bg_color = Color(ACCENT_GOLD, 0.07)
+		sb.border_color = ACCENT_GOLD
+	else:
+		sb.bg_color = Color(1, 1, 1, 0.02)
+		sb.border_color = Color(ACCENT_CYAN, 0.18)
+	wrap.add_theme_stylebox_override("panel", sb)
+
 	var card := VBoxContainer.new()
-	card.add_theme_constant_override("separation", 1)
+	card.add_theme_constant_override("separation", 2)
+	wrap.add_child(card)
 	var line1 := HBoxContainer.new()
-	line1.add_theme_constant_override("separation", 6)
-	var medal := Label.new()
-	medal.text = str(r.get("medal", "—"))
-	medal.custom_minimum_size = Vector2(30, 0)
-	medal.add_theme_font_size_override("font_size", 18)
-	line1.add_child(medal)
+	line1.add_theme_constant_override("separation", 8)
+	var rank_lbl := Label.new()
+	rank_lbl.text = str(r.get("medal", "—"))
+	rank_lbl.custom_minimum_size = Vector2(28, 0)
+	rank_lbl.add_theme_font_override("font", RosterHelpers._mono_font())
+	rank_lbl.add_theme_font_size_override("font_size", 17)
+	rank_lbl.add_theme_color_override("font_color", ACCENT_GOLD if is_first else TEXT_MUTED)
+	line1.add_child(rank_lbl)
 	var chip := PlayerChipScene.instantiate()
 	chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line1.add_child(chip)
 	chip.setup(int(r.get("pid", 0)), false)
 	for t in r.get("titles", []):
-		var badge := Label.new()
-		badge.text = tr(str(t))
-		badge.add_theme_font_size_override("font_size", 11)
-		badge.add_theme_color_override("font_color", ACCENT_GOLD)
-		badge.tooltip_text = tr("REPORT_TITLE_TOOLTIP")
-		badge.mouse_filter = Control.MOUSE_FILTER_PASS
-		line1.add_child(badge)
+		line1.add_child(_title_badge(tr(str(t)), tr("REPORT_TITLE_TOOLTIP")))
 	# Points de match : +N PTS pour MOI (connu) ; « — » (masqué) pour les autres (redaction serveur
 	# — seuls MES points sont diffusés). On ne masque plus la colonne : on affiche l'inconnu honnête.
 	var pts := int(r.get("points", -1))
 	var pts_lbl := Label.new()
-	pts_lbl.add_theme_font_size_override("font_size", 15)
+	pts_lbl.add_theme_font_override("font", RosterHelpers._mono_font())
+	pts_lbl.add_theme_font_size_override("font_size", 14)
 	if pts >= 0:
 		pts_lbl.text = "+%d PTS" % pts
 		pts_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
@@ -462,93 +538,147 @@ func _make_podium_row(r: Dictionary) -> Control:
 	var line2 := HBoxContainer.new()
 	line2.add_theme_constant_override("separation", 8)
 	var indent := Control.new()
-	indent.custom_minimum_size = Vector2(30, 0)
+	indent.custom_minimum_size = Vector2(28, 0)
 	line2.add_child(indent)
-	# Objectif révélé (bloc PUBLIC objectives_reveal) — ✔ vert / ✘ gris ; masqué si serveur
-	# antérieur (has_reveal false → mention neutre).
+	# Objectif révélé (bloc PUBLIC objectives_reveal) — ✓ vert / ✕ acier ; mention neutre si
+	# serveur antérieur (has_reveal false).
 	var obj := Label.new()
 	if bool(r.get("has_reveal", false)):
 		var done := bool(r.get("completed", false))
-		obj.text = ("✔ " if done else "✘ ") + str(r.get("objective", ""))
+		obj.text = ("✓ " if done else "✕ ") + str(r.get("objective", ""))
 		obj.add_theme_color_override("font_color", Color("46b58a") if done else TEXT_MUTED)
 	else:
 		obj.text = tr("REPORT_OBJ_UNKNOWN")
 		obj.add_theme_color_override("font_color", TEXT_MUTED)
-	obj.add_theme_font_size_override("font_size", 13)
+	obj.add_theme_font_size_override("font_size", 12)
 	obj.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	obj.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	obj.tooltip_text = str(r.get("objective", ""))
 	obj.mouse_filter = Control.MOUSE_FILTER_PASS
 	line2.add_child(obj)
 	var stats := Label.new()
-	stats.text = "⚔%d 🚩%d 🎯%d" % [int(r.get("kills", 0)), int(r.get("conquests", 0)),
+	stats.text = "K %d · C %d · E %d" % [int(r.get("kills", 0)), int(r.get("conquests", 0)),
 		int(r.get("eliminations", 0))]
-	stats.add_theme_font_size_override("font_size", 12)
+	stats.add_theme_font_override("font", RosterHelpers._mono_font())
+	stats.add_theme_font_size_override("font_size", 11)
 	stats.add_theme_color_override("font_color", Color("c8cdd6"))
 	stats.tooltip_text = tr("REPORT_STATS_LEGEND")
 	stats.mouse_filter = Control.MOUSE_FILTER_PASS
 	line2.add_child(stats)
 	card.add_child(line2)
-	return card
+	return wrap
 
-# Tableau BILAN (§8.99) — `rows` résolues par main.gd via WarRoom.debrief_rows (module PUR) :
+# Tableau BILAN (§8.99, rendu maquette §8.100) — `rows` résolues par main.gd via
+# WarRoom.debrief_rows (module PUR) + enrichies de `color` (pastille plateau) :
 # { pid, username, is_bot, is_alive, is_me, is_winner, rank, territories, conquests, kills,
-#   eliminations, hero_damage, hero_kills, losses, zone_deaths, ratio, threat }.
+#   eliminations, hero_damage, hero_kills, losses, zone_deaths, ratio, threat, color }.
 # Vue PURE (Règle d'Or §6.1) : aucun calcul ici, uniquement du rendu. Clé `data["debrief"]`
 # FACULTATIVE côté populate() (§9.2) : payload legacy → cette fonction n'est jamais appelée, le
-# tableau reste vide (juste les en-têtes ne sont pas non plus posés), aucune erreur.
+# tableau reste vide (l'onglet existe, sans en-têtes), aucune erreur.
 func populate_debrief(rows: Array) -> void:
-	if _debrief_grid == null:
+	if _debrief_rows_box == null:
 		return
-	for c in _debrief_grid.get_children():
-		_debrief_grid.remove_child(c)
+	for c in _debrief_rows_box.get_children():
+		_debrief_rows_box.remove_child(c)
 		c.queue_free()
-	for h in ["JOUEUR", "TERR", "CONQ", "KILLS", "ÉLIM", "HÉROS", "UNITÉS", "ZONE", "ÉCHANGE"]:
-		var lbl := Label.new()
-		lbl.text = h
-		# Les 2 colonnes de PERTES en rouge : « gains vs pertes » lisible sans légende.
-		lbl.add_theme_color_override("font_color",
-			DANGER if h in ["UNITÉS", "ZONE"] else TEXT_MUTED)
-		lbl.add_theme_font_size_override("font_size", 10)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if h == "JOUEUR" \
-			else HORIZONTAL_ALIGNMENT_RIGHT
-		_debrief_grid.add_child(lbl)
-	for r in rows:
-		_add_debrief_row(r)
+	# En-tête d'onglet façon maquette : « ❯ BILAN TACTIQUE — N BELLIGÉRANTS ».
+	if _debrief_eyebrow != null:
+		_debrief_eyebrow.text = tr("REPORT_DEBRIEF_EYEBROW") \
+			+ ((tr("REPORT_DEBRIEF_COUNT") % rows.size()) if not rows.is_empty() else "")
 
-# Une ligne du tableau BILAN. Vainqueur → or ; moi → cyan ; éliminé → muet + ✖ ; sinon texte
-# primaire. Les colonnes UNITÉS/ZONE (pertes) restent en rouge quel que soit le tint de la ligne —
-# même logique de lecture que l'en-tête.
-func _add_debrief_row(r: Dictionary) -> void:
+	# Rangée d'EN-TÊTES GROUPÉS : GAINS (5 colonnes) souligné cyan / PERTES (2 colonnes) souligné
+	# rouge — la lecture « gains vs pertes » de la maquette, impossible avec l'ancien GridContainer.
+	var groups := HBoxContainer.new()
+	groups.add_theme_constant_override("separation", 0)
+	groups.add_child(_spacer(ROW_PAD_L))
+	groups.add_child(_fixed_cell("", DBF_NAME_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_LEFT))
+	groups.add_child(_group_rule(tr("REPORT_DEBRIEF_GAINS"), ACCENT_CYAN, DBF_COL_W * 5.0))
+	groups.add_child(_group_rule(tr("REPORT_DEBRIEF_LOSSES"), DANGER, DBF_LOSS_W * 2.0))
+	groups.add_child(_fixed_cell("", DBF_BAR_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_CENTER))
+	_debrief_rows_box.add_child(groups)
+
+	# Rangée des TITRES de colonnes (PERTES en rouge : lisible sans légende).
+	var heads := HBoxContainer.new()
+	heads.add_theme_constant_override("separation", 0)
+	heads.add_child(_spacer(ROW_PAD_L))
+	heads.add_child(_fixed_cell("JOUEUR", DBF_NAME_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_LEFT))
+	for h in ["TERR", "CONQ", "KILLS", "ÉLIM", "HÉROS"]:
+		heads.add_child(_fixed_cell(h, DBF_COL_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_RIGHT))
+	for h in ["UNITÉS", "ZONE"]:
+		heads.add_child(_fixed_cell(h, DBF_LOSS_W, DANGER, 10, HORIZONTAL_ALIGNMENT_RIGHT))
+	heads.add_child(_fixed_cell("ÉCHANGE", DBF_BAR_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_CENTER))
+	_debrief_rows_box.add_child(heads)
+	_debrief_rows_box.add_child(_spacer_v(3.0))
+
+	for i in range(rows.size()):
+		_debrief_rows_box.add_child(_make_debrief_row(rows[i], i % 2 == 1))
+
+# Une ligne du tableau BILAN (§8.100). Vainqueur → panneau lavé OR + liseré gauche or (maquette) ;
+# moi → pseudo cyan ; éliminé → muet + ✕ rouge ; sinon texte primaire. Les colonnes UNITÉS/ZONE
+# (pertes) restent en rouge quel que soit le tint de la ligne — même logique que l'en-tête.
+func _make_debrief_row(r: Dictionary, odd: bool) -> Control:
 	var alive := bool(r.get("is_alive", true))
-	var tint: Color = ACCENT_GOLD if bool(r.get("is_winner", false)) \
+	var is_winner := bool(r.get("is_winner", false))
+	var tint: Color = ACCENT_GOLD if is_winner \
 		else (ACCENT_CYAN if bool(r.get("is_me", false)) else (TEXT_PRIMARY if alive else TEXT_MUTED))
-	var name_lbl := Label.new()
+	var wrap := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.content_margin_top = 4
+	sb.content_margin_bottom = 4
+	sb.content_margin_left = ROW_PAD_L
+	if is_winner:
+		sb.bg_color = Color(ACCENT_GOLD, 0.08)
+		sb.border_width_left = 3
+		sb.border_color = ACCENT_GOLD
+	else:
+		# Zébrage discret une ligne sur deux : balayage horizontal guidé, sans bruit visuel.
+		sb.bg_color = Color(1, 1, 1, 0.025) if odd else Color(0, 0, 0, 0)
+	wrap.add_theme_stylebox_override("panel", sb)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 0)
+	wrap.add_child(row)
+
+	# Colonne JOUEUR : pastille couleur PLATEAU + pseudo (+ ✕ rouge si éliminé).
+	var name_box := HBoxContainer.new()
+	name_box.add_theme_constant_override("separation", 6)
+	name_box.custom_minimum_size = Vector2(DBF_NAME_W, 0)
+	var sw := ColorRect.new()
+	sw.color = r.get("color", Color("8a97a5"))
+	sw.custom_minimum_size = Vector2(10, 10)
+	sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_box.add_child(sw)
 	var tag := "[IA] " if bool(r.get("is_bot", false)) else ""
-	name_lbl.text = "%s%s%s" % [tag, str(r.get("username", "?")), "" if alive else "  ✖"]
+	var name_lbl := Label.new()
+	name_lbl.text = "%s%s" % [tag, str(r.get("username", "?"))]
 	name_lbl.add_theme_color_override("font_color", tint)
-	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_lbl.add_theme_font_size_override("font_size", 12)
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_debrief_grid.add_child(name_lbl)
-	for key in ["territories", "conquests", "kills", "eliminations", "hero_kills",
-			"losses", "zone_deaths"]:
-		var v := Label.new()
-		v.text = str(int(r.get(key, 0)))
-		v.add_theme_color_override("font_color",
-			DANGER if key in ["losses", "zone_deaths"] else tint)
-		v.add_theme_font_override("font", RosterHelpers._mono_font())
-		v.add_theme_font_size_override("font_size", 12)
-		v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		_debrief_grid.add_child(v)
+	name_box.add_child(name_lbl)
+	if not alive:
+		var kia := Label.new()
+		kia.text = "✕"
+		kia.add_theme_color_override("font_color", DANGER)
+		kia.add_theme_font_size_override("font_size", 12)
+		name_box.add_child(kia)
+	row.add_child(name_box)
+
+	for key in ["territories", "conquests", "kills", "eliminations", "hero_kills"]:
+		row.add_child(_num_cell(int(r.get(key, 0)), DBF_COL_W, tint))
+	for key in ["losses", "zone_deaths"]:
+		row.add_child(_num_cell(int(r.get(key, 0)), DBF_LOSS_W, DANGER))
+
 	# ÉCHANGE : ratio kills/(kills+pertes) — barre CYAN (gains) sur fond ROUGE (pertes) : lecture
-	# instantanée, sans avoir à comparer les 2 colonnes chiffrées d'à côté (cf. REPORT_DEBRIEF_LEGEND).
+	# instantanée, sans comparer les colonnes chiffrées (cf. REPORT_DEBRIEF_LEGEND).
+	var bar_wrap := CenterContainer.new()
+	bar_wrap.custom_minimum_size = Vector2(DBF_BAR_W, 0)
 	var bar := ProgressBar.new()
 	bar.show_percentage = false
 	bar.min_value = 0.0
 	bar.max_value = 1.0
 	bar.value = float(r.get("ratio", 0.5))
-	bar.custom_minimum_size = Vector2(76, 6)
+	bar.custom_minimum_size = Vector2(DBF_BAR_W - 20.0, 6)
 	var bar_bg := StyleBoxFlat.new()
 	bar_bg.bg_color = Color(DANGER, 0.55)
 	bar_bg.set_corner_radius_all(0)
@@ -557,7 +687,60 @@ func _add_debrief_row(r: Dictionary) -> void:
 	bar_fill.set_corner_radius_all(0)
 	bar.add_theme_stylebox_override("background", bar_bg)
 	bar.add_theme_stylebox_override("fill", bar_fill)
-	_debrief_grid.add_child(bar)
+	bar_wrap.add_child(bar)
+	row.add_child(bar_wrap)
+	return wrap
+
+# --- Briques du tableau BILAN (§8.100) ---
+
+# Cellule de LARGEUR FIXE (alignement inter-rangées garanti sans grille).
+func _fixed_cell(text: String, w: float, color: Color, font_size: int, align: int) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.custom_minimum_size = Vector2(w, 0)
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_font_size_override("font_size", font_size)
+	l.horizontal_alignment = align
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	return l
+
+# Cellule CHIFFRÉE (police mono, alignée à droite) — colonne de largeur fixe.
+func _num_cell(value: int, w: float, color: Color) -> Label:
+	var l := _fixed_cell(str(value), w, color, 12, HORIZONTAL_ALIGNMENT_RIGHT)
+	l.add_theme_font_override("font", RosterHelpers._mono_font())
+	return l
+
+# En-tête de GROUPE de colonnes (« GAINS » / « PERTES ») : libellé centré + filet 1 px souligné,
+# retrait latéral de 8 px (les deux groupes adjacents restent visuellement séparés — maquette).
+func _group_rule(text: String, color: Color, w: float) -> Control:
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(w, 0)
+	box.add_theme_constant_override("separation", 2)
+	var l := Label.new()
+	l.text = text
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_font_size_override("font_size", 10)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(l)
+	var mc := MarginContainer.new()
+	mc.add_theme_constant_override("margin_left", 8)
+	mc.add_theme_constant_override("margin_right", 8)
+	var rule := ColorRect.new()
+	rule.color = Color(color, 0.55)
+	rule.custom_minimum_size = Vector2(0, 1)
+	mc.add_child(rule)
+	box.add_child(mc)
+	return box
+
+func _spacer(w: float) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(w, 0)
+	return c
+
+func _spacer_v(h: float) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(0, h)
+	return c
 
 # Timeline de domination (E11) : series résolues par main.gd (couleur plateau + points par round).
 # Vide / absente (serveur antérieur) → section MASQUÉE, aucune erreur (§9.2).
@@ -596,9 +779,78 @@ func set_my_stats(ms: Dictionary) -> void:
 		var hero_lbl := Label.new()
 		hero_lbl.text = tr("REPORT_MY_HERO") + "  " + hero_line
 		hero_lbl.add_theme_font_size_override("font_size", 14)
+		# §8.100 — flag EXPLICITE `hero_dead` (résolu par main.gd) : l'ancien test sur le préfixe
+		# emoji du libellé i18n cassait dès que la traduction changeait.
 		hero_lbl.add_theme_color_override("font_color",
-			DANGER if hero_line.begins_with("💀") else ACCENT_CYAN)
+			DANGER if bool(ms.get("hero_dead", false)) else ACCENT_CYAN)
 		_my_stats_box.add_child(hero_lbl)
+
+# §8.100 — identité du héros LOCAL (onglet XP HÉROS, en-tête TOUJOURS visible) : panneau à liseré
+# couleur plateau — portrait de faction, nom, chip de niveau, état (PV/PA/PP ou ABATTU). `h` résolu
+# par main.gd (_hero_panel_data, données 100 % locales) ; {} (pré-RPG / spectateur) → aucun panneau.
+func populate_hero_identity(h: Dictionary) -> void:
+	if _hero_identity_box == null:
+		return
+	for c in _hero_identity_box.get_children():
+		_hero_identity_box.remove_child(c)
+		c.queue_free()
+	if h.is_empty():
+		return
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(0.101961, 0.12549, 0.156863, 0.5)
+	sb.border_width_left = 3
+	sb.border_color = h.get("color", ACCENT_CYAN)
+	sb.set_content_margin_all(10)
+	panel.add_theme_stylebox_override("panel", sb)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 12)
+	panel.add_child(hb)
+	var portrait = h.get("portrait")
+	if portrait is Texture2D:
+		var tex := TextureRect.new()
+		tex.texture = portrait
+		tex.custom_minimum_size = Vector2(56, 56)
+		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		tex.clip_contents = true
+		hb.add_child(tex)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 3)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hb.add_child(col)
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 8)
+	col.add_child(name_row)
+	var name_lbl := Label.new()
+	name_lbl.text = str(h.get("faction_name", "")).to_upper()
+	name_lbl.add_theme_font_size_override("font_size", 17)
+	name_lbl.add_theme_color_override("font_color", TEXT_PRIMARY)
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	name_row.add_child(name_lbl)
+	name_row.add_child(_title_badge(tr("REPORT_HERO_LEVEL") % int(h.get("level", 1))))
+	var state_lbl := Label.new()
+	state_lbl.add_theme_font_override("font", RosterHelpers._mono_font())
+	state_lbl.add_theme_font_size_override("font_size", 12)
+	if bool(h.get("is_dead", false)):
+		state_lbl.text = tr("REPORT_HERO_DOWN")
+		state_lbl.add_theme_color_override("font_color", DANGER)
+	else:
+		state_lbl.text = "PV %d/%d · PA %d · PP %+d" % [int(h.get("pv_current", 0)),
+			int(h.get("pv_max", 0)), int(h.get("pa", 0)), int(h.get("pp", 0))]
+		state_lbl.add_theme_color_override("font_color", Color("c8cdd6"))
+	col.add_child(state_lbl)
+	_hero_identity_box.add_child(panel)
+
+# §8.100 — MAJ des entrées brutes du détail du barème APRÈS coup (main.gd, à l'arrivée du
+# game_over) : le rang serveur définitif remplace le rang deviné à l'ouverture du rapport.
+# Sans effet si le détail est déjà construit (garde _rewards_built en amont).
+func set_xp_detail(d: Dictionary) -> void:
+	if typeof(d) == TYPE_DICTIONARY and not d.is_empty():
+		_detail_inputs = d
 
 # Pont missions (M2 §8.65 — E11) : rappel de la boucle de rétention au pied de MA colonne.
 func set_missions_summary(progressed: int, claimable: int) -> void:
@@ -608,8 +860,7 @@ func set_missions_summary(progressed: int, claimable: int) -> void:
 		_missions_lbl = Label.new()
 		_missions_lbl.add_theme_font_size_override("font_size", 14)
 		_player_tab.add_child(_missions_lbl)
-	_missions_lbl.text = tr("REPORT_MISSIONS") % [progressed, claimable] \
-		+ (" ✦" if claimable > 0 else "")
+	_missions_lbl.text = tr("REPORT_MISSIONS") % [progressed, claimable]
 	_missions_lbl.add_theme_color_override("font_color",
 		ACCENT_GOLD if claimable > 0 else TEXT_MUTED)
 
@@ -621,7 +872,9 @@ func set_missions_summary(progressed: int, claimable: int) -> void:
 #   podium: Array (FACULTATIF, E11) — lignes résolues (populate_podium),
 #   timeline: Array (FACULTATIF, E11) — séries de domination (set_timeline),
 #   my_stats: Dictionary (FACULTATIF, E11) — stats personnelles (set_my_stats),
-#   debrief: Array (FACULTATIF, §8.99) — tableau BILAN, une ligne/belligérant (populate_debrief) }
+#   debrief: Array (FACULTATIF, §8.99) — tableau BILAN, une ligne/belligérant (populate_debrief),
+#   hero_panel: Dictionary (FACULTATIF, §8.100) — identité du héros local (populate_hero_identity),
+#   podium_provisional: bool (FACULTATIF, §8.100) — podium issu du repli LOCAL (mention discrète) }
 func populate(data: Dictionary) -> void:
 	%ReportTitle.text = str(data.get("title", "OPÉRATION TERMINÉE")).to_upper()
 	%ReportTitle.add_theme_color_override("font_color", data.get("title_color", ACCENT_GOLD))
@@ -629,37 +882,16 @@ func populate(data: Dictionary) -> void:
 	# qui peut arriver plus tard (course réseau) et en aura besoin pour reconstruire les postes.
 	_detail_inputs = data.get("xp_detail", {})
 
-	var stag := int(data.get("stagnation", 0))
-	if stag > 0:
-		_stagnation_ref.text = "☢ La zone radioactive a stagné %d round(s) sans se déplacer." % stag
-	else:
-		_stagnation_ref.text = "☢ Zone radioactive instable jusqu'au bout (déplacements fréquents)."
-
-	var list: VBoxContainer = _attrition_ref
-	for child in list.get_children():
-		child.queue_free()
-	var attrition: Array = data.get("attrition", [])
-	var worst := str(data.get("worst_pseudo", ""))
-	if attrition.is_empty():
-		var none := Label.new()
-		none.text = "— Aucune perte enregistrée dans la zone —"
-		none.add_theme_color_override("font_color", TEXT_MUTED)
-		none.add_theme_font_size_override("font_size", 15)
-		list.add_child(none)
-	else:
-		for e in attrition:
-			var pseudo := str(e.get("pseudo", "?"))
-			var is_worst: bool = pseudo == worst
-			var row := Label.new()
-			var prefix := "🥇 PLUS LOURD TRIBUT : " if is_worst else "❯ "
-			row.text = "%s%s — %d unité(s) perdues dans la zone" % [prefix, pseudo, int(e.get("losses", 0))]
-			row.add_theme_color_override("font_color", ACCENT_GOLD if is_worst else e.get("color", Color.WHITE))
-			row.add_theme_font_size_override("font_size", 17 if is_worst else 15)
-			list.add_child(row)
+	# §8.100 — le récap de zone (stagnation + attrition) n'est PLUS rendu : la colonne ZONE du
+	# BILAN porte l'information (demande produit). Les clés `stagnation`/`attrition`/`worst_pseudo`
+	# restent ACCEPTÉES dans `data` (contrat main.gd/tests inchangé) mais sont ignorées — les nœuds
+	# .tscn correspondants sont masqués par _build_tabs.
 
 	# Blocs E11 (clés FACULTATIVES — payload legacy → sections masquées, aucune erreur §9.2).
+	# §8.100 — identité du héros (données 100 % locales) : l'onglet XP HÉROS a TOUJOURS un contenu.
+	populate_hero_identity(data.get("hero_panel", {}))
 	if data.has("podium"):
-		populate_podium(data.get("podium", []))
+		populate_podium(data.get("podium", []), bool(data.get("podium_provisional", false)))
 	set_timeline(data.get("timeline", []))
 	set_my_stats(data.get("my_stats", {}))
 	# Tableau BILAN (§8.99, FACULTATIF) — même garde que le podium : absente → onglet 4 vide,
@@ -753,11 +985,16 @@ func _build_rp_block(block: VBoxContainer, rewards: Dictionary) -> void:
 # SUIVI du détail du barème (points & XP réconciliés aux totaux serveur). Coroutine (await l'anim).
 func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	var box: VBoxContainer = _player_rewards_box if _player_rewards_box != null else _attrition_ref
+	# §8.100 — boîte VIDÉE avant construction : efface le placeholder « en attente » posé par
+	# _build_tabs (et rend la construction idempotente).
+	for c in box.get_children():
+		box.remove_child(c)
+		c.queue_free()
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 6)
 
 	var header := Label.new()
-	header.text = "▌ RÉCOMPENSES DE FIN D'OPÉRATION"
+	header.text = "❯ RÉCOMPENSES DE FIN D'OPÉRATION"
 	header.add_theme_color_override("font_color", ACCENT_CYAN)
 	header.add_theme_font_size_override("font_size", 18)
 	block.add_child(header)
@@ -821,7 +1058,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	if rewards.get("level_up_triggered", false):
 		var lvl_lbl := Label.new()
 		var gained := int(rewards.get("levels_gained", 0))
-		lvl_lbl.text = "⬆ %d NIVEAU(X) GAGNÉ(S) — NIVEAU %d" % [gained, int(rewards.get("new_level", 1))]
+		lvl_lbl.text = "▲ %d NIVEAU(X) GAGNÉ(S) — NIVEAU %d" % [gained, int(rewards.get("new_level", 1))]
 		lvl_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		lvl_lbl.add_theme_font_size_override("font_size", 14)
 		block.add_child(lvl_lbl)
@@ -829,15 +1066,22 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	# COINS GAGNÉS (§8.89/§8.99) — TOTAL réel = coins de PROFIL (paliers de 10 niveaux) + coins de
 	# MONTÉE DE NIVEAU DU HÉROS (même porte-monnaie). §8.99 : TOUJOURS affiché, même à 0 — un
 	# compteur masqué à 0 est indiscernable d'un compteur ABSENT (le joueur ne peut pas savoir s'il
-	# a gagné 0 ou si l'affichage a échoué).
+	# a gagné 0 ou si l'affichage a échoué). §8.100 — icône hexagonale de la charte (CoinIcon,
+	# réutilisée de xp_coins_bar) à la place de l'ancien glyphe « ◈ ».
 	var coins_profile := int(rewards.get("coins_earned", 0))
 	var coins_hero := int(rewards.get("hero_coins_earned", 0))
 	var coins_total := coins_profile + coins_hero
+	var coins_row := HBoxContainer.new()
+	coins_row.add_theme_constant_override("separation", 8)
+	var coin_ic = XpCoinsBarScript.CoinIcon.new()
+	coin_ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	coins_row.add_child(coin_ic)
 	var coins_lbl := Label.new()
-	coins_lbl.text = "◈ COINS GAGNÉS : +%d" % coins_total
+	coins_lbl.text = "COINS GAGNÉS : +%d" % coins_total
 	coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 	coins_lbl.add_theme_font_size_override("font_size", 18)
-	block.add_child(coins_lbl)
+	coins_row.add_child(coins_lbl)
+	block.add_child(coins_row)
 	# Détail muet : uniquement quand les DEUX sources ont contribué (sinon le total se suffit — ce
 	# n'est pas un compteur masqué mais une RÉPARTITION, et la part héros reste lisible onglet 2).
 	if coins_profile > 0 and coins_hero > 0:
@@ -865,11 +1109,16 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 # SUIVI du détail du barème héros (réconcilié à hero_xp_earned). Coroutine (await l'animation).
 func _build_hero_progress(rewards: Dictionary) -> void:
 	var box: VBoxContainer = _hero_progress_box if _hero_progress_box != null else _attrition_ref
+	# §8.100 — boîte VIDÉE avant construction (efface le placeholder « en attente », idempotent).
+	# L'en-tête d'IDENTITÉ du héros vit dans _hero_identity_box, séparée : il n'est pas touché.
+	for c in box.get_children():
+		box.remove_child(c)
+		c.queue_free()
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 6)
 
 	var hero_header := Label.new()
-	hero_header.text = "▌ PROGRESSION DU HÉROS"
+	hero_header.text = "❯ PROGRESSION DU HÉROS"
 	hero_header.add_theme_color_override("font_color", ACCENT_CYAN)
 	hero_header.add_theme_font_size_override("font_size", 18)
 	block.add_child(hero_header)
@@ -884,11 +1133,18 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	# porte-monnaie que le profil. §8.99 : TOUJOURS construit, même à 0 → `hero_coins_lbl` n'est
 	# plus jamais null, l'animation de queue d'_animate_hero s'exécute donc toujours (cf. plus bas,
 	# le test `!= null` y reste une garde défensive inoffensive, pas une condition d'affichage).
+	var hero_coins_row := HBoxContainer.new()
+	hero_coins_row.add_theme_constant_override("separation", 8)
+	var hero_coin_ic = XpCoinsBarScript.CoinIcon.new()
+	hero_coin_ic.custom_minimum_size = Vector2(18, 18)
+	hero_coin_ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hero_coins_row.add_child(hero_coin_ic)
 	var hero_coins_lbl := Label.new()
 	hero_coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 	hero_coins_lbl.add_theme_font_size_override("font_size", 16)
-	hero_coins_lbl.text = "◈ COINS HÉROS : +0"
-	block.add_child(hero_coins_lbl)
+	hero_coins_lbl.text = "COINS HÉROS : +0"
+	hero_coins_row.add_child(hero_coins_lbl)
+	block.add_child(hero_coins_row)
 
 	var hero_level_lbl := Label.new()
 	var h_old := int(rewards.get("hero_level", 1))
@@ -898,16 +1154,18 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	hero_level_lbl.add_theme_font_size_override("font_size", 14)
 	block.add_child(hero_level_lbl)
 
-	# Niveaux héros gagnés (§8.89) — ligne MIROIR du bloc joueur (« ⬆ N NIVEAU(X) GAGNÉ(S) »),
+	# Niveaux héros gagnés (§8.89) — ligne MIROIR du bloc joueur (« ▲ N NIVEAU(X) GAGNÉ(S) »),
 	# pilotée par le flag SERVEUR hero_level_up plutôt que par la déduction h_new > h_old.
 	if bool(rewards.get("hero_level_up", false)):
 		var hero_gain_lbl := Label.new()
-		hero_gain_lbl.text = "⬆ %d NIVEAU(X) HÉROS GAGNÉ(S)" % int(rewards.get("hero_levels_gained", 0))
+		hero_gain_lbl.text = "▲ %d NIVEAU(X) HÉROS GAGNÉ(S)" % int(rewards.get("hero_levels_gained", 0))
 		hero_gain_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		hero_gain_lbl.add_theme_font_size_override("font_size", 14)
 		block.add_child(hero_gain_lbl)
 
 	# Barre log : remplie à la fraction xp_in_level / xp_for_level (0..1) calculée serveur-side.
+	# §8.100 — habillée charte (remplissage CYAN sur gunmetal, angles droits) : la barre au thème
+	# gris par défaut détonnait au milieu des jauges stylées (XpCoinsBar, ÉCHANGE du BILAN).
 	var hero_bar := ProgressBar.new()
 	hero_bar.min_value = 0.0
 	hero_bar.max_value = 1.0
@@ -915,12 +1173,22 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	hero_bar.show_percentage = false
 	hero_bar.custom_minimum_size = Vector2(0, 14)
 	hero_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var hb_bg := StyleBoxFlat.new()
+	hb_bg.bg_color = Color(0.101961, 0.12549, 0.156863, 1)
+	hb_bg.set_corner_radius_all(0)
+	hb_bg.set_border_width_all(1)
+	hb_bg.border_color = Color(ACCENT_CYAN, 0.35)
+	var hb_fill := StyleBoxFlat.new()
+	hb_fill.bg_color = ACCENT_CYAN
+	hb_fill.set_corner_radius_all(0)
+	hero_bar.add_theme_stylebox_override("background", hb_bg)
+	hero_bar.add_theme_stylebox_override("fill", hb_fill)
 	block.add_child(hero_bar)
 
 	# Pop-up « Statistiques Améliorées » : un palier franchi → bonus de stats (ex. +50 PV, +1 PA).
 	for ms in rewards.get("hero_milestones", []):
 		var ms_lbl := Label.new()
-		ms_lbl.text = "⬆ STATISTIQUES AMÉLIORÉES (Niv %d) : %s" % [
+		ms_lbl.text = "▲ STATISTIQUES AMÉLIORÉES (Niv %d) : %s" % [
 			int(ms.get("level", 0)), _format_milestone_bonus(ms.get("bonus", {}))]
 		ms_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 		ms_lbl.add_theme_font_size_override("font_size", 14)
@@ -1125,7 +1393,7 @@ func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionar
 		var coins := int(rewards.get("hero_coins_earned", 0))
 		var tc := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tc.tween_method(
-			func(v: float): hero_coins_lbl.text = "◈ COINS HÉROS : +%d" % int(round(v)),
+			func(v: float): hero_coins_lbl.text = "COINS HÉROS : +%d" % int(round(v)),
 			0.0, float(coins), 0.6)
 		await tc.finished
 
