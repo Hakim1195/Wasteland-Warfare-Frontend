@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cpreviewshopv2"]
+
+[ext_resource type="Script" path="res://tools/preview_shop_v2.gd" id="1_pv2"]
+
+[node name="PreviewShopV2" type="Node"]
+script = ExtResource("1_pv2")

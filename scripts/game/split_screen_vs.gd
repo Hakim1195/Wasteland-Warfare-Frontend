@@ -349,7 +349,7 @@ func _setup_side(is_left: bool, faction: Dictionary) -> void:
 	var placeholder: ColorRect = %LeftPlaceholder if is_left else %RightPlaceholder
 	var background: TextureRect = %LeftBackground if is_left else %RightBackground
 
-	role_label.text = "⚔ ATTAQUANT" if is_left else "🛡 DÉFENSEUR"
+	role_label.text = "❯ ATTAQUANT" if is_left else "❯ DÉFENSEUR"
 	name_label.text = str(faction["name"]).to_upper()
 	name_label.add_theme_color_override("font_color", accent.lightened(0.35))
 
@@ -411,7 +411,7 @@ func _ensure_side_hero3d(is_left: bool, frame: PanelContainer):
 # E2 §8.74 — IDENTITÉS, BARRES PV HÉROS, GARNISONS, DUEL
 # =========================================================
 
-# Rôles enrichis : « ⚔ ASSAILLANT — <PSEUDO> » / « 🛡 DÉFENSEUR — <PSEUDO> » à la couleur
+# Rôles enrichis : « ❯ ASSAILLANT — <PSEUDO> » / « ❯ DÉFENSEUR — <PSEUDO> » à la couleur
 # PLATEAU du joueur, + chip « NIV n » sous chaque rôle. Pseudo absent (meta legacy / territoire
 # neutre) → libellés historiques conservés tels quels (client défensif §9.2).
 func _apply_identities() -> void:
@@ -532,7 +532,7 @@ func _build_garrison_labels() -> void:
 func _add_garrison_label(is_left: bool, before: int, after: int) -> void:
 	var dice: HBoxContainer = %LeftDice if is_left else %RightDice
 	var lbl := Label.new()
-	lbl.text = "🪖 %d ➜ %d" % [before, after]
+	lbl.text = "%d ➜ %d" % [before, after]
 	lbl.add_theme_font_size_override("font_size", 22)
 	lbl.add_theme_color_override("font_color",
 		Color("#8a97a5") if after >= before else Color("#d6453f").lightened(0.2))
@@ -861,7 +861,7 @@ func _spawn_floater(half: Control, text: String, color: Color, font_size: int, y
 # Pop « ⏱ TIME BANK +Ns » (or) qui s'envole côté attaquant (récompense de l'attaque).
 func _spawn_time_bank(bonus: int) -> void:
 	var lbl := Label.new()
-	lbl.text = "⏱ TIME BANK +%ds" % bonus
+	lbl.text = "TIME BANK +%ds" % bonus
 	lbl.add_theme_font_size_override("font_size", 46)
 	lbl.add_theme_color_override("font_color", COLOR_TIME_BANK)
 	lbl.add_theme_constant_override("outline_size", 6)

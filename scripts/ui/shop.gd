@@ -1,28 +1,32 @@
 extends Control
 
 # =========================================================================
-# Boutique & Inventaire (Feuille de route R1) — charte « Warzone Command » §2
+# Boutique (Feuille de route R1, refonte onglets §8.102) — charte « Warzone Command » §2
 # =========================================================================
-# Écran NEUF accessible depuis main_menu (« ❯ BOUTIQUE & INVENTAIRE »).
+# Écran accessible depuis la nav (onglet BOUTIQUE). Refonte §8.102 : QUATRE onglets de
+# catégorie (PERSONNAGES / SKINS / PASS / COINS) remplacent l'ancien couple Boutique/Inventaire.
+# L'inventaire est FUSIONNÉ : un article possédé s'affiche dans son onglet avec le badge
+# « EN DÉPÔT » (et ÉQUIPER pour les skins) — plus de grille séparée.
 # Règle d'Or §6.1 : VUE pure — aucune logique de jeu brute. L'économie est SERVEUR (R1 —
 # CONTRAT_RESEAU.md §9.3), branchée via NetworkManager :
-#   • GET  /shop/catalog          → catalogue réel (id, catégorie, prix, devise, clés i18n).
-#   • GET  /shop/inventory        → solde Coins + articles possédés + Pass actif (has_active_pass).
+#   • GET  /shop/catalog?include_all=1 → catalogue réel (id, catégorie, prix, clés i18n,
+#     purchasable). Les articles purchasable=false (skins exclusifs de saison) ne sont montrés
+#     que POSSÉDÉS, sans CTA d'achat.
+#   • GET  /shop/inventory        → solde Coins + possessions + Pass actif + payments_enabled.
 #   • POST /shop/purchase/virtual → achat en Coins (faction / skin / Pass Spécial).
-#   • POST /shop/purchase/fiat    → achat de Coins en argent réel (packs « currency », stub serveur).
-# Plus aucun catalogue en dur ni achat « aperçu local » : le serveur fait foi (solde, inventaire).
+#   • POST /shop/purchase/fiat    → achat de Coins en argent réel (packs « currency »).
+# Gate paiements (§8.102) : tant que payments_enabled=false (défaut serveur fail-closed), les
+# packs de Coins s'affichent « BIENTÔT DISPONIBLE » (CTA désactivé) au lieu d'échouer en 501.
 
 # Nœuds câblés via @export + NodePath (drag-drop éditeur) — cf. conventions CLAUDE.md.
 @export var panel: Control
-@export var shop_tab_button: Button
-@export var inventory_tab_button: Button
+@export var tabs_bar: HBoxContainer
 @export var shop_grid: GridContainer
-@export var inventory_grid: GridContainer
 @export var status_label: Label
 
 # Helpers UI partagés de la charte « Warzone Command » (§2) — encoches, badge hexagonal.
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
-# Barre de navigation supérieure partagée (hub Warzone) — montée en tête d'écran (onglet STORE).
+# Barre de navigation supérieure partagée (hub Warzone) — montée en tête d'écran (onglet BOUTIQUE).
 const TopNav = preload("res://scripts/ui/top_nav.gd")
 
 # --- Palette canonique (§2) ---
@@ -33,6 +37,16 @@ const MUTED := Color(0.541176, 0.592157, 0.647059, 1)   # acier (eyebrow / muet)
 const SURFACE := Color(0.101961, 0.12549, 0.156863, 1)  # surface secondaire
 const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 1) # fond gunmetal (texte sur badge clair)
 const DANGER := Color(0.839216, 0.270588, 0.247059, 1)  # rouge (erreur : fonds insuffisants…)
+
+# --- Onglets de catégorie (§8.102) : id interne, catégorie serveur filtrée, clé i18n. ---
+# L'ordre = ordre d'affichage. Les libellés sont des CLÉS brutes → auto-traduction Godot
+# (le changement de langue re-traduit les onglets sans re-render manuel).
+const TAB_DEFS := [
+	{"id": "characters", "category": "faction", "key": "SHOP_TAB_CHARACTERS"},
+	{"id": "skins", "category": "skin", "key": "SHOP_TAB_SKINS"},
+	{"id": "pass", "category": "pass", "key": "SHOP_TAB_PASS"},
+	{"id": "coins", "category": "currency", "key": "SHOP_TAB_COINS"},
+]
 
 # Factions data-driven (resources/factions/*.tres) — MÊMES garde-fous que profile.gd /
 # faction_selection.gd. On en lit la COULEUR SIGNATURE (accent_color) pour teinter les cartes
@@ -51,34 +65,40 @@ const FALLBACK_PATHS := [
 	"res://resources/factions/chasseurs_ombres.tres",
 ]
 
-# Catalogue RÉEL, peuplé par GET /shop/catalog. Forme interne par carte :
-# {id, name (clé i18n), cat (clé i18n « SHOP_CAT_<CATEGORY> »), price (int), desc (clé i18n)}.
-# Le serveur renvoie {id, category, price, name_key, desc_key} → converti dans _on_catalog_loaded.
+# Catalogue RÉEL, peuplé par GET /shop/catalog?include_all=1. Forme interne par carte :
+# {id, name (clé i18n), cat (clé « SHOP_CAT_<CATEGORY> »), category, price, desc (clé i18n),
+#  currency_type, grant_amount, hero_key, purchasable}.
 # i18n (R4) : « name », « cat » et « desc » sont des CLÉS de traduction (résolues via tr() à
 # l'affichage) — voir translations/ui_strings.csv. Seul l'id reste un identifiant brut.
 var _catalog: Array = []
 
-# Solde Coins de l'opérateur, peuplé par GET /shop/inventory (0 tant que la réponse n'est pas arrivée).
+# Solde Coins du joueur, peuplé par GET /shop/inventory (0 tant que la réponse n'est pas arrivée).
 var _credits: int = 0
 # Inventaire (id -> quantité), peuplé par GET /shop/inventory. Le serveur fait foi.
 var _owned: Dictionary = {}
 # Pass Spécial actif ? Peuplé par GET /shop/inventory (has_active_pass). Le serveur fait foi.
 var _has_active_pass: bool = false
-# Date ISO 8601 d'expiration du Pass (ou "") — peuplée par GET /shop/inventory ; sert au compte à rebours.
+# Date ISO 8601 d'expiration du Pass (ou "") — peuplée par GET /shop/inventory ; compte à rebours.
 var _pass_expires_at: String = ""
+# Paiements réels ouverts ? (§8.102, GET /shop/inventory). Défaut false (fail-closed) : un serveur
+# ANTÉRIEUR n'envoie pas le champ mais refuse de toute façon les achats fiat (501) → cohérent.
+var _payments_enabled: bool = false
 # id de faction -> { name, color } (chargé des .tres) pour teinter les cartes faction/skin.
 var _factions: Dictionary = {}
 # Nom (traduit) du dernier article dont l'achat a été LANCÉ — pour libeller le message de succès,
 # le signal d'achat étant global (il ne rappelle pas quel article a été acheté).
 var _pending_purchase_name: String = ""
 
+# Onglet actif (id de TAB_DEFS) + boutons construits (id -> Button) pour le restylage actif/inactif.
+var _active_tab: String = "characters"
+var _tab_buttons: Dictionary = {}
+
 # Police condensée de la charte (§2), construite en code pour les nœuds générés dynamiquement.
 var _font: SystemFont
 
 func _ready():
-	# Header CANONIQUE partagé (§8.94), onglet BOUTIQUE actif. Il porte désormais l'identité, la
-	# jauge XP/Coins (donc le SOLDE — l'ex-CreditsBox de l'en-tête a été retirée, elle doublonnait)
-	# et le retour par ÉCHAP (l'ex-bouton RETOUR a disparu). ⚠️ active_tab AVANT add_child.
+	# Header CANONIQUE partagé (§8.94), onglet BOUTIQUE actif. Il porte l'identité, la jauge
+	# XP/Coins (donc le SOLDE) et le retour par ÉCHAP. ⚠️ active_tab AVANT add_child.
 	var nav := TopNav.new()
 	nav.active_tab = "shop"
 	add_child(nav)
@@ -99,38 +119,75 @@ func _ready():
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)
 
-	# Styles de boutons construits en code (cohérent avec lobby_screen.gd).
-	if shop_tab_button: shop_tab_button.pressed.connect(func(): _show_tab(true))
-	if inventory_tab_button: inventory_tab_button.pressed.connect(func(): _show_tab(false))
-
-	# SFX d'interface (survol/clic — R6).
-	WarzoneUI.wire_buttons_sfx([shop_tab_button, inventory_tab_button])
+	# Onglets de catégorie construits en code (§8.102) — data-driven depuis TAB_DEFS.
+	_build_tabs()
 
 	# Économie serveur (R1) : catalogue + solde/inventaire + résultats d'achat via NetworkManager.
 	NetworkManager.shop_catalog_loaded.connect(_on_catalog_loaded)
 	NetworkManager.shop_inventory_loaded.connect(_on_inventory_loaded)
 	NetworkManager.shop_purchase_success.connect(_on_purchase_success)
 	NetworkManager.shop_purchase_failed.connect(_on_purchase_failed)
-	# Rotation gratuite hebdomadaire (M3 §8.66) : bannière + badges sur les factions concernées.
+	# Rotation gratuite hebdomadaire (M3 §8.66) : bannière + badges, onglet PERSONNAGES seulement.
 	NetworkManager.shop_rotation_loaded.connect(_on_rotation_loaded)
 	# Skins équipables (M5 §8.69) : la réponse d'equip est un inventaire complet → même handler.
 	NetworkManager.skin_equipped.connect(_on_skin_equipped)
 	NetworkManager.skin_equip_failed.connect(_on_skin_equip_failed)
+	# Changement de langue : les cartes contiennent des textes résolus par tr() au build → re-render.
+	LocaleManager.locale_changed.connect(_on_locale_changed)
 	NetworkManager.fetch_shop_catalog()
 	NetworkManager.fetch_shop_inventory()
 	NetworkManager.fetch_shop_rotation()
 
-	# Peuplement initial (vide jusqu'aux réponses serveur), onglet Boutique actif.
-	_populate_shop()
-	_populate_inventory()
-	_show_tab(true)
+	# Peuplement initial (vide jusqu'aux réponses serveur), onglet PERSONNAGES actif.
+	_show_tab(_active_tab)
 
-	_set_status(tr("SHOP_STATUS_PREVIEW"))
+# --- Onglets (§8.102) --------------------------------------------------------
+func _build_tabs() -> void:
+	if tabs_bar == null:
+		return
+	_clear(tabs_bar)
+	_tab_buttons.clear()
+	for def in TAB_DEFS:
+		var btn := Button.new()
+		btn.text = str(def.get("key"))  # clé i18n brute → auto-traduite (et re-traduite) par Godot.
+		btn.custom_minimum_size = Vector2(200, 52)
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_on_tab_pressed.bind(str(def.get("id"))))
+		tabs_bar.add_child(btn)
+		_tab_buttons[str(def.get("id"))] = btn
+	WarzoneUI.wire_buttons_sfx(_tab_buttons.values())
+
+func _on_tab_pressed(id: String) -> void:
+	if id == _active_tab:
+		return
+	_show_tab(id)
+
+func _show_tab(id: String) -> void:
+	_active_tab = id
+	for tab_id in _tab_buttons:
+		_style_tab(_tab_buttons[tab_id], tab_id == _active_tab)
+	_populate()
+	_refresh_status_for_tab()
+
+# Catégorie serveur filtrée par l'onglet actif ("faction", "skin", "pass" ou "currency").
+func _active_category() -> String:
+	for def in TAB_DEFS:
+		if str(def.get("id")) == _active_tab:
+			return str(def.get("category"))
+	return ""
+
+# Ligne de statut par défaut de l'onglet : note « paiements fermés » sur COINS, accueil sinon.
+func _refresh_status_for_tab() -> void:
+	if _active_tab == "coins" and not _payments_enabled:
+		_set_status(tr("SHOP_COINS_DISABLED_NOTE"))
+	else:
+		_set_status(tr("SHOP_STATUS_PREVIEW"))
 
 # --- Catalogue / inventaire serveur (R1) ------------------------------------
-# Convertit les articles serveur {id, category, price, name_key, desc_key} vers la forme interne des
-# cartes (name/cat/desc = clés i18n). La catégorie canonique (« bonus ») devient la clé d'étiquette
-# « SHOP_CAT_BONUS » (réutilise les traductions existantes de translations/ui_strings.csv).
+# Convertit les articles serveur {id, category, price, name_key, desc_key, purchasable} vers la
+# forme interne des cartes (name/cat/desc = clés i18n).
 func _on_catalog_loaded(items: Array) -> void:
 	_catalog.clear()
 	for it in items:
@@ -148,14 +205,19 @@ func _on_catalog_loaded(items: Array) -> void:
 			"grant_amount": int(it.get("grant_amount", 0)) if it.get("grant_amount") != null else 0,
 			# hero_key (faction liée à un skin) peut arriver à null → "".
 			"hero_key": str(it.get("hero_key", "")) if it.get("hero_key") != null else "",
+			# purchasable (§8.102) : absent sur un serveur antérieur → true (comportement historique).
+			"purchasable": bool(it.get("purchasable", true)),
 		})
-	_populate_shop()
-	_populate_inventory()
+	_populate()
 
 # Solde + inventaire (id -> quantité). Piège JSON float §5 : quantités/solde -> int().
 func _on_inventory_loaded(data: Dictionary) -> void:
 	_credits = int(data.get("credits", 0))
 	_has_active_pass = bool(data.get("has_active_pass", false))
+	# Gate paiements (§8.102) : absent (serveur antérieur / réponse d'achat) → on GARDE la dernière
+	# valeur connue (les snapshots post-achat ne portent pas le champ — ne pas régresser à false).
+	if data.has("payments_enabled"):
+		_payments_enabled = bool(data.get("payments_enabled"))
 	# Saison courante (M4 §8.67) : { id, ends_at } — compte à rebours du Pass ET de la saison.
 	var season_data = data.get("season", {})
 	_season = season_data if typeof(season_data) == TYPE_DICTIONARY else {}
@@ -169,15 +231,21 @@ func _on_inventory_loaded(data: Dictionary) -> void:
 	var items_data = data.get("items", {})
 	if typeof(items_data) == TYPE_DICTIONARY:
 		for id in items_data:
-			# Garde-fou : une quantité null venue du JSON ferait planter int(null) → 0 (même prudence
-			# que grant_amount/hero_key/pass_expires_at ci-dessus).
+			# Garde-fou : une quantité null venue du JSON ferait planter int(null) → 0.
 			var q = items_data[id]
 			_owned[str(id)] = int(q) if q != null else 0
-	# L'inventaire change l'état des cartes Boutique (« EN DÉPÔT », Pass actif) → on repeuple les deux.
-	# NOTE §8.94 : le solde n'est plus affiché ICI (l'ex-CreditsBox de l'en-tête doublonnait la jauge
-	# XP/Coins de la nav) — `_credits` reste néanmoins lu pour griser les articles trop chers.
-	_populate_shop()
-	_populate_inventory()
+	# L'inventaire change l'état des cartes (« EN DÉPÔT », Pass actif, gate Coins) → on repeuple.
+	# NOTE §8.94 : le solde n'est plus affiché ICI (la jauge XP/Coins de la nav s'en charge) —
+	# `_credits` reste néanmoins lu pour le pré-contrôle d'achat.
+	_populate()
+	_refresh_status_for_tab()
+
+# Changement de langue : les onglets (clés brutes) se re-traduisent seuls ; les cartes et la
+# bannière de rotation contiennent des textes COMPOSÉS résolus au build → re-render manuel.
+func _on_locale_changed(_code: String) -> void:
+	_render_rotation_banner()
+	_populate()
+	_refresh_status_for_tab()
 
 # Sépare les milliers par une fine espace (lisibilité du solde en or).
 func _format_credits(value: int) -> String:
@@ -221,10 +289,10 @@ func _faction_name(faction_id: String) -> String:
 	var info: Dictionary = _factions.get(faction_id, {})
 	return str(info.get("name", faction_id))
 
-# Garde-fou de CONTRASTE : une couleur signature de faction trop SOMBRE (ex. chasseurs_ombres, ardoise ;
-# ordre_eclipse, violet) devient illisible en TEXTE sur le fond gunmetal. Sous un seuil de luminance,
-# on l'éclaircit vers le blanc froid (TEXT) en conservant la teinte. À n'utiliser QUE pour du texte :
-# le liseré de carte (élément non-texte, fin) garde l'accent brut.
+# Garde-fou de CONTRASTE : une couleur signature de faction trop SOMBRE (ex. chasseurs_ombres ;
+# ordre_eclipse) devient illisible en TEXTE sur le fond gunmetal. Sous un seuil de luminance,
+# on l'éclaircit vers le blanc froid (TEXT) en conservant la teinte. À n'utiliser QUE pour du
+# texte : le liseré de carte (élément non-texte, fin) garde l'accent brut.
 func _readable_accent(c: Color) -> Color:
 	if c.get_luminance() < 0.30:
 		return c.lerp(TEXT, 0.6)
@@ -240,22 +308,18 @@ func _pass_days_left() -> int:
 	var now := Time.get_unix_time_from_system()
 	return int(max(0, ceil((expiry - now) / 86400.0)))
 
-# --- Onglets ----------------------------------------------------------------
-func _show_tab(show_shop: bool):
-	if shop_grid: shop_grid.visible = show_shop
-	if inventory_grid: inventory_grid.visible = not show_shop
-	_style_tab(shop_tab_button, show_shop)
-	_style_tab(inventory_tab_button, not show_shop)
-
 # --- Rotation gratuite hebdomadaire (M3 §8.66) ------------------------------
 # Ids des factions payantes GRATUITES cette semaine + bannière construite par code au-dessus
-# de la grille Boutique. Repli gracieux : rotation muette → aucune bannière, aucun badge.
+# de la grille. §8.102 : visible sur le SEUL onglet PERSONNAGES. Repli gracieux : rotation
+# muette → aucune bannière, aucun badge.
 var _rotation_ids: Dictionary = {}
 var _rotation_banner: Label = null
 # --- Saison courante (M4 §8.67) : { id, ends_at } lu du bloc `season` de GET /shop/inventory. ---
 var _season: Dictionary = {}
 # --- Skins équipés (M5 §8.69) : { faction_id: skin_id } lu du bloc `equipped` de l'inventaire. ---
 var _equipped: Dictionary = {}
+# Compteur « EN DÉPÔT » de l'onglet courant (§8.102), inséré au-dessus de la grille.
+var _owned_count_label: Label = null
 
 # Vrai si CE skin est celui actuellement équipé pour sa faction.
 func _is_skin_equipped(item: Dictionary) -> bool:
@@ -316,38 +380,82 @@ func _on_rotation_loaded(data: Dictionary) -> void:
 	_rotation_ids.clear()
 	for fid in data.get("free_faction_ids", []):
 		_rotation_ids[str(fid)] = true
-	_ensure_rotation_banner()
+	_render_rotation_banner()
+	_populate()
+
+# (Re)compose le texte de la bannière de rotation (appelé au chargement ET au changement de
+# langue). La VISIBILITÉ effective est arbitrée par _populate (onglet PERSONNAGES seulement).
+func _render_rotation_banner() -> void:
+	_ensure_header_labels()
 	if _rotation_ids.is_empty():
 		_rotation_banner.visible = false
-	else:
-		var names: Array = []
-		for fid in _rotation_ids:
-			names.append(_faction_name(str(fid)).to_upper())
-		names.sort()
-		_rotation_banner.text = tr("SHOP_ROTATION_BANNER").format({"factions": " · ".join(PackedStringArray(names))})
-		_rotation_banner.visible = true
-	_populate_shop()
-
-func _ensure_rotation_banner() -> void:
-	if _rotation_banner != null and is_instance_valid(_rotation_banner):
 		return
-	_rotation_banner = Label.new()
-	_rotation_banner.name = "RotationBanner"
-	_rotation_banner.visible = false
-	_rotation_banner.add_theme_font_override("font", _font)
-	_rotation_banner.add_theme_font_size_override("font_size", 15)
-	_rotation_banner.add_theme_color_override("font_color", GOLD)
-	_rotation_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	# Insérée juste AU-DESSUS de la grille Boutique (même parent), sans retouche .tscn.
-	var parent := shop_grid.get_parent()
-	parent.add_child(_rotation_banner)
-	parent.move_child(_rotation_banner, shop_grid.get_index())
+	var names: Array = []
+	for fid in _rotation_ids:
+		names.append(_faction_name(str(fid)).to_upper())
+	names.sort()
+	_rotation_banner.text = tr("SHOP_ROTATION_BANNER").format({"factions": " · ".join(PackedStringArray(names))})
 
-# --- Peuplement Boutique ----------------------------------------------------
-func _populate_shop():
+# Bannière de rotation + compteur « EN DÉPÔT », insérés juste AU-DESSUS de la grille (même
+# parent), sans retouche .tscn. Créés une seule fois, à la demande.
+func _ensure_header_labels() -> void:
+	if _rotation_banner == null or not is_instance_valid(_rotation_banner):
+		_rotation_banner = Label.new()
+		_rotation_banner.name = "RotationBanner"
+		_rotation_banner.visible = false
+		_rotation_banner.add_theme_font_override("font", _font)
+		_rotation_banner.add_theme_font_size_override("font_size", 15)
+		_rotation_banner.add_theme_color_override("font_color", GOLD)
+		_rotation_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		var parent := shop_grid.get_parent()
+		parent.add_child(_rotation_banner)
+		parent.move_child(_rotation_banner, shop_grid.get_index())
+	if _owned_count_label == null or not is_instance_valid(_owned_count_label):
+		_owned_count_label = Label.new()
+		_owned_count_label.name = "OwnedCountLabel"
+		_owned_count_label.visible = false
+		_owned_count_label.add_theme_font_override("font", _font)
+		_owned_count_label.add_theme_font_size_override("font_size", 13)
+		_owned_count_label.add_theme_color_override("font_color", GOLD)
+		var parent2 := shop_grid.get_parent()
+		parent2.add_child(_owned_count_label)
+		parent2.move_child(_owned_count_label, shop_grid.get_index())
+
+# --- Peuplement de la grille (onglet actif) ---------------------------------
+# Un article apparaît dans l'onglet de sa catégorie s'il est ACHETABLE ou déjà POSSÉDÉ (les
+# skins exclusifs de saison, purchasable=false, ne se montrent que possédés — §8.102).
+func _populate() -> void:
+	if shop_grid == null:
+		return
+	_ensure_header_labels()
 	_clear(shop_grid)
+	var category := _active_category()
+	var owned_count := 0
+	var shown := 0
 	for item in _catalog:
+		if str(item.get("category", "")) != category:
+			continue
+		var id := str(item.get("id", ""))
+		var owned := _owned.has(id)
+		if not bool(item.get("purchasable", true)) and not owned:
+			continue  # article retiré de la vente et non possédé → invisible.
+		if owned:
+			owned_count += 1
 		shop_grid.add_child(_build_shop_card(item))
+		shown += 1
+	# Bannière de rotation : onglet PERSONNAGES uniquement (elle parle des factions).
+	_rotation_banner.visible = _active_tab == "characters" and not _rotation_ids.is_empty()
+	# Compteur « EN DÉPÔT » de la section (discret, or) — masqué à zéro.
+	if owned_count > 0:
+		_owned_count_label.text = tr("SHOP_OWNED_COUNT") % owned_count
+		_owned_count_label.visible = true
+	else:
+		_owned_count_label.visible = false
+	# État vide (catalogue pas encore chargé ou section sans article).
+	if shown == 0:
+		var empty := _body_label(tr("SHOP_TAB_EMPTY"))
+		empty.add_theme_color_override("font_color", MUTED)
+		shop_grid.add_child(empty)
 
 func _build_shop_card(item: Dictionary) -> PanelContainer:
 	var category := str(item.get("category", ""))
@@ -362,10 +470,12 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 	var id := str(item.get("id", ""))
 	var is_fiat := str(item.get("currency_type", "virtual")) == "fiat"
 	var owned := _owned.has(id)                          # factions / skins (achat définitif)
+	var purchasable := bool(item.get("purchasable", true))
 	var pass_active := category == "pass" and _has_active_pass
 
-	# Ligne haute : catégorie (eyebrow À L'ACCENT de la carte) + badge prix hexagonal OR. Pour un pack
-	# fiat, le prix est en euros (centimes → « 4,99 € ») ; sinon c'est un prix en Coins (« or », §2).
+	# Ligne haute : catégorie (eyebrow À L'ACCENT de la carte) + badge prix hexagonal OR. Pour un
+	# pack fiat, le prix est en euros (« 4,99 € ») ; sinon en Coins. Un article possédé NON
+	# achetable (skin de saison) montre sa quantité plutôt qu'un prix qui n'a plus de sens.
 	var top := HBoxContainer.new()
 	var cat_eb := _eyebrow(tr(str(item.get("cat", ""))))
 	cat_eb.add_theme_color_override("font_color", text_accent)
@@ -373,8 +483,11 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(spacer)
-	var price_text := _format_fiat(int(item.get("price", 0))) if is_fiat else str(int(item.get("price", 0)))
-	top.add_child(WarzoneUI.make_hex_badge(price_text, _font, 15, GOLD, GUNMETAL, 56))
+	if owned and not purchasable:
+		top.add_child(WarzoneUI.make_hex_badge("x" + str(int(_owned.get(id, 1))), _font, 15, ACCENT, GUNMETAL, 56))
+	else:
+		var price_text := _format_fiat(int(item.get("price", 0))) if is_fiat else str(int(item.get("price", 0)))
+		top.add_child(WarzoneUI.make_hex_badge(price_text, _font, 15, GOLD, GUNMETAL, 56))
 	v.add_child(top)
 
 	# Nom de l'article (valeur primaire, MAJUSCULES) — clé traduite (R4).
@@ -434,6 +547,25 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		# Skin possédé (M5 §8.69) : bouton ÉQUIPER / ÉQUIPÉ ✓ (un skin équipé par faction).
 		if category == "skin":
 			v.add_child(_make_equip_button(item))
+	elif is_fiat and not _payments_enabled:
+		# Gate paiements (§8.102) : pack fiat proposé alors que les paiements réels sont fermés →
+		# CTA neutralisé « BIENTÔT DISPONIBLE » (au lieu d'un achat voué à l'échec 501).
+		var soon := Button.new()
+		soon.text = tr("SHOP_COINS_SOON")
+		soon.custom_minimum_size = Vector2(0, 44)
+		soon.disabled = true
+		soon.focus_mode = Control.FOCUS_NONE
+		soon.add_theme_font_override("font", _font)
+		soon.add_theme_font_size_override("font_size", 16)
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.bg_color = Color(1, 1, 1, 0.03)
+		sb.set_border_width_all(1)
+		sb.border_color = Color(MUTED, 0.5)
+		sb.set_content_margin_all(10)
+		soon.add_theme_stylebox_override("disabled", sb)
+		soon.add_theme_color_override("font_disabled_color", MUTED)
+		v.add_child(soon)
 	else:
 		# CTA d'achat (cyan). Libellé « ACHETER » pour un pack fiat (argent réel), « ACQUÉRIR » sinon.
 		var buy := Button.new()
@@ -457,7 +589,7 @@ func _on_buy_pressed(item: Dictionary):
 		NetworkManager.purchase_item_fiat(id)
 		return
 	# Article en Coins (faction / skin / Pass) : pré-contrôle local pour un retour INSTANTANÉ et
-	# localisé (le serveur reste l'autorité finale). Le Pass se prolonge même s'il est déjà actif.
+	# localisé (le serveur reste l'autorité finale).
 	if _credits < int(item.get("price", 0)):
 		_set_status(tr("SHOP_INSUFFICIENT") % item_name, true)
 		return
@@ -469,67 +601,9 @@ func _on_purchase_success(data: Dictionary) -> void:
 	_on_inventory_loaded(data)
 	_set_status(tr("SHOP_ACQUIRED") % _pending_purchase_name)
 
-# Échec (HTTP 400) : on affiche le message du serveur EN ROUGE (« Crédits insuffisants »…).
+# Échec (HTTP 400/501) : on affiche le message du serveur EN ROUGE (« Crédits insuffisants »…).
 func _on_purchase_failed(message: String) -> void:
 	_set_status(message, true)
-
-# --- Peuplement Inventaire --------------------------------------------------
-func _populate_inventory():
-	_clear(inventory_grid)
-	if _owned.is_empty():
-		var empty := _body_label(tr("SHOP_EMPTY"))
-		empty.add_theme_color_override("font_color", MUTED)
-		inventory_grid.add_child(empty)
-		return
-	for item in _catalog:
-		var id := str(item.get("id", ""))
-		if _owned.has(id):
-			inventory_grid.add_child(_build_inventory_card(item, int(_owned[id])))
-
-func _build_inventory_card(item: Dictionary, qty: int) -> PanelContainer:
-	var accent := _card_accent(item)
-	var text_accent := _readable_accent(accent)   # variante LISIBLE pour le texte ; le liseré garde l'accent brut
-	var card := _make_card(accent)
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	card.add_child(v)
-
-	# Ligne haute : catégorie (eyebrow à l'accent) + quantité dans un badge hexagonal CYAN (le cyan
-	# garantit un bon contraste du texte gunmetal quelle que soit la couleur de faction).
-	var top := HBoxContainer.new()
-	var cat_eb := _eyebrow(tr(str(item.get("cat", ""))))
-	cat_eb.add_theme_color_override("font_color", text_accent)
-	top.add_child(cat_eb)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top.add_child(spacer)
-	top.add_child(WarzoneUI.make_hex_badge("x" + str(qty), _font, 16, ACCENT, GUNMETAL, 56))
-	v.add_child(top)
-
-	v.add_child(_title_label(tr(str(item.get("name", "—"))).to_upper(), 20))
-
-	# Skin : on rappelle le héros lié (nom de faction résolu), à sa couleur signature.
-	if str(item.get("category", "")) == "skin" and str(item.get("hero_key", "")) != "":
-		var hero := _eyebrow(tr("SHOP_SKIN_HERO") % _faction_name(str(item.get("hero_key", ""))).to_upper())
-		hero.add_theme_color_override("font_color", text_accent)
-		v.add_child(hero)
-
-	var desc := _body_label(tr(str(item.get("desc", ""))))
-	desc.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	v.add_child(desc)
-
-	# Pied : statut « EN DÉPÔT » (or).
-	var owned := _eyebrow(tr("SHOP_IN_DEPOT"))
-	owned.add_theme_color_override("font_color", GOLD)
-	v.add_child(owned)
-
-	# Skin possédé (M5 §8.69) : équipable depuis l'inventaire aussi.
-	if str(item.get("category", "")) == "skin":
-		v.add_child(_make_equip_button(item))
-
-	WarzoneUI.add_corner_notches(card)
-	return card
 
 # --- Fabriques de nœuds (charte §2) -----------------------------------------
 func _make_card(accent: Color = ACCENT) -> PanelContainer:
@@ -627,13 +701,17 @@ func _style_tab(btn: Button, active: bool) -> void:
 		sb.border_width_bottom = 1
 		sb.border_color = Color(0.211765, 0.772549, 0.85098, 0.35)
 
+	var hover := sb.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.211765, 0.772549, 0.85098, 0.10) if not active else sb.bg_color
+
 	btn.add_theme_font_override("font", _font)
-	btn.add_theme_font_size_override("font_size", 20)
+	btn.add_theme_font_size_override("font_size", 18)
 	btn.add_theme_stylebox_override("normal", sb)
-	btn.add_theme_stylebox_override("hover", sb)
+	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", sb)
 	btn.add_theme_stylebox_override("focus", sb)
 	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
+	btn.add_theme_color_override("font_hover_color", TEXT)
 
 # --- Utilitaires ------------------------------------------------------------
 # Vide un conteneur sans laisser de doublons (retrait immédiat + libération différée, cf. lobby_screen.gd).

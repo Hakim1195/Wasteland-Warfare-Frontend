@@ -243,9 +243,9 @@ func _make_row(pid: int) -> Control:
 	marker.add_theme_font_size_override("font_size", 12)
 	marker.mouse_filter = Control.MOUSE_FILTER_PASS
 	if abandoned:
-		marker.text = "🏳"
+		marker.text = "⚐"
 	elif down:
-		marker.text = "💀"
+		marker.text = "☠"
 		marker.add_theme_color_override("font_color", DANGER)
 	elif is_current:
 		marker.text = "▶"
@@ -263,13 +263,13 @@ func _make_row(pid: int) -> Control:
 	chip.setup(pid, false)
 
 	# Compteurs publics compacts : territoires possédés + cartes en main (len — public).
-	line1.add_child(_counter_label("🏴%d" % territory_count(GameState.territories, pid),
+	line1.add_child(_counter_label("⚑%d" % territory_count(GameState.territories, pid),
 		Color("eef3f7"), tr("ROSTER_TERR_TOOLTIP")))
 	var cards_n := 0
 	var hand = p.get("cards_in_hand", [])
 	if typeof(hand) == TYPE_ARRAY:
 		cards_n = (hand as Array).size()
-	line1.add_child(_counter_label("🃏%d" % cards_n, MUTED, tr("ROSTER_CARDS_TOOLTIP")))
+	line1.add_child(_counter_label("❖%d" % cards_n, MUTED, tr("ROSTER_CARDS_TOOLTIP")))
 
 	# Niveau du héros (masqué si héros non initialisé — état pré-RPG, aucun « NIV » fantôme).
 	var lvl := Label.new()

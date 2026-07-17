@@ -23,7 +23,7 @@ border_color = Color(0.211765, 0.772549, 0.85098, 1)
 color = Color(0.211765, 0.772549, 0.85098, 0.5)
 thickness = 2
 
-[node name="ShopScreen" type="Control" node_paths=PackedStringArray("panel", "shop_tab_button", "inventory_tab_button", "shop_grid", "inventory_grid", "status_label")]
+[node name="ShopScreen" type="Control" node_paths=PackedStringArray("panel", "tabs_bar", "shop_grid", "status_label")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -32,10 +32,8 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_shop")
 panel = NodePath("CenterContainer/MainPanel")
-shop_tab_button = NodePath("CenterContainer/MainPanel/RootVBox/TabsBar/ShopTabButton")
-inventory_tab_button = NodePath("CenterContainer/MainPanel/RootVBox/TabsBar/InventoryTabButton")
+tabs_bar = NodePath("CenterContainer/MainPanel/RootVBox/TabsBar")
 shop_grid = NodePath("CenterContainer/MainPanel/RootVBox/ContentScroll/ContentVBox/ShopGrid")
-inventory_grid = NodePath("CenterContainer/MainPanel/RootVBox/ContentScroll/ContentVBox/InventoryGrid")
 status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
 
 [node name="Background" type="TextureRect" parent="."]
@@ -58,7 +56,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="MainPanel" type="PanelContainer" parent="CenterContainer"]
-custom_minimum_size = Vector2(1040, 740)
+custom_minimum_size = Vector2(1120, 760)
 layout_mode = 2
 theme_override_styles/panel = SubResource("bg_panel")
 
@@ -72,17 +70,7 @@ theme_override_styles/separator = SubResource("filet_cyan")
 
 [node name="TabsBar" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
 layout_mode = 2
-theme_override_constants/separation = 12
-
-[node name="ShopTabButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/TabsBar"]
-custom_minimum_size = Vector2(230, 52)
-layout_mode = 2
-text = "SHOP_TAB_SHOP"
-
-[node name="InventoryTabButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/TabsBar"]
-custom_minimum_size = Vector2(230, 52)
-layout_mode = 2
-text = "SHOP_TAB_INVENTORY"
+theme_override_constants/separation = 8
 
 [node name="ContentScroll" type="ScrollContainer" parent="CenterContainer/MainPanel/RootVBox"]
 custom_minimum_size = Vector2(0, 470)
@@ -96,14 +84,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 
 [node name="ShopGrid" type="GridContainer" parent="CenterContainer/MainPanel/RootVBox/ContentScroll/ContentVBox"]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/h_separation = 16
-theme_override_constants/v_separation = 16
-columns = 3
-
-[node name="InventoryGrid" type="GridContainer" parent="CenterContainer/MainPanel/RootVBox/ContentScroll/ContentVBox"]
-visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 16

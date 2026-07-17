@@ -240,7 +240,7 @@ static func build_language_selector() -> Control:
 	root.add_theme_constant_override("separation", 6)
 
 	var globe := Label.new()
-	globe.text = "🌐"
+	globe.text = "❯"
 	globe.add_theme_font_size_override("font_size", 18)
 	globe.add_theme_color_override("font_color", MUTED)
 	globe.vertical_alignment = VERTICAL_ALIGNMENT_CENTER

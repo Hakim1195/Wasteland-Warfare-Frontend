@@ -220,7 +220,7 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 	# Cadenas si non possédé (déblocage boutique non câblé → owned == true partout pour l'instant).
 	if not owned:
 		var lock := Label.new()
-		lock.text = "🔒"
+		lock.text = "✕"
 		lock.tooltip_text = tr("CHAR_LOCKED")
 		lock.add_theme_font_size_override("font_size", 18)
 		lock.add_theme_color_override("font_color", MUTED)

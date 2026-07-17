@@ -73,7 +73,7 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.8, 0.7, 1)
 theme_override_font_sizes/font_size = 22
-text = "⚔ ATTAQUANT"
+text = "❯ ATTAQUANT"
 
 [node name="LeftName" type="Label" parent="Halves/LeftHalf/LeftVBox"]
 unique_name_in_owner = true
@@ -139,7 +139,7 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.8, 0.7, 1)
 theme_override_font_sizes/font_size = 22
 horizontal_alignment = 2
-text = "🛡 DÉFENSEUR"
+text = "❯ DÉFENSEUR"
 
 [node name="RightName" type="Label" parent="Halves/RightHalf/RightVBox"]
 unique_name_in_owner = true

@@ -121,7 +121,7 @@ func _on_lobby_state(players: Array, ready_ids: Array, usernames: Dictionary = {
 			uname = tr("WR_PLAYER_FALLBACK") % (i + 1)
 		# Bot de remplissage (G2 §8.72) : id NÉGATIF → préfixe « [IA] » + icône robot.
 		var is_bot := int(pid) < 0
-		var line = ("🤖 [IA] " + uname) if is_bot else ("👤 " + uname)
+		var line = ("[IA] " + uname) if is_bot else uname
 		if is_me:
 			line += tr("WR_ME_SUFFIX")
 		line += "   " + (tr("WR_STATUS_READY") if is_ready_p else tr("WR_STATUS_WAITING"))

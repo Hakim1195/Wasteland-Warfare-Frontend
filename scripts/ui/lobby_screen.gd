@@ -101,9 +101,10 @@ func _ready():
 	NetworkManager.lobby_error.connect(_on_lobby_error)
 	NetworkManager.lobby_action_success.connect(_on_lobby_success)
 
-	# Identité de l'opérateur dans le Centre de Commandement (pseudo posé au login, cf. AuthManager).
+	# Identité du joueur dans le Centre de Commandement (pseudo posé au login, cf. AuthManager).
+	# Repli NEUTRE « Joueur » (COMMON_PLAYER) — COMMON_OPERATOR est un libellé, pas un nom (§8.102).
 	if pseudo_label:
-		var pseudo: String = AuthManager.username if AuthManager.username != "" else tr("COMMON_OPERATOR")
+		var pseudo: String = AuthManager.username if AuthManager.username != "" else tr("COMMON_PLAYER")
 		pseudo_label.text = "// " + pseudo.to_upper()
 
 	# Effectif HÉRITÉ du mode choisi au Menu Principal (autoload MatchConfig — refonte « Warzone

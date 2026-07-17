@@ -182,7 +182,8 @@ func _ready():
 
 	# Identité locale : connue dès le login (AuthManager.username) ; le niveau/victoires arrivent
 	# via /auth/me (le code ne pousse que les valeurs ; les intitulés statiques vivent dans la scène).
-	_local_name = AuthManager.username if AuthManager.username != "" else tr("COMMON_OPERATOR")
+	# Repli NEUTRE « Joueur » (COMMON_PLAYER) — COMMON_OPERATOR est un libellé, pas un nom (§8.102).
+	_local_name = AuthManager.username if AuthManager.username != "" else tr("COMMON_PLAYER")
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
 	AuthManager.get_profile()
 

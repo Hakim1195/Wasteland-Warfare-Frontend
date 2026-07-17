@@ -409,7 +409,7 @@ func _disarm_abandon() -> void:
 # que le backend rejetterait (« Vous avez déjà abandonné la partie »).
 func lock_abandon_button() -> void:
 	_abandon_armed = false
-	%AbandonButton.text = "🏳️ ABANDONNÉ"
+	%AbandonButton.text = "⚐ ABANDONNÉ"
 	%AbandonButton.disabled = true
 
 # =========================================================
@@ -539,7 +539,7 @@ func pulse_next_phase(on: bool) -> void:
 func set_local_identity(pseudo: String, color: Color) -> void:
 	_local_pseudo = pseudo
 	_local_color = color
-	%IdentityLabel.text = "👤 " + (pseudo if pseudo != "" else "—")
+	%IdentityLabel.text = "❯ " + (pseudo if pseudo != "" else "—")
 	%IdentityLabel.add_theme_color_override("font_color", color)
 
 # =========================================================
@@ -584,7 +584,7 @@ func _hide_faction_tooltip() -> void:
 # Déploie / replie le panneau Intel (fondu via Tween natif, cohérent avec les autres panneaux).
 func _toggle_intel() -> void:
 	_intel_open = not _intel_open
-	%IntelToggleButton.text = "🛰 INTEL : ZONE ▾" if _intel_open else "🛰 INTEL : ZONE ▸"
+	%IntelToggleButton.text = "INTEL : ZONE ▾" if _intel_open else "INTEL : ZONE ▸"
 	if _intel_tween and _intel_tween.is_valid():
 		_intel_tween.kill()
 	var panel: Control = %IntelPanel
@@ -729,7 +729,7 @@ func set_zone_forecast(names: Array) -> void:
 # Déploie / replie le panneau Factions (fondu Tween natif, cohérent avec le tiroir Zone).
 func _toggle_factions_intel() -> void:
 	_factions_intel_open = not _factions_intel_open
-	%IntelFactionsToggleButton.text = "🛰 INTEL : FACTIONS ▾" if _factions_intel_open else "🛰 INTEL : FACTIONS ▸"
+	%IntelFactionsToggleButton.text = "INTEL : FACTIONS ▾" if _factions_intel_open else "INTEL : FACTIONS ▸"
 	if _factions_intel_tween and _factions_intel_tween.is_valid():
 		_factions_intel_tween.kill()
 	var panel: Control = %IntelFactionsPanel
@@ -895,7 +895,7 @@ func _make_war_row(r: Dictionary, max_threat: int) -> Control:
 	head.add_child(chip)
 	chip.setup(int(r.get("pid", 0)), true)
 	var terr := Label.new()
-	terr.text = "🏴%d" % int(r.get("territories", 0))
+	terr.text = "⚑%d" % int(r.get("territories", 0))
 	terr.add_theme_font_size_override("font_size", 12)
 	terr.add_theme_color_override("font_color", Color("eef3f7"))
 	terr.add_theme_font_override("font", RosterHelpers._mono_font())
@@ -929,10 +929,10 @@ func _make_war_row(r: Dictionary, max_threat: int) -> Control:
 	grid.add_theme_constant_override("v_separation", 3)
 	grid.add_child(_stat_pill("⚔", "WARROOM_LBL_KILLS", int(r.get("kills", 0)), "WARROOM_TIP_KILLS"))
 	grid.add_child(_stat_pill("☠", "WARROOM_LBL_LOSSES", int(r.get("losses", 0)), "WARROOM_TIP_LOSSES"))
-	grid.add_child(_stat_pill("🚩", "WARROOM_LBL_CONQ", int(r.get("conquests", 0)), "WARROOM_TIP_CONQ"))
-	grid.add_child(_stat_pill("🎯", "WARROOM_LBL_ELIM", int(r.get("eliminations", 0)), "WARROOM_TIP_ELIM"))
-	grid.add_child(_stat_pill("💥", "WARROOM_LBL_HERODMG", int(r.get("hero_damage", 0)), "WARROOM_TIP_HERODMG"))
-	grid.add_child(_stat_pill("💀", "WARROOM_LBL_HEROKILL", int(r.get("hero_kills", 0)), "WARROOM_TIP_HEROKILL"))
+	grid.add_child(_stat_pill("⚑", "WARROOM_LBL_CONQ", int(r.get("conquests", 0)), "WARROOM_TIP_CONQ"))
+	grid.add_child(_stat_pill("◎", "WARROOM_LBL_ELIM", int(r.get("eliminations", 0)), "WARROOM_TIP_ELIM"))
+	grid.add_child(_stat_pill("✸", "WARROOM_LBL_HERODMG", int(r.get("hero_damage", 0)), "WARROOM_TIP_HERODMG"))
+	grid.add_child(_stat_pill("⚰", "WARROOM_LBL_HEROKILL", int(r.get("hero_kills", 0)), "WARROOM_TIP_HEROKILL"))
 	grid.add_child(_stat_pill("☢", "WARROOM_LBL_ZONE", int(r.get("zone_deaths", 0)), "WARROOM_TIP_ZONE"))
 	card.add_child(grid)
 
@@ -1418,7 +1418,7 @@ func _build_feed_filters() -> void:
 	row.add_theme_constant_override("separation", 4)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	var group := ButtonGroup.new()
-	var defs := [["all", "TOUS"], ["combat", "⚔"], ["zone", "☢"], ["cards", "🃏"], ["system", "⚙"]]
+	var defs := [["all", "TOUS"], ["combat", "⚔"], ["zone", "☢"], ["cards", "❖"], ["system", "⚙"]]
 	for d in defs:
 		var b := Button.new()
 		b.text = str(d[1])
@@ -1577,7 +1577,7 @@ func update_display() -> void:
 
 	# Objectif secret du joueur local.
 	var obj: Dictionary = GameState.objectives.get(str(AuthManager.user_id), {})
-	%ObjectiveLabel.text = "🎯 OBJECTIF : " + str(obj.get("description", "(secret)"))
+	%ObjectiveLabel.text = "◎ OBJECTIF : " + str(obj.get("description", "(secret)"))
 
 	_refresh_cards()
 
@@ -1756,9 +1756,9 @@ func show_combat_banner(data: Dictionary) -> void:
 	if int(data.get("hero_damage", 0)) > 0:
 		txt += "  ♥−%d" % int(data.get("hero_damage", 0))
 	if bool(data.get("hero_died", false)):
-		txt += "  💀"
+		txt += "  ☠"
 	elif bool(data.get("conquered", false)):
-		txt += "  🏴"
+		txt += "  ⚑"
 	summary.text = txt
 	summary.add_theme_font_size_override("font_size", 14)
 	summary.add_theme_color_override("font_color", Color("c8cdd6"))

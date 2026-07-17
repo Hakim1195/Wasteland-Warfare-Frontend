@@ -37,7 +37,7 @@ func _ready() -> void:
 			f.close()
 			if custom != "":
 				_apply_http_host(custom)
-				print("🌐 ApiConfig: hôte personnalisé (server_host.txt) = ", http_host)
+				print("ApiConfig: hôte personnalisé (server_host.txt) = ", http_host)
 				return
 
 	# 2) Argument --local (éditeur/dev contre un backend Docker local).
@@ -45,11 +45,11 @@ func _ready() -> void:
 	if argv.has("--local"):
 		http_host = LOCAL_HTTP
 		ws_host = LOCAL_WS
-		print("🌐 ApiConfig: mode LOCAL (--local) = ", http_host)
+		print("ApiConfig: mode LOCAL (--local) = ", http_host)
 		return
 
 	# 3) Production (défaut).
-	print("🌐 ApiConfig: mode PRODUCTION = ", http_host)
+	print("ApiConfig: mode PRODUCTION = ", http_host)
 
 
 # Déduit l'hôte WebSocket (ws/wss) à partir d'un hôte HTTP fourni, et normalise (sans "/" final).

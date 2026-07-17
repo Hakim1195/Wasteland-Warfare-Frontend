@@ -63,7 +63,7 @@ func _on_id_request_completed(_result, response_code, _headers, body):
 			if data.has("username"):
 				username = str(data["username"])
 			emit_signal("user_id_loaded", user_id)
-			print("🪪 AuthManager : player_id récupéré = ", user_id)
+			print("AuthManager : player_id récupéré = ", user_id)
 
 # Décode le claim "sub" (= username) d'un JWT sans vérifier la signature. Le payload est encodé
 # en base64url (URL-safe, sans padding) : on le convertit en base64 standard avant décodage.

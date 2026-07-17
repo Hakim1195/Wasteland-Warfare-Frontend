@@ -143,7 +143,7 @@ func connect_to_server(room_id: String):
 
 	# Le serveur écoute sur /ws/{room_id}/{player_id}. On a besoin de notre ID numérique.
 	if AuthManager.user_id < 0:
-		print("⚠️ NETWORK: player_id inconnu, connexion WebSocket impossible. As-tu bien fini le login ?")
+		print("NETWORK: player_id inconnu, connexion WebSocket impossible. As-tu bien fini le login ?")
 		lobby_error.emit("Identité joueur non chargée, réessayez.")
 		return
 
@@ -154,7 +154,7 @@ func connect_to_server(room_id: String):
 		cv = str(GameState.client_version)
 	var final_url = websocket_url + room_id + "/" + str(AuthManager.user_id) + "?client_version=" + cv.uri_encode()
 	# On journalise l'URL SANS le token (le JWT ne doit jamais traîner dans les logs).
-	print("🌐 NETWORK: Tentative de connexion WebSocket vers " + final_url)
+	print("NETWORK: Tentative de connexion WebSocket vers " + final_url)
 
 	# Authentification du handshake (C2/M1) : le serveur EXIGE le JWT en query string (?token=)
 	# et ferme en 4001 sinon. L'en-tête Authorization ci-dessous est conservé par compat mais
@@ -179,7 +179,7 @@ func _process(_delta):
 
 	if state == WebSocketPeer.STATE_OPEN:
 		if not connected:
-			print("🟢 CONNECTÉ AU WEBSOCKET !")
+			print("NETWORK: connecté au WebSocket.")
 			connected = true
 			server_connected.emit()
 
@@ -198,7 +198,7 @@ func _process(_delta):
 		if code == 4000:
 			var reason := socket.get_close_reason()
 			var msg := reason if reason != "" else "Version du jeu obsolète : mettez à jour."
-			print("🚫 NETWORK: connexion refusée par le serveur (version) : " + msg)
+			print("NETWORK: connexion refusée par le serveur (version) : " + msg)
 			game_error.emit(msg)
 			lobby_error.emit(msg)
 		elif code == 4001 or code == 4003:
@@ -207,7 +207,7 @@ func _process(_delta):
 			# le message serveur (raison ASCII) tel quel — l'écran courant l'affiche en rouge.
 			var auth_reason := socket.get_close_reason()
 			var auth_msg := auth_reason if auth_reason != "" else "Connexion refusée : session invalide, reconnectez-vous."
-			print("🚫 NETWORK: connexion refusée par le serveur (auth %d) : %s" % [code, auth_msg])
+			print("NETWORK: connexion refusée par le serveur (auth %d) : %s" % [code, auth_msg])
 			game_error.emit(auth_msg)
 			lobby_error.emit(auth_msg)
 		connected = false
@@ -228,7 +228,7 @@ func _handle_server_message(msg: Dictionary) -> void:
 				game_event.emit(msg["event"])
 		"error":
 			var err_msg = str(msg.get("message", "Erreur inconnue"))
-			print("🚫 NETWORK: action refusée par le serveur : " + err_msg)
+			print("NETWORK: action refusée par le serveur : " + err_msg)
 			game_error.emit(err_msg)
 		"player_disconnected":
 			player_left.emit(msg.get("player_id"))
@@ -342,7 +342,7 @@ func _next_action_id() -> String:
 
 func send_action(action_type: String, payload: Dictionary = {}) -> void:
 	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
-		print("⚠️ NETWORK: WebSocket non ouvert, action '" + action_type + "' ignorée.")
+		print("NETWORK: WebSocket non ouvert, action '" + action_type + "' ignorée.")
 		game_error.emit("Pas connecté au serveur temps réel.")
 		return
 	# On DUPLIQUE la charge utile pour y injecter action_id SANS muter le dict de l'appelant.
@@ -574,8 +574,11 @@ func _on_heroes_fetched(_result, response_code, _headers, body, http_node):
 # =========================================================
 
 # 7. Catalogue : GET /shop/catalog (public). Liste d'articles {id, category, price, name_key, desc_key}.
+# §8.102 : `?include_all=1` → le serveur renvoie AUSSI les articles `purchasable=false` (skins
+# exclusifs de saison) avec le champ `purchasable` exposé — la boutique ne les affiche que
+# POSSÉDÉS, sans CTA d'achat. Un serveur antérieur ignore simplement le paramètre (rétro-compat).
 func fetch_shop_catalog():
-	_send_api_request("/shop/catalog", HTTPClient.METHOD_GET, {}, _on_shop_catalog_fetched)
+	_send_api_request("/shop/catalog?include_all=1", HTTPClient.METHOD_GET, {}, _on_shop_catalog_fetched)
 
 func _on_shop_catalog_fetched(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()

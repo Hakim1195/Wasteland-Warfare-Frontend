@@ -340,21 +340,45 @@ func _build_identity_frame() -> Control:
 	_xp_bar.profile_widget_clicked.connect(_on_profile_widget_clicked)
 	return frame
 
-# Bouton icône carré (⚙ cyan / ⏻ rouge) — même style que _style_icon_button du menu principal.
+# Glyphe « power » (⏻) DESSINÉ par code (§8.102) : U+23FB n'existe dans AUCUNE police système de
+# la chaîne (tofu constaté §8.94, Segoe UI Symbol ne l'a pas non plus) → on trace le symbole IEC
+# 60417-5009 (arc ouvert en haut + trait vertical). Rendu net à toute taille, aucun nouvel asset.
+class PowerGlyph extends Control:
+	var color: Color = Color.WHITE:
+		set(v):
+			color = v
+			queue_redraw()
+
+	func _draw() -> void:
+		var c := size / 2.0
+		var r := minf(size.x, size.y) * 0.28
+		# Arc ouvert en haut (ouverture ~80° centrée sur le sommet), puis trait vertical dans l'ouverture.
+		draw_arc(c, r, -PI / 2 + 0.7, -PI / 2 + TAU - 0.7, 24, color, 2.0, true)
+		draw_line(c + Vector2(0, -r * 1.30), c + Vector2(0, -r * 0.15), color, 2.0, true)
+
+
+# Bouton icône carré (⚙ cyan / power rouge) — même style que _style_icon_button du menu principal.
 func _build_icon_button(glyph: String, accent: Color, on_pressed: Callable) -> Button:
 	var btn := Button.new()
-	btn.text = glyph
 	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	btn.custom_minimum_size = Vector2(44, 44)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	# ⚠️ DÉFAUT HÉRITÉ (constaté §8.94, NON corrigé — hors périmètre) : la chaîne condensée de la
-	# charte porte bien ⚙ (U+2699) mais PAS ⏻ (U+23FB) → le bouton Quitter s'affiche en « tofu »
-	# (carré de glyphe manquant). Le comportement est INCHANGÉ par rapport à l'ancienne top-bar du
-	# menu (même chaîne de police) ; ajouter « Segoe UI Symbol » en tête ne le corrige pas (cette
-	# police n'a pas non plus U+23FB) et dégrade le rendu du ⚙. Correctif à trancher : remplacer le
-	# glyphe par un symbole couvert, ou embarquer une police d'icônes (nouvel asset → Annexe C).
+	# Correctif §8.102 du « tofu » hérité (§8.94) : le bouton Quitter (⏻) reçoit un PowerGlyph
+	# dessiné par code au lieu d'un caractère manquant ; le ⚙ (couvert par la police) reste un texte.
+	if glyph == "⏻":
+		btn.text = ""
+		var pg := PowerGlyph.new()
+		pg.set_anchors_preset(Control.PRESET_FULL_RECT)
+		pg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		pg.color = accent
+		btn.add_child(pg)
+		# Miroir du comportement texte (accent → blanc froid au survol).
+		btn.mouse_entered.connect(func() -> void: pg.color = TEXT)
+		btn.mouse_exited.connect(func() -> void: pg.color = accent)
+	else:
+		btn.text = glyph
 	btn.add_theme_font_override("font", _font)
 	btn.add_theme_font_size_override("font_size", 18)
 	var normal := StyleBoxFlat.new()

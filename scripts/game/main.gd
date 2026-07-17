@@ -292,7 +292,7 @@ func _on_territory_clicked(tid: String):
 		_buffer_add(tid, step)
 		return
 	if GameState.stage == "placement":
-		hud.add_log("⏳ Pas votre tour de placement.")
+		hud.add_log("Pas votre tour de placement.")
 	elif GameState.stage == "playing":
 		_handle_play_click(tid)
 
@@ -305,7 +305,7 @@ func _on_territory_right_clicked(tid: String):
 
 func _handle_play_click(tid: String):
 	if not _is_playing_my_turn():
-		hud.add_log("⏳ Ce n'est pas votre tour.")
+		hud.add_log("Ce n'est pas votre tour.")
 		return
 	match GameState.current_phase:
 		3: _do_attack_click(tid)
@@ -647,22 +647,22 @@ func _on_deploy_confirmed() -> void:
 
 func _on_pass_pressed():
 	if _pass_in_flight:
-		hud.add_log("⏳ Action en cours…")
+		hud.add_log("Action en cours…")
 		return
 	if _awaiting_conquer_move:
-		hud.add_log("⏳ Répartissez d'abord vos troupes sur le territoire conquis.")
+		hud.add_log("Répartissez d'abord vos troupes sur le territoire conquis.")
 		return
 	if _awaiting_eclipse:
-		hud.add_log("⏳ Choisissez d'abord votre carte Événement (Ordre de l'Éclipse).")
+		hud.add_log("Choisissez d'abord votre carte Événement (Ordre de l'Éclipse).")
 		return
 	if _awaiting_spy:
-		hud.add_log("⏳ Choisissez d'abord une cible à espionner (Chasseurs d'Ombres).")
+		hud.add_log("Choisissez d'abord une cible à espionner (Chasseurs d'Ombres).")
 		return
 	if GameState.stage != "playing":
 		hud.add_log("La partie n'a pas encore commencé.")
 		return
 	if not _is_playing_my_turn():
-		hud.add_log("⏳ Ce n'est pas votre tour.")
+		hud.add_log("Ce n'est pas votre tour.")
 		return
 	_clear_source()
 	# Verrou + désactivation immédiate du bouton : un seul pass_turn en vol par aller-retour serveur.
@@ -705,7 +705,7 @@ func _on_card_played(card_index: int):
 	if _input_blocked():
 		return
 	if not _is_playing_my_turn():
-		hud.add_log("⏳ Vous ne pouvez jouer une carte que pendant votre tour.")
+		hud.add_log("Vous ne pouvez jouer une carte que pendant votre tour.")
 		return
 	# Une carte = un nombre brut de troupes : on l'envoie directement par son index.
 	# Le serveur retire la carte et crédite sa valeur au stock à déployer.
@@ -892,7 +892,7 @@ func _populate_spy_buttons() -> void:
 		if pid == _my_id():
 			continue
 		var btn := Button.new()
-		btn.text = "🎯 %s" % _display_name(pid)
+		btn.text = "◎ %s" % _display_name(pid)
 		btn.custom_minimum_size = Vector2(380, 50)
 		btn.add_theme_font_size_override("font_size", 18)
 		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -911,7 +911,7 @@ func _on_spy_target_chosen(target_id: int) -> void:
 # de la cible en couleur plateau (_bb_pseudo) ; la description est ÉCHAPPÉE (elle peut contenir
 # le pseudo d'un joueur — objectif « éliminer X » — donc des « [ » hostiles, piège n° 1).
 func _on_spy_result(target_player_id: int, description: String) -> void:
-	var line := "🕵 L'objectif de %s est : [color=#c9a0ff]%s[/color]" % [
+	var line := "◎ L'objectif de %s est : [color=#c9a0ff]%s[/color]" % [
 		_bb_pseudo(target_player_id), str(description).replace("[", "[lb]")]
 	hud.add_chat_message("prive", line)
 	hud.add_log(line)
@@ -938,10 +938,10 @@ func _on_chat_message(tab: String, sender_id: int, sender_name: String, text: St
 	if channel == "prive" and sender_id == _my_id():
 		var to_color: Color = board.get_player_color(target_id)
 		var to_name := _display_name(target_id).replace("[", "[lb]")
-		line = "🔒 [color=#%s]→ %s[/color] : %s" % [to_color.to_html(false), to_name, esc_text]
+		line = "❯ [color=#%s]→ %s[/color] : %s" % [to_color.to_html(false), to_name, esc_text]
 	else:
 		var who: String = hud.color_pseudo(sender_name.replace("[", "[lb]"), board.get_player_color(sender_id))
-		var prefix := "🔒 " if channel == "prive" else ""
+		var prefix := "❯ " if channel == "prive" else ""
 		line = "%s%s : %s" % [prefix, who, esc_text]
 	hud.add_chat_message(channel, line)
 
@@ -1483,14 +1483,14 @@ func _on_game_error(message: String):
 		board.set_pending_deployments(pending_deployments)
 		_refresh_confirm_state()
 		_update_instruction()
-	hud.add_log("🚫 " + message)
+	hud.add_log("⚠ " + message)
 
 # Un joueur a abandonné (Fallen Empire §8.20). L'état est déjà appliqué et le refresh déjà
 # déclenché par network_manager (game_state_updated émis dans le même message) : ici on
 # journalise, et si c'est NOUS on verrouille le bouton d'abandon (anti double-envoi).
 func _on_player_abandoned(player_id: int) -> void:
 	# Unification E1 : pseudo en couleur plateau (échappé), reste de la ligne en rouge charte.
-	hud.add_log("🏳 %s [color=#d6453f]a abandonné ! Défense automatique activée.[/color]" % _bb_pseudo(player_id))
+	hud.add_log("⚐ %s [color=#d6453f]a abandonné ! Défense automatique activée.[/color]" % _bb_pseudo(player_id))
 	if player_id == _my_id():
 		hud.lock_abandon_button()
 
@@ -2175,25 +2175,25 @@ func _on_back_to_lobby():
 
 func _update_instruction():
 	if GameState.winner_id != null:
-		hud.set_instruction("🏆 VICTOIRE de %s !" % _display_name(int(GameState.winner_id)))
+		hud.set_instruction("★ VICTOIRE de %s !" % _display_name(int(GameState.winner_id)))
 		return
 
 	# Conquête en attente de répartition : la fenêtre fait foi (jeu figé, §8.23).
 	if _awaiting_conquer_move:
-		hud.set_instruction("🏴 Conquête ! Répartissez vos troupes dans la fenêtre.")
+		hud.set_instruction("⚑ Conquête ! Répartissez vos troupes dans la fenêtre.")
 		return
 
 	# Choix de carte Événement / espionnage en attente (factions à états bloquants, §8.3).
 	if _awaiting_eclipse:
-		hud.set_instruction("🌑 Ordre de l'Éclipse : choisissez la carte à conserver.")
+		hud.set_instruction("❖ Ordre de l'Éclipse : choisissez la carte à conserver.")
 		return
 	if _awaiting_spy:
-		hud.set_instruction("🕵 Chasseurs d'Ombres : choisissez une cible à espionner.")
+		hud.set_instruction("◎ Chasseurs d'Ombres : choisissez une cible à espionner.")
 		return
 
 	# Empire déchu local : plus rien à jouer (le serveur saute nos tours), on observe.
 	if _am_abandoned():
-		hud.set_instruction("🏳️ Vous avez abandonné — vos territoires se défendent automatiquement.")
+		hud.set_instruction("⚐ Vous avez abandonné — vos territoires se défendent automatiquement.")
 		return
 
 	match GameState.stage:
@@ -2204,7 +2204,7 @@ func _update_instruction():
 				var suffix := ""
 				if _blind_expected > 0:
 					suffix = " (%d/%d)" % [_blind_ready, _blind_expected]
-				hud.set_instruction("⏳ Déploiement validé — en attente des autres joueurs…%s" % suffix)
+				hud.set_instruction("Déploiement validé — en attente des autres joueurs…%s" % suffix)
 			else:
 				hud.set_instruction("PLACEMENT AVEUGLE : clic GAUCHE +1 / clic DROIT -1 sur VOS territoires. Posez vos %d troupes, puis CONFIRMER." % _deploy_quota())
 		"playing":
@@ -2250,68 +2250,68 @@ func _format_event(e) -> String:
 		return str(e)
 	match str(e.get("event_type", "")):
 		"attack_result":
-			var s = "⚔️ T%s→T%s | dés A:%s D:%s | pertes A:%s D:%s" % [
+			var s = "⚔ T%s→T%s | dés A:%s D:%s | pertes A:%s D:%s" % [
 				e.get("attacker_territory_id"), e.get("defender_territory_id"),
 				e.get("attacker_rolls"), e.get("defender_rolls"),
 				e.get("attacker_losses"), e.get("defender_losses")]
 			# Effets de faction déclenchés ce combat (§8.3).
 			if e.get("phalanges_reroll"):
-				s += " ⚙️ Phalanges (relance)"
+				s += " ⚙ Phalanges (relance)"
 			if e.get("aegis_kill"):
-				s += " 🛡️ Aegis (double)"
+				s += " ◆ Aegis (double)"
 			if e.get("terror_kill"):
-				s += " 💀 Terreur (3e)"
+				s += " ☠ Terreur (3e)"
 			if e.get("conquered"):
-				s += " 🏴 conquis !"
+				s += " ⚑ conquis !"
 			return s
 		"blind_deploy_submitted":
 			# Phase 0 (§8.31) : un joueur a validé son déploiement aveugle (compteur X/Y).
-			var line := "📦 Déploiement aveugle validé (%s/%s)." % [
+			var line := "❯ Déploiement aveugle validé (%s/%s)." % [
 				str(int(e.get("ready_count", 0))), str(int(e.get("expected_count", 0)))]
 			if e.get("setup_complete"):
 				line += " Tous prêts — la partie commence !"
 			return line
 		"blind_deploy_resolved":
 			# Résolution simultanée de la Phase 0 (tous soumis OU délai de 90 s écoulé, §8.31).
-			return "📦 Déploiements simultanés résolus%s — la partie commence !" % (
+			return "❯ Déploiements simultanés résolus%s — la partie commence !" % (
 				" (délai écoulé)" if e.get("forced") else "")
 		"turn_timeout":
 			# Minuterie de tour expirée (60 s) : le serveur a passé le tour d'office (§8.31).
-			return "⏰ Temps écoulé — tour de %s passé d'office." % _bb_pseudo(int(e.get("player_id", -1)))
+			return "❯ Temps écoulé — tour de %s passé d'office." % _bb_pseudo(int(e.get("player_id", -1)))
 		"initial_units_placed":
 			# Déploiement en masse (§8.26) : `deployments` = dict {tid: nb} ; l'ancien format
 			# unitaire (territory_id/amount) reste affichable proprement.
 			var msg = ""
 			if e.has("territory_id"):
-				msg = "📍 +%s sur T%s" % [e.get("amount"), e.get("territory_id")]
+				msg = "❯ +%s sur T%s" % [e.get("amount"), e.get("territory_id")]
 			else:
-				msg = "📍 %s troupe(s) placée(s) sur %d territoire(s)" % [
+				msg = "❯ %s troupe(s) placée(s) sur %d territoire(s)" % [
 					str(e.get("amount", 0)), _deployments_count(e)]
 			if e.get("setup_complete"):
 				msg += " — placement terminé, la partie commence !"
 			return msg
 		"units_deployed":
 			if e.has("territory_id"):
-				return "🪖 +%s sur T%s" % [e.get("amount"), e.get("territory_id")]
-			return "🪖 %s renfort(s) déployé(s) sur %d territoire(s)" % [
+				return "❯ +%s sur T%s" % [e.get("amount"), e.get("territory_id")]
+			return "❯ %s renfort(s) déployé(s) sur %d territoire(s)" % [
 				str(e.get("amount", 0)), _deployments_count(e)]
 		"units_moved":
-			return "➡️ %s de T%s à T%s" % [e.get("amount"), e.get("source_territory_id"), e.get("target_territory_id")]
+			return "➜ %s de T%s à T%s" % [e.get("amount"), e.get("source_territory_id"), e.get("target_territory_id")]
 		"conquer_move_resolved":
-			return "🚚 %s troupe(s) déplacée(s) de T%s vers T%s (conquête)." % [
+			return "➜ %s troupe(s) déplacée(s) de T%s vers T%s (conquête)." % [
 				str(e.get("troops")), e.get("from_tid"), e.get("to_tid")]
 		"turn_passed":
-			return "⏭️ Phase suivante."
+			return "❯ Phase suivante."
 		"card_played":
-			return "🃏 Carte +%s jouée — troupes à déployer." % str(int(e.get("card_value", 0)))
+			return "❖ Carte +%s jouée — troupes à déployer." % str(int(e.get("card_value", 0)))
 		"card_kept":
-			return "🌑 Carte +%s conservée (Ordre de l'Éclipse)." % str(int(e.get("card_value", 0)))
+			return "❖ Carte +%s conservée (Ordre de l'Éclipse)." % str(int(e.get("card_value", 0)))
 		"spy_done":
-			return "🕵 Un Chasseur d'Ombres a espionné un objectif secret."
+			return "◎ Un Chasseur d'Ombres a espionné un objectif secret."
 		"game_initialized":
-			return "🌍 " + str(e.get("message", "Partie initialisée."))
+			return "❯ " + str(e.get("message", "Partie initialisée."))
 		"game_over":
-			return "🏁 Partie terminée — vainqueur : %s (%s)" % [
+			return "★ Partie terminée — vainqueur : %s (%s)" % [
 				_bb_pseudo(int(e.get("winner_id", -1))), str(e.get("match_type"))]
 		_:
 			return str(e.get("event_type", e))

@@ -112,6 +112,10 @@ func _ready():
 	# Saison (M6 §8.68) : division + points de saison viennent de /auth/me (season_points/division).
 	AuthManager.profile_loaded.connect(_on_me_loaded)
 	AuthManager.get_profile()
+	# Changement de langue (§8.102) : les cartes/lignes générées en code contiennent des textes
+	# résolus par tr() au build → re-render complet (les labels de la scène, à clé brute, se
+	# re-traduisent seuls).
+	LocaleManager.locale_changed.connect(func(_code: String) -> void: _refresh_all())
 
 	# Premier rendu avec les valeurs neutres (écrasées dès que le serveur répond).
 	_refresh_all()
@@ -185,8 +189,9 @@ func _read_int(data: Dictionary, keys: Array, fallback: int) -> int:
 # --- Rendu global -----------------------------------------------------------
 func _refresh_all() -> void:
 	if username_value and username_value.text.strip_edges() in ["", "—"]:
-		# Le pseudo arrive via /auth/me ; on n'écrase pas s'il a déjà été poussé.
-		_set_username(AuthManager.username if AuthManager.username != "" else tr("COMMON_OPERATOR"))
+		# Le pseudo arrive via /auth/me ; on n'écrase pas s'il a déjà été poussé. Repli NEUTRE
+		# « Joueur » (COMMON_PLAYER) — COMMON_OPERATOR est un LIBELLÉ d'eyebrow, pas un nom.
+		_set_username(AuthManager.username if AuthManager.username != "" else tr("COMMON_PLAYER"))
 	_update_level_xp()
 	_update_faction()
 	_populate_stats()
@@ -220,22 +225,25 @@ func _populate_stats() -> void:
 	var ratio := 0.0
 	if _wins + _losses > 0:
 		ratio = 100.0 * float(_wins) / float(_wins + _losses)
-	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_GAMES"), str(_games_played), TEXT))
-	stats_grid.add_child(_make_stat_card(tr("COMMON_WINS"), str(_wins), GOLD))
-	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_LOSSES"), str(_losses), DANGER))
-	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_RATIO"), "%d%%" % int(round(ratio)), ACCENT))
-	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_TOLL"), _format_thousands(_heaviest_toll), MUTED))
-	# Saison (M6 §8.68) : division + points saisonniers (masqués tant que /auth/me n'a pas répondu).
+	# Saison (M6 §8.68, promue §8.102) : division + points saisonniers EN TÊTE de grille — c'est
+	# le rang vivant du joueur, il prime sur l'historique cumulé (masqués tant que /auth/me muet).
 	if _division != "":
 		stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_DIVISION"), _division,
 			DIVISION_COLORS.get(_division, MUTED)))
 		stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_SEASON_POINTS"),
 			_format_thousands(_season_points), ACCENT))
+	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_GAMES"), str(_games_played), TEXT))
+	stats_grid.add_child(_make_stat_card(tr("COMMON_WINS"), str(_wins), GOLD))
+	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_LOSSES"), str(_losses), DANGER))
+	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_RATIO"), "%d%%" % int(round(ratio)), ACCENT))
+	stats_grid.add_child(_make_stat_card(tr("PROFILE_STAT_TOLL"), _format_thousands(_heaviest_toll), MUTED))
 
-# Carte readout : eyebrow (libellé) + valeur en gros (couleur sémantique). Surface gunmetal + liseré cyan.
+# Carte readout : eyebrow (libellé) + valeur en gros (couleur sémantique). Surface gunmetal.
+# §8.102 : le LISERÉ gauche prend la couleur sémantique de la valeur (or victoire, rouge défaite,
+# couleur de division…) — lecture d'un coup d'œil, cohérent avec les cartes teintées de la boutique.
 func _make_stat_card(label: String, value: String, value_color: Color) -> PanelContainer:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _make_card_style())
+	card.add_theme_stylebox_override("panel", _make_card_style(value_color))
 	card.custom_minimum_size = Vector2(175, 96)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
@@ -327,13 +335,14 @@ func _body_label(text: String) -> Label:
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	return l
 
-# Style d'une carte : surface gunmetal + liseré cyan à gauche (charte §2, comme shop.gd).
-func _make_card_style() -> StyleBoxFlat:
+# Style d'une carte : surface gunmetal + liseré à gauche (charte §2, comme shop.gd). L'accent est
+# paramétrable (§8.102) : cyan par défaut, couleur sémantique pour les cartes de statistiques.
+func _make_card_style(accent: Color = ACCENT) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = SURFACE
 	sb.set_corner_radius_all(0)
 	sb.border_width_left = 3
-	sb.border_color = ACCENT
+	sb.border_color = accent
 	sb.content_margin_left = 16.0
 	sb.content_margin_top = 12.0
 	sb.content_margin_right = 14.0

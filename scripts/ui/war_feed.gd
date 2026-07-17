@@ -34,7 +34,7 @@ const SIMPLE_CATEGORIES := {
 	"game_over": CAT_SYSTEM,
 	"spy_done": CAT_SYSTEM,
 }
-const SIMPLE_ICONS := {"card_played": "🃏", "card_kept": "🃏"}
+const SIMPLE_ICONS := {"card_played": "❖", "card_kept": "❖"}
 
 static func _mk(category: String, icon: String, rich_text: String,
 		tid: String = "", major: bool = false) -> Dictionary:
@@ -84,22 +84,22 @@ static func _parse_attack(event: Dictionary, ctx: Dictionary,
 		int(event.get("attacker_losses", 0)), int(event.get("defender_losses", 0))]
 	# Effets de faction déclenchés (mêmes marqueurs que le texte legacy).
 	if event.get("phalanges_reroll"):
-		line += " ⚙️ Phalanges"
+		line += " ⚙ Phalanges"
 	if event.get("aegis_kill"):
-		line += " 🛡️ Aegis"
+		line += " ◆ Aegis"
 	if event.get("terror_kill"):
-		line += " 💀 Terreur"
+		line += " ☠ Terreur"
 	out.append(_mk(CAT_COMBAT, "⚔", line, def_tid))
 
 	# Conquête → entrée MAJEURE compacte (kill feed E4 : « ⚔ Hakim ➜ Ontario (−3) »).
 	if bool(event.get("conquered", false)):
-		out.append(_mk(CAT_COMBAT, "🏴", "⚔ %s ➜ %s (−%d)" % [
+		out.append(_mk(CAT_COMBAT, "⚑", "⚔ %s ➜ %s (−%d)" % [
 			atk_label, def_name, int(event.get("defender_losses", 0))], def_tid, true))
 
 	# Permadeath du héros défenseur → entrée MAJEURE (« 💀 X abattu par Y »).
 	var duel = event.get("hero_duel")
 	if typeof(duel) == TYPE_DICTIONARY and bool(duel.get("hero_died", false)):
-		out.append(_mk(CAT_COMBAT, "💀", "💀 %s abattu par %s" % [
+		out.append(_mk(CAT_COMBAT, "☠", "☠ %s abattu par %s" % [
 			_bb_of(bb, int(duel.get("defender_id", -9999))),
 			_bb_of(bb, int(duel.get("attacker_id", -9999)))], def_tid, true))
 	return out

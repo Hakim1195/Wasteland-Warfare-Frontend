@@ -32,12 +32,12 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_prof")
 panel = NodePath("CenterContainer/MainPanel")
-username_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityBar/IdentityBox/UsernameValue")
+username_value = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox/UsernameValue")
 level_value = NodePath("CenterContainer/MainPanel/RootVBox/LevelBox/LevelHeader/LevelInfo/LevelValue")
 xp_bar = NodePath("CenterContainer/MainPanel/RootVBox/LevelBox/XpBar")
 xp_value = NodePath("CenterContainer/MainPanel/RootVBox/LevelBox/LevelHeader/XpValue")
-faction_chevron = NodePath("CenterContainer/MainPanel/RootVBox/IdentityBar/FactionBox/FactionLine/FactionChevron")
-faction_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityBar/FactionBox/FactionLine/FactionValue")
+faction_chevron = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/FactionBox/FactionLine/FactionChevron")
+faction_value = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/FactionBox/FactionLine/FactionValue")
 stats_grid = NodePath("CenterContainer/MainPanel/RootVBox/StatsGrid")
 history_box = NodePath("CenterContainer/MainPanel/RootVBox/HistoryScroll/HistoryBox")
 status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
@@ -76,7 +76,7 @@ theme_override_constants/separation = 16
 
 [node name="TitleBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
 layout_mode = 2
-theme_override_constants/separation = 0
+theme_override_constants/separation = 2
 
 [node name="TitleEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
 layout_mode = 2
@@ -85,52 +85,22 @@ theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 13
 text = "PROFILE_EYEBROW"
 
-[node name="TitleLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
+[node name="UsernameValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
 theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 30
-text = "PROFILE_TITLE"
+theme_override_font_sizes/font_size = 36
+text = "—"
 
 [node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="FiletTop" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
-layout_mode = 2
-theme_override_styles/separator = SubResource("filet_cyan")
-
-[node name="IdentityBar" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
-layout_mode = 2
-theme_override_constants/separation = 24
-
-[node name="IdentityBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityBar"]
+[node name="FactionBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="IdentityEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityBar/IdentityBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 13
-text = "COMMON_OPERATOR"
-
-[node name="UsernameValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityBar/IdentityBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
-theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 34
-text = "—"
-
-[node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/IdentityBar"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="FactionBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityBar"]
-layout_mode = 2
-theme_override_constants/separation = 2
-
-[node name="FactionEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityBar/FactionBox"]
+[node name="FactionEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/FactionBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
@@ -138,24 +108,28 @@ theme_override_font_sizes/font_size = 13
 text = "PROFILE_FAVORITE_FACTION"
 horizontal_alignment = 2
 
-[node name="FactionLine" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityBar/FactionBox"]
+[node name="FactionLine" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/FactionBox"]
 layout_mode = 2
 alignment = 2
 theme_override_constants/separation = 8
 
-[node name="FactionChevron" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityBar/FactionBox/FactionLine"]
+[node name="FactionChevron" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/FactionBox/FactionLine"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 26
 text = "❯"
 
-[node name="FactionValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityBar/FactionBox/FactionLine"]
+[node name="FactionValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/FactionBox/FactionLine"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 26
 text = "—"
+
+[node name="FiletTop" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
 
 [node name="LevelBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
 layout_mode = 2
