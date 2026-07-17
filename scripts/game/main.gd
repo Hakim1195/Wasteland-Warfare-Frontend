@@ -44,6 +44,15 @@ var _report_node: Control = null
 # Classement de la partie (E11 §8.83) : rankings du game_over (liste de pids, gagnant en tête) —
 # consommé par le podium du Rapport Post-Op. [] tant que la clôture n'est pas reçue.
 var _match_rankings: Array = []
+# §8.99 — vrai dès que le message game_over (rankings + match_rewards) a été reçu au moins une fois
+# pour cette partie. NE PAS confondre avec `_match_rankings.is_empty()` : sert de verrou pour ne
+# JAMAIS déclarer une anomalie « aucune récompense » (cf. _has_played/populate_rewards) tant que le
+# game_over n'est pas CONFIRMÉ arrivé — sinon la course réseau (état winner_id pouvant précéder le
+# game_over, cf. commentaire _match_rewards ci-dessus) ferait passer un simple retard réseau pour
+# une anomalie, et la garde _rewards_built de operation_report.gd figerait ce faux diagnostic AVANT
+# même que les vraies récompenses (poussées juste après par _on_match_over) n'aient une chance de
+# s'afficher.
+var _match_over_received := false
 # Pont missions (E11) : un seul fetch par fin de partie.
 var _missions_fetched_for_report := false
 # Vrai pendant l'animation Split-Screen VS : le rafraîchissement du plateau est alors différé
@@ -1819,6 +1828,14 @@ func _show_operation_report() -> void:
 		# pilote l'affichage des points de match. Résolu ICI (main.gd) : le rapport reste une
 		# Vue pure (§6.1) et ne lit aucun manager.
 		"is_ranked": _match_is_ranked(),
+		# §8.99 — n'affirme « le joueur a disputé la partie » (→ bloc récompenses à 0 + anomalie si
+		# `rewards` est vide) QUE si le game_over est déjà CONFIRMÉ reçu (_match_over_received) :
+		# sinon, quand l'état winner_id arrive avant le game_over (course réseau, cf. _match_rewards
+		# plus haut), un simple retard réseau serait affiché comme une anomalie — et la garde
+		# _rewards_built bloquerait ensuite silencieusement les VRAIES récompenses poussées par
+		# _on_match_over l'instant d'après. Dans ce cas, `has_played` reste false ICI : le bloc
+		# n'est pas construit maintenant, _on_match_over le fera dès son arrivée (avec le bon verdict).
+		"has_played": _has_played() and _match_over_received,
 	}
 	if not _match_rankings.is_empty():
 		data["podium"] = _podium_rows()
@@ -1830,10 +1847,14 @@ func _show_operation_report() -> void:
 # affiché (game_over reçu après l'état winner_id), on lui pousse les récompenses du joueur local.
 # E11 §8.83 : rankings ENFIN consommé (podium + objectifs révélés) + pont missions.
 func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match_rewards: Dictionary) -> void:
+	# §8.99 — le game_over EST la confirmation autoritaire (cf. commentaire de la variable) : à partir
+	# d'ici, `_local_rewards()` vide pour un joueur ayant disputé la partie est une VRAIE anomalie,
+	# plus un simple retard réseau.
+	_match_over_received = true
 	_match_rewards = match_rewards
 	_match_rankings = rankings if typeof(rankings) == TYPE_ARRAY else []
 	if _report_node != null and is_instance_valid(_report_node):
-		_report_node.populate_rewards(_local_rewards(), _match_is_ranked())
+		_report_node.populate_rewards(_local_rewards(), _match_is_ranked(), _has_played())
 		if not _match_rankings.is_empty():
 			_report_node.populate_podium(_podium_rows())
 			_fetch_missions_for_report()
@@ -2004,6 +2025,18 @@ func _on_report_missions(data: Dictionary) -> void:
 func _local_rewards() -> Dictionary:
 	var src: Dictionary = _match_rewards if not _match_rewards.is_empty() else NetworkManager.last_match_rewards
 	return src.get(str(_my_id()), {})
+
+# §8.99 — ai-je DISPUTÉ cette partie ? Discriminant joueur / spectateur pour le bloc récompenses :
+# présence dans `rankings` (source d'autorité du game_over), repli sur l'état public `players`
+# (rankings absent = serveur antérieur / game_over pas encore arrivé). Clés de players en STRING
+# après JSON (piège §5). Répond uniquement « ai-je joué », PAS « peut-on déjà se fier à une
+# récompense vide » — voir `_match_over_received` pour cette 2ᵉ question (évite de crier à
+# l'anomalie pendant que le game_over est simplement en vol).
+func _has_played() -> bool:
+	for p in _match_rankings:
+		if int(p) == _my_id():
+			return true
+	return GameState.players.has(str(_my_id()))
 
 # CTA « RETOURNER AU LOBBY » : nettoyage de session puis retour au lobby (≠ ancien retour au
 # main_menu). lobby_screen re-fetch les salles en REST (le JWT reste valide).

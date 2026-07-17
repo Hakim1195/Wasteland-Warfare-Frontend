@@ -26,15 +26,31 @@ signal board_cleared
 # Le développeur y glisse le nœud parent (Node2D) contenant ses 42 Area2D-territoires.
 @export var territories_container: Node2D
 
-# Palette par joueur (jusqu'à 6), teintes distinctes dans l'esprit wasteland. Sert de REPLI
-# quand la faction du joueur n'a pas (encore) de ressource .tres avec accent_color.
+# Palette par JOUEUR (jusqu'à 6) — SOURCE UNIQUE de la couleur plateau (§8.97).
+#
+# ⚠️ Elle n'est PLUS un repli : elle est la règle. Avant §8.97, la couleur venait de
+# l'accent_color de la FACTION, ce qui rendait le plateau illisible — les 6 factions GRATUITES
+# (celles que tirent les bots et la plupart des joueurs) tiennent dans 43° du cercle chromatique :
+# phalanges #D35400 / pillards #D88528 / barons #A05229 / éveillés #D9A520 / écorcheurs #B32121
+# sont CINQ variantes de rouge-orange. Pire : l'unicité de faction n'étant pas imposée aux humains
+# (décision produit §7.1 ouverte), deux joueurs de MÊME faction avaient la MÊME couleur — aucune
+# palette de faction ne peut donc garantir la distinction. La couleur appartient donc au SIÈGE.
+#
+# Critère de construction : 6 teintes réparties sur TOUT le cercle, écart minimum 44°, toutes
+# lisibles sur le gunmetal #0F1318 et distinctes du gris NEUTRAL_COLOR #8A97A5 (territoire sans
+# propriétaire). AUCUN orange (→ pas de paire rouge/orange) et AUCUN violet (→ pas de paire
+# bleu/violet) : ce sont les deux confusions signalées. Ne PAS insérer une 7ᵉ teinte intermédiaire
+# sans recalculer les écarts — c'est ce glissement qui a produit les 5 oranges d'origine.
+#
+# L'identité de faction n'est pas perdue : accent_color survit via get_faction_accent() (losange ◆
+# de player_chip, carrousel de draft, écran Personnages) — elle quitte seulement le plateau.
 const PALETTE := [
-	Color("3fb7c9"),  # cyan tactique
-	Color("c0654f"),  # rouille
-	Color("5a8fd0"),  # acier bleu
-	Color("e0b249"),  # or
-	Color("9b6fd0"),  # améthyste
-	Color("46b58a"),  # vert oxydé
+	Color("e8443c"),  # rouge alerte    (teinte   2°)
+	Color("d9c22e"),  # jaune toxique   (teinte  53°)
+	Color("3cc26e"),  # vert radio      (teinte 145°)
+	Color("22b8ce"),  # cyan glacier    (teinte 188°)
+	Color("5a6ee8"),  # bleu cobalt     (teinte 232°)
+	Color("d45bbd"),  # magenta plasma  (teinte 310°)
 ]
 # Palette DALTONIENNE (E10 §8.82) : Okabe-Ito, sûre pour deutan/protan/tritan. Quand le mode
 # daltonien est actif, elle REMPLACE la palette de faction pour TOUS les joueurs — la bascule vit
@@ -315,9 +331,10 @@ func clear_intent_arrow() -> void:
 	if _intent_head != null and is_instance_valid(_intent_head):
 		_intent_head.visible = false
 
-# Couleur d'un joueur telle qu'utilisée sur le plateau (accent de faction, sinon PALETTE par
-# index, gris si inconnu). Exposé pour que le HUD colore le pseudo du joueur de façon COHÉRENTE
-# avec ses territoires (CONTEXTE.md §8.23). Reconstruit la table si elle n'a pas encore été bâtie.
+# Couleur d'un joueur telle qu'utilisée sur le plateau : PALETTE par index de siège (§8.97), gris
+# NEUTRAL_COLOR si le joueur est inconnu. Exposé pour que le HUD colore le pseudo du joueur de façon
+# COHÉRENTE avec ses territoires (CONTEXTE.md §8.23). Reconstruit la table si elle n'a pas encore
+# été bâtie. SOURCE UNIQUE (E1) : roster, VS, kill feed, badges et pastilles en découlent tous.
 func get_player_color(pid: int) -> Color:
 	if _owner_colors.is_empty():
 		_build_owner_colors()
@@ -370,10 +387,13 @@ func set_pending_deployments(pending: Dictionary) -> void:
 	_pending = pending.duplicate() if pending != null else {}
 	generate_board()
 
-# Construit la table propriétaire -> couleur. Priorité à l'accent_color de la FACTION du
-# joueur (via FactionData), sinon repli sur la PALETTE par index (ordre stable des ids).
-# Mode DALTONIEN (E10 §8.82) : la palette Okabe-Ito par INDEX remplace TOUT (y compris les accents
-# de faction) → distinction garantie des 6 factions ; les motifs (shader) renforcent la couleur.
+# Construit la table propriétaire -> couleur. La couleur est celle du SIÈGE : PALETTE par INDEX,
+# sur l'ordre stable des ids (§8.97) → deux joueurs n'ont JAMAIS la même couleur, même s'ils ont
+# choisi la même faction (les doublons humains restent permis, décision produit §7.1).
+# L'accent_color de la faction n'intervient PLUS ici (cf. le pourquoi en tête de PALETTE) ; il
+# reste exposé par get_faction_accent pour l'identité de faction hors plateau.
+# Mode DALTONIEN (E10 §8.82) : la palette Okabe-Ito remplace la PALETTE, même mécanique par index ;
+# les motifs (shader) renforcent la couleur.
 func _build_owner_colors() -> void:
 	var pids: Array = []
 	for k in GameState.players.keys():
@@ -383,17 +403,8 @@ func _build_owner_colors() -> void:
 	var colorblind: bool = bool(SettingsManager.get_comfort("colorblind_mode"))
 	for i in range(pids.size()):
 		var pid: int = pids[i]
-		var col: Color
-		if colorblind:
-			col = PALETTE_COLORBLIND[i % PALETTE_COLORBLIND.size()]
-		else:
-			col = PALETTE[i % PALETTE.size()]
-			var pdata = GameState.players.get(str(pid), {})
-			if typeof(pdata) == TYPE_DICTIONARY:
-				var fid := str(pdata.get("faction", ""))
-				if _faction_accents.has(fid):
-					col = _faction_accents[fid]
-		_owner_colors[pid] = col
+		var palette: Array = PALETTE_COLORBLIND if colorblind else PALETTE
+		_owner_colors[pid] = palette[i % palette.size()]
 
 # Index de PALETTE d'un joueur (0..5, ordre stable des ids) — sert au motif daltonien (pattern_id
 # par index de joueur, E10 §8.82).

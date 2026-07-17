@@ -565,9 +565,12 @@ func populate(data: Dictionary) -> void:
 
 	# Bloc « Récompenses » animé (si les gains du joueur local sont déjà connus à l'affichage).
 	# is_ranked (§8.88, FACULTATIF) : défaut `true` = comportement legacy (points affichés).
+	# has_played (§8.99, FACULTATIF, défaut false = comportement historique) : discrimine JOUEUR
+	# (bloc à 0 + anomalie si `rewards` est vide) de SPECTATEUR (rien affiché) — cf. populate_rewards.
 	var rewards: Dictionary = data.get("rewards", {})
-	if not rewards.is_empty():
-		populate_rewards(rewards, bool(data.get("is_ranked", true)))
+	var has_played := bool(data.get("has_played", false))
+	if not rewards.is_empty() or has_played:
+		populate_rewards(rewards, bool(data.get("is_ranked", true)), has_played)
 
 # =========================================================
 # Bloc « Récompenses » (§8.47) — décompte des points + barre d'XP qui se remplit + lueur Coins
@@ -579,8 +582,20 @@ func populate(data: Dictionary) -> void:
 # mention « PARTIE NON CLASSÉE » (le serveur renvoie match_points = 0 : afficher « +0 » serait
 # trompeur). Défaut `true` = comportement LEGACY — un serveur antérieur ne diffuse pas le champ
 # mais crédite encore le ladder sur toutes les parties.
-func populate_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
-	if _rewards_built or rewards.is_empty():
+# `has_played` (§8.99, ADDITIF, défaut `false` = comportement historique) distingue les DEUX cas
+# qu'un simple `rewards.is_empty()` confondait :
+#   - SPECTATEUR (n'a pas joué) → on n'affiche rien : « XP : +0 » pour une partie non disputée
+#     serait un contresens. Comportement actuel CONSERVÉ ;
+#   - JOUEUR sans récompense reçue → ANOMALIE (0 XP ne devrait jamais arriver) : on affiche le
+#     bloc à 0 + une mention explicite. Une anomalie muette est indétectable côté joueur.
+# ⚠️ L'appelant (main.gd) est responsable de ne passer `has_played=true` qu'une fois le game_over
+# CONFIRMÉ reçu (pas seulement « le joueur est en jeu ») : sinon un simple retard réseau (rewards
+# pas encore arrivées) serait pris pour une anomalie, construirait ce bloc à 0, et la garde
+# `_rewards_built` ci-dessous bloquerait silencieusement les VRAIES récompenses reçues juste après.
+func populate_rewards(rewards: Dictionary, is_ranked: bool = true, has_played: bool = false) -> void:
+	if _rewards_built:
+		return
+	if rewards.is_empty() and not has_played:
 		return
 	_rewards_built = true
 	# Onglet 1 (joueur) et onglet 2 (héros) construits + animés SÉPARÉMENT (coroutines détachées :
@@ -643,6 +658,17 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	header.add_theme_font_size_override("font_size", 18)
 	block.add_child(header)
 
+	# §8.99 — le serveur n'a envoyé AUCUNE récompense alors que le joueur a bien disputé la partie
+	# (populate_rewards ne nous fait atteindre ce point avec `rewards` vide QUE si `has_played`
+	# était vrai) : 0 XP ne devrait JAMAIS arriver. On rend l'anomalie VISIBLE plutôt que d'afficher
+	# un bloc de zéros silencieux qui passerait pour un résultat normal.
+	if rewards.is_empty():
+		var anomaly := Label.new()
+		anomaly.text = "AUCUNE RÉCOMPENSE REÇUE DU SERVEUR"
+		anomaly.add_theme_color_override("font_color", DANGER)
+		anomaly.add_theme_font_size_override("font_size", 13)
+		block.add_child(anomaly)
+
 	# Ligne « Points de Match » (décompte animé depuis 0) — EN CLASSÉE UNIQUEMENT (§8.88). Hors
 	# classée le serveur renvoie match_points = 0 : on affiche une mention muette explicite plutôt
 	# qu'un « +0 » qui laisserait croire à une contre-performance. `points_lbl` reste null dans ce
@@ -696,32 +722,38 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 		lvl_lbl.add_theme_font_size_override("font_size", 14)
 		block.add_child(lvl_lbl)
 
-	# COINS GAGNÉS (§8.89) — TOTAL réel = coins de PROFIL (paliers de 10 niveaux) + coins de MONTÉE
-	# DE NIVEAU DU HÉROS. Les coins héros tombent sur le MÊME porte-monnaie mais n'étaient affichés
-	# NULLE PART → le joueur sous-estimait ses gains. Masqué si le total est nul.
+	# COINS GAGNÉS (§8.89/§8.99) — TOTAL réel = coins de PROFIL (paliers de 10 niveaux) + coins de
+	# MONTÉE DE NIVEAU DU HÉROS (même porte-monnaie). §8.99 : TOUJOURS affiché, même à 0 — un
+	# compteur masqué à 0 est indiscernable d'un compteur ABSENT (le joueur ne peut pas savoir s'il
+	# a gagné 0 ou si l'affichage a échoué).
 	var coins_profile := int(rewards.get("coins_earned", 0))
 	var coins_hero := int(rewards.get("hero_coins_earned", 0))
 	var coins_total := coins_profile + coins_hero
-	if coins_total > 0:
-		var coins_lbl := Label.new()
-		coins_lbl.text = "◈ COINS GAGNÉS : +%d" % coins_total
-		coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
-		coins_lbl.add_theme_font_size_override("font_size", 18)
-		block.add_child(coins_lbl)
-		# Détail muet : uniquement quand les DEUX sources ont contribué (sinon le total se suffit).
-		# Police mono + texte acier = même registre visuel que le bloc « détail du barème ».
-		if coins_profile > 0 and coins_hero > 0:
-			var coins_sub := Label.new()
-			coins_sub.text = "profil +%d · héros +%d" % [coins_profile, coins_hero]
-			coins_sub.add_theme_color_override("font_color", TEXT_MUTED)
-			coins_sub.add_theme_font_override("font", RosterHelpers._mono_font())
-			coins_sub.add_theme_font_size_override("font_size", 13)
-			block.add_child(coins_sub)
+	var coins_lbl := Label.new()
+	coins_lbl.text = "◈ COINS GAGNÉS : +%d" % coins_total
+	coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+	coins_lbl.add_theme_font_size_override("font_size", 18)
+	block.add_child(coins_lbl)
+	# Détail muet : uniquement quand les DEUX sources ont contribué (sinon le total se suffit — ce
+	# n'est pas un compteur masqué mais une RÉPARTITION, et la part héros reste lisible onglet 2).
+	if coins_profile > 0 and coins_hero > 0:
+		var coins_sub := Label.new()
+		coins_sub.text = "profil +%d · héros +%d" % [coins_profile, coins_hero]
+		coins_sub.add_theme_color_override("font_color", TEXT_MUTED)
+		coins_sub.add_theme_font_override("font", RosterHelpers._mono_font())
+		coins_sub.add_theme_font_size_override("font_size", 13)
+		block.add_child(coins_sub)
 
 	box.add_child(block)
 	# NOUVEAU — détail ligne-à-ligne du barème (points de match + XP de profil), réconcilié aux
 	# totaux OFFICIELS serveur (match_points / xp_earned) pour ne jamais mentir sur le chiffre.
-	_build_player_detail(box, rewards)
+	# §8.99 — SAUF en cas d'anomalie (`rewards` vide) : le détail se réconcilie aux totaux serveur
+	# avec REPLI sur le total reconstruit côté client (cf. _render_detail), il afficherait donc un
+	# « TOTAL : +N » non nul JUSTE SOUS la bannière « AUCUNE RÉCOMPENSE REÇUE DU SERVEUR » — un
+	# contresens qui saperait le signal d'anomalie lui-même. Soit le serveur a envoyé les chiffres
+	# (on détaille), soit il n'a rien envoyé (on ne détaille rien) : pas d'entre-deux inventé.
+	if not rewards.is_empty():
+		_build_player_detail(box, rewards)
 
 	await _run_reward_animation(points_lbl, xp_lbl, bar, rewards)
 
@@ -744,15 +776,15 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	hero_xp_lbl.text = "XP HÉROS : +0"
 	block.add_child(hero_xp_lbl)
 
-	# COINS HÉROS (§8.89) : les montées de niveau du héros créditent des coins sur le MÊME
-	# porte-monnaie que le profil, mais ils n'étaient affichés NULLE PART. Masqué si nul.
-	var hero_coins_lbl: Label = null
-	if int(rewards.get("hero_coins_earned", 0)) > 0:
-		hero_coins_lbl = Label.new()
-		hero_coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
-		hero_coins_lbl.add_theme_font_size_override("font_size", 16)
-		hero_coins_lbl.text = "◈ COINS HÉROS : +0"
-		block.add_child(hero_coins_lbl)
+	# COINS HÉROS (§8.89/§8.99) : les montées de niveau du héros créditent des coins sur le MÊME
+	# porte-monnaie que le profil. §8.99 : TOUJOURS construit, même à 0 → `hero_coins_lbl` n'est
+	# plus jamais null, l'animation de queue d'_animate_hero s'exécute donc toujours (cf. plus bas,
+	# le test `!= null` y reste une garde défensive inoffensive, pas une condition d'affichage).
+	var hero_coins_lbl := Label.new()
+	hero_coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+	hero_coins_lbl.add_theme_font_size_override("font_size", 16)
+	hero_coins_lbl.text = "◈ COINS HÉROS : +0"
+	block.add_child(hero_coins_lbl)
 
 	var hero_level_lbl := Label.new()
 	var h_old := int(rewards.get("hero_level", 1))
@@ -792,7 +824,10 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 
 	box.add_child(block)
 	# NOUVEAU — détail du barème héros (réconcilié à hero_xp_earned).
-	_build_hero_detail(box, rewards)
+	# §8.99 — même garde que l'onglet 1 : en anomalie (`rewards` vide), le détail retomberait sur le
+	# total RECONSTRUIT côté client et contredirait la bannière « aucune récompense reçue ».
+	if not rewards.is_empty():
+		_build_hero_detail(box, rewards)
 
 	await _animate_hero(hero_xp_lbl, hero_bar, rewards, hero_coins_lbl)
 
@@ -963,7 +998,10 @@ func _format_milestone_bonus(bonus: Dictionary) -> String:
 
 
 # Animation du bloc héros : décompte de l'XP gagnée, remplissage de la barre log, puis décompte
-# des coins héros (§8.89 ; `hero_coins_lbl` est null quand aucun coin n'a été gagné).
+# des coins héros (§8.89). §8.99 : `hero_coins_lbl` est désormais TOUJOURS construit par
+# _build_hero_progress (même à 0) — le défaut `null` du paramètre et le test `!= null` plus bas ne
+# sont plus que des gardes défensives (appel externe / futur), jamais le cas nominal : le décompte
+# des coins héros s'exécute donc à chaque fois, 0 → 0 laissant le texte à « +0 ».
 func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionary,
 		hero_coins_lbl: Label = null) -> void:
 	var earned := int(rewards.get("hero_xp_earned", 0))

@@ -3,13 +3,18 @@ extends Control
 # =========================================================================
 # Classement mondial (Feuille de route R3) — charte « Warzone Command » §2
 # =========================================================================
-# Écran NEUF accessible depuis main_menu (« ❯ CLASSEMENT MONDIAL »).
 # Règle d'Or §6.1 : VUE pure — aucune logique de jeu brute. Le classement est SERVEUR (R3 —
-# CONTRAT_RESEAU.md §9.2) : GET /leaderboard renvoie une page triée par victoires + le bloc `me`
-# (rang GLOBAL de l'opérateur, même hors page). Quand le serveur répond, on FAIT CONFIANCE à son
-# ordre et à ses rangs ; l'opérateur courant est surligné (et ajouté en bas via `me` s'il n'est pas
-# dans la page). Repli PRÉVISUALISATION : tant que le serveur est muet/hors-ligne (ou sur l'ancienne
-# forme « liste plate » avant redéploiement VPS), un classement mock est trié/rangé côté client.
+# CONTRAT_RESEAU.md §9.2, ladder RP §8.95, navigation §8.98).
+#
+# §8.98 — NAVIGATION PAR DIVISION (le classement n'est plus « tous mélangés ») :
+#   • bande des 5 divisions CLIQUABLE (seuil + effectif) → chaque division ouvre SON classement ;
+#   • 3 onglets de SOUS-DIVISION (I/II/III, 200 RP chacune) — ÉLITE = ladder ouvert, sans onglet ;
+#   • le PODIUM affiché est celui de la sous-division I de la division sélectionnée (spec) ;
+#   • l'onglet GÉNÉRAL (lifetime) est retiré de l'écran (l'API reste servie — réseau additif) ;
+#   • toutes les requêtes passent par une FILE (une seule en vol : le signal global ne rappelle
+#     pas ses paramètres) et un CACHE par tranche « DIVISION|TIER ».
+# REPLIS : backend sans `divisions` → liste plate historique (M6/§9.2) ; serveur muet → attente
+# « SYNCHRONISATION… » ; échec avéré → mock étiqueté « HORS LIGNE » (§8.96).
 
 # Nœuds câblés via @export + NodePath (drag-drop éditeur) — cf. conventions CLAUDE.md.
 @export var panel: Control
@@ -71,16 +76,15 @@ var _me: Dictionary = {}
 # Police condensée de la charte (§2), construite en code pour les nœuds générés dynamiquement.
 var _font: SystemFont
 
-# --- Ladder SAISONNIER (lot M6 §8.68) ---
-# Scope courant : "season" (défaut, divisions + points de saison) | "lifetime" (historique §9.2).
-var _scope := "season"
-# Bloc { id, ends_at } de la réponse (compte à rebours de fin de saison), lu de NetworkManager.
+# --- Ladder SAISONNIER (lot M6 §8.68, révisé §8.98) ---
+# §8.98 : l'onglet GÉNÉRAL (lifetime) est RETIRÉ de l'écran (décision produit : « d'aucune
+# utilité » pour l'instant) — l'API `scope=lifetime` reste servie côté serveur (réseau additif),
+# seul le client n'en propose plus l'accès. Tout l'écran est donc en scope SAISON.
+const SCOPE := "season"
+# Bloc { id, ends_at, divisions?, rules? } de la réponse, lu de NetworkManager.
 var _season_info: Dictionary = {}
-# Vrai si le serveur fournit les divisions (backend ≥ M6). Repli legacy : false → onglet GÉNÉRAL seul.
+# Vrai si le serveur fournit les divisions (backend ≥ M6). Repli legacy : false → liste plate.
 var _has_division_data := false
-# Onglets SAISON / GÉNÉRAL construits par code dans la barre d'en-tête.
-var _tab_season: Button = null
-var _tab_lifetime: Button = null
 
 # Couleurs des divisions (M6 §8.68 — bronze/argent/or charte/platine cyan pâle/élite cyan tactique).
 const DIVISION_COLORS := {
@@ -96,12 +100,32 @@ const DANGER := Color(0.839216, 0.270588, 0.247059, 1)  # rouge (ΔRP négatif)
 # --- Ladder RP (§8.95) ---
 # Taille de page (le serveur accepte limit/offset ; l'écran figeait 20/0 → « AFFICHER PLUS »).
 const PAGE_SIZE := 20
-# Offset de la PROCHAINE page à demander (0 = on repart du début à chaque changement de scope).
+# Offset de la PROCHAINE page à demander — chemin LEGACY (liste plate) uniquement ; en navigation
+# par division (§8.98) la pagination vit PAR TRANCHE dans _tier_cache.
 var _offset: int = 0
 # Vrai pendant qu'une page supplémentaire est en vol (évite d'empiler les clics sur « AFFICHER PLUS »).
 var _loading_more: bool = false
-# Vrai quand la dernière réponse a renvoyé MOINS que PAGE_SIZE → plus rien à charger.
+# Vrai quand la dernière réponse a renvoyé MOINS que PAGE_SIZE → plus rien à charger (legacy).
 var _end_reached: bool = false
+
+# --- Navigation PAR DIVISION (§8.98) ---
+# Le classement ne s'affiche plus « tous mélangés » : on navigue par division (bande cliquable),
+# puis par sous-division (3 onglets d'échelon I/II/III — ÉLITE n'en a pas, ladder ouvert).
+# Actif dès que le serveur publie `season.divisions` (backend ≥ §8.98) ; sinon repli liste plate.
+var _browse_mode: bool = false
+var _selected_division: String = ""   # division affichée ("" tant que rien n'est sélectionné)
+var _selected_tier: String = ""       # échelon affiché ("I"/"II"/"III" ; "" pour ÉLITE)
+# Cache des tranches déjà chargées : "DIVISION|TIER" -> { "entries": Array, "end_reached": bool }.
+var _tier_cache: Dictionary = {}
+# File de requêtes leaderboard (UNE seule en vol à la fois : le signal global ne rappelle pas ses
+# paramètres — sans sérialisation, deux réponses croisées se rangeraient dans la mauvaise tranche).
+var _fetch_queue: Array = []
+var _fetch_pending: Dictionary = {}   # requête EN VOL ({division, tier, offset}) ; {} = aucune
+# Onglets d'échelon (rangée reconstruite à chaque sélection) + boutons de la bande des divisions.
+var _tier_tabs_row: HBoxContainer = null
+# Références scène (nommées dans le .tscn — pas de nom auto-généré, piège §8.95) :
+var _podium_eyebrow: Label = null     # « PODIUM — {division} I » en navigation, clé brute sinon
+var _ranking_eyebrow: Label = null    # masqué en navigation (les onglets d'échelon le remplacent)
 # Conteneurs construits en code, insérés en tête du panneau (carte « VOTRE RANG » + bande divisions).
 var _rank_card_slot: VBoxContainer = null
 var _divisions_slot: VBoxContainer = null
@@ -162,16 +186,18 @@ func _ready():
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
 	AuthManager.get_profile()
 
-	# Onglets SAISON / GÉNÉRAL (M6 §8.68) — le classement OUVRE sur SAISON.
-	_build_scope_tabs()
+	# §8.98 : plus d'onglets SAISON/GÉNÉRAL — l'écran est tout entier en scope SAISON (le GÉNÉRAL,
+	# jugé sans utilité pour l'instant, n'a plus d'accès client ; l'API lifetime reste servie).
 
-	# Classement mondial RÉEL (§P2) : GET /leaderboard via NetworkManager. Remplace le mock dès la réponse.
+	# Classement mondial RÉEL (§P2) : GET /leaderboard via NetworkManager. Toutes les requêtes de
+	# l'écran passent par la FILE (§8.98) — la requête d'amorçage est GLOBALE (division "") : elle
+	# rapporte `me` + `divisions` + `rules` (et alimente le repli liste plate d'un backend antérieur).
 	NetworkManager.leaderboard_loaded.connect(_on_leaderboard_loaded)
 	# ÉCHEC réseau (§8.96) : le fetch signale ses erreurs via lobby_error → c'est SEULEMENT là qu'on
 	# bascule sur le mock. Avant, le mock s'affichait D'EMBLÉE : un classement fictif « flashait »
 	# une fraction de seconde avant d'être remplacé par le vrai — trompeur.
 	NetworkManager.lobby_error.connect(_on_leaderboard_failed)
-	NetworkManager.fetch_leaderboard(PAGE_SIZE, 0, _scope)
+	_queue_fetch("", "", 0)
 
 	# État d'ATTENTE : aucune donnée tant que le serveur n'a pas répondu (ni mock, ni podium fictif).
 	_set_status(tr("COMMON_SYNCING"))
@@ -196,12 +222,44 @@ func _read_last_rp_delta() -> void:
 # un signal GLOBAL partagé par d'autres appels REST : on ignore l'erreur si le classement a DÉJÀ
 # répondu (elle ne nous concerne alors pas) — sinon un échec d'un autre écran effacerait la liste.
 func _on_leaderboard_failed(_message: String) -> void:
-	if not is_inside_tree() or not _server_board.is_empty():
+	if not is_inside_tree():
+		return
+	# §8.98 : libère la file (sinon une requête en vol échouée bloquerait toutes les suivantes).
+	_fetch_pending = {}
+	_pump_fetch_queue()
+	if not _server_board.is_empty():
 		return
 	_loading_more = false
 	_offline_fallback = true
 	_refresh()
 	_set_status(tr("COMMON_OFFLINE_LOCAL"))
+
+# =========================================================
+# FILE DE REQUÊTES (§8.98) — une seule requête leaderboard en vol à la fois
+# =========================================================
+# Le signal `leaderboard_loaded` est GLOBAL et ne rappelle pas les paramètres de la requête : la
+# seule façon SÛRE d'associer une réponse à sa tranche est de n'avoir qu'UNE requête en vol.
+func _queue_fetch(division: String, tier: String, offset: int) -> void:
+	var req := {"division": division, "tier": tier, "offset": offset}
+	if _fetch_pending == req or _fetch_queue.has(req):
+		return  # déjà demandé (double-clic, resélection rapide).
+	_fetch_queue.append(req)
+	_pump_fetch_queue()
+
+func _pump_fetch_queue() -> void:
+	if not _fetch_pending.is_empty() or _fetch_queue.is_empty():
+		return
+	_fetch_pending = _fetch_queue.pop_front()
+	NetworkManager.fetch_leaderboard(PAGE_SIZE, int(_fetch_pending["offset"]), SCOPE,
+		str(_fetch_pending["division"]), str(_fetch_pending["tier"]))
+
+# Clé de cache d'une tranche. L'échelon du PODIUM d'une division est toujours le I (spec §8.98) —
+# sauf ÉLITE, ladder ouvert sans échelon.
+func _cache_key(division: String, tier: String) -> String:
+	return "%s|%s" % [division, tier]
+
+func _podium_tier(division: String) -> String:
+	return "" if division == "ELITE" else "I"
 
 # --- Classement serveur (R3 — §9.2) -----------------------------------------
 # Mappe les entrées backend vers le format d'affichage ({name, level, wins, rank}) puis redessine.
@@ -210,40 +268,17 @@ func _on_leaderboard_failed(_message: String) -> void:
 func _on_leaderboard_loaded(entries: Array, me: Dictionary) -> void:
 	if not is_inside_tree():
 		return  # garde défensive : signal GLOBAL (partagé avec le top-3 du menu) reçu hors arbre.
+	# §8.98 : réponse associée à la requête EN VOL de la file (une seule à la fois). Réponse sans
+	# requête de notre part (émission croisée d'un autre écran pendant un changement de scène) → ignorée.
+	var req := _fetch_pending
+	_fetch_pending = {}
+	if req.is_empty():
+		_pump_fetch_queue()
+		return
 	_me = me if typeof(me) == TYPE_DICTIONARY else {}
 	# Bloc saison { id, ends_at, divisions?, rules? } (M6/§8.95) — stocké par NetworkManager à côté du
 	# signal (sa signature (entries, me) reste inchangée pour ses écouteurs existants).
 	_season_info = NetworkManager.last_leaderboard_season
-	# PAGINATION (§8.95) : une page suivante s'AJOUTE ; une 1re page (offset 0) REMPLACE.
-	if not _loading_more:
-		_server_board.clear()
-	for e in entries:
-		if typeof(e) != TYPE_DICTIONARY:
-			continue
-		_server_board.append({
-			"name": str(e.get("username", "—")),
-			"level": int(e.get("level", e.get("niveau", 1))),
-			"wins": int(e.get("wins", e.get("stats_victoires", 0))),
-			"rank": int(e.get("rank", 0)),
-			# M6 : points de saison + division (défauts sûrs sur un backend antérieur).
-			"season_points": int(e.get("season_points", 0)),
-			"division": str(e.get("division", "")),
-			# §8.95 : échelon + progression dans l'échelon (défauts sûrs — backend antérieur).
-			"division_tier": str(e.get("division_tier", "")),
-		})
-	# Fin de liste = page incomplète. L'offset suit le nombre d'entrées RÉELLEMENT accumulées.
-	_end_reached = entries.size() < PAGE_SIZE
-	_offset = _server_board.size()
-	_loading_more = false
-	if _more_button != null:
-		_more_button.disabled = false
-		# Bouton visible uniquement s'il reste des pages ET qu'on est sur le chemin SERVEUR.
-		_more_button.visible = not _end_reached and not _server_board.is_empty()
-	# Repli LEGACY (M6, convention §9.2 client défensif) : réponse sans `division` → le backend
-	# est antérieur au ladder saisonnier → onglet GÉNÉRAL seul (les onglets se masquent).
-	_has_division_data = entries.size() > 0 and typeof(entries[0]) == TYPE_DICTIONARY \
-		and entries[0].has("division")
-	_update_scope_tabs_visibility()
 	# Identité/valeurs locales depuis le bloc me (rang global fiable même si l'opérateur est hors page).
 	if not _me.is_empty():
 		if _me.has("username") and str(_me["username"]) != "":
@@ -254,18 +289,81 @@ func _on_leaderboard_loaded(entries: Array, me: Dictionary) -> void:
 	if _rules_button != null:
 		var rules = _season_info.get("rules", {})
 		_rules_button.visible = typeof(rules) == TYPE_DICTIONARY and not rules.is_empty()
+
+	if str(req.get("division", "")) != "":
+		_store_tier_page(req, entries)
+	else:
+		_apply_global_page(entries)
+
+	_pump_fetch_queue()
 	_build_columns_header()
 	_refresh()
 	_set_status(_season_status_line())
+
+# Réponse GLOBALE (amorçage / repli liste plate). C'est elle qui décide du MODE de l'écran :
+# `season.divisions` présent → navigation par division (§8.98) ; absent → liste plate historique.
+func _apply_global_page(entries: Array) -> void:
+	# PAGINATION legacy (§8.95) : une page suivante s'AJOUTE ; une 1re page (offset 0) REMPLACE.
+	if not _loading_more:
+		_server_board.clear()
+	for e in entries:
+		if typeof(e) == TYPE_DICTIONARY:
+			_server_board.append(_map_entry(e))
+	_end_reached = entries.size() < PAGE_SIZE
+	_offset = _server_board.size()
+	_loading_more = false
+	# Repli LEGACY (M6, convention §9.2 client défensif) : réponse sans `division` → backend antérieur.
+	_has_division_data = entries.size() > 0 and typeof(entries[0]) == TYPE_DICTIONARY \
+		and entries[0].has("division")
+	# Bascule en NAVIGATION PAR DIVISION (§8.98), une seule fois : division du joueur si connue
+	# (échelon du joueur présélectionné — il se voit d'emblée), sinon ÉLITE (vitrine du haut du ladder).
+	var divs = _season_info.get("divisions", [])
+	if not _browse_mode and typeof(divs) == TYPE_ARRAY and not divs.is_empty():
+		_browse_mode = true
+		var my_div := str(_me.get("division", ""))
+		if DIVISION_COLORS.has(my_div):
+			_select_division(my_div, str(_me.get("division_tier", "")))
+		else:
+			_select_division("ELITE", "")
+
+# Réponse de TRANCHE (division+échelon) : rangée dans le cache. offset 0 = remplace, sinon append.
+func _store_tier_page(req: Dictionary, entries: Array) -> void:
+	var key := _cache_key(str(req["division"]), str(req["tier"]))
+	var bucket: Dictionary = _tier_cache.get(key, {"entries": [], "end_reached": false})
+	if int(req["offset"]) == 0:
+		bucket["entries"] = []
+	for e in entries:
+		if typeof(e) == TYPE_DICTIONARY:
+			bucket["entries"].append(_map_entry(e))
+	bucket["end_reached"] = entries.size() < PAGE_SIZE
+	_tier_cache[key] = bucket
+
+# Mapping COMMUN d'une entrée serveur vers la forme d'affichage (lecture défensive §9.2/§5).
+func _map_entry(e: Dictionary) -> Dictionary:
+	return {
+		"name": str(e.get("username", "—")),
+		"level": int(e.get("level", e.get("niveau", 1))),
+		"wins": int(e.get("wins", e.get("stats_victoires", 0))),
+		"rank": int(e.get("rank", 0)),
+		# M6 : points de saison + division (défauts sûrs sur un backend antérieur).
+		"season_points": int(e.get("season_points", 0)),
+		"division": str(e.get("division", "")),
+		# §8.95 : échelon (défaut sûr — backend antérieur).
+		"division_tier": str(e.get("division_tier", "")),
+	}
 
 # Ligne de statut (M6). §8.95 : « VOTRE DIVISION » et le compte à rebours ne sont plus relégués ici
 # — ils sont mis en avant par la carte « VOTRE RANG » en tête. On ne les répète DANS le statut que
 # si cette carte n'a pas pu être construite (backend antérieur, sans `division_tier`).
 func _season_status_line() -> String:
+	# §8.98 : en navigation par division, la ligne du bas n'a plus rien à dire de la liste plate
+	# globale (l'attente/le vide de la TRANCHE affichée vivent dans la liste elle-même).
+	if _browse_mode:
+		return tr("LEADERBOARD_STATUS_LOCATED")
 	if _server_board.is_empty():
 		return tr("LEADERBOARD_EMPTY")
 	var base := tr("LEADERBOARD_STATUS_LOCATED")
-	if _scope != "season" or not _has_division_data:
+	if not _has_division_data:
 		return base
 	if not _me_rank_info().is_empty():
 		return base  # la carte VOTRE RANG porte déjà division + échelon + fin de saison.
@@ -306,6 +404,21 @@ func _build_rp_slots() -> void:
 	root.move_child(_rank_card_slot, 2)
 	root.move_child(_divisions_slot, 3)
 
+	# Références aux eyebrows de la SCÈNE (nœuds nommés dans le .tscn — fiables, contrairement aux
+	# noms auto-générés des nœuds créés par code, piège §8.95) : le podium devient contextuel et
+	# l'eyebrow de liste cède la place aux onglets d'échelon en navigation (§8.98).
+	_podium_eyebrow = root.get_node_or_null("PodiumEyebrow") as Label
+	_ranking_eyebrow = root.get_node_or_null("RankingEyebrow") as Label
+
+	# Rangée des onglets d'échelon (§8.98), insérée À LA PLACE de l'eyebrow de liste (juste après
+	# lui) — reconstruite à chaque sélection par _rebuild_tier_tabs, masquée en repli plat.
+	_tier_tabs_row = HBoxContainer.new()
+	_tier_tabs_row.add_theme_constant_override("separation", 4)
+	_tier_tabs_row.visible = false
+	root.add_child(_tier_tabs_row)
+	if _ranking_eyebrow != null:
+		root.move_child(_tier_tabs_row, _ranking_eyebrow.get_index() + 1)
+
 # Bouton « ℹ RÈGLES » (barre d'en-tête) — masqué par défaut, révélé si `season.rules` arrive.
 func _build_rules_button() -> void:
 	if header_bar == null:
@@ -342,11 +455,70 @@ func _build_more_button() -> void:
 		root.move_child(_more_button, status_label.get_index())
 
 func _on_more_pressed() -> void:
+	if _browse_mode:
+		# §8.98 : pagination PAR TRANCHE — l'offset est la taille déjà chargée de la tranche affichée.
+		var bucket: Dictionary = _tier_cache.get(_cache_key(_selected_division, _selected_tier), {})
+		if bucket.is_empty() or bool(bucket.get("end_reached", false)):
+			return
+		_queue_fetch(_selected_division, _selected_tier, bucket["entries"].size())
+		return
 	if _loading_more or _end_reached:
 		return
 	_loading_more = true
 	_more_button.disabled = true
-	NetworkManager.fetch_leaderboard(PAGE_SIZE, _offset, _scope)
+	_queue_fetch("", "", _offset)
+
+# =========================================================
+# SÉLECTION DIVISION / ÉCHELON (§8.98)
+# =========================================================
+# Clic sur une division de la bande → on affiche SON classement : podium = sous-division I (spec —
+# il ne suit PAS l'onglet sélectionné), liste = échelon sélectionné (3 onglets I/II/III ; ÉLITE n'en
+# a pas). `wanted_tier` : échelon à présélectionner ("" → I ; toujours "" en ÉLITE).
+func _select_division(division: String, wanted_tier: String = "") -> void:
+	_selected_division = division
+	if division == "ELITE":
+		_selected_tier = ""
+	else:
+		_selected_tier = wanted_tier if wanted_tier in ["I", "II", "III"] else "I"
+	# Tranches nécessaires : celle du PODIUM (échelon I) + celle de la LISTE (si différente).
+	var podium_key := _cache_key(division, _podium_tier(division))
+	if not _tier_cache.has(podium_key):
+		_queue_fetch(division, _podium_tier(division), 0)
+	var list_key := _cache_key(division, _selected_tier)
+	if list_key != podium_key and not _tier_cache.has(list_key):
+		_queue_fetch(division, _selected_tier, 0)
+	_refresh()
+
+func _on_division_clicked(division: String) -> void:
+	AudioManager.play_sfx("click")
+	if division == _selected_division:
+		return
+	_select_division(division)
+
+func _on_tier_tab_pressed(tier: String) -> void:
+	if tier == _selected_tier:
+		return
+	AudioManager.play_sfx("click")
+	_selected_tier = tier
+	var key := _cache_key(_selected_division, tier)
+	if not _tier_cache.has(key):
+		_queue_fetch(_selected_division, tier, 0)
+	_refresh()
+
+# Entrées de la tranche affichée (depuis le cache). Marque l'opérateur local à la volée (le pseudo
+# peut arriver APRÈS la tranche, via /auth/me) — pas d'ajout artificiel de `me` hors de sa tranche :
+# son rang global n'aurait aucun sens dans un classement de sous-division.
+func _tier_entries(division: String, tier: String) -> Array:
+	var bucket: Dictionary = _tier_cache.get(_cache_key(division, tier), {})
+	var rows: Array = bucket.get("entries", [])
+	var local_upper := _local_name.to_upper()
+	for r in rows:
+		r["is_local"] = str(r.get("name", "")).to_upper() == local_upper
+	return rows
+
+# Le podium de la division sélectionnée = top 3 de sa sous-division I (ÉLITE : de son ladder).
+func _podium_entries() -> Array:
+	return _tier_entries(_selected_division, _podium_tier(_selected_division))
 
 # `rank_info` du bloc `me` — renvoie {} si le backend est antérieur au ladder RP (§8.95).
 func _me_rank_info() -> Dictionary:
@@ -369,8 +541,8 @@ func _rebuild_rank_card() -> void:
 		return
 	_clear(_rank_card_slot)
 	var info := _me_rank_info()
-	if info.is_empty() or _scope != "season":
-		return  # onglet GÉNÉRAL ou backend antérieur → pas de carte RP.
+	if info.is_empty():
+		return  # backend antérieur au ladder RP → pas de carte.
 
 	var division := str(info["division"])
 	var color: Color = DIVISION_COLORS.get(division, ACCENT)
@@ -445,14 +617,16 @@ func _rebuild_rank_card() -> void:
 
 	WarzoneUI.add_corner_notches(card, 14.0, color)
 
-# Bande des 5 divisions : seuil (floor) + effectif, celle du joueur surlignée (encoche or).
-# Repli : `season` sans `divisions` (backend antérieur / scope GÉNÉRAL) → bande masquée.
+# Bande des 5 divisions (§8.98 : c'est désormais LA navigation du classement) : seuil (floor) +
+# effectif ; badge du joueur = encoches or ; badge SÉLECTIONNÉ = fond teinté + liseré plein. Chaque
+# badge est CLIQUABLE → affiche le classement de sa division (podium sous-division I + onglets).
+# Repli : `season` sans `divisions` (backend antérieur) → bande masquée, liste plate.
 func _rebuild_divisions_band() -> void:
 	if _divisions_slot == null:
 		return
 	_clear(_divisions_slot)
 	var divs = _season_info.get("divisions", [])
-	if typeof(divs) != TYPE_ARRAY or divs.is_empty() or _scope != "season":
+	if typeof(divs) != TYPE_ARRAY or divs.is_empty():
 		return
 	_divisions_slot.add_child(_mini_label("LEADERBOARD_DIVISIONS", 13, ACCENT, true))
 	var band := HBoxContainer.new()
@@ -462,29 +636,48 @@ func _rebuild_divisions_band() -> void:
 	for d in divs:
 		if typeof(d) != TYPE_DICTIONARY:
 			continue
-		band.add_child(_make_division_badge(d, str(d.get("id", "")) == mine))
+		var did := str(d.get("id", ""))
+		band.add_child(_make_division_badge(d, did == mine, did == _selected_division))
 
-func _make_division_badge(d: Dictionary, is_mine: bool) -> PanelContainer:
+func _make_division_badge(d: Dictionary, is_mine: bool, is_selected: bool) -> PanelContainer:
 	var did := str(d.get("id", ""))
 	var color: Color = DIVISION_COLORS.get(did, MUTED)
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(color, 0.16) if is_mine else SURFACE
+	# Sélectionné > mien > neutre (un badge peut être les deux : fond de sélection + encoches or).
+	sb.bg_color = Color(color, 0.26) if is_selected else (Color(color, 0.12) if is_mine else SURFACE)
 	sb.set_corner_radius_all(0)
-	sb.set_border_width_all(2 if is_mine else 1)
-	sb.border_color = color if is_mine else Color(color, 0.4)
+	sb.set_border_width_all(2 if (is_selected or is_mine) else 1)
+	sb.border_color = color if (is_selected or is_mine) else Color(color, 0.4)
 	sb.set_content_margin_all(8.0)
 	card.add_theme_stylebox_override("panel", sb)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 0)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(v)
 	v.add_child(_mini_label(_division_name(did), 14, color, false, HORIZONTAL_ALIGNMENT_CENTER))
 	v.add_child(_mini_label(tr("LEADERBOARD_DIVISION_FLOOR").format({"n": int(d.get("floor", 0))}),
 		11, MUTED, false, HORIZONTAL_ALIGNMENT_CENTER))
 	v.add_child(_mini_label(tr("LEADERBOARD_DIVISION_PLAYERS").format({"n": int(d.get("players", 0))}),
-		11, TEXT if is_mine else MUTED, false, HORIZONTAL_ALIGNMENT_CENTER))
+		11, TEXT if (is_mine or is_selected) else MUTED, false, HORIZONTAL_ALIGNMENT_CENTER))
+
+	# Bouton transparent superposé : capte le clic sur tout le badge (le contenu ignore la souris —
+	# même patron que les cartes de mode du menu). Ajouté en DERNIER → au-dessus, donc cliquable.
+	var btn := Button.new()
+	btn.flat = true
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var empty := StyleBoxEmpty.new()
+	btn.add_theme_stylebox_override("normal", empty)
+	btn.add_theme_stylebox_override("hover", empty)
+	btn.add_theme_stylebox_override("pressed", empty)
+	btn.add_theme_stylebox_override("focus", empty)
+	btn.pressed.connect(func() -> void: _on_division_clicked(did))
+	btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	card.add_child(btn)
+
 	if is_mine:
 		WarzoneUI.add_corner_notches(card, 8.0, GOLD)
 	return card
@@ -568,11 +761,24 @@ func _populate_rules(rules: Dictionary) -> void:
 		{"n": int(rules.get("tier_rp", 0))}), 13, TEXT))
 	body.add_child(_mini_label("LEADERBOARD_RULES_UNRANKED", 12, MUTED, true))
 
-	# Récompenses de fin de saison (dict division -> coins).
+	# Récompenses de fin de saison (§8.98) : `rewards_coins` = ENVELOPPE par division, répartie entre
+	# les podiums des sous-divisions selon `reward_splits` — tout vient du serveur, rien en dur.
 	var rewards = rules.get("rewards_coins", {})
 	if typeof(rewards) == TYPE_DICTIONARY and not rewards.is_empty():
 		WarzoneUI.add_filet(body)
 		body.add_child(_mini_label("LEADERBOARD_RULES_REWARDS", 13, ACCENT, true))
+		var splits = rules.get("reward_splits", {})
+		if typeof(splits) == TYPE_DICTIONARY and not splits.is_empty():
+			# Backend ≥ §8.98 : primes aux PODIUMS uniquement + répartitions I/II/III et 1ᵉʳ/2ᵉ/3ᵉ.
+			body.add_child(_mini_label("LEADERBOARD_RULES_REWARDS_PODIUM", 12, MUTED, true))
+			var t = splits.get("tiers", [])
+			if typeof(t) == TYPE_ARRAY and t.size() >= 3:
+				body.add_child(_mini_label(tr("LEADERBOARD_RULES_SPLIT_TIERS").format(
+					{"one": int(t[0]), "two": int(t[1]), "three": int(t[2])}), 12, TEXT))
+			var p = splits.get("podium", [])
+			if typeof(p) == TYPE_ARRAY and p.size() >= 3:
+				body.add_child(_mini_label(tr("LEADERBOARD_RULES_SPLIT_PODIUM").format(
+					{"one": int(p[0]), "two": int(p[1]), "three": int(p[2])}), 12, TEXT))
 		for did in rewards:
 			body.add_child(_rules_row(_division_name(str(did)), "◈ %d" % int(rewards[did]),
 				DIVISION_COLORS.get(str(did), GOLD)))
@@ -622,33 +828,40 @@ func _mini_label(text: String, size: int, color: Color, is_key: bool = false,
 	return l
 
 
-# --- Onglets SAISON / GÉNÉRAL (M6 §8.68) -------------------------------------
-# §8.94 : la barre d'en-tête ne contient plus ni titre ni bouton RETOUR — juste un extenseur. Les
-# onglets sont donc simplement APPENDUS (ils se rangent à droite de l'extenseur), au lieu d'être
-# insérés avant l'ex-bouton RETOUR.
-func _build_scope_tabs() -> void:
-	if header_bar == null:
+# --- Onglets d'ÉCHELON (§8.98) — une rangée I / II / III au-dessus de la liste ------------------
+# Remplacent l'eyebrow « CLASSEMENT GÉNÉRAL » en navigation par division : chaque onglet ouvre le
+# classement de SA sous-division (le podium, lui, reste celui de la sous-division I — spec).
+# (Les ex-onglets SAISON/GÉNÉRAL de la barre d'en-tête ont été retirés en §8.98 : l'écran est tout
+# entier en scope SAISON. Le style de pastille est repris tel quel pour les onglets d'échelon.)
+func _rebuild_tier_tabs() -> void:
+	if _tier_tabs_row == null:
 		return
-	_tab_season = _make_scope_tab(tr("LEADERBOARD_TAB_SEASON"), true)
-	_tab_season.pressed.connect(func() -> void: _switch_scope("season"))
-	_tab_lifetime = _make_scope_tab(tr("LEADERBOARD_TAB_LIFETIME"), false)
-	_tab_lifetime.pressed.connect(func() -> void: _switch_scope("lifetime"))
-	header_bar.add_child(_tab_season)
-	header_bar.add_child(_tab_lifetime)
+	_clear(_tier_tabs_row)
+	# ÉLITE = ladder ouvert, pas de sous-divisions → aucun onglet.
+	var show := _browse_mode and _selected_division != "" and _selected_division != "ELITE"
+	_tier_tabs_row.visible = show
+	if not show:
+		return
+	for tier in ["I", "II", "III"]:
+		var btn := _make_pill_tab(_division_label(_selected_division, tier), tier == _selected_tier)
+		var this_tier: String = tier  # capture de boucle (sinon toutes les lambdas verraient "III").
+		btn.pressed.connect(func() -> void: _on_tier_tab_pressed(this_tier))
+		_tier_tabs_row.add_child(btn)
 
-func _make_scope_tab(text: String, active: bool) -> Button:
+func _make_pill_tab(text: String, active: bool) -> Button:
 	var btn := Button.new()
 	btn.text = text
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # libellé composé (« OR II »).
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	btn.add_theme_font_override("font", _font)
 	btn.add_theme_font_size_override("font_size", 15)
-	# §8.96 : feedback UNIFORME (SFX survol/clic + lueur cyan) — n'écrase pas _style_scope_tab.
+	# §8.96 : feedback UNIFORME (SFX survol/clic + lueur cyan) — n'écrase pas _style_pill_tab.
 	WarzoneUI.wire_button_feedback(btn)
-	_style_scope_tab(btn, active)
+	_style_pill_tab(btn, active)
 	return btn
 
-func _style_scope_tab(btn: Button, active: bool) -> void:
+func _style_pill_tab(btn: Button, active: bool) -> void:
 	if btn == null:
 		return
 	var sb := StyleBoxFlat.new()
@@ -668,32 +881,6 @@ func _style_scope_tab(btn: Button, active: bool) -> void:
 	btn.add_theme_stylebox_override("pressed", hover)
 	btn.add_theme_stylebox_override("focus", sb)
 	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
-
-func _switch_scope(scope: String) -> void:
-	if scope == _scope:
-		return
-	_scope = scope
-	_style_scope_tab(_tab_season, _scope == "season")
-	_style_scope_tab(_tab_lifetime, _scope == "lifetime")
-	_set_status(tr("LEADERBOARD_STATUS_PREVIEW"))
-	# Changement de ladder = on REPART de la 1re page (§8.95) : sinon la pagination du scope
-	# précédent contaminerait l'offset demandé.
-	_offset = 0
-	_end_reached = false
-	_loading_more = false
-	NetworkManager.fetch_leaderboard(PAGE_SIZE, 0, _scope)
-
-# Repli legacy (backend sans divisions) : les onglets disparaissent, on force le GÉNÉRAL.
-func _update_scope_tabs_visibility() -> void:
-	var show := _has_division_data or _server_board.is_empty()
-	if _tab_season != null:
-		_tab_season.visible = show
-	if _tab_lifetime != null:
-		_tab_lifetime.visible = show
-	if not show and _scope != "lifetime":
-		_scope = "lifetime"
-		_style_scope_tab(_tab_season, false)
-		_style_scope_tab(_tab_lifetime, true)
 
 # --- Profil / lecture défensive --------------------------------------------
 func _on_profile_loaded(data: Dictionary):
@@ -776,11 +963,49 @@ func _build_ranked_locally() -> Array:
 	return rows
 
 func _refresh() -> void:
-	var entries := _build_entries()
 	_rebuild_rank_card()      # §8.95 — carte « VOTRE RANG » (en tête)
-	_rebuild_divisions_band() # §8.95 — bande des 5 divisions
-	_populate_podium(entries)
-	_populate_ranking(entries)
+	_rebuild_divisions_band() # §8.95/§8.98 — bande des 5 divisions (cliquable en navigation)
+	_rebuild_tier_tabs()      # §8.98 — onglets d'échelon I/II/III de la division sélectionnée
+	if _browse_mode:
+		_populate_podium(_podium_entries())
+		_populate_ranking(_tier_entries(_selected_division, _selected_tier))
+	else:
+		# Repli LISTE PLATE (backend antérieur / hors ligne) — chemins historiques inchangés.
+		var entries := _build_entries()
+		_populate_podium(entries)
+		_populate_ranking(entries)
+	_update_podium_eyebrow()
+	_update_more_button()
+
+# Eyebrow du podium (§8.98) : « PODIUM — OR I » en navigation (le podium est celui de la
+# sous-division I de la division sélectionnée) ; clé historique en repli plat.
+func _update_podium_eyebrow() -> void:
+	if _podium_eyebrow == null:
+		return
+	if _browse_mode and _selected_division != "":
+		_podium_eyebrow.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		_podium_eyebrow.text = tr("LEADERBOARD_PODIUM_DIV").format(
+			{"label": _division_label(_selected_division, _podium_tier(_selected_division))})
+	else:
+		_podium_eyebrow.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_INHERIT
+		_podium_eyebrow.text = "LEADERBOARD_PODIUM"  # clé brute -> auto-traduction
+	# L'eyebrow de la liste est REMPLACÉ par les onglets d'échelon en navigation.
+	if _ranking_eyebrow != null:
+		_ranking_eyebrow.visible = not _browse_mode
+
+# Visibilité/état du bouton « AFFICHER PLUS » selon le mode (§8.98 : par tranche ; legacy : global).
+func _update_more_button() -> void:
+	if _more_button == null:
+		return
+	if _browse_mode:
+		var bucket: Dictionary = _tier_cache.get(_cache_key(_selected_division, _selected_tier), {})
+		_more_button.disabled = false
+		_more_button.visible = not bucket.is_empty() \
+			and not bool(bucket.get("end_reached", false)) \
+			and not bucket.get("entries", []).is_empty()
+	else:
+		_more_button.disabled = false
+		_more_button.visible = not _end_reached and not _server_board.is_empty()
 
 # --- Podium top 3 (cartes générées en code, or pour le #1) -----------------
 func _populate_podium(entries: Array) -> void:
@@ -824,10 +1049,10 @@ func _make_podium_card(entry: Dictionary) -> PanelContainer:
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(name_label)
 
-	# Valeur mise en avant (or) — §8.95 : RP en SAISON (la clé de tri), VICTOIRES en GÉNÉRAL.
-	# Avant, le podium affichait TOUJOURS les victoires, même en SAISON : l'ordre paraissait arbitraire.
+	# Valeur mise en avant (or) — §8.95/§8.98 : RP dès que le backend fournit le ladder saisonnier
+	# (la clé de TRI) ; VICTOIRES seulement en repli mock/pré-M6 (où le tri suit les victoires).
 	var value := Label.new()
-	if _scope == "season":
+	if _gold_is_rp():
 		value.text = tr("LEADERBOARD_RP_TOTAL").format({"n": int(entry.get("season_points", 0))})
 	else:
 		value.text = _format_thousands(int(entry.get("wins", 0))) + " " + tr("COMMON_WINS")
@@ -860,19 +1085,23 @@ func _build_columns_header() -> void:
 	# Colonne DIVISION (M6 §8.68) — uniquement sur l'onglet SAISON avec un backend qui la fournit.
 	if _show_division_column():
 		columns_header.add_child(_header_cell(tr("LEADERBOARD_COL_DIVISION"), COL_DIVISION, HORIZONTAL_ALIGNMENT_CENTER))
-	# §8.95 : en SAISON la colonne MISE EN AVANT (or) devient RP — c'est la clé de TRI du ladder
-	# saisonnier ; afficher les VICTOIRES en or alors que l'ordre suit les RP rendait le classement
-	# incompréhensible. L'onglet GÉNÉRAL, trié par victoires, garde VICTOIRES en or (inchangé).
-	if _scope == "season":
-		columns_header.add_child(_header_cell(tr("COMMON_LEVEL"), COL_LEVEL, HORIZONTAL_ALIGNMENT_CENTER))
-		columns_header.add_child(_header_cell(tr("LEADERBOARD_COL_RP"), COL_WINS, HORIZONTAL_ALIGNMENT_RIGHT))
-	else:
-		columns_header.add_child(_header_cell(tr("COMMON_LEVEL"), COL_LEVEL, HORIZONTAL_ALIGNMENT_CENTER))
-		columns_header.add_child(_header_cell(tr("COMMON_WINS"), COL_WINS, HORIZONTAL_ALIGNMENT_RIGHT))
+	# §8.95/§8.98 : la colonne MISE EN AVANT (or) est RP dès que le backend fournit le ladder
+	# saisonnier (c'est sa clé de TRI) ; VICTOIRES en repli mock/pré-M6 (trié par victoires).
+	columns_header.add_child(_header_cell(tr("COMMON_LEVEL"), COL_LEVEL, HORIZONTAL_ALIGNMENT_CENTER))
+	columns_header.add_child(_header_cell(
+		tr("LEADERBOARD_COL_RP") if _gold_is_rp() else tr("COMMON_WINS"),
+		COL_WINS, HORIZONTAL_ALIGNMENT_RIGHT))
 
-# La colonne division ne s'affiche que sur le ladder SAISON d'un backend ≥ M6 (repli §9.2 sinon).
+# La colonne or affiche les RP dès que le serveur publie le ladder saisonnier ; en NAVIGATION la
+# question ne se pose pas (le mode n'existe qu'avec un backend ≥ §8.98).
+func _gold_is_rp() -> bool:
+	return _browse_mode or _has_division_data
+
+# Colonne DIVISION : seulement en liste PLATE d'un backend ≥ M6 (repli §9.2 sinon). En NAVIGATION
+# par division (§8.98) elle est MASQUÉE : toutes les lignes de la tranche portent le même badge —
+# l'information vit déjà dans l'onglet actif et l'eyebrow du podium.
 func _show_division_column() -> bool:
-	return _scope == "season" and _has_division_data
+	return _has_division_data and not _browse_mode
 
 func _header_cell(text: String, width: float, align: int, expand: bool = false) -> Label:
 	var l := Label.new()
@@ -894,7 +1123,12 @@ func _populate_ranking(entries: Array) -> void:
 		var empty := Label.new()
 		# §8.96 : distinguer « on attend le réseau » (SYNCHRONISATION…) de « le serveur a répondu, il
 		# n'y a personne » (AUCUN OPÉRATEUR CLASSÉ) — avant, les deux affichaient le même message.
-		var waiting := _server_board.is_empty() and not _offline_fallback
+		# §8.98 : en navigation, « on attend » = la tranche affichée n'est pas encore au cache.
+		var waiting: bool
+		if _browse_mode:
+			waiting = not _tier_cache.has(_cache_key(_selected_division, _selected_tier))
+		else:
+			waiting = _server_board.is_empty() and not _offline_fallback
 		empty.text = tr("COMMON_SYNCING") if waiting else tr("LEADERBOARD_EMPTY")
 		empty.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 		empty.add_theme_font_override("font", _font)
@@ -965,10 +1199,11 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(level_label)
 
-	# Colonne OR = la clé de TRI du ladder affiché (§8.95) : RP en SAISON, VICTOIRES en GÉNÉRAL.
+	# Colonne OR = la clé de TRI du ladder affiché (§8.95/§8.98) : RP dès que le serveur les
+	# fournit, VICTOIRES en repli mock/pré-M6.
 	var value_label := Label.new()
 	value_label.text = _format_thousands(
-		int(entry.get("season_points", 0)) if _scope == "season" else int(entry.get("wins", 0)))
+		int(entry.get("season_points", 0)) if _gold_is_rp() else int(entry.get("wins", 0)))
 	value_label.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	value_label.add_theme_font_override("font", _font)
 	value_label.add_theme_font_size_override("font_size", 18)

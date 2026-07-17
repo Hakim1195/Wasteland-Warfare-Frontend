@@ -80,12 +80,13 @@ func _ready():
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
 	_font.font_weight = 700
 
-	# Header CANONIQUE partagé (§8.94). Écran HORS ONGLETS (on l'ouvre par la jauge XP cliquable de
-	# la nav, pas par un onglet) → `active_tab = ""` : AUCUN onglet surligné. L'écran GARDE son titre
-	# interne : sans onglet actif, c'est la seule chose qui le nomme. ÉCHAP (nav) remplace le RETOUR.
+	# Header CANONIQUE partagé (§8.94, révisé §8.97). L'onglet OPÉRATEUR étant REVENU dans la nav,
+	# cet écran a de nouveau un onglet à surligner → `active_tab = "profile"` (§8.94 posait `""`,
+	# aucun onglet actif, l'écran ne se nommant alors que par son titre interne). Le titre interne
+	# est CONSERVÉ. ÉCHAP (nav) remplace le RETOUR. Reste aussi joignable par la jauge XP cliquable.
 	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
 	var nav := TopNav.new()
-	nav.active_tab = ""
+	nav.active_tab = "profile"
 	add_child(nav)
 	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
 	AudioManager.start_menu_ambient()

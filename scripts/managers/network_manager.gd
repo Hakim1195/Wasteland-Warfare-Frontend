@@ -480,9 +480,18 @@ var last_leaderboard_season: Dictionary = {}
 
 # `scope` (M6 §8.68) : "season" (défaut serveur — ladder saisonnier avec divisions) | "lifetime"
 # (comportement historique §9.2). Les écrans legacy qui n'envoient pas scope reçoivent le défaut.
-func fetch_leaderboard(limit: int = 20, offset: int = 0, scope: String = "season"):
-	_send_api_request("/leaderboard?limit=%d&offset=%d&scope=%s" % [limit, offset, scope],
-		HTTPClient.METHOD_GET, {}, _on_leaderboard_fetched)
+# `division`/`tier` (§8.98) : filtre de TRANCHE du ladder saisonnier (navigation par division de
+# l'écran Classement — division ∈ BRONZE/ARGENT/OR/PLATINE/ELITE, tier ∈ I/II/III, "" = pas de
+# filtre). ADDITIF : omis quand vides ; un backend antérieur IGNORE ces query params inconnus
+# (FastAPI) et renvoie la liste globale — le client le détecte et retombe sur l'affichage plat.
+func fetch_leaderboard(limit: int = 20, offset: int = 0, scope: String = "season",
+		division: String = "", tier: String = ""):
+	var url := "/leaderboard?limit=%d&offset=%d&scope=%s" % [limit, offset, scope]
+	if division != "":
+		url += "&division=%s" % division
+		if tier != "":
+			url += "&tier=%s" % tier
+	_send_api_request(url, HTTPClient.METHOD_GET, {}, _on_leaderboard_fetched)
 
 func _on_leaderboard_fetched(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()

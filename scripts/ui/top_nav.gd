@@ -41,15 +41,21 @@ const DANGER := Color(0.839216, 0.270588, 0.247059, 1)
 const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 0.95)  # fond pastille onglets (opaque)
 const SURFACE := Color(0.058824, 0.07451, 0.094118, 0.85)   # fond cadre identité (= card_panel du menu)
 
-# --- Onglets CANONIQUES (§8.94) : STRICTEMENT alignés sur l'ancien menu principal. ---
-# `profile` N'EST PLUS un onglet : le Profil s'ouvre par la jauge XP CLIQUABLE (mini-profil), comme
-# au menu depuis §8.58. `missions` (écran DÉFIS, clé MENU_TAB_MISSIONS renommée « DÉFIS » en §8.92)
-# prend sa place. Les sections Armes / Battle Pass / Événements / Skins restent DÉBRANCHÉES
-# (placeholders) : leurs scènes vivent sur disque, réactivation = remettre leur entrée ici.
+# --- Onglets CANONIQUES (§8.94, révisé §8.97) : STRICTEMENT alignés sur l'ancien menu principal. ---
+# `profile` (OPÉRATEUR) est REVENU à sa place historique, la 4ᵉ — entre BOUTIQUE et CLASSEMENT.
+# §8.94 l'avait retiré au motif que le Profil s'ouvre par la jauge XP cliquable (mini-profil, §8.58)
+# et y avait mis `missions` à sa place exacte. Retour d'usage de Hakim : le chemin restant
+# (jauge XP → mini-profil → « VOIR LE PROFIL COMPLET ») est FONCTIONNEL mais INDÉCOUVRABLE — deux
+# clics derrière une affordance que rien ne nomme « profil ». La jauge et son mini-profil RESTENT
+# (raccourci pour qui le connaît) : l'onglet ne les remplace pas, il rend le chemin évident.
+# `missions` (écran DÉFIS, clé MENU_TAB_MISSIONS renommée « DÉFIS » en §8.92) glisse en 5ᵉ.
+# Les sections Armes / Battle Pass / Événements / Skins restent DÉBRANCHÉES (placeholders) :
+# leurs scènes vivent sur disque, réactivation = remettre leur entrée ici.
 const TABS := [
 	{"id": "lobby", "key": "MENU_TAB_LOBBY", "scene": "res://scenes/ui/main_menu.tscn"},
 	{"id": "characters", "key": "MENU_TAB_CHARACTERS", "scene": "res://scenes/ui/characters_screen.tscn"},
 	{"id": "shop", "key": "MENU_TAB_SHOP", "scene": "res://scenes/ui/shop.tscn"},
+	{"id": "profile", "key": "MENU_TAB_PROFILE", "scene": "res://scenes/ui/profile.tscn"},
 	{"id": "missions", "key": "MENU_TAB_MISSIONS", "scene": "res://scenes/ui/missions.tscn"},
 	{"id": "leaderboard", "key": "MENU_TAB_LEADERBOARD", "scene": "res://scenes/ui/leaderboard.tscn"},
 ]

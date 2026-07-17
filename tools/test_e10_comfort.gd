@@ -39,7 +39,27 @@ func _ready() -> void:
 	SettingsManager.set_comfort("colorblind_mode", false)
 	board._owner_colors.clear()
 	var normal_11: Color = board.get_player_color(11)
-	# En mode normal, HAKIM (phalanges_acier) prend l'accent de faction si dispo, sinon PALETTE[0].
+	var normal_7: Color = board.get_player_color(7)
+	var normal_5: Color = board.get_player_color(5)
+	# §8.97 — en mode NORMAL la couleur appartient désormais au SIÈGE : PALETTE par index d'id
+	# trié ([5,7,11] → 0/1/2), et NON PLUS à l'accent_color de la faction. Motif : les 6 factions
+	# GRATUITES tenaient dans 43° du cercle chromatique (5 variantes de rouge-orange), et deux
+	# humains de MÊME faction (doublons permis, §7.1) recevaient la MÊME couleur.
+	assert(normal_11.is_equal_approx(CB.PALETTE[2]))
+	assert(normal_7.is_equal_approx(CB.PALETTE[1]))
+	assert(normal_5.is_equal_approx(CB.PALETTE[0]))
+	# ⚠️ L'assert DISCRIMINANT est celui sur PALETTE[2] : HAKIM joue phalanges_acier, donc l'ancien
+	# code lui donnait l'accent #D35400 de sa faction — ce test rougit si la résolution par faction
+	# revient. (VULTURE et GHOST ont une faction VIDE dans ce stub : eux tombaient déjà sur la
+	# PALETTE par index, leur cas ne prouverait rien à lui seul.)
+	# L'EXIGENCE CENTRALE (§8.97) — deux joueurs n'ont JAMAIS la même couleur — est désormais vraie
+	# PAR CONSTRUCTION (index de siège distinct, effectif ≤ 6 = taille de PALETTE), y compris si
+	# deux humains choisissent la même faction (doublons permis, §7.1).
+	assert(not normal_11.is_equal_approx(normal_7))
+	assert(not normal_11.is_equal_approx(normal_5))
+	assert(not normal_7.is_equal_approx(normal_5))
+	print("[OK] couleur par SIÈGE, jamais deux joueurs identiques (§8.97) (6 asserts)")
+
 	SettingsManager.set_comfort("colorblind_mode", true)
 	board._owner_colors.clear()
 	var cb_11: Color = board.get_player_color(11)
@@ -66,5 +86,5 @@ func _ready() -> void:
 	SettingsManager.set_comfort("colorblind_mode", false)
 	SettingsManager.set_comfort("reduced_motion", false)
 
-	print("[OK] TEST E10 COMFORT : 10 asserts verts")
+	print("[OK] TEST E10 COMFORT : 16 asserts verts")
 	get_tree().quit(0)
