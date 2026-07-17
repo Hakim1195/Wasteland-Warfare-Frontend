@@ -128,6 +128,57 @@ static func wire_buttons_sfx(buttons: Array) -> void:
 		wire_button_sfx(b)
 
 
+# =========================================================
+# POLISH TRANSVERSE DES ÉCRANS HUB (§8.96)
+# =========================================================
+# Feedback interactif UNIFORME : SFX de survol/clic (wire_button_sfx) + LUEUR cyan légère au survol.
+# ⚠️ N'ÉCRASE AUCUN StyleBox : la lueur passe par `modulate` (multiplicatif), donc les styles propres
+# à chaque écran (ghost, CTA, or…) sont préservés — on n'ajoute que les signaux manquants.
+# Idempotent (garde par méta) → sans danger sur un bouton déjà câblé par son écran.
+static func wire_button_feedback(btn: Button) -> void:
+	if btn == null or btn.has_meta("ww_feedback"):
+		return
+	btn.set_meta("ww_feedback", true)
+	wire_button_sfx(btn)
+	btn.mouse_entered.connect(func() -> void:
+		if is_instance_valid(btn):
+			btn.modulate = HOVER_GLOW)
+	btn.mouse_exited.connect(func() -> void:
+		if is_instance_valid(btn):
+			btn.modulate = Color(1, 1, 1, 1))
+
+# Teinte de survol : blanc légèrement sur-exposé → « allume » n'importe quel style sans le redéfinir.
+const HOVER_GLOW := Color(1.18, 1.18, 1.18, 1.0)
+
+static func wire_buttons_feedback(buttons: Array) -> void:
+	for b in buttons:
+		wire_button_feedback(b)
+
+
+# Animation d'ENTRÉE d'écran commune (§8.96) : fondu alpha 0→1 + léger glissement vertical, appelée
+# au `_ready()` de chaque écran hub APRÈS construction. Volontairement DISCRÈTE et identique partout.
+# ⚠️ Jamais `Engine.time_scale` (qui affecterait tout le jeu) : un Tween local, borné à ce Control.
+# Les transitions ENTRE scènes restent gérées par TransitionManager (fondu) — on ne les touche pas.
+# No-op headless (le pilote « Dummy » ne rend rien, mais le tween reste inoffensif) et robuste si le
+# nœud sort de l'arbre pendant l'animation (le Tween est lié au nœud → tué avec lui).
+const SCREEN_ENTER_TIME := 0.18
+const SCREEN_ENTER_OFFSET := 12.0
+
+static func animate_screen_enter(root: Control) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	var start := root.position
+	root.modulate = Color(1, 1, 1, 0)
+	root.position = start + Vector2(0, SCREEN_ENTER_OFFSET)
+	# `create_tween()` sur le nœud : automatiquement libéré avec lui (aucune fuite au changement de scène).
+	var tw := root.create_tween()
+	tw.set_parallel(true)
+	tw.set_ease(Tween.EASE_OUT)
+	tw.set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(root, "modulate:a", 1.0, SCREEN_ENTER_TIME)
+	tw.tween_property(root, "position", start, SCREEN_ENTER_TIME)
+
+
 # Ajoute un filet fin cyan (HSeparator stylé) comme enfant de `parent`. Renvoie le séparateur
 # (utile pour le repositionner / régler son `size_flags`). Mutualise l'ornement de charte (§2).
 static func add_filet(parent: Node, thickness: int = 2, color: Color = ACCENT) -> HSeparator:

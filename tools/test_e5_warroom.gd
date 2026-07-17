@@ -68,5 +68,56 @@ func _ready() -> void:
 	assert(hud._war_intel_panel.visible)
 	print("[OK] HUD : tiroir INTEL GUERRE construit + peuplé (4 asserts)")
 
-	print("[OK] TEST E5 WARROOM : 17 asserts verts")
+	# --- §8.92 : lignes du DÉBRIEFING (onglet BILAN du Rapport Post-Op) ---
+	# rankings = [11, 7] → 11 en tête MALGRÉ ses 2 territoires (7 en a 3) : le débriefing trie par
+	# CLASSEMENT FINAL, pas par territoires (contrairement à player_rows).
+	var d: Array = WarRoom.debrief_rows(PLAYERS, TERRITORIES, STATS, [11, 7], 11, 11)
+	assert(d.size() == 2)
+	assert(int(d[0]["pid"]) == 11 and int(d[1]["pid"]) == 7)
+	assert(int(d[0]["rank"]) == 0 and int(d[1]["rank"]) == 1)
+	assert(str(d[0]["username"]) == "HAKIM")
+	assert(bool(d[0]["is_me"]) and not bool(d[1]["is_me"]))
+	assert(bool(d[0]["is_winner"]) and not bool(d[1]["is_winner"]))
+	# Compteurs INCHANGÉS par rapport à player_rows (même source, aucune divergence possible).
+	assert(int(d[0]["kills"]) == 14 and int(d[0]["losses"]) == 7)
+
+	# pid ABSENT de rankings (état incohérent) → mis EN QUEUE, jamais perdu.
+	var d2: Array = WarRoom.debrief_rows(PLAYERS, TERRITORIES, STATS, [7], 7, 7)
+	assert(d2.size() == 2)
+	assert(int(d2[0]["pid"]) == 7 and int(d2[1]["pid"]) == 11)
+
+	# rankings VIDE (serveur antérieur) → aucune perte de ligne, ordre stable par pid croissant.
+	var d3: Array = WarRoom.debrief_rows(PLAYERS, TERRITORIES, STATS, [], 11, -1)
+	assert(d3.size() == 2)
+	assert(int(d3[0]["pid"]) == 7 and int(d3[1]["pid"]) == 11)
+	assert(not bool(d3[0]["is_winner"]) and not bool(d3[1]["is_winner"]))
+
+	# statistics VIDE → zéros, aucune erreur.
+	var d4: Array = WarRoom.debrief_rows(PLAYERS, TERRITORIES, {}, [11, 7], 11, 11)
+	assert(int(d4[0]["kills"]) == 0 and int(d4[0]["losses"]) == 0)
+
+	# Identité : is_bot / is_alive (§6.2). Le stub partagé PLAYERS ne porte NI `is_bot` NI `status`
+	# → ces 2 champs n'y seraient exercés QU'À leur valeur de repli. Stub LOCAL dédié (PLAYERS reste
+	# intact : les asserts de tri/agrégats ci-dessus en dépendent). Clés STRING, pids négatifs
+	# inclus (piège §5 + convention G2 : les bots portent des ids NÉGATIFS).
+	var players_mix := {
+		"11": {"username": "HAKIM"},                          # `status`/`is_bot` ABSENTS → replis
+		"7": {"username": "VULTURE", "status": "eliminated"},  # ÉLIMINÉ (permadeath) → is_alive=false
+		"5": {"username": "OVERSEER", "is_bot": true},         # bot EXPLICITE malgré un pid POSITIF
+		"-2": {"username": "VIPER"},                           # `is_bot` ABSENT + pid<0 → repli true
+	}
+	var d5: Array = WarRoom.debrief_rows(players_mix, TERRITORIES, STATS, [11, 7, 5, -2], 11, 11)
+	assert(d5.size() == 4)
+	# `status` absent → vivant par défaut (rétro-compat) ; "eliminated" explicite → is_alive=false.
+	assert(bool(d5[0]["is_alive"]) and not bool(d5[1]["is_alive"]))
+	assert(bool(d5[2]["is_alive"]) and bool(d5[3]["is_alive"]))
+	# is_bot : la donnée serveur EXPLICITE prime sur l'heuristique du pid (5 > 0 mais is_bot=true) ;
+	# le repli pid<0 couvre les états ANTÉRIEURS au champ public `is_bot` (G2 §8.72).
+	assert(not bool(d5[0]["is_bot"]) and not bool(d5[1]["is_bot"]))
+	assert(bool(d5[2]["is_bot"]) and bool(d5[3]["is_bot"]))
+	# Le pid NÉGATIF (clé "-2") est bien résolu : ni ligne perdue, ni identité manquée.
+	assert(int(d5[3]["pid"]) == -2 and str(d5[3]["username"]) == "VIPER")
+	print("  ✅ debrief_rows (§8.92)")
+
+	print("[OK] TEST E5 WARROOM : 36 asserts verts")
 	get_tree().quit(0)

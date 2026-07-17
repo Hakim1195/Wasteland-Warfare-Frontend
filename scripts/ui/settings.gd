@@ -56,9 +56,9 @@ func _ready() -> void:
 	_font.font_weight = 700
 	_grabber_tex = _make_grabber_texture()
 
-	# Header CANONIQUE partagé (§8.93). Écran HORS ONGLETS (on s'y rend par le ⚙ de la nav, pas par
+	# Header CANONIQUE partagé (§8.94). Écran HORS ONGLETS (on s'y rend par le ⚙ de la nav, pas par
 	# un onglet) → `active_tab = ""` : AUCUN onglet surligné, comportement nominal et assumé.
-	# ⚠️ Avant §8.93 la valeur était "options", un id qui n'existe dans AUCUNE entrée de TABS : le
+	# ⚠️ Avant §8.94 la valeur était "options", un id qui n'existe dans AUCUNE entrée de TABS : le
 	# résultat était le même (rien de surligné) mais par accident — c'est désormais explicite.
 	# L'écran conserve son titre : sans onglet actif, c'est la SEULE chose qui le nomme.
 	var nav := TopNav.new()
@@ -66,6 +66,9 @@ func _ready() -> void:
 	add_child(nav)
 	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
 	AudioManager.start_menu_ambient()
+
+	# Entrée d'écran UNIFORME (§8.96) : fondu + léger glissement, identique sur tous les écrans hub.
+	WarzoneUI.animate_screen_enter(self)
 
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)

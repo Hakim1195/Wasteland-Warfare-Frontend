@@ -4,14 +4,14 @@ extends Control
 # MENU PRINCIPAL — Tableau de bord asymétrique « Warzone Command » (§2 / §8.37)
 # =========================================================================
 # Refonte du menu d'une liste de boutons vers un lobby AAA (réf. Call of Duty: Warzone) :
-#   • Top Bar : plus AUCUNE barre en dur ici (§8.93) — le menu monte le composant PARTAGÉ
+#   • Top Bar : plus AUCUNE barre en dur ici (§8.94) — le menu monte le composant PARTAGÉ
 #     `top_nav.gd` (`active_tab = "lobby"`), header CANONIQUE de tous les écrans hub : marque,
 #     onglets, pastille défis, identité + jauge XP cliquable (mini-profil), ⚙, ⏻. Le menu ne gère
 #     donc plus ni onglets, ni jauge, ni mini-profil, ni pop-up « Quitter ».
-#   • Centre : HÉROS affiché par priorité (§8.92) — (1) personnage CHOISI dans l'écran Personnages
+#   • Centre : HÉROS affiché par priorité (§8.93) — (1) personnage CHOISI dans l'écran Personnages
 #     (SettingsManager, persistant), (2) sinon dernière faction JOUÉE (/profile/history),
 #     (3) sinon défaut alphabétique du catalogue .tres.
-#   • Colonne gauche : mini-classement (top 3) + carte Défis (3 vraies missions serveur, §8.91).
+#   • Colonne gauche : mini-classement (top 3) + carte Défis (3 vraies missions serveur, §8.92).
 #   • Bas-gauche : gros CTA « START » qui lance le MODE sélectionné.
 #   • Bas-centre : cartes de mode Trio(3) / Quad(4) / Five(5) / Exa(6) + Classée(5, classé).
 # Règle d'Or §6.1 : VUE pure — navigation via TransitionManager, données via AuthManager /
@@ -37,7 +37,7 @@ extends Control
 
 # Helpers UI partagés de la charte (§2) — encoches, filets, sélecteur de langue, SFX, ghost.
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
-# Header CANONIQUE partagé (§8.93) : marque + onglets + pastille défis + identité/jauge + ⚙ + ⏻.
+# Header CANONIQUE partagé (§8.94) : marque + onglets + pastille défis + identité/jauge + ⚙ + ⏻.
 # La jauge XP/Coins (§8.47) est montée PAR la nav — le menu n'en garde aucune copie.
 const TopNav = preload("res://scripts/ui/top_nav.gd")
 # Héros 3D (SubViewport transparent) — remplace le portrait 2D quand la faction a un .glb riggé.
@@ -80,7 +80,7 @@ const MODES := [
 ]
 const DEFAULT_MODE := "trio"
 
-# Nombre de défis mis en avant sur la carte du menu (§8.91) — la liste complète vit dans l'écran Défis.
+# Nombre de défis mis en avant sur la carte du menu (§8.92) — la liste complète vit dans l'écran Défis.
 const MENU_CHALLENGES_MAX := 3
 
 # Police condensée de la charte (§2) pour les nœuds générés en code.
@@ -97,7 +97,7 @@ var _selected_mode: String = DEFAULT_MODE
 var _lb_rows: VBoxContainer = null
 # Dernières entrées de classement reçues (re-rendues au changement de langue — format des victoires).
 var _last_lb_entries: Array = []
-# --- Carte Défis (§8.91) : conteneur des lignes + dernier payload GET /missions reçu ---
+# --- Carte Défis (§8.92) : conteneur des lignes + dernier payload GET /missions reçu ---
 var _challenges_rows: VBoxContainer = null
 # Dernier dict {daily, weekly, …} reçu, re-rendu au changement de langue (textes composés).
 var _missions_data: Dictionary = {}
@@ -108,8 +108,8 @@ var _missions_received: bool = false
 # Non typée à dessein (appels dynamiques set_model/set_accent — pas de class_name sur le composant).
 var _hero3d = null
 
-# Dernière faction JOUÉE (historique) — priorité (2) du héros central (§8.92). Le mini-profil, qui
-# l'affichait aussi, vit désormais dans top_nav (§8.93) et refait sa propre lecture.
+# Dernière faction JOUÉE (historique) — priorité (2) du héros central (§8.93). Le mini-profil, qui
+# l'affichait aussi, vit désormais dans top_nav (§8.94) et refait sa propre lecture.
 var _last_faction_id: String = ""
 
 # Statut courant (clé + args), mémorisé pour re-traduction au changement de langue (R4).
@@ -125,6 +125,9 @@ func _ready() -> void:
 	# Catalogue des factions (résolution id -> ressource pour le héros central).
 	_load_factions()
 
+	# Entrée d'écran UNIFORME (§8.96) : fondu + léger glissement, identique sur tous les écrans hub.
+	WarzoneUI.animate_screen_enter(self)
+
 	# --- CTA START ---
 	_style_cta(play_button)
 	if play_button: play_button.pressed.connect(_on_play_pressed)
@@ -136,7 +139,7 @@ func _ready() -> void:
 	_build_leaderboard_widget()
 	_build_challenges_widget()
 
-	# --- Héros central : appliqué IMMÉDIATEMENT (avant réseau) — personnage choisi (§8.92) s'il y en
+	# --- Héros central : appliqué IMMÉDIATEMENT (avant réseau) — personnage choisi (§8.93) s'il y en
 	# a un, sinon repli faction par défaut ; affiné à la réception de l'historique SI aucun choix. ---
 	_apply_hero(_explicit_faction())
 
@@ -159,16 +162,16 @@ func _ready() -> void:
 	# Héros central : historique (dernière faction jouée) — priorité (2), cf. _explicit_faction.
 	NetworkManager.profile_history_loaded.connect(_on_history_loaded)
 	NetworkManager.leaderboard_loaded.connect(_on_leaderboard_loaded)
-	# Missions (M2 §8.65) : alimente la carte Défis de la colonne gauche (§8.91), rafraîchie à chaque
+	# Missions (M2 §8.65) : alimente la carte Défis de la colonne gauche (§8.92), rafraîchie à chaque
 	# retour au menu → l'état après un claim dans l'écran Défis est correct sans travail en plus.
-	# ⚠️ §8.93 : le menu se contente d'ÉCOUTER — c'est `top_nav` qui appelle fetch_missions() (et
+	# ⚠️ §8.94 : le menu se contente d'ÉCOUTER — c'est `top_nav` qui appelle fetch_missions() (et
 	# fetch_profile_history / get_profile), sur TOUS les écrans hub. Éviter d'ajouter un fetch ici :
 	# les deux consommateurs (pastille de la nav, carte du menu) partagent la même réponse.
 	NetworkManager.missions_loaded.connect(_on_missions_badge_data)
 
 	_set_status("MENU_STATUS_LOADING")
 
-	# --- Nav PARTAGÉE (§8.93) : header canonique, monté en dernier (au-dessus du Hud). `active_tab`
+	# --- Nav PARTAGÉE (§8.94) : header canonique, monté en dernier (au-dessus du Hud). `active_tab`
 	# est réglé AVANT add_child (il est lu au _ready du composant). ---
 	_mount_top_nav()
 
@@ -176,7 +179,7 @@ func _ready() -> void:
 
 
 # =========================================================
-# NAV PARTAGÉE (§8.93)
+# NAV PARTAGÉE (§8.94)
 # =========================================================
 func _mount_top_nav() -> void:
 	var nav := TopNav.new()
@@ -187,7 +190,7 @@ func _mount_top_nav() -> void:
 # =========================================================
 # HÉROS CENTRAL — dernière faction jouée
 # =========================================================
-# Faction CHOISIE dans l'écran Personnages (§8.92), priorité (1) du héros affiché. Renvoie "" si
+# Faction CHOISIE dans l'écran Personnages (§8.93), priorité (1) du héros affiché. Renvoie "" si
 # aucun choix n'a jamais été fait OU si l'id persisté est inconnu du catalogue local (.tres retiré,
 # sauvegarde d'une version antérieure) → on retombe alors proprement sur (2) puis (3).
 # NOTE : si les factions deviennent VERROUILLÉES côté serveur (rotation/possession, lot M3), c'est
@@ -201,7 +204,7 @@ func _explicit_faction() -> String:
 # Réception de l'historique (/profile/history, le plus récent d'abord) : la 1re entrée valide donne
 # la DERNIÈRE faction jouée → priorité (2) du héros affiché. Historique vide → on garde le héros de
 # repli déjà affiché (compte neuf).
-# ⚠️ POINT CRITIQUE (§8.92) : ce handler est ASYNCHRONE et arrive APRÈS le _ready qui a déjà posé le
+# ⚠️ POINT CRITIQUE (§8.93) : ce handler est ASYNCHRONE et arrive APRÈS le _ready qui a déjà posé le
 # personnage choisi — il ne doit donc JAMAIS écraser un choix explicite, sinon la sélection faite
 # dans Personnages « clignoterait » puis serait remplacée par la dernière faction jouée.
 func _on_history_loaded(entries: Array) -> void:
@@ -512,7 +515,7 @@ func _set_lb_message(key: String) -> void:
 
 
 # =========================================================
-# CARTE DÉFIS (§8.91) — les VRAIES missions du serveur (GET /missions)
+# CARTE DÉFIS (§8.92) — les VRAIES missions du serveur (GET /missions)
 # =========================================================
 # Ex-placeholder décoratif (« BIENTÔT DISPONIBLE ») désormais BRANCHÉ : le menu était DÉJÀ abonné à
 # NetworkManager.missions_loaded pour la pastille de l'onglet — on consomme maintenant le dict
@@ -677,7 +680,7 @@ func _make_challenge_row(m: Dictionary) -> Control:
 # =========================================================
 # PROFIL SERVEUR (pseudo / niveau / XP / Coins)
 # =========================================================
-# Le pseudo et la jauge XP/Coins sont désormais rendus par `top_nav` (§8.93) : le menu ne consomme
+# Le pseudo et la jauge XP/Coins sont désormais rendus par `top_nav` (§8.94) : le menu ne consomme
 # plus le profil que pour sa ligne de STATUT. (Il ÉCOUTE seulement : c'est la nav qui appelle
 # AuthManager.get_profile().)
 func _on_profile_loaded(_data: Dictionary) -> void:
@@ -704,7 +707,7 @@ func _on_locale_changed(_code: String) -> void:
 		_apply_mode_sub(_mode_cards[mid])
 	_rebuild_lb_rows()
 	# Carte Défis : intitulés composés (« ❯ NOM ») → re-rendu manuel (la pastille « ●N » de l'onglet
-	# est, elle, re-rendue par top_nav qui la porte désormais, §8.93).
+	# est, elle, re-rendue par top_nav qui la porte désormais, §8.94).
 	_rebuild_challenges_rows()
 
 func _go(path: String) -> void:
@@ -722,8 +725,8 @@ func _on_play_pressed() -> void:
 func _on_missions_pressed() -> void:
 	_go("res://scenes/ui/missions.tscn")
 
-# Réception des missions (§8.91) : le menu n'en tire QUE la carte Défis — la pastille « ●N » de
-# l'onglet est portée par top_nav (§8.93), qui écoute le même signal global.
+# Réception des missions (§8.92) : le menu n'en tire QUE la carte Défis — la pastille « ●N » de
+# l'onglet est portée par top_nav (§8.94), qui écoute le même signal global.
 func _on_missions_badge_data(data: Dictionary) -> void:
 	if not is_inside_tree():
 		return  # garde défensive : signal global reçu pendant un changement de scène.

@@ -25,7 +25,7 @@ extends Control
 # Helpers de charte (§2) + composant héros 3D — préchargés (pas de class_name, prudence cache d'import).
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
-# Header CANONIQUE partagé (§8.93) — remplace l'ex-HeaderBar maison + bouton RETOUR.
+# Header CANONIQUE partagé (§8.94) — remplace l'ex-HeaderBar maison + bouton RETOUR.
 const TopNav = preload("res://scripts/ui/top_nav.gd")
 # Vue partagée des caractéristiques (SOURCE UNIQUE de STAT_ROWS + formatage) — mutualisée avec
 # faction_selection.gd (DRY : aucun libellé ni format de stat dupliqué).
@@ -59,7 +59,7 @@ var _factions: Dictionary = {}     # faction_id -> ressource .tres (accent_color
 var _heroes: Array = []            # roster reçu du backend (liste de Dictionary)
 var _selected_index: int = -1
 var _cards: Array = []             # PanelContainer par héros (pour la surbrillance de sélection)
-# Chips « SÉLECTIONNÉ » (§8.92) : index de HÉROS -> Label (un seul visible à la fois). Indexé par
+# Chips « SÉLECTIONNÉ » (§8.93) : index de HÉROS -> Label (un seul visible à la fois). Indexé par
 # index de héros (et non par position dans _cards) → insensible à une entrée de roster non-Dictionary.
 var _chips: Dictionary = {}
 # Emplacement héros (montés une fois dans hero_stage, basculés selon la faction sélectionnée).
@@ -73,10 +73,13 @@ func _ready() -> void:
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
 	_font.font_weight = 700
 
+	# Entrée d'écran UNIFORME (§8.96) : fondu + léger glissement, identique sur tous les écrans hub.
+	WarzoneUI.animate_screen_enter(self)
+
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)
 
-	# Nav PARTAGÉE (§8.93) : header canonique. Remplace l'ex-en-tête maison (titre + RETOUR) — c'est
+	# Nav PARTAGÉE (§8.94) : header canonique. Remplace l'ex-en-tête maison (titre + RETOUR) — c'est
 	# l'onglet ACTIF qui identifie désormais la section, et ÉCHAP (géré par la nav) qui ramène au QG.
 	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
 	var nav := TopNav.new()
@@ -111,12 +114,12 @@ func _on_heroes_loaded(heroes: Array) -> void:
 		_set_status(tr("CHAR_STATUS_EMPTY"))
 		_show_select_hint()
 		return
-	# Auto-sélection : le personnage CHOISI (§8.92) s'il est encore au roster, sinon le 1er (le
+	# Auto-sélection : le personnage CHOISI (§8.93) s'il est encore au roster, sinon le 1er (le
 	# détail n'est jamais vide). `persist` reste FAUX : ouvrir l'écran ne vaut PAS un choix.
 	_select(_initial_index())
 	_set_status(tr("CHAR_STATUS_LOADED"))
 
-# Index d'ouverture : celui du personnage persisté (§8.92) s'il figure dans le roster reçu, sinon 0.
+# Index d'ouverture : celui du personnage persisté (§8.93) s'il figure dans le roster reçu, sinon 0.
 # Robuste à un id inconnu (faction retirée du catalogue, roster serveur différent) → repli 0.
 func _initial_index() -> int:
 	var fid := SettingsManager.get_selected_faction()
@@ -186,7 +189,7 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 	lvl_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(lvl_lbl)
 
-	# Chip or « SÉLECTIONNÉ » (§8.92) : rend le choix EXPLICITE (avant, la sélection n'était qu'une
+	# Chip or « SÉLECTIONNÉ » (§8.93) : rend le choix EXPLICITE (avant, la sélection n'était qu'une
 	# surbrillance éphémère). Masqué par défaut, révélé par _select sur la seule carte choisie.
 	var chip := Label.new()
 	chip.text = "CHAR_SELECTED_BADGE"  # clé brute -> auto-traduction (FR/EN/IT)
@@ -245,13 +248,13 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 
 func _on_card_pressed(index: int) -> void:
 	AudioManager.play_sfx("click")
-	# Clic UTILISATEUR = choix EXPLICITE → persisté (§8.92).
+	# Clic UTILISATEUR = choix EXPLICITE → persisté (§8.93).
 	_select(index, true)
 
 # `persist` : n'écrit le choix que sur une sélection EXPLICITE de l'utilisateur. L'auto-sélection
 # d'ouverture (_on_heroes_loaded) passe FAUX — sinon un joueur n'ayant jamais choisi verrait le
 # simple fait de consulter cet écran figer le héros du menu sur le 1er du roster, alors que le menu
-# doit rester sur sa dernière faction JOUÉE tant qu'aucun choix n'est fait (§8.92, repli (2)).
+# doit rester sur sa dernière faction JOUÉE tant qu'aucun choix n'est fait (§8.93, repli (2)).
 func _select(index: int, persist: bool = false) -> void:
 	if index < 0 or index >= _heroes.size():
 		return

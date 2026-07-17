@@ -68,6 +68,41 @@ static func player_rows(players: Dictionary, territories: Dictionary,
 		return int(a["pid"]) < int(b["pid"]))
 	return rows
 
+# Rang d'un joueur absent de `rankings` (état incohérent / serveur antérieur) : trié EN QUEUE,
+# jamais perdu — un débriefing qui « oublie » un belligérant est pire qu'un ordre approximatif.
+const RANK_UNKNOWN := 9999
+
+# Lignes du DÉBRIEFING (§8.92) — une par joueur, pour le tableau BILAN du Rapport Post-Op.
+# Repart de player_rows() (SOURCE UNIQUE des compteurs : aucune divergence possible entre le HUD
+# in-game et le rapport) puis :
+#   - RETRIE par `rankings` (ordre du podium) : dans un débriefing le classement final prime sur
+#     les territoires possédés (tri de player_rows, pertinent en cours de partie mais pas ici) ;
+#   - enrichit de l'identité et des marqueurs d'affichage.
+# `winner_pid` = -1 (ou pid inconnu) → aucune ligne marquée vainqueur. Clés de `players` en STRING
+# après JSON (piège §5) → accès via str(pid) avec repli sur la clé int.
+static func debrief_rows(players: Dictionary, territories: Dictionary, statistics: Dictionary,
+		rankings: Array, my_pid: int, winner_pid: int) -> Array:
+	var rank_of := {}
+	for i in range(rankings.size()):
+		rank_of[int(rankings[i])] = i
+	var rows: Array = player_rows(players, territories, statistics)
+	for r in rows:
+		var pid := int(r["pid"])
+		var raw = players.get(str(pid), players.get(pid, {}))
+		var p: Dictionary = raw if typeof(raw) == TYPE_DICTIONARY else {}
+		r["username"] = str(p.get("username", "JOUEUR %d" % pid))
+		# Repli pid < 0 : convention G2 (les bots portent des ids NÉGATIFS).
+		r["is_bot"] = bool(p.get("is_bot", pid < 0))
+		r["is_alive"] = str(p.get("status", "alive")) == "alive"
+		r["is_me"] = (pid == my_pid)
+		r["is_winner"] = (pid == winner_pid)
+		r["rank"] = int(rank_of.get(pid, RANK_UNKNOWN))
+	rows.sort_custom(func(a, b) -> bool:
+		if int(a["rank"]) != int(b["rank"]):
+			return int(a["rank"]) < int(b["rank"])
+		return int(a["pid"]) < int(b["pid"]))   # ordre stable (§5)
+	return rows
+
 # Synthèse des continents : `continents` = { cid: { "name": String, "tids": Array } } (résolu par
 # le contrôleur depuis MapData.get_map(map_id).continent_territories — carte courante G5).
 # Retour (ordre d'itération des clés) : { "name", "total", "held" (du leader), "owner" (pid si

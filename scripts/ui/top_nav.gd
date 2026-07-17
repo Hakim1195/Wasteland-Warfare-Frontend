@@ -3,8 +3,8 @@ extends Control
 # =========================================================
 # BARRE DE NAVIGATION SUPÉRIEURE — « Warzone Command » (§2)
 # =========================================================
-# HEADER CANONIQUE ET UNIQUE de TOUS les écrans hub (§8.93) : menu principal, personnages,
-# boutique, défis, classement, profil, réglages, placeholders. Avant §8.93 il coexistait TROIS
+# HEADER CANONIQUE ET UNIQUE de TOUS les écrans hub (§8.94) : menu principal, personnages,
+# boutique, défis, classement, profil, réglages, placeholders. Avant §8.94 il coexistait TROIS
 # familles de headers (top-bar en dur du menu, ce composant, headers maison + bouton RETOUR) : ce
 # fichier est désormais la SOURCE UNIQUE — les écrans n'ont plus ni HeaderBar de nav, ni RETOUR.
 #
@@ -41,9 +41,9 @@ const DANGER := Color(0.839216, 0.270588, 0.247059, 1)
 const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 0.95)  # fond pastille onglets (opaque)
 const SURFACE := Color(0.058824, 0.07451, 0.094118, 0.85)   # fond cadre identité (= card_panel du menu)
 
-# --- Onglets CANONIQUES (§8.93) : STRICTEMENT alignés sur l'ancien menu principal. ---
+# --- Onglets CANONIQUES (§8.94) : STRICTEMENT alignés sur l'ancien menu principal. ---
 # `profile` N'EST PLUS un onglet : le Profil s'ouvre par la jauge XP CLIQUABLE (mini-profil), comme
-# au menu depuis §8.58. `missions` (écran DÉFIS, clé MENU_TAB_MISSIONS renommée « DÉFIS » en §8.91)
+# au menu depuis §8.58. `missions` (écran DÉFIS, clé MENU_TAB_MISSIONS renommée « DÉFIS » en §8.92)
 # prend sa place. Les sections Armes / Battle Pass / Événements / Skins restent DÉBRANCHÉES
 # (placeholders) : leurs scènes vivent sur disque, réactivation = remettre leur entrée ici.
 const TABS := [
@@ -84,12 +84,12 @@ var _font: Font
 var _xp_bar: PanelContainer = null
 var _operator_name: Label = null
 
-# --- Pastille DÉFIS (§8.93, ex-main_menu §8.65) : « DÉFIS ●N » quand N missions sont réclamables ---
+# --- Pastille DÉFIS (§8.94, ex-main_menu §8.65) : « DÉFIS ●N » quand N missions sont réclamables ---
 # Vit désormais DANS la nav → la pastille est visible sur TOUS les écrans hub, plus seulement au menu.
 var _missions_tab_btn: Button = null
 var _missions_claimable: int = 0
 
-# --- Mini-profil flottant (§8.58, déplacé du menu en §8.93) ---
+# --- Mini-profil flottant (§8.58, déplacé du menu en §8.94) ---
 var _profile_flyout: Control = null
 var _flyout_panel: PanelContainer = null
 var _flyout_body: VBoxContainer = null
@@ -97,7 +97,7 @@ var _profile_data: Dictionary = {}
 var _last_faction_id: String = ""
 var _factions: Dictionary = {}
 
-# --- Confirmation « Quitter » (§8.93, ex-main_menu) : le ⏻ ne tue plus le jeu sans demander ---
+# --- Confirmation « Quitter » (§8.94, ex-main_menu) : le ⏻ ne tue plus le jeu sans demander ---
 var _quit_dialog: Control = null
 
 
@@ -118,7 +118,7 @@ func _ready() -> void:
 	_build()
 
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
-	# La nav est le SEUL déclencheur de ces deux fetchs sur les écrans hub (§8.93) : elle est montée
+	# La nav est le SEUL déclencheur de ces deux fetchs sur les écrans hub (§8.94) : elle est montée
 	# partout, donc un écran hôte n'a qu'à ÉCOUTER le signal global s'il en a besoin (le menu écoute
 	# missions_loaded pour sa carte Défis et profile_history_loaded pour son héros) — évite le
 	# double fetch qu'aurait produit « chacun son appel ».
@@ -327,7 +327,7 @@ func _build_identity_frame() -> Control:
 	_xp_bar = XpCoinsBarScript.new()
 	_xp_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(_xp_bar)
-	# Jauge CLIQUABLE (§8.58, généralisée §8.93) : rendue interactive APRÈS l'ajout à l'arbre (le
+	# Jauge CLIQUABLE (§8.58, généralisée §8.94) : rendue interactive APRÈS l'ajout à l'arbre (le
 	# contenu existe alors → le bouton capteur reste au-dessus). C'est LE point d'entrée du Profil,
 	# qui n'a plus d'onglet.
 	_xp_bar.set_interactive(true)
@@ -343,6 +343,12 @@ func _build_icon_button(glyph: String, accent: Color, on_pressed: Callable) -> B
 	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	btn.custom_minimum_size = Vector2(44, 44)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	# ⚠️ DÉFAUT HÉRITÉ (constaté §8.94, NON corrigé — hors périmètre) : la chaîne condensée de la
+	# charte porte bien ⚙ (U+2699) mais PAS ⏻ (U+23FB) → le bouton Quitter s'affiche en « tofu »
+	# (carré de glyphe manquant). Le comportement est INCHANGÉ par rapport à l'ancienne top-bar du
+	# menu (même chaîne de police) ; ajouter « Segoe UI Symbol » en tête ne le corrige pas (cette
+	# police n'a pas non plus U+23FB) et dégrade le rendu du ⚙. Correctif à trancher : remplacer le
+	# glyphe par un symbole couvert, ou embarquer une police d'icônes (nouvel asset → Annexe C).
 	btn.add_theme_font_override("font", _font)
 	btn.add_theme_font_size_override("font_size", 18)
 	var normal := StyleBoxFlat.new()
@@ -369,7 +375,7 @@ func _go(scene: String) -> void:
 
 
 # =========================================================
-# PASTILLE DÉFIS (§8.93) — « DÉFIS ●N » sur l'onglet des défis
+# PASTILLE DÉFIS (§8.94) — « DÉFIS ●N » sur l'onglet des défis
 # =========================================================
 func _on_missions_loaded(data: Dictionary) -> void:
 	if not is_inside_tree():
@@ -402,7 +408,7 @@ func _on_locale_changed(_code: String) -> void:
 
 
 # =========================================================
-# MINI-PROFIL FLOTTANT (§8.58 — déplacé du menu principal en §8.93)
+# MINI-PROFIL FLOTTANT (§8.58 — déplacé du menu principal en §8.94)
 # =========================================================
 # Le Profil n'a plus d'onglet : un clic sur la jauge XP/Coins ouvre ce menu déroulant à la charte
 # (résumé express de l'opérateur + CTA vers le profil complet), depuis N'IMPORTE QUEL écran hub.
@@ -569,7 +575,7 @@ func _card_title(key: String) -> Label:
 
 
 # =========================================================
-# RETOUR UNIFORME (§8.93) — ÉCHAP remplace tous les boutons RETOUR supprimés
+# RETOUR UNIFORME (§8.94) — ÉCHAP remplace tous les boutons RETOUR supprimés
 # =========================================================
 # Priorité : (1) si le mini-profil est ouvert, ÉCHAP le referme ; (2) sinon, depuis tout écran hub
 # AUTRE que le QG, ÉCHAP ramène au menu principal. Au QG (active_tab == "lobby") ÉCHAP ne fait rien
@@ -593,9 +599,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 # =========================================================
-# CONFIRMATION « QUITTER » (§8.93, portée du menu) — overlay modal à la charte
+# CONFIRMATION « QUITTER » (§8.94, portée du menu) — overlay modal à la charte
 # =========================================================
-# Avant §8.93 le ⏻ de cette barre tuait le jeu SANS demander (seul le menu confirmait) : en faisant
+# Avant §8.94 le ⏻ de cette barre tuait le jeu SANS demander (seul le menu confirmait) : en faisant
 # de top_nav le header unique, on porte la confirmation ici → plus aucune sortie accidentelle.
 func _on_quit_requested() -> void:
 	if _quit_dialog == null:

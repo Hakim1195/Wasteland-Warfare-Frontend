@@ -76,7 +76,7 @@ var _pending_purchase_name: String = ""
 var _font: SystemFont
 
 func _ready():
-	# Header CANONIQUE partagé (§8.93), onglet BOUTIQUE actif. Il porte désormais l'identité, la
+	# Header CANONIQUE partagé (§8.94), onglet BOUTIQUE actif. Il porte désormais l'identité, la
 	# jauge XP/Coins (donc le SOLDE — l'ex-CreditsBox de l'en-tête a été retirée, elle doublonnait)
 	# et le retour par ÉCHAP (l'ex-bouton RETOUR a disparu). ⚠️ active_tab AVANT add_child.
 	var nav := TopNav.new()
@@ -92,6 +92,9 @@ func _ready():
 
 	# Catalogue des factions (id -> nom + couleur d'accent) pour teinter les cartes faction/skin.
 	_load_factions()
+
+	# Entrée d'écran UNIFORME (§8.96) : fondu + léger glissement, identique sur tous les écrans hub.
+	WarzoneUI.animate_screen_enter(self)
 
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)
@@ -171,7 +174,7 @@ func _on_inventory_loaded(data: Dictionary) -> void:
 			var q = items_data[id]
 			_owned[str(id)] = int(q) if q != null else 0
 	# L'inventaire change l'état des cartes Boutique (« EN DÉPÔT », Pass actif) → on repeuple les deux.
-	# NOTE §8.93 : le solde n'est plus affiché ICI (l'ex-CreditsBox de l'en-tête doublonnait la jauge
+	# NOTE §8.94 : le solde n'est plus affiché ICI (l'ex-CreditsBox de l'en-tête doublonnait la jauge
 	# XP/Coins de la nav) — `_credits` reste néanmoins lu pour griser les articles trop chers.
 	_populate_shop()
 	_populate_inventory()

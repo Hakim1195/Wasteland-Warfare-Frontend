@@ -588,6 +588,48 @@ func populate_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	_build_player_rewards(rewards, is_ranked)
 	_build_hero_progress(rewards)
 
+# Bloc LADDER RP (§8.95) : ligne « +25 RP — OR II » (or si positif, rouge danger si négatif), suivie
+# d'une bannière PROMOTION / RÉTROGRADATION et d'une mention discrète si le plancher de division a
+# amorti la perte. Tout vient des champs PRIVÉS de match_rewards — aucun barème en dur ici.
+func _build_rp_block(block: VBoxContainer, rewards: Dictionary) -> void:
+	var delta := int(rewards.get("rp_delta", 0))
+	var label := str(rewards.get("rp_label", ""))
+
+	var eyebrow := Label.new()
+	eyebrow.text = tr("REPORT_RP_EYEBROW")
+	eyebrow.add_theme_color_override("font_color", TEXT_MUTED)
+	eyebrow.add_theme_font_size_override("font_size", 12)
+	block.add_child(eyebrow)
+
+	var rp_lbl := Label.new()
+	# Le signe + n'est pas posé par %d sur les positifs → composé à la main.
+	var signed := ("+%d" % delta) if delta > 0 else str(delta)
+	rp_lbl.text = tr("REPORT_RP_LINE").format({"delta": signed, "label": label})
+	rp_lbl.add_theme_color_override("font_color", ACCENT_GOLD if delta >= 0 else Color("d6453f"))
+	rp_lbl.add_theme_font_size_override("font_size", 20)
+	block.add_child(rp_lbl)
+
+	if bool(rewards.get("rp_promoted", false)):
+		var promo := Label.new()
+		promo.text = tr("REPORT_PROMOTED").format({"label": label})
+		promo.add_theme_color_override("font_color", ACCENT_GOLD)
+		promo.add_theme_font_size_override("font_size", 16)
+		block.add_child(promo)
+	elif bool(rewards.get("rp_demoted", false)):
+		var demo := Label.new()
+		demo.text = tr("REPORT_DEMOTED").format({"label": label})
+		demo.add_theme_color_override("font_color", TEXT_MUTED)
+		demo.add_theme_font_size_override("font_size", 14)
+		block.add_child(demo)
+
+	# Plancher de division appliqué : mention DISCRÈTE (le joueur a « perdu » moins que le barème).
+	if bool(rewards.get("rp_floor_protected", false)):
+		var prot := Label.new()
+		prot.text = tr("REPORT_RP_PROTECTED")
+		prot.add_theme_color_override("font_color", TEXT_MUTED)
+		prot.add_theme_font_size_override("font_size", 12)
+		block.add_child(prot)
+
 # Onglet 1 — bloc RÉCOMPENSES animé (points de match + jauge XP/Coins + Pass + montées de niveau)
 # SUIVI du détail du barème (points & XP réconciliés aux totaux serveur). Coroutine (await l'anim).
 func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
@@ -618,6 +660,12 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 		unranked_lbl.add_theme_color_override("font_color", TEXT_MUTED)
 		unranked_lbl.add_theme_font_size_override("font_size", 15)
 		block.add_child(unranked_lbl)
+
+	# --- Ladder RP (§8.95) — EN CLASSÉE UNIQUEMENT (en non classée, rien : cohérent §8.88) ---
+	# Champs PRIVÉS de match_rewards (redactés par destinataire, E11 §8.83). Lecture DÉFENSIVE : un
+	# serveur antérieur au ladder RP n'envoie pas `rp_label` → aucun bloc affiché (pas de « +0 RP »).
+	if is_ranked and str(rewards.get("rp_label", "")) != "":
+		_build_rp_block(block, rewards)
 
 	# XP JOUEUR gagnée (§8.89) — compteur animé, miroir de « XP HÉROS : +N » de l'onglet héros.
 	# L'XP est créditée dans TOUS les modes (seuls les points de ladder sont conditionnels).

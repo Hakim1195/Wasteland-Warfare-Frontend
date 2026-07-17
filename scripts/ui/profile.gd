@@ -25,7 +25,7 @@ extends Control
 
 # Helpers UI partagés de la charte « Warzone Command » (§2) — encoches.
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
-# Header CANONIQUE partagé (§8.93) — remplace l'ex-bouton RETOUR de l'en-tête.
+# Header CANONIQUE partagé (§8.94) — remplace l'ex-bouton RETOUR de l'en-tête.
 const TopNav = preload("res://scripts/ui/top_nav.gd")
 
 # --- Palette canonique (§2) ---
@@ -80,7 +80,7 @@ func _ready():
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
 	_font.font_weight = 700
 
-	# Header CANONIQUE partagé (§8.93). Écran HORS ONGLETS (on l'ouvre par la jauge XP cliquable de
+	# Header CANONIQUE partagé (§8.94). Écran HORS ONGLETS (on l'ouvre par la jauge XP cliquable de
 	# la nav, pas par un onglet) → `active_tab = ""` : AUCUN onglet surligné. L'écran GARDE son titre
 	# interne : sans onglet actif, c'est la seule chose qui le nomme. ÉCHAP (nav) remplace le RETOUR.
 	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
@@ -89,6 +89,9 @@ func _ready():
 	add_child(nav)
 	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
 	AudioManager.start_menu_ambient()
+
+	# Entrée d'écran UNIFORME (§8.96) : fondu + léger glissement, identique sur tous les écrans hub.
+	WarzoneUI.animate_screen_enter(self)
 
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)

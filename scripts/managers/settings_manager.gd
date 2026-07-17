@@ -52,7 +52,7 @@ var _volumes := {"master": 0.8, "music": 0.7, "sfx": 0.8}
 var _fullscreen := true
 var _resolution_index := DEFAULT_RESOLUTION_INDEX
 
-# --- Gameplay (§8.92) : personnage choisi dans l'écran Personnages, persisté en [gameplay] ---
+# --- Gameplay (§8.93) : personnage choisi dans l'écran Personnages, persisté en [gameplay] ---
 # id snake_case de faction, "" = aucun choix explicite (le menu retombe alors sur la dernière
 # faction JOUÉE, puis sur le défaut alphabétique). Volontairement HORS de COMFORT_DEFAULTS : ce
 # n'est pas un réglage de confort typé/gated, mais une préférence libre → API dédiée.
@@ -73,7 +73,7 @@ func is_fullscreen() -> bool:
 func get_resolution_index() -> int:
 	return _resolution_index
 
-# --- Gameplay (§8.92) : personnage sélectionné ------------------------------
+# --- Gameplay (§8.93) : personnage sélectionné ------------------------------
 # Persistance LOCALE à la machine (aucun champ serveur « faction sélectionnée » n'existe : la
 # `favorite_faction` du profil est DÉRIVÉE de l'historique — sémantique différente).
 func get_selected_faction() -> String:
@@ -215,7 +215,7 @@ func _load() -> void:
 	# Confort (E8/E10) : relecture typée par le défaut de chaque clé.
 	for key in COMFORT_DEFAULTS:
 		_comfort[key] = cfg.get_value("comfort", key, COMFORT_DEFAULTS[key])
-	# Gameplay (§8.92) : id de faction choisi (str() défensif — un ConfigFile relit en Variant).
+	# Gameplay (§8.93) : id de faction choisi (str() défensif — un ConfigFile relit en Variant).
 	_selected_faction = str(cfg.get_value("gameplay", "selected_faction", _selected_faction))
 
 func _save() -> void:
