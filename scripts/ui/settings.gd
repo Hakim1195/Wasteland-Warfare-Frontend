@@ -16,7 +16,6 @@ extends Control
 
 # Nœuds câblés via @export + NodePath (drag-drop éditeur) — cf. conventions CLAUDE.md.
 @export var panel: Control
-@export var back_button: Button
 @export var master_slider: HSlider
 @export var master_value: Label
 @export var music_slider: HSlider
@@ -57,19 +56,19 @@ func _ready() -> void:
 	_font.font_weight = 700
 	_grabber_tex = _make_grabber_texture()
 
-	# Barre de navigation supérieure « Warzone Command » (onglet OPTIONS actif).
+	# Header CANONIQUE partagé (§8.93). Écran HORS ONGLETS (on s'y rend par le ⚙ de la nav, pas par
+	# un onglet) → `active_tab = ""` : AUCUN onglet surligné, comportement nominal et assumé.
+	# ⚠️ Avant §8.93 la valeur était "options", un id qui n'existe dans AUCUNE entrée de TABS : le
+	# résultat était le même (rien de surligné) mais par accident — c'est désormais explicite.
+	# L'écran conserve son titre : sans onglet actif, c'est la SEULE chose qui le nomme.
 	var nav := TopNav.new()
-	nav.active_tab = "options"
+	nav.active_tab = ""
 	add_child(nav)
+	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
+	AudioManager.start_menu_ambient()
 
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)
-
-	# Bouton RETOUR (ghost) — cohérent avec leaderboard / shop / profile.
-	_style_ghost_button(back_button)
-	if back_button:
-		back_button.pressed.connect(_on_back_pressed)
-		WarzoneUI.wire_button_sfx(back_button)  # SFX d'interface (survol/clic — R6)
 
 	# Bouton DÉCONNEXION (ghost « danger » rouge) tout en bas — action destructrice (charte §2).
 	# Migré du lobby : c'est désormais ICI qu'on coupe le tunnel temps réel + purge la session.
@@ -247,33 +246,6 @@ func _style_segment(btn: Button, active: bool) -> void:
 	btn.add_theme_color_override("font_hover_color", TEXT)
 	btn.add_theme_color_override("font_disabled_color", TEXT if active else MUTED)
 
-# Style « ghost » (fond quasi nul + liseré cyan) — bouton RETOUR (identique aux autres écrans).
-func _style_ghost_button(btn: Button) -> void:
-	if btn == null:
-		return
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(1, 1, 1, 0.03)
-	normal.set_border_width_all(1)
-	normal.border_color = Color(ACCENT, 0.55)
-	normal.set_corner_radius_all(0)
-	normal.content_margin_left = 14.0
-	normal.content_margin_top = 8.0
-	normal.content_margin_right = 14.0
-	normal.content_margin_bottom = 8.0
-
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(ACCENT, 0.16)
-	hover.border_color = ACCENT
-
-	btn.add_theme_font_override("font", _font)
-	btn.add_theme_font_size_override("font_size", 18)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", MUTED)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
 # Style « ghost danger » (liseré + texte ROUGE #D6453F) — bouton DÉCONNEXION (action destructrice §2).
 # Même ADN angulaire que le ghost cyan, mais en rouge danger pour signaler la nature destructrice.
 func _style_logout_button(btn: Button) -> void:
@@ -395,9 +367,6 @@ func _same_value(a, b) -> bool:
 func _set_status(text: String) -> void:
 	if status_label:
 		status_label.text = text
-
-func _on_back_pressed() -> void:
-	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 # DÉCONNEXION (migrée du lobby) : coupe le tunnel temps réel s'il est ouvert, purge le token JWT +
 # l'identité (mémoire ET disque, §P1) via AuthManager.clear_session(), puis renvoie l'opérateur vers

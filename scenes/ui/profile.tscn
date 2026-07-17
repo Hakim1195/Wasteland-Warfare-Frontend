@@ -23,7 +23,7 @@ border_color = Color(0.211765, 0.772549, 0.85098, 1)
 color = Color(0.211765, 0.772549, 0.85098, 0.5)
 thickness = 2
 
-[node name="ProfileScreen" type="Control" node_paths=PackedStringArray("panel", "back_button", "username_value", "level_value", "xp_bar", "xp_value", "faction_chevron", "faction_value", "stats_grid", "history_box", "status_label")]
+[node name="ProfileScreen" type="Control" node_paths=PackedStringArray("panel", "username_value", "level_value", "xp_bar", "xp_value", "faction_chevron", "faction_value", "stats_grid", "history_box", "status_label")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -32,7 +32,6 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_prof")
 panel = NodePath("CenterContainer/MainPanel")
-back_button = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/BackButton")
 username_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityBar/IdentityBox/UsernameValue")
 level_value = NodePath("CenterContainer/MainPanel/RootVBox/LevelBox/LevelHeader/LevelInfo/LevelValue")
 xp_bar = NodePath("CenterContainer/MainPanel/RootVBox/LevelBox/XpBar")
@@ -58,6 +57,7 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_top = 100.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -95,12 +95,6 @@ text = "PROFILE_TITLE"
 [node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
 layout_mode = 2
 size_flags_horizontal = 3
-
-[node name="BackButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
-custom_minimum_size = Vector2(150, 48)
-layout_mode = 2
-size_flags_vertical = 4
-text = "COMMON_BACK"
 
 [node name="FiletTop" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
 layout_mode = 2

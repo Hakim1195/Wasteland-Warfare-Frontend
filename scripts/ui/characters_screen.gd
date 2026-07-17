@@ -17,7 +17,6 @@ extends Control
 
 # --- Nœuds câblés via @export + NodePath (drag-drop éditeur, pas de $chemin codé en dur) ---
 @export var panel: Control
-@export var back_button: Button
 @export var hero_list: VBoxContainer       # GAUCHE : cartes de héros (générées en code)
 @export var hero_stage: Control            # DROITE : emplacement 3D/portrait (rempli en code)
 @export var detail_box: VBoxContainer      # DROITE : détail textuel (reconstruit à la sélection)
@@ -26,6 +25,8 @@ extends Control
 # Helpers de charte (§2) + composant héros 3D — préchargés (pas de class_name, prudence cache d'import).
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
+# Header CANONIQUE partagé (§8.93) — remplace l'ex-HeaderBar maison + bouton RETOUR.
+const TopNav = preload("res://scripts/ui/top_nav.gd")
 # Vue partagée des caractéristiques (SOURCE UNIQUE de STAT_ROWS + formatage) — mutualisée avec
 # faction_selection.gd (DRY : aucun libellé ni format de stat dupliqué).
 const HeroStatsView = preload("res://scripts/ui/hero_stats_view.gd")
@@ -58,6 +59,9 @@ var _factions: Dictionary = {}     # faction_id -> ressource .tres (accent_color
 var _heroes: Array = []            # roster reçu du backend (liste de Dictionary)
 var _selected_index: int = -1
 var _cards: Array = []             # PanelContainer par héros (pour la surbrillance de sélection)
+# Chips « SÉLECTIONNÉ » (§8.92) : index de HÉROS -> Label (un seul visible à la fois). Indexé par
+# index de héros (et non par position dans _cards) → insensible à une entrée de roster non-Dictionary.
+var _chips: Dictionary = {}
 # Emplacement héros (montés une fois dans hero_stage, basculés selon la faction sélectionnée).
 var _hero3d = null                 # instance hero_viewport_3d (API non typée : set_model/set_accent)
 var _portrait: TextureRect = null  # repli portrait 2D
@@ -72,10 +76,14 @@ func _ready() -> void:
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)
 
-	# Bouton RETOUR (ghost) — cohérent avec profile.gd / leaderboard.gd.
-	_style_ghost_button(back_button)
-	if back_button: back_button.pressed.connect(_on_back_pressed)
-	WarzoneUI.wire_button_sfx(back_button)
+	# Nav PARTAGÉE (§8.93) : header canonique. Remplace l'ex-en-tête maison (titre + RETOUR) — c'est
+	# l'onglet ACTIF qui identifie désormais la section, et ÉCHAP (géré par la nav) qui ramène au QG.
+	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
+	var nav := TopNav.new()
+	nav.active_tab = "characters"
+	add_child(nav)
+	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
+	AudioManager.start_menu_ambient()
 
 	# Catalogue des factions (résolution id -> couleur / portrait / modèle 3D).
 	_load_factions()
@@ -103,8 +111,21 @@ func _on_heroes_loaded(heroes: Array) -> void:
 		_set_status(tr("CHAR_STATUS_EMPTY"))
 		_show_select_hint()
 		return
-	_select(0)  # auto-sélection du 1er héros (le détail n'est jamais vide).
+	# Auto-sélection : le personnage CHOISI (§8.92) s'il est encore au roster, sinon le 1er (le
+	# détail n'est jamais vide). `persist` reste FAUX : ouvrir l'écran ne vaut PAS un choix.
+	_select(_initial_index())
 	_set_status(tr("CHAR_STATUS_LOADED"))
+
+# Index d'ouverture : celui du personnage persisté (§8.92) s'il figure dans le roster reçu, sinon 0.
+# Robuste à un id inconnu (faction retirée du catalogue, roster serveur différent) → repli 0.
+func _initial_index() -> int:
+	var fid := SettingsManager.get_selected_faction()
+	if fid != "":
+		for i in _heroes.size():
+			var h = _heroes[i]
+			if typeof(h) == TYPE_DICTIONARY and str(h.get("faction_id", "")) == fid:
+				return i
+	return 0
 
 
 # =========================================================
@@ -113,6 +134,7 @@ func _on_heroes_loaded(heroes: Array) -> void:
 func _build_cards() -> void:
 	_clear(hero_list)
 	_cards.clear()
+	_chips.clear()
 	for i in _heroes.size():
 		var hero = _heroes[i]
 		if typeof(hero) != TYPE_DICTIONARY:
@@ -164,6 +186,34 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 	lvl_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(lvl_lbl)
 
+	# Chip or « SÉLECTIONNÉ » (§8.92) : rend le choix EXPLICITE (avant, la sélection n'était qu'une
+	# surbrillance éphémère). Masqué par défaut, révélé par _select sur la seule carte choisie.
+	var chip := Label.new()
+	chip.text = "CHAR_SELECTED_BADGE"  # clé brute -> auto-traduction (FR/EN/IT)
+	chip.add_theme_font_override("font", _font)
+	chip.add_theme_font_size_override("font_size", 11)
+	chip.add_theme_color_override("font_color", GOLD)
+	chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var chip_style := StyleBoxFlat.new()
+	chip_style.set_corner_radius_all(0)
+	chip_style.bg_color = Color(GOLD, 0.14)
+	chip_style.set_border_width_all(1)
+	chip_style.border_color = GOLD
+	chip_style.content_margin_left = 8.0
+	chip_style.content_margin_right = 8.0
+	chip_style.content_margin_top = 3.0
+	chip_style.content_margin_bottom = 3.0
+	var chip_box := PanelContainer.new()
+	chip_box.add_theme_stylebox_override("panel", chip_style)
+	chip_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	chip_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip_box.add_child(chip)
+	chip_box.visible = false
+	h.add_child(chip_box)
+	WarzoneUI.add_corner_notches(chip_box, 5.0, GOLD)
+	_chips[index] = chip_box
+
 	# Cadenas si non possédé (déblocage boutique non câblé → owned == true partout pour l'instant).
 	if not owned:
 		var lock := Label.new()
@@ -195,9 +245,14 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 
 func _on_card_pressed(index: int) -> void:
 	AudioManager.play_sfx("click")
-	_select(index)
+	# Clic UTILISATEUR = choix EXPLICITE → persisté (§8.92).
+	_select(index, true)
 
-func _select(index: int) -> void:
+# `persist` : n'écrit le choix que sur une sélection EXPLICITE de l'utilisateur. L'auto-sélection
+# d'ouverture (_on_heroes_loaded) passe FAUX — sinon un joueur n'ayant jamais choisi verrait le
+# simple fait de consulter cet écran figer le héros du menu sur le 1er du roster, alors que le menu
+# doit rester sur sa dernière faction JOUÉE tant qu'aucun choix n'est fait (§8.92, repli (2)).
+func _select(index: int, persist: bool = false) -> void:
 	if index < 0 or index >= _heroes.size():
 		return
 	_selected_index = index
@@ -206,11 +261,18 @@ func _select(index: int) -> void:
 		var c = _cards[i]
 		if c != null and is_instance_valid(c):
 			c.add_theme_stylebox_override("panel", _card_style(i == index))
+	# Chip or « SÉLECTIONNÉ » : porté par la seule carte choisie (indexé par index de HÉROS).
+	for idx in _chips:
+		var chip = _chips[idx]
+		if chip != null and is_instance_valid(chip):
+			chip.visible = (int(idx) == index)
 	var hero = _heroes[index]
 	if typeof(hero) != TYPE_DICTIONARY:
 		return
 	_apply_hero_stage(str(hero.get("faction_id", "")))
 	_populate_detail(hero)
+	if persist:
+		SettingsManager.set_selected_faction(str(hero.get("faction_id", "")))
 
 
 # =========================================================
@@ -588,31 +650,6 @@ func _style_xp_bar(bar: ProgressBar) -> void:
 	bar.add_theme_stylebox_override("background", bg)
 	bar.add_theme_stylebox_override("fill", fill)
 
-# Style « ghost » (fond quasi nul + liseré cyan) — bouton RETOUR (identique à profile.gd / leaderboard.gd).
-func _style_ghost_button(btn: Button) -> void:
-	if btn == null:
-		return
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(1, 1, 1, 0.03)
-	normal.set_border_width_all(1)
-	normal.border_color = Color(ACCENT, 0.55)
-	normal.set_corner_radius_all(0)
-	normal.content_margin_left = 14.0
-	normal.content_margin_top = 8.0
-	normal.content_margin_right = 14.0
-	normal.content_margin_bottom = 8.0
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(ACCENT, 0.16)
-	hover.border_color = ACCENT
-	btn.add_theme_font_override("font", _font)
-	btn.add_theme_font_size_override("font_size", 18)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", MUTED)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
 
 # =========================================================
 # CHARGEMENT DES FACTIONS (id -> ressource), garde-fous de profile.gd / main_menu.gd
@@ -686,5 +723,3 @@ func _set_status(text: String) -> void:
 	if status_label:
 		status_label.text = text
 
-func _on_back_pressed() -> void:
-	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")

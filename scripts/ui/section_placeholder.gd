@@ -12,8 +12,13 @@ const ACCENT := Color("36c5d9")
 const TEXT := Color("eef3f7")
 const MUTED := Color("8a97a5")
 const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 0.9)
-const BAR_H := 56.0
+# Décalage du contenu sous la nav : ALIGNÉ sur la hauteur RÉELLE du composant (§8.93). Avant, la
+# valeur locale (56) sous-estimait la bande (100) → le panneau passait dessous.
+const BAR_H := TopNav.NAV_H
 
+# `tab_id` : ces sections sont DÉBRANCHÉES de la nav (aucune entrée dans TABS) → leur id ne matche
+# aucun onglet et AUCUN onglet n'est surligné. C'est le comportement nominal des écrans « hors
+# onglets » (§8.93), identique à profil/réglages qui passent "".
 @export var tab_id: String = "weapons"
 @export var title_key: String = "NAV_WEAPONS"
 

@@ -13,7 +13,6 @@ extends Control
 
 # Nœuds câblés via @export + NodePath (drag-drop éditeur) — cf. conventions CLAUDE.md.
 @export var panel: Control
-@export var back_button: Button
 @export var username_value: Label
 @export var level_value: Label
 @export var xp_bar: ProgressBar
@@ -26,6 +25,8 @@ extends Control
 
 # Helpers UI partagés de la charte « Warzone Command » (§2) — encoches.
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
+# Header CANONIQUE partagé (§8.93) — remplace l'ex-bouton RETOUR de l'en-tête.
+const TopNav = preload("res://scripts/ui/top_nav.gd")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -79,13 +80,18 @@ func _ready():
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
 	_font.font_weight = 700
 
+	# Header CANONIQUE partagé (§8.93). Écran HORS ONGLETS (on l'ouvre par la jauge XP cliquable de
+	# la nav, pas par un onglet) → `active_tab = ""` : AUCUN onglet surligné. L'écran GARDE son titre
+	# interne : sans onglet actif, c'est la seule chose qui le nomme. ÉCHAP (nav) remplace le RETOUR.
+	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
+	var nav := TopNav.new()
+	nav.active_tab = ""
+	add_child(nav)
+	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
+	AudioManager.start_menu_ambient()
+
 	# Encoche biseautée d'angle sur le panneau principal (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(panel)
-
-	# Bouton RETOUR (ghost) — cohérent avec shop.gd.
-	_style_ghost_button(back_button)
-	if back_button: back_button.pressed.connect(_on_back_pressed)
-	WarzoneUI.wire_button_sfx(back_button)  # SFX d'interface (survol/clic — R6)
 
 	# Barre d'XP cyan (construite en code).
 	_style_xp_bar()
@@ -348,33 +354,6 @@ func _style_xp_bar() -> void:
 	xp_bar.add_theme_stylebox_override("fill", fill)
 	xp_bar.show_percentage = false
 
-# Style « ghost » (fond quasi nul + liseré cyan) — bouton RETOUR (identique à shop.gd).
-func _style_ghost_button(btn: Button) -> void:
-	if btn == null:
-		return
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(1, 1, 1, 0.03)
-	normal.set_border_width_all(1)
-	normal.border_color = Color(0.211765, 0.772549, 0.85098, 0.55)
-	normal.set_corner_radius_all(0)
-	normal.content_margin_left = 14.0
-	normal.content_margin_top = 8.0
-	normal.content_margin_right = 14.0
-	normal.content_margin_bottom = 8.0
-
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
-	hover.border_color = ACCENT
-
-	btn.add_theme_font_override("font", _font)
-	btn.add_theme_font_size_override("font_size", 18)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", MUTED)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
 # --- Chargement des factions (id -> nom + couleur), garde-fous de faction_selection.gd ---
 func _load_factions() -> void:
 	var paths := _scan_faction_paths()
@@ -438,5 +417,3 @@ func _set_status(text: String) -> void:
 	if status_label:
 		status_label.text = text
 
-func _on_back_pressed():
-	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")

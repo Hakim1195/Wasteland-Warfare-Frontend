@@ -4,32 +4,21 @@ extends Control
 # MENU PRINCIPAL — Tableau de bord asymétrique « Warzone Command » (§2 / §8.37)
 # =========================================================================
 # Refonte du menu d'une liste de boutons vers un lobby AAA (réf. Call of Duty: Warzone) :
-#   • Top Bar : identité opérateur + onglets (QG / Boutique / Opérateur / Classement) + cluster
-#     utilitaire (jauge XP·Coins, Paramètres ⚙, bouton système ⏻). Le choix de la langue n'est
-#     plus dans la nav : il est centralisé dans l'écran Paramètres (⚙).
-#   • Centre : HÉROS de la DERNIÈRE FACTION JOUÉE (résolu via /profile/history → faction .tres).
-#   • Colonne gauche : mini-classement (top 3) + carte Défis (placeholder, gains XP/niveau à venir).
+#   • Top Bar : plus AUCUNE barre en dur ici (§8.93) — le menu monte le composant PARTAGÉ
+#     `top_nav.gd` (`active_tab = "lobby"`), header CANONIQUE de tous les écrans hub : marque,
+#     onglets, pastille défis, identité + jauge XP cliquable (mini-profil), ⚙, ⏻. Le menu ne gère
+#     donc plus ni onglets, ni jauge, ni mini-profil, ni pop-up « Quitter ».
+#   • Centre : HÉROS affiché par priorité (§8.92) — (1) personnage CHOISI dans l'écran Personnages
+#     (SettingsManager, persistant), (2) sinon dernière faction JOUÉE (/profile/history),
+#     (3) sinon défaut alphabétique du catalogue .tres.
+#   • Colonne gauche : mini-classement (top 3) + carte Défis (3 vraies missions serveur, §8.91).
 #   • Bas-gauche : gros CTA « START » qui lance le MODE sélectionné.
 #   • Bas-centre : cartes de mode Trio(3) / Quad(4) / Five(5) / Exa(6) + Classée(5, classé).
 # Règle d'Or §6.1 : VUE pure — navigation via TransitionManager, données via AuthManager /
 # NetworkManager (signaux), audio via AudioManager. Aucune logique de jeu brute ici.
 
-# --- Identité / statut (Top Bar + CTA) ---
-@export var welcome_label: Label
+# --- Statut (sous le CTA) ---
 @export var status_label: Label
-
-# --- Top Bar : onglets de navigation ---
-@export var lobby_tab: Button
-@export var characters_tab: Button
-@export var shop_tab: Button
-# Onglet « OPÉRATIONS » (missions M2 §8.65) — pastille or = nombre de missions réclamables.
-@export var missions_tab: Button
-@export var leaderboard_tab: Button
-
-# --- Top Bar : cluster utilitaire ---
-@export var settings_button: Button
-@export var system_button: Button
-@export var xp_coins_slot: Control
 
 # --- Centre : héros de la dernière faction jouée ---
 @export var hero_portrait: TextureRect
@@ -48,8 +37,9 @@ extends Control
 
 # Helpers UI partagés de la charte (§2) — encoches, filets, sélecteur de langue, SFX, ghost.
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
-# Jauge XP + Coins (§8.47) — composant réutilisable monté par code.
-const XpCoinsBarScript = preload("res://scripts/ui/xp_coins_bar.gd")
+# Header CANONIQUE partagé (§8.93) : marque + onglets + pastille défis + identité/jauge + ⚙ + ⏻.
+# La jauge XP/Coins (§8.47) est montée PAR la nav — le menu n'en garde aucune copie.
+const TopNav = preload("res://scripts/ui/top_nav.gd")
 # Héros 3D (SubViewport transparent) — remplace le portrait 2D quand la faction a un .glb riggé.
 # Préchargé (pas de class_name, par prudence vis-à-vis du cache d'import, cf. WarzoneUI).
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
@@ -90,10 +80,11 @@ const MODES := [
 ]
 const DEFAULT_MODE := "trio"
 
+# Nombre de défis mis en avant sur la carte du menu (§8.91) — la liste complète vit dans l'écran Défis.
+const MENU_CHALLENGES_MAX := 3
+
 # Police condensée de la charte (§2) pour les nœuds générés en code.
 var _font: SystemFont
-# Jauge XP/Coins, montée dans le slot du cluster utilitaire (révélée au chargement du profil).
-var _xp_bar: PanelContainer = null
 # Catalogue de factions : id -> ressource FactionData (.tres).
 var _factions: Dictionary = {}
 # Faction de repli (première triée) si l'historique est vide / l'id est inconnu → centre jamais vide.
@@ -106,21 +97,19 @@ var _selected_mode: String = DEFAULT_MODE
 var _lb_rows: VBoxContainer = null
 # Dernières entrées de classement reçues (re-rendues au changement de langue — format des victoires).
 var _last_lb_entries: Array = []
-# Overlay de confirmation « Quitter » (construit par code à la demande, masqué par défaut).
-var _quit_dialog: Control = null
+# --- Carte Défis (§8.91) : conteneur des lignes + dernier payload GET /missions reçu ---
+var _challenges_rows: VBoxContainer = null
+# Dernier dict {daily, weekly, …} reçu, re-rendu au changement de langue (textes composés).
+var _missions_data: Dictionary = {}
+# False tant qu'AUCUNE réponse n'est arrivée → la carte reste sur « SYNCHRONISATION… » (jamais de
+# mock, et un serveur muet laisse simplement l'état passif).
+var _missions_received: bool = false
 # Instance du héros 3D, montée une fois dans HeroLayer (le modèle est échangé via set_model).
 # Non typée à dessein (appels dynamiques set_model/set_accent — pas de class_name sur le composant).
 var _hero3d = null
 
-# --- Mini-profil flottant (§8.58) : ouvert au clic sur la jauge XP/Coins ---
-# Overlay construit À LA DEMANDE (même pattern que le pop-up « Quitter ») : un capteur plein-cadre
-# transparent (ferme au clic extérieur) + un panneau « intel » ancré sous la jauge. Masqué par défaut.
-var _profile_flyout: Control = null
-var _flyout_panel: PanelContainer = null
-var _flyout_body: VBoxContainer = null
-# Dernières données de profil (/auth/me) et dernière faction jouée (historique) — elles alimentent
-# le résumé du mini-profil SANS refaire d'appel réseau (tout est déjà chargé au _ready).
-var _profile_data: Dictionary = {}
+# Dernière faction JOUÉE (historique) — priorité (2) du héros central (§8.92). Le mini-profil, qui
+# l'affichait aussi, vit désormais dans top_nav (§8.93) et refait sa propre lecture.
 var _last_faction_id: String = ""
 
 # Statut courant (clé + args), mémorisé pour re-traduction au changement de langue (R4).
@@ -136,26 +125,6 @@ func _ready() -> void:
 	# Catalogue des factions (résolution id -> ressource pour le héros central).
 	_load_factions()
 
-	# --- Top Bar : onglets (style « souligné » Warzone) ---
-	# L'onglet « OPÉRATEUR » a été RETIRÉ de la nav (§8.58) : le profil s'ouvre désormais via la
-	# jauge XP/Coins cliquable (mini-profil flottant). _on_profile_pressed() est conservé — il est
-	# maintenant déclenché par le CTA « VOIR LE PROFIL COMPLET » de ce mini-profil.
-	_style_tab(lobby_tab, true)
-	_style_tab(characters_tab, false)
-	_style_tab(shop_tab, false)
-	_style_tab(missions_tab, false)
-	_style_tab(leaderboard_tab, false)
-	if characters_tab: characters_tab.pressed.connect(_on_characters_pressed)
-	if shop_tab: shop_tab.pressed.connect(_on_inventory_pressed)
-	if missions_tab: missions_tab.pressed.connect(_on_missions_pressed)
-	if leaderboard_tab: leaderboard_tab.pressed.connect(_on_leaderboard_pressed)
-
-	# --- Top Bar : boutons système (engrenage cyan + power rouge) ---
-	_style_icon_button(settings_button, ACCENT)
-	_style_icon_button(system_button, DANGER)
-	if settings_button: settings_button.pressed.connect(_on_settings_pressed)
-	if system_button: system_button.pressed.connect(_on_quit_requested)
-
 	# --- CTA START ---
 	_style_cta(play_button)
 	if play_button: play_button.pressed.connect(_on_play_pressed)
@@ -167,75 +136,85 @@ func _ready() -> void:
 	_build_leaderboard_widget()
 	_build_challenges_widget()
 
-	# --- Héros central : repli immédiat (faction par défaut), affiné à la réception de l'historique. ---
-	_apply_hero("")
+	# --- Héros central : appliqué IMMÉDIATEMENT (avant réseau) — personnage choisi (§8.92) s'il y en
+	# a un, sinon repli faction par défaut ; affiné à la réception de l'historique SI aucun choix. ---
+	_apply_hero(_explicit_faction())
 
 	# Encoches biseautées sur les cartes de la colonne gauche (ADN angulaire §2).
 	if leaderboard_content: WarzoneUI.add_corner_notches(leaderboard_content.get_parent())
 	if challenges_content: WarzoneUI.add_corner_notches(challenges_content.get_parent())
 
-	# Halo néon cyan derrière la petite marque biohazard de la Top Bar (§8.63).
-	var logo_small := get_node_or_null("Hud/Shell/TopBar/BrandBox/LogoSmall")
-	if logo_small is TextureRect:
-		WarzoneUI.attach_mark_glow(logo_small, 72.0, 0.85, 1.5)
-
-	# --- Audio (R6) : nappe d'ambiance + SFX d'interface sur les boutons interactifs (no-op headless). ---
+	# --- Audio (R6) : nappe d'ambiance + SFX d'interface (no-op headless). La nav pose ses propres
+	# SFX ; ici il ne reste que le CTA START. ---
 	AudioManager.start_menu_ambient()
-	WarzoneUI.wire_buttons_sfx([lobby_tab, characters_tab, shop_tab, missions_tab, leaderboard_tab, settings_button, system_button, play_button])
+	WarzoneUI.wire_button_sfx(play_button)
 
-	# --- Jauge XP/Coins, montée dans son slot de la Top Bar. ---
-	_mount_xp_bar()
-	# Le sélecteur de langue ne vit plus dans la nav (centralisé dans Paramètres) ; on reste tout de
-	# même abonné à LocaleManager pour re-traduire les textes FORMATÉS au retour des réglages (R4).
+	# Re-traduction des textes FORMATÉS au retour des réglages (R4) — les clés brutes se
+	# re-traduisent seules.
 	LocaleManager.locale_changed.connect(_on_locale_changed)
 
-	# --- Réseau : profil (niveau/XP/coins/pseudo), historique (dernière faction), classement (top 3). ---
+	# --- Réseau : on s'ABONNE avant de monter la nav (c'est elle qui déclenche les fetchs). ---
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
 	AuthManager.auth_failed.connect(_on_auth_failed)
+	# Héros central : historique (dernière faction jouée) — priorité (2), cf. _explicit_faction.
 	NetworkManager.profile_history_loaded.connect(_on_history_loaded)
 	NetworkManager.leaderboard_loaded.connect(_on_leaderboard_loaded)
+	# Missions (M2 §8.65) : alimente la carte Défis de la colonne gauche (§8.91), rafraîchie à chaque
+	# retour au menu → l'état après un claim dans l'écran Défis est correct sans travail en plus.
+	# ⚠️ §8.93 : le menu se contente d'ÉCOUTER — c'est `top_nav` qui appelle fetch_missions() (et
+	# fetch_profile_history / get_profile), sur TOUS les écrans hub. Éviter d'ajouter un fetch ici :
+	# les deux consommateurs (pastille de la nav, carte du menu) partagent la même réponse.
+	NetworkManager.missions_loaded.connect(_on_missions_badge_data)
 
 	_set_status("MENU_STATUS_LOADING")
 
-	AuthManager.get_profile()
-	NetworkManager.fetch_profile_history(1)
+	# --- Nav PARTAGÉE (§8.93) : header canonique, monté en dernier (au-dessus du Hud). `active_tab`
+	# est réglé AVANT add_child (il est lu au _ready du composant). ---
+	_mount_top_nav()
+
 	NetworkManager.fetch_leaderboard(3)
-	# Missions (M2 §8.65) : pastille or « réclamables » sur l'onglet OPÉRATIONS, rafraîchie à
-	# chaque retour au menu (fetch → missions_loaded → _update_missions_badge).
-	NetworkManager.missions_loaded.connect(_on_missions_badge_data)
-	NetworkManager.fetch_missions()
 
 
 # =========================================================
-# MONTAGE DES COMPOSANTS PARTAGÉS (XP/Coins)
+# NAV PARTAGÉE (§8.93)
 # =========================================================
-func _mount_xp_bar() -> void:
-	_xp_bar = XpCoinsBarScript.new()
-	_xp_bar.visible = false  # révélée par _on_profile_loaded (évite un « LV 1 / 0 XP » fugace).
-	if xp_coins_slot:
-		xp_coins_slot.add_child(_xp_bar)
-	else:
-		add_child(_xp_bar)
-	# Jauge CLIQUABLE (§8.58) : on rend le panneau interactif APRÈS l'ajout à l'arbre (le contenu
-	# existe alors → le bouton capteur reste bien au-dessus) et on écoute le clic pour ouvrir/fermer
-	# le mini-profil flottant.
-	_xp_bar.set_interactive(true)
-	_xp_bar.profile_widget_clicked.connect(_on_profile_widget_clicked)
+func _mount_top_nav() -> void:
+	var nav := TopNav.new()
+	nav.active_tab = "lobby"  # ⚠️ AVANT add_child : lu au _ready du composant.
+	add_child(nav)
 
 
 # =========================================================
 # HÉROS CENTRAL — dernière faction jouée
 # =========================================================
+# Faction CHOISIE dans l'écran Personnages (§8.92), priorité (1) du héros affiché. Renvoie "" si
+# aucun choix n'a jamais été fait OU si l'id persisté est inconnu du catalogue local (.tres retiré,
+# sauvegarde d'une version antérieure) → on retombe alors proprement sur (2) puis (3).
+# NOTE : si les factions deviennent VERROUILLÉES côté serveur (rotation/possession, lot M3), c'est
+# ICI qu'il faudra revalider que le joueur a encore le droit d'arborer ce héros.
+func _explicit_faction() -> String:
+	var fid := SettingsManager.get_selected_faction()
+	if fid != "" and _factions.has(fid):
+		return fid
+	return ""
+
 # Réception de l'historique (/profile/history, le plus récent d'abord) : la 1re entrée valide donne
-# la DERNIÈRE faction jouée → on bascule le portrait dessus. Historique vide → on garde le héros de
+# la DERNIÈRE faction jouée → priorité (2) du héros affiché. Historique vide → on garde le héros de
 # repli déjà affiché (compte neuf).
+# ⚠️ POINT CRITIQUE (§8.92) : ce handler est ASYNCHRONE et arrive APRÈS le _ready qui a déjà posé le
+# personnage choisi — il ne doit donc JAMAIS écraser un choix explicite, sinon la sélection faite
+# dans Personnages « clignoterait » puis serait remplacée par la dernière faction jouée.
 func _on_history_loaded(entries: Array) -> void:
+	var explicit := _explicit_faction()
 	for e in entries:
 		if typeof(e) == TYPE_DICTIONARY:
 			var fid := str(e.get("faction_id", ""))
 			if fid != "":
-				_last_faction_id = fid  # alimente la ligne « faction » du mini-profil (§8.58).
-				_apply_hero(fid)
+				# Mémorisé DANS TOUS LES CAS : la ligne « faction de prédilection » du mini-profil
+				# (§8.58) garde la sémantique « dernière jouée », indépendante du choix explicite.
+				_last_faction_id = fid
+				if explicit == "":
+					_apply_hero(fid)
 				return
 
 # Monte (une seule fois) le composant héros 3D dans HeroLayer, au même emplacement que le
@@ -533,313 +512,176 @@ func _set_lb_message(key: String) -> void:
 
 
 # =========================================================
-# CARTE DÉFIS (placeholder) — gains XP / montée de niveau à configurer plus tard
+# CARTE DÉFIS (§8.91) — les VRAIES missions du serveur (GET /missions)
 # =========================================================
+# Ex-placeholder décoratif (« BIENTÔT DISPONIBLE ») désormais BRANCHÉ : le menu était DÉJÀ abonné à
+# NetworkManager.missions_loaded pour la pastille de l'onglet — on consomme maintenant le dict
+# complet. VUE pure : aucun appel réseau propre, aucune logique de progression (tout est serveur) ;
+# le claim se fait dans l'écran Défis, ici on ne fait qu'AFFICHER et renvoyer vers lui.
+# Rendu compact inspiré de missions.gd::_make_row (source de vérité du rendu détaillé).
 func _build_challenges_widget() -> void:
 	if challenges_content == null:
 		return
 	challenges_content.add_child(_card_title("MENU_CHALLENGES_TITLE"))
 	challenges_content.add_child(_body("MENU_CHALLENGES_SUB"))
 	WarzoneUI.add_filet(challenges_content)
-	for i in 2:
-		challenges_content.add_child(_make_challenge_placeholder())
-	var soon := Label.new()
-	soon.text = "MENU_CHALLENGES_SOON"  # clé brute -> auto-traduction
-	soon.add_theme_font_override("font", _font)
-	soon.add_theme_font_size_override("font_size", 12)
-	soon.add_theme_color_override("font_color", GOLD)
-	soon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	challenges_content.add_child(soon)
 
-func _make_challenge_placeholder() -> HBoxContainer:
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 10)
-	var chev := Label.new()
-	chev.text = "❯"
-	chev.add_theme_font_override("font", _font)
-	chev.add_theme_font_size_override("font_size", 14)
-	chev.add_theme_color_override("font_color", Color(ACCENT, 0.5))
-	h.add_child(chev)
-	# Barre de progression « verrouillée » (cyan très atténué) — purement décorative tant que les
-	# défis ne sont pas configurés côté serveur.
-	var bar := ColorRect.new()
-	bar.color = Color(ACCENT, 0.12)
-	bar.custom_minimum_size = Vector2(0, 12)
+	_challenges_rows = VBoxContainer.new()
+	_challenges_rows.add_theme_constant_override("separation", 10)
+	challenges_content.add_child(_challenges_rows)
+
+	# Pied de carte : renvoie vers l'écran Défis complet (même mécanique que « VOIR TOUT » du
+	# mini-classement, et même cible que l'onglet Défis).
+	var more := Button.new()
+	more.text = "MENU_CHALLENGES_VIEW_ALL"  # clé brute -> auto-traduction
+	more.add_theme_font_override("font", _font)
+	more.add_theme_font_size_override("font_size", 13)
+	WarzoneUI.apply_ghost_button(more)
+	more.pressed.connect(_on_missions_pressed)
+	more.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	challenges_content.add_child(more)
+
+	_rebuild_challenges_rows()  # état d'attente « ❯ SYNCHRONISATION… » avant la 1re réponse.
+
+# Reçoit le dict complet de GET /missions et re-rend la carte (appelé par _on_missions_badge_data).
+func _populate_challenges_widget(data: Dictionary) -> void:
+	_missions_data = data
+	_missions_received = true
+	_rebuild_challenges_rows()
+
+# (Re)construit les lignes. AUCUN mock : tant que le serveur n'a pas répondu (ou s'il ne répond
+# jamais), la carte reste sur l'état passif « SYNCHRONISATION… » — pas d'erreur bruyante.
+func _rebuild_challenges_rows() -> void:
+	if _challenges_rows == null:
+		return
+	_clear(_challenges_rows)
+	if not _missions_received:
+		_challenges_rows.add_child(_body("MENU_CHALLENGES_LOADING"))
+		return
+	var top := _pick_top_challenges(_missions_data)
+	if top.is_empty():
+		_challenges_rows.add_child(_body("MENU_CHALLENGES_EMPTY"))
+		return
+	for m in top:
+		_challenges_rows.add_child(_make_challenge_row(m))
+
+# Sélection des défis à mettre en avant : fusionne quotidiennes + hebdomadaires, EXCLUT les déjà
+# réclamées, puis ordonne (1) réclamables d'abord, (2) en cours par ratio progress/target
+# DÉCROISSANT (le plus proche du but en tête), (3) départage stable par id. Renvoie au plus
+# MENU_CHALLENGES_MAX entrées.
+func _pick_top_challenges(data: Dictionary) -> Array:
+	var pool := []
+	for section in ["daily", "weekly"]:
+		for m in data.get(section, []):
+			if typeof(m) != TYPE_DICTIONARY:
+				continue
+			if bool(m.get("claimed", false)):
+				continue
+			pool.append(m)
+	pool.sort_custom(_challenge_sort)
+	return pool.slice(0, mini(MENU_CHALLENGES_MAX, pool.size()))
+
+func _challenge_sort(a: Dictionary, b: Dictionary) -> bool:
+	var ca := _is_claimable(a)
+	var cb := _is_claimable(b)
+	if ca != cb:
+		return ca  # les réclamables passent devant.
+	var ra := _progress_ratio(a)
+	var rb := _progress_ratio(b)
+	if not is_equal_approx(ra, rb):
+		return ra > rb
+	# Départage déterministe (évite un ordre instable entre deux défis à égalité de ratio).
+	return str(a.get("mission_id", "")) < str(b.get("mission_id", ""))
+
+func _is_claimable(m: Dictionary) -> bool:
+	return bool(m.get("completed", false)) and not bool(m.get("claimed", false))
+
+# Piège JSON §5 : progress/target arrivent en float après parse -> int() avant tout calcul.
+func _progress_ratio(m: Dictionary) -> float:
+	return float(int(m.get("progress", 0))) / float(maxi(1, int(m.get("target", 1))))
+
+# Ligne compacte : « ❯ NOM » + chip récompense « ◈ N » (or) / barre de progression cyan (or si
+# réclamable) + compteur « progress/target » (remplacé par « À RÉCLAMER » quand c'est le cas).
+func _make_challenge_row(m: Dictionary) -> Control:
+	var cur := int(m.get("progress", 0))
+	var goal := maxi(1, int(m.get("target", 1)))
+	var reward := int(m.get("reward_coins", 0))
+	var claimable := _is_claimable(m)
+	var accent: Color = GOLD if claimable else ACCENT
+
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+
+	# --- Ligne 1 : intitulé + chip récompense ---
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	row.add_child(head)
+
+	var name_lbl := Label.new()
+	name_lbl.text = "❯ %s" % tr(str(m.get("name_key", "")))
+	# Texte COMPOSÉ (chevron + libellé déjà traduit) → jamais ré-auto-traduit (re-rendu manuel au
+	# changement de langue via _rebuild_challenges_rows).
+	name_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	name_lbl.add_theme_font_override("font", _font)
+	name_lbl.add_theme_font_size_override("font_size", 13)
+	name_lbl.add_theme_color_override("font_color", TEXT if claimable else MUTED)
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.clip_text = true
+	head.add_child(name_lbl)
+
+	var chip := Label.new()
+	chip.text = "◈ %d" % reward
+	chip.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	chip.add_theme_font_override("font", _font)
+	chip.add_theme_font_size_override("font_size", 13)
+	chip.add_theme_color_override("font_color", GOLD)
+	chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	head.add_child(chip)
+
+	# --- Ligne 2 : mini barre de progression + compteur / « À RÉCLAMER » ---
+	var foot := HBoxContainer.new()
+	foot.add_theme_constant_override("separation", 8)
+	row.add_child(foot)
+
+	var bar := ProgressBar.new()
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 6)
+	bar.min_value = 0.0
+	bar.max_value = float(goal)
+	bar.value = float(cur)
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	h.add_child(bar)
-	return h
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(1, 1, 1, 0.08)
+	bg.set_corner_radius_all(0)
+	var fg := StyleBoxFlat.new()
+	fg.bg_color = accent
+	fg.set_corner_radius_all(0)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fg)
+	foot.add_child(bar)
 
+	var counter := Label.new()
+	counter.text = tr("MENU_CHALLENGES_CLAIMABLE") if claimable else ("%d/%d" % [cur, goal])
+	counter.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	counter.add_theme_font_override("font", _font)
+	counter.add_theme_font_size_override("font_size", 12)
+	counter.add_theme_color_override("font_color", accent)
+	counter.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	counter.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	foot.add_child(counter)
+	return row
 
-# =========================================================
-# CONFIRMATION « QUITTER » — overlay modal à la charte (construit à la demande)
-# =========================================================
-func _on_quit_requested() -> void:
-	if _quit_dialog == null:
-		_build_quit_dialog()
-	if _quit_dialog:
-		_quit_dialog.visible = true
-
-func _build_quit_dialog() -> void:
-	var dim := ColorRect.new()
-	dim.name = "QuitDialog"
-	dim.color = Color(0, 0, 0, 0.6)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.visible = false
-	add_child(dim)
-
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.add_child(center)
-
-	var panel := PanelContainer.new()
-	var pstyle := StyleBoxFlat.new()
-	pstyle.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
-	pstyle.set_corner_radius_all(0)
-	pstyle.set_border_width_all(2)
-	pstyle.border_color = DANGER
-	pstyle.set_content_margin_all(28.0)
-	panel.add_theme_stylebox_override("panel", pstyle)
-	center.add_child(panel)
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 16)
-	panel.add_child(v)
-
-	var title := Label.new()
-	title.text = "MENU_QUIT_TITLE"
-	title.add_theme_font_override("font", _font)
-	title.add_theme_font_size_override("font_size", 24)
-	title.add_theme_color_override("font_color", DANGER)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(title)
-
-	var body := Label.new()
-	body.text = "MENU_QUIT_BODY"
-	body.add_theme_font_override("font", _font)
-	body.add_theme_font_size_override("font_size", 15)
-	body.add_theme_color_override("font_color", MUTED)
-	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(body)
-
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	v.add_child(row)
-
-	var cancel := Button.new()
-	cancel.text = "MENU_QUIT_CANCEL"
-	cancel.add_theme_font_override("font", _font)
-	cancel.add_theme_font_size_override("font_size", 16)
-	cancel.custom_minimum_size = Vector2(150, 48)
-	WarzoneUI.apply_ghost_button(cancel)
-	cancel.pressed.connect(_on_quit_cancel)
-	cancel.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
-	row.add_child(cancel)
-
-	var ok := Button.new()
-	ok.text = "MENU_QUIT_OK"
-	ok.add_theme_font_override("font", _font)
-	ok.add_theme_font_size_override("font_size", 16)
-	ok.custom_minimum_size = Vector2(170, 48)
-	_style_danger_button(ok)
-	ok.pressed.connect(_on_quit_confirm)
-	ok.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
-	row.add_child(ok)
-
-	WarzoneUI.add_corner_notches(panel, 16.0, DANGER)
-	_quit_dialog = dim
-
-func _on_quit_cancel() -> void:
-	AudioManager.play_sfx("click")
-	if _quit_dialog:
-		_quit_dialog.visible = false
-
-func _on_quit_confirm() -> void:
-	AudioManager.play_sfx("click")
-	get_tree().quit()
-
-
-# =========================================================
-# MINI-PROFIL FLOTTANT (§8.58) — ouvert au clic sur la jauge XP/Coins
-# =========================================================
-# Remplace l'ancien onglet « OPÉRATEUR » : un clic sur la jauge XP/Coins ouvre un menu déroulant à
-# la charte (résumé express de l'opérateur + CTA vers le profil complet). Construit À LA DEMANDE
-# (comme le pop-up « Quitter »). Se ferme au clic extérieur, sur ÉCHAP, ou au re-clic sur la jauge.
-func _on_profile_widget_clicked() -> void:
-	AudioManager.play_sfx("click")
-	if _profile_flyout != null and _profile_flyout.visible:
-		_close_profile_flyout()
-	else:
-		_open_profile_flyout()
-
-func _open_profile_flyout() -> void:
-	if _profile_flyout == null:
-		_build_profile_flyout()
-	_populate_profile_flyout()
-	# Pré-positionnement à la taille minimale estimée (évite un flash en (0,0)), affichage, puis
-	# ajustement fin une fois le layout résolu (la taille réelle n'est connue qu'après une frame).
-	_flyout_panel.size = _flyout_panel.get_combined_minimum_size()
-	_position_profile_flyout()
-	_profile_flyout.visible = true
-	await get_tree().process_frame
-	_position_profile_flyout()
-
-func _close_profile_flyout() -> void:
-	if _profile_flyout:
-		_profile_flyout.visible = false
-
-# Ancre le panneau JUSTE SOUS la jauge, bord droit aligné (la jauge vit dans le cluster aligné à
-# droite), borné à l'écran (jamais hors cadre). Recalculé à chaque ouverture (robuste au resize).
-func _position_profile_flyout() -> void:
-	if _flyout_panel == null or _xp_bar == null or not is_instance_valid(_xp_bar):
-		return
-	var bar := _xp_bar.get_global_rect()
-	var vp := get_viewport_rect().size
-	var psize := _flyout_panel.size
-	var x := clampf(bar.end.x - psize.x, 8.0, maxf(8.0, vp.x - psize.x - 8.0))
-	var y := minf(bar.end.y + 8.0, maxf(8.0, vp.y - psize.y - 8.0))
-	_flyout_panel.global_position = Vector2(x, y)
-
-func _build_profile_flyout() -> void:
-	# Calque plein-cadre, masqué par défaut, posé AU-DESSUS du HUD (ajouté après lui à l'arbre).
-	_profile_flyout = Control.new()
-	_profile_flyout.name = "ProfileFlyout"
-	_profile_flyout.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_profile_flyout.visible = false
-	add_child(_profile_flyout)
-
-	# Capteur transparent plein-cadre : tout clic HORS du panneau referme le menu (clic extérieur).
-	var catcher := Control.new()
-	catcher.name = "Catcher"
-	catcher.set_anchors_preset(Control.PRESET_FULL_RECT)
-	catcher.mouse_filter = Control.MOUSE_FILTER_STOP
-	catcher.gui_input.connect(func(ev: InputEvent) -> void:
-		if ev is InputEventMouseButton and ev.pressed:
-			_close_profile_flyout())
-	_profile_flyout.add_child(catcher)
-
-	# Panneau « intel » : gunmetal quasi opaque + liseré cyan + encoches d'angle + ombre (charte §2).
-	# Parent = Control simple (pas un conteneur) → position/taille pilotées en code (cf. _position_…).
-	_flyout_panel = PanelContainer.new()
-	_flyout_panel.name = "Panel"
-	_flyout_panel.custom_minimum_size = Vector2(300, 0)
-	var pstyle := StyleBoxFlat.new()
-	pstyle.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
-	pstyle.set_corner_radius_all(0)
-	pstyle.set_border_width_all(1)
-	pstyle.border_color = Color(ACCENT, 0.7)
-	pstyle.set_content_margin_all(18.0)
-	pstyle.shadow_color = Color(0, 0, 0, 0.5)
-	pstyle.shadow_size = 10
-	_flyout_panel.add_theme_stylebox_override("panel", pstyle)
-	_profile_flyout.add_child(_flyout_panel)
-
-	_flyout_body = VBoxContainer.new()
-	_flyout_body.add_theme_constant_override("separation", 10)
-	_flyout_panel.add_child(_flyout_body)
-
-	WarzoneUI.add_corner_notches(_flyout_panel)
-
-# (Re)construit le contenu du mini-profil depuis les données DÉJÀ chargées (aucun appel réseau).
-func _populate_profile_flyout() -> void:
-	if _flyout_body == null:
-		return
-	_clear(_flyout_body)
-
-	# --- En-tête : eyebrow OPÉRATEUR + pseudo (rythme eyebrow → valeur §2) ---
-	_flyout_body.add_child(_card_title("COMMON_OPERATOR"))
-	var name_lbl := Label.new()
-	name_lbl.text = str(_profile_data.get("username", tr("COMMON_PLAYER"))).to_upper()
-	name_lbl.add_theme_font_override("font", _font)
-	name_lbl.add_theme_font_size_override("font_size", 24)
-	name_lbl.add_theme_color_override("font_color", TEXT)
-	_flyout_body.add_child(name_lbl)
-
-	WarzoneUI.add_filet(_flyout_body)
-
-	# --- Lignes de résumé (libellé muet à gauche, valeur colorée à droite) ---
-	var level := int(_profile_data.get("player_level", _profile_data.get("niveau", 1)))
-	var coins := int(_profile_data.get("coins_balance", _profile_data.get("coins", 0)))
-	_flyout_body.add_child(_flyout_stat_row("COMMON_LEVEL", "LV %d" % maxi(1, level), ACCENT))
-	_flyout_body.add_child(_flyout_stat_row("SHOP_CREDITS", str(maxi(0, coins)), GOLD))
-
-	# Dernière faction jouée (donnée RÉELLE de l'historique) — affichée si connue, à la couleur
-	# d'accent de la faction (cohérent avec profile.gd). Étiquetée « FACTION DE PRÉDILECTION ».
-	if _last_faction_id != "":
-		var f = _resolve_faction(_last_faction_id)
-		if f != null and f.get("name") != null:
-			var fac_color: Color = f.accent_color if f.get("accent_color") != null else ACCENT
-			_flyout_body.add_child(_flyout_stat_row("PROFILE_FAVORITE_FACTION", str(f.name).to_upper(), fac_color))
-
-	WarzoneUI.add_filet(_flyout_body)
-
-	# --- CTA : ouvre le profil complet via TransitionManager ---
-	var cta := Button.new()
-	cta.text = "MENU_PROFILE_VIEW_FULL"  # clé brute -> auto-traduction (FR/EN/IT)
-	cta.add_theme_font_override("font", _font)
-	cta.add_theme_font_size_override("font_size", 15)
-	cta.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	WarzoneUI.apply_ghost_button(cta)
-	cta.pressed.connect(func() -> void:
-		AudioManager.play_sfx("click")
-		_close_profile_flyout()
-		_on_profile_pressed())
-	cta.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
-	_flyout_body.add_child(cta)
-
-# Ligne « eyebrow → valeur » du mini-profil : libellé muet à gauche, valeur colorée à droite.
-func _flyout_stat_row(label_key: String, value: String, value_color: Color) -> HBoxContainer:
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 12)
-
-	var l := Label.new()
-	l.text = label_key  # clé brute -> auto-traduction
-	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", 13)
-	l.add_theme_color_override("font_color", MUTED)
-	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(l)
-
-	var v := Label.new()
-	v.text = value
-	v.add_theme_font_override("font", _font)
-	v.add_theme_font_size_override("font_size", 18)
-	v.add_theme_color_override("font_color", value_color)
-	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	v.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(v)
-	return h
-
-# ÉCHAP referme le mini-profil s'il est ouvert (confort clavier ; ne gêne rien d'autre).
-func _unhandled_input(event: InputEvent) -> void:
-	if _profile_flyout != null and _profile_flyout.visible and event.is_action_pressed("ui_cancel"):
-		_close_profile_flyout()
-		get_viewport().set_input_as_handled()
 
 
 # =========================================================
 # PROFIL SERVEUR (pseudo / niveau / XP / Coins)
 # =========================================================
-func _on_profile_loaded(data: Dictionary) -> void:
-	_profile_data = data  # mémorisé pour le résumé du mini-profil (§8.58) — pas de nouvel appel réseau.
-	# Rythme « eyebrow → valeur » (§2) : l'intitulé OPÉRATEUR vit dans la scène ; le code ne pousse
-	# que la VALEUR brute (pseudo en MAJUSCULES). Le niveau est désormais porté par la jauge XP.
-	if welcome_label:
-		welcome_label.text = str(data.get("username", tr("COMMON_PLAYER"))).to_upper()
-	if _xp_bar:
-		var level := int(data.get("player_level", data.get("niveau", 1)))
-		var xp := int(data.get("current_xp", data.get("experience", 0)))
-		# xp_to_next_level absent (VPS pas à jour) → repli sur la courbe locale (miroir backend).
-		var xp_next := int(data.get("xp_to_next_level", _xp_bar._xp_required_for_level(level) - xp))
-		var coins := int(data.get("coins_balance", data.get("coins", 0)))
-		_xp_bar.set_profile(level, xp, maxi(0, xp_next), coins)
-		_xp_bar.visible = true
+# Le pseudo et la jauge XP/Coins sont désormais rendus par `top_nav` (§8.93) : le menu ne consomme
+# plus le profil que pour sa ligne de STATUT. (Il ÉCOUTE seulement : c'est la nav qui appelle
+# AuthManager.get_profile().)
+func _on_profile_loaded(_data: Dictionary) -> void:
 	_set_status("MENU_STATUS_CONNECTED")
-	# Si le mini-profil est ouvert au moment où le profil (re)charge, on rafraîchit son résumé.
-	if _profile_flyout != null and _profile_flyout.visible:
-		_populate_profile_flyout()
 
 func _on_auth_failed(message: String) -> void:
 	_set_status("MENU_STATUS_ERROR", [message])
@@ -861,8 +703,9 @@ func _on_locale_changed(_code: String) -> void:
 	for mid in _mode_cards:
 		_apply_mode_sub(_mode_cards[mid])
 	_rebuild_lb_rows()
-	# Pastille OPÉRATIONS : texte formaté (« ●N ») → re-rendu manuel au changement de langue.
-	_update_missions_badge()
+	# Carte Défis : intitulés composés (« ❯ NOM ») → re-rendu manuel (la pastille « ●N » de l'onglet
+	# est, elle, re-rendue par top_nav qui la porte désormais, §8.93).
+	_rebuild_challenges_rows()
 
 func _go(path: String) -> void:
 	TransitionManager.change_scene(path)
@@ -875,41 +718,20 @@ func _on_play_pressed() -> void:
 		mc.set_mode(m["id"], int(m["count"]), bool(m["ranked"]))
 	_go("res://scenes/ui/lobby_screen.tscn")
 
-func _on_characters_pressed() -> void:
-	_go("res://scenes/ui/characters_screen.tscn")
-
-func _on_inventory_pressed() -> void:
-	_go("res://scenes/ui/shop.tscn")
-
+# Cible du pied de la carte Défis (« VOIR TOUT ❯ ») — même écran que l'onglet Défis de la nav.
 func _on_missions_pressed() -> void:
 	_go("res://scenes/ui/missions.tscn")
 
-# Pastille OR de l'onglet OPÉRATIONS (M2 §8.65) : « OPÉRATIONS ●N » quand N missions sont
-# complétées non réclamées ; libellé i18n simple sinon. Re-rendue au changement de langue.
-var _missions_claimable: int = 0
-
+# Réception des missions (§8.91) : le menu n'en tire QUE la carte Défis — la pastille « ●N » de
+# l'onglet est portée par top_nav (§8.93), qui écoute le même signal global.
 func _on_missions_badge_data(data: Dictionary) -> void:
-	_missions_claimable = int(data.get("claimable_count", 0))
-	_update_missions_badge()
+	if not is_inside_tree():
+		return  # garde défensive : signal global reçu pendant un changement de scène.
+	_populate_challenges_widget(data)
 
-func _update_missions_badge() -> void:
-	if missions_tab == null:
-		return
-	if _missions_claimable > 0:
-		missions_tab.text = "%s ●%d" % [tr("MENU_TAB_MISSIONS"), _missions_claimable]
-		missions_tab.add_theme_color_override("font_color", GOLD)
-	else:
-		missions_tab.text = tr("MENU_TAB_MISSIONS")
-		missions_tab.remove_theme_color_override("font_color")
-
-func _on_profile_pressed() -> void:
-	_go("res://scenes/ui/profile.tscn")
-
+# Cible du pied du mini-classement (« VOIR TOUT ») — même écran que l'onglet Classement de la nav.
 func _on_leaderboard_pressed() -> void:
 	_go("res://scenes/ui/leaderboard.tscn")
-
-func _on_settings_pressed() -> void:
-	_go("res://scenes/ui/settings.tscn")
 
 func _mode_def(mode_id: String):
 	for m in MODES:
@@ -956,71 +778,6 @@ func _style_cta(btn: Button) -> void:
 	btn.add_theme_stylebox_override("normal", normal)
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", TEXT)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
-func _style_tab(btn: Button, active: bool) -> void:
-	if btn == null:
-		return
-	btn.focus_mode = Control.FOCUS_NONE
-	var normal := StyleBoxFlat.new()
-	normal.set_corner_radius_all(0)
-	normal.bg_color = Color(1, 1, 1, 0.0)
-	normal.content_margin_left = 16.0
-	normal.content_margin_top = 10.0
-	normal.content_margin_right = 16.0
-	normal.content_margin_bottom = 10.0
-	if active:
-		normal.border_width_bottom = 3
-		normal.border_color = ACCENT
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(ACCENT, 0.06)
-	hover.border_width_bottom = 3
-	hover.border_color = ACCENT if active else Color(ACCENT, 0.5)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
-func _style_icon_button(btn: Button, accent: Color) -> void:
-	if btn == null:
-		return
-	btn.focus_mode = Control.FOCUS_NONE
-	# Police condensée de la charte (§2) — cohérence avec les onglets et le CTA (les glyphes ⚙/⏻
-	# tombaient sinon sur la police par défaut de Godot).
-	btn.add_theme_font_override("font", _font)
-	var normal := StyleBoxFlat.new()
-	normal.set_corner_radius_all(0)
-	normal.bg_color = Color(1, 1, 1, 0.03)
-	normal.set_border_width_all(1)
-	normal.border_color = Color(accent, 0.5)
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(accent, 0.18)
-	hover.border_color = accent
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", accent)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
-func _style_danger_button(btn: Button) -> void:
-	if btn == null:
-		return
-	var normal := StyleBoxFlat.new()
-	normal.set_corner_radius_all(0)
-	normal.set_content_margin_all(10.0)
-	normal.bg_color = Color(DANGER, 0.16)
-	normal.set_border_width_all(2)
-	normal.border_color = DANGER
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(DANGER, 0.32)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
 	btn.add_theme_stylebox_override("focus", normal)
 	btn.add_theme_color_override("font_color", TEXT)
 	btn.add_theme_color_override("font_hover_color", TEXT)

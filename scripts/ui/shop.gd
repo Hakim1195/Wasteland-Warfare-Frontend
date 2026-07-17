@@ -14,8 +14,6 @@ extends Control
 
 # Nœuds câblés via @export + NodePath (drag-drop éditeur) — cf. conventions CLAUDE.md.
 @export var panel: Control
-@export var credits_label: Label
-@export var back_button: Button
 @export var shop_tab_button: Button
 @export var inventory_tab_button: Button
 @export var shop_grid: GridContainer
@@ -78,10 +76,14 @@ var _pending_purchase_name: String = ""
 var _font: SystemFont
 
 func _ready():
-	# Barre de navigation supérieure « Warzone Command » (onglet STORE actif).
+	# Header CANONIQUE partagé (§8.93), onglet BOUTIQUE actif. Il porte désormais l'identité, la
+	# jauge XP/Coins (donc le SOLDE — l'ex-CreditsBox de l'en-tête a été retirée, elle doublonnait)
+	# et le retour par ÉCHAP (l'ex-bouton RETOUR a disparu). ⚠️ active_tab AVANT add_child.
 	var nav := TopNav.new()
 	nav.active_tab = "shop"
 	add_child(nav)
+	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
+	AudioManager.start_menu_ambient()
 
 	# Police partagée (mêmes réglages que le SystemFont des .tscn de menu).
 	_font = SystemFont.new()
@@ -95,13 +97,11 @@ func _ready():
 	WarzoneUI.add_corner_notches(panel)
 
 	# Styles de boutons construits en code (cohérent avec lobby_screen.gd).
-	_style_ghost_button(back_button)
-	if back_button: back_button.pressed.connect(_on_back_pressed)
 	if shop_tab_button: shop_tab_button.pressed.connect(func(): _show_tab(true))
 	if inventory_tab_button: inventory_tab_button.pressed.connect(func(): _show_tab(false))
 
 	# SFX d'interface (survol/clic — R6).
-	WarzoneUI.wire_buttons_sfx([back_button, shop_tab_button, inventory_tab_button])
+	WarzoneUI.wire_buttons_sfx([shop_tab_button, inventory_tab_button])
 
 	# Économie serveur (R1) : catalogue + solde/inventaire + résultats d'achat via NetworkManager.
 	NetworkManager.shop_catalog_loaded.connect(_on_catalog_loaded)
@@ -116,7 +116,6 @@ func _ready():
 	NetworkManager.fetch_shop_catalog()
 	NetworkManager.fetch_shop_inventory()
 	NetworkManager.fetch_shop_rotation()
-	_update_credits()
 
 	# Peuplement initial (vide jusqu'aux réponses serveur), onglet Boutique actif.
 	_populate_shop()
@@ -171,14 +170,11 @@ func _on_inventory_loaded(data: Dictionary) -> void:
 			# que grant_amount/hero_key/pass_expires_at ci-dessus).
 			var q = items_data[id]
 			_owned[str(id)] = int(q) if q != null else 0
-	_update_credits()
 	# L'inventaire change l'état des cartes Boutique (« EN DÉPÔT », Pass actif) → on repeuple les deux.
+	# NOTE §8.93 : le solde n'est plus affiché ICI (l'ex-CreditsBox de l'en-tête doublonnait la jauge
+	# XP/Coins de la nav) — `_credits` reste néanmoins lu pour griser les articles trop chers.
 	_populate_shop()
 	_populate_inventory()
-
-func _update_credits():
-	if credits_label:
-		credits_label.text = _format_credits(_credits)
 
 # Sépare les milliers par une fine espace (lisibilité du solde en or).
 func _format_credits(value: int) -> String:
@@ -609,33 +605,6 @@ func _style_cta_button(btn: Button) -> void:
 	btn.add_theme_stylebox_override("focus", normal)
 	btn.add_theme_color_override("font_color", TEXT)
 
-# Style « ghost » (fond quasi nul + liseré cyan translucide) — bouton RETOUR.
-func _style_ghost_button(btn: Button) -> void:
-	if btn == null:
-		return
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(1, 1, 1, 0.03)
-	normal.set_border_width_all(1)
-	normal.border_color = Color(0.211765, 0.772549, 0.85098, 0.55)
-	normal.set_corner_radius_all(0)
-	normal.content_margin_left = 14.0
-	normal.content_margin_top = 8.0
-	normal.content_margin_right = 14.0
-	normal.content_margin_bottom = 8.0
-
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
-	hover.border_color = ACCENT
-
-	btn.add_theme_font_override("font", _font)
-	btn.add_theme_font_size_override("font_size", 18)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", normal)
-	btn.add_theme_color_override("font_color", MUTED)
-	btn.add_theme_color_override("font_hover_color", TEXT)
-
 # Onglet : actif = fond cyan + soulignement, inactif = ghost. Construit en code (§2).
 func _style_tab(btn: Button, active: bool) -> void:
 	if btn == null:
@@ -678,8 +647,6 @@ func _set_status(text: String, is_error: bool = false) -> void:
 		# Rouge sur erreur (fonds insuffisants / article inconnu), texte muet sinon.
 		status_label.add_theme_color_override("font_color", DANGER if is_error else MUTED)
 
-func _on_back_pressed():
-	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 # --- Catalogue de factions (couleurs signatures) ----------------------------
 # Charge resources/factions/*.tres → _factions[id] = { name, color }. Garde-fous identiques à

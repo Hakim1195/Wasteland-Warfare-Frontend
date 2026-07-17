@@ -23,7 +23,7 @@ border_color = Color(0.211765, 0.772549, 0.85098, 1)
 color = Color(0.211765, 0.772549, 0.85098, 0.5)
 thickness = 2
 
-[node name="ShopScreen" type="Control" node_paths=PackedStringArray("panel", "credits_label", "back_button", "shop_tab_button", "inventory_tab_button", "shop_grid", "inventory_grid", "status_label")]
+[node name="ShopScreen" type="Control" node_paths=PackedStringArray("panel", "shop_tab_button", "inventory_tab_button", "shop_grid", "inventory_grid", "status_label")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -32,8 +32,6 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_shop")
 panel = NodePath("CenterContainer/MainPanel")
-credits_label = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/CreditsBox/CreditsValue")
-back_button = NodePath("CenterContainer/MainPanel/RootVBox/HeaderBar/BackButton")
 shop_tab_button = NodePath("CenterContainer/MainPanel/RootVBox/TabsBar/ShopTabButton")
 inventory_tab_button = NodePath("CenterContainer/MainPanel/RootVBox/TabsBar/InventoryTabButton")
 shop_grid = NodePath("CenterContainer/MainPanel/RootVBox/ContentScroll/ContentVBox/ShopGrid")
@@ -55,6 +53,7 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_top = 100.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -66,58 +65,6 @@ theme_override_styles/panel = SubResource("bg_panel")
 [node name="RootVBox" type="VBoxContainer" parent="CenterContainer/MainPanel"]
 layout_mode = 2
 theme_override_constants/separation = 18
-
-[node name="HeaderBar" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
-layout_mode = 2
-theme_override_constants/separation = 16
-
-[node name="TitleBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
-layout_mode = 2
-theme_override_constants/separation = 0
-
-[node name="TitleEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 13
-text = "SHOP_EYEBROW"
-
-[node name="TitleLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/TitleBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
-theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 30
-text = "SHOP_TITLE"
-
-[node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="CreditsBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
-layout_mode = 2
-theme_override_constants/separation = 0
-
-[node name="CreditsEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/CreditsBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 13
-text = "SHOP_CREDITS"
-horizontal_alignment = 2
-
-[node name="CreditsValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/HeaderBar/CreditsBox"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
-theme_override_fonts/font = SubResource("font_warzone")
-theme_override_font_sizes/font_size = 26
-text = "—"
-horizontal_alignment = 2
-
-[node name="BackButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/HeaderBar"]
-custom_minimum_size = Vector2(150, 48)
-layout_mode = 2
-size_flags_vertical = 4
-text = "COMMON_BACK"
 
 [node name="FiletTop" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
 layout_mode = 2

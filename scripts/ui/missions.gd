@@ -1,14 +1,19 @@
 extends Control
 
-# ÉCRAN OPÉRATIONS — missions QUOTIDIENNES / HEBDOMADAIRES (lot M2 — PLAN_EVOLUTIONS §8.65).
+# ÉCRAN DÉFIS — missions QUOTIDIENNES / HEBDOMADAIRES (lot M2 — PLAN_EVOLUTIONS §8.65).
+# Ex-« OPÉRATIONS », renommé « DÉFIS » en §8.91 (i18n SEULE : MISSIONS_TITLE / MENU_TAB_MISSIONS ;
+# les clés, le nom de scène et les endpoints /missions restent inchangés).
 # Ex-maquette MOCK (§8.55, orpheline depuis le retrait de l'ancienne top-nav) désormais BRANCHÉE
 # au backend réel : GET /missions (assignation lazy déterministe côté serveur) + POST /missions/claim.
 # View PURE (Règle d'Or §6.1) : toute la progression est SERVEUR — l'écran ne fait qu'afficher et
 # relayer les claims via NetworkManager (signaux missions_loaded / mission_claimed / _claim_failed).
-# Accès : onglet « OPÉRATIONS » du menu principal (pastille or = missions réclamables).
+# Accès : onglet « DÉFIS » de la nav (pastille or = missions réclamables) + carte « DÉFIS EN
+# COURS » de la colonne gauche du menu (§8.91).
 # Construit par code (charte « Warzone Command » §2 : gunmetal, cyan tactique, or récompense).
 
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
+# Header CANONIQUE partagé (§8.93) — remplace l'ex-en-tête construit en code (titre + RETOUR).
+const TopNav = preload("res://scripts/ui/top_nav.gd")
 
 const ACCENT := Color("36c5d9")
 const GOLD := Color("e0b249")
@@ -31,8 +36,15 @@ var _claim_in_flight: String = ""
 
 func _ready() -> void:
 	_font = _make_font()
+	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
 	AudioManager.start_menu_ambient()
 	_build()
+	# Nav PARTAGÉE (§8.93), onglet DÉFIS actif (c'est lui qui nomme désormais l'écran, d'où le
+	# retrait de l'en-tête interne). Montée APRÈS _build → dessinée AU-DESSUS du contenu.
+	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
+	var nav := TopNav.new()
+	nav.active_tab = "missions"
+	add_child(nav)
 
 	NetworkManager.missions_loaded.connect(_on_missions_loaded)
 	NetworkManager.mission_claimed.connect(_on_mission_claimed)
@@ -50,6 +62,8 @@ func _make_font() -> Font:
 func _build() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Contenu décalé SOUS la bande de nav (§8.93) : on centre dans la zone restante.
+	center.offset_top = TopNav.NAV_H
 	add_child(center)
 
 	var panel := PanelContainer.new()
@@ -68,30 +82,8 @@ func _build() -> void:
 	vb.add_theme_constant_override("separation", 12)
 	panel.add_child(vb)
 
-	# --- En-tête : eyebrow + titre à gauche, RETOUR à droite ---
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 16)
-	vb.add_child(header)
-	var title_box := VBoxContainer.new()
-	title_box.add_theme_constant_override("separation", 0)
-	header.add_child(title_box)
-	title_box.add_child(_label(tr("MISSIONS_EYEBROW"), 14, ACCENT, HORIZONTAL_ALIGNMENT_LEFT))
-	title_box.add_child(_label(tr("MISSIONS_TITLE"), 36, TEXT, HORIZONTAL_ALIGNMENT_LEFT))
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(spacer)
-	var back := Button.new()
-	back.text = tr("COMMON_BACK")
-	back.custom_minimum_size = Vector2(150, 46)
-	back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	back.add_theme_font_override("font", _font)
-	back.add_theme_font_size_override("font_size", 16)
-	WarzoneUI.apply_ghost_button(back)
-	WarzoneUI.wire_button_sfx(back)
-	back.pressed.connect(_on_back_pressed)
-	header.add_child(back)
-
-	WarzoneUI.add_filet(vb)
+	# --- En-tête interne RETIRÉ (§8.93) : l'onglet DÉFIS actif de la nav nomme l'écran, et ÉCHAP
+	# (géré par la nav) remplace l'ex-bouton RETOUR. ---
 
 	# --- Section QUOTIDIENNES : eyebrow + compte à rebours + liste ---
 	var d_header := HBoxContainer.new()
@@ -322,9 +314,6 @@ func _set_status(text: String, color: Color) -> void:
 	if _status != null:
 		_status.text = text
 		_status.add_theme_color_override("font_color", color)
-
-func _on_back_pressed() -> void:
-	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 func _label(text: String, size: int, color: Color, align: int) -> Label:
 	var l := Label.new()
