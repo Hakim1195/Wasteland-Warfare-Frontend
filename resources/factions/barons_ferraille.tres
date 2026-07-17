@@ -14,5 +14,5 @@ modifiers = {
 }
 logo_path = ""
 hero_path = "res://assets/images/heroes/barons_ferraille.png"
-hero_model_path = "res://assets/models/Personnage-1.glb"
+hero_model_path = "res://assets/models/barons_ferraille.glb"
 accent_color = Color(0.627451, 0.321569, 0.176471, 1)

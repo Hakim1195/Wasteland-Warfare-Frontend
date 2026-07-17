@@ -45,6 +45,8 @@ const OVERSCAN := 60.0
 
 # Couleur d'accent "Cyan Tactique" de la charte Warzone Command.
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
+# Or « récompense » de la charte (#E0B249) — badge « CLASSÉE » (§8.88).
+const ACCENT_GOLD := Color(0.878431, 0.698039, 0.286275, 1)
 
 # Positions de repos des calques, recalculées analytiquement à chaque resize.
 var _bg_rest := Vector2.ZERO
@@ -55,9 +57,17 @@ var selected_room_id: int = -1
 # Effectif imposé par le mode du Menu Principal (autoload MatchConfig). Pilote À LA FOIS la création
 # de salle ET le filtrage du Radar (on ne montre que les salles de même capacité). Borné 3-6 ;
 # une absence de sélection (0, ex. accès direct au lobby en debug) est ramenée à 3 par clampi.
-# NB : le mode « Classée » est une modalité À PART (décision CTO, traitée plus tard) — le lobby
-# n'hérite que de son EFFECTIF, sans aucune logique/affichage classé ici.
 var _required_players: int = 3
+
+# Mode « Classée » (§8.88) hérité du Menu Principal : la salle créée est marquée is_ranked et
+# devient le SEUL mode à créditer le ladder. Le serveur fait autorité (il force l'effectif et
+# refuse une carte incompatible) — les constantes ci-dessous ne sont qu'une garde d'UI, tenue
+# en MIROIR de api/game/ranked.py (RANKED_PLAYER_COUNT) et du registre des cartes.
+var _required_ranked: bool = false
+# Effectif EXACT d'une partie classée — miroir de ranked.RANKED_PLAYER_COUNT.
+const RANKED_PLAYER_COUNT := 5
+# Seule carte supportant l'effectif classé aujourd'hui (skirmish_atlantic est bornée 3-4).
+const RANKED_MAP_ID := "classic_42"
 
 # Rafraîchissement automatique de la liste (en secondes).
 # Le lobby est purement REST : le backend n'émet AUCUN push WebSocket quand une salle
@@ -99,11 +109,21 @@ func _ready():
 	# Effectif HÉRITÉ du mode choisi au Menu Principal (autoload MatchConfig — refonte « Warzone
 	# Command » §8.54). Le sélecteur manuel a disparu (§8.57) : cette valeur pilote À LA FOIS la
 	# création de salle ET le filtrage du Radar. L'effectif (3-6) passe nativement par max_players.
-	# (Le mode « Classée » est une modalité à part, hors périmètre ici — cf. note sur _required_players.)
+	# Mode « Classée » (§8.88) : l'intention est LUE ici et câblée jusqu'au serveur (create_room).
 	var match_cfg := get_node_or_null("/root/MatchConfig")
 	if match_cfg != null:
 		# clampi ramène une absence de sélection (0) à 3 → le lobby reflète toujours un mode cohérent.
 		_required_players = clampi(int(match_cfg.selected_player_count), 3, 6)
+		_required_ranked = bool(match_cfg.selected_ranked)
+	if _required_ranked:
+		# Garde DÉFENSIVE (le serveur re-valide et fait autorité) : une partie classée se joue à
+		# RANKED_PLAYER_COUNT joueurs sur une carte qui les supporte. Aujourd'hui seule classic_42
+		# accepte 5 (skirmish_atlantic est bornée 3-4) → on verrouille les deux pour ne jamais
+		# soumettre une création vouée au 400.
+		_required_players = RANKED_PLAYER_COUNT
+		_selected_map_id = RANKED_MAP_ID
+		_lock_map_selector_for_ranked()
+		_show_ranked_badge()
 	_refresh_headcount_display()
 
 	# Mise en place de la couche 2.5D (repos des calques + dimensionnement des cendres).
@@ -208,6 +228,34 @@ func _build_map_selector() -> void:
 	parent.move_child(eyebrow, create_public_button.get_index())
 	parent.move_child(_map_option, create_public_button.get_index())
 
+# Badge « CLASSÉE » (§8.88) — or « récompense » de la charte Warzone Command (#E0B249). Purement
+# LOCAL (dérivé de MatchConfig) : aucun champ réseau requis. Inséré au-dessus de l'effectif affiché,
+# donc aucune retouche .tscn.
+func _show_ranked_badge() -> void:
+	if headcount_value == null:
+		return
+	var badge := Label.new()
+	badge.text = tr("LOBBY_RANKED_BADGE")
+	badge.add_theme_font_size_override("font_size", 14)
+	badge.add_theme_color_override("font_color", ACCENT_GOLD)
+	var parent := headcount_value.get_parent()
+	if parent == null:
+		return
+	parent.add_child(badge)
+	parent.move_child(badge, headcount_value.get_index())
+
+# Mode « Classée » (§8.88) : la carte est IMPOSÉE (seule classic_42 supporte 5 joueurs) — on cale
+# le sélecteur dessus et on le désactive, plutôt que de laisser le joueur soumettre une création
+# que le serveur refuserait en 400. Garde d'UI : le serveur reste seul juge.
+func _lock_map_selector_for_ranked() -> void:
+	if _map_option == null:
+		return
+	var idx := _MAP_CHOICES.find(RANKED_MAP_ID)
+	if idx >= 0:
+		_map_option.select(idx)
+	_map_option.disabled = true
+	_map_option.tooltip_text = tr("LOBBY_RANKED_MAP_LOCKED")
+
 # Effectif de création CLAMPÉ aux bornes de la carte choisie (G5) : le serveur re-clampe de
 # toute façon, mais on évite de créer une salle qui ne matcherait pas le mode du joueur.
 func _create_headcount() -> int:
@@ -217,13 +265,15 @@ func _create_headcount() -> int:
 func _on_create_public_pressed():
 	# Effectif AUTOMATIQUE hérité du mode (MatchConfig, §8.57), CLAMPÉ aux bornes de la carte
 	# choisie (G5 §8.71 : Théâtre Atlantique = 3-4). Le serveur re-clampe de toute façon.
+	# is_ranked (§8.88) : marque la salle → seul mode à créditer le ladder.
 	status_label.text = tr("LOBBY_CREATING_PUBLIC") % _create_headcount()
-	NetworkManager.create_room(false, "", _create_headcount(), _selected_map_id)
+	NetworkManager.create_room(false, "", _create_headcount(), _selected_map_id, _required_ranked)
 
 func _on_create_private_pressed():
 	# Idem : la salle privée naît avec l'effectif du mode sélectionné au Menu Principal.
 	status_label.text = tr("LOBBY_CREATING_PRIVATE") % _create_headcount()
-	NetworkManager.create_room(true, "SECRET123", _create_headcount(), _selected_map_id) # Le code secret sera configurable plus tard
+	NetworkManager.create_room(true, "SECRET123", _create_headcount(), _selected_map_id,
+		_required_ranked) # Le code secret sera configurable plus tard
 
 # RETOUR (refonte navigation) : simple retour au menu principal, avec le fondu gunmetal
 # entrant/sortant du TransitionManager (cohérent avec leaderboard / shop / profile / settings).

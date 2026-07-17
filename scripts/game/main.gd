@@ -1288,14 +1288,38 @@ func _play_combat_resolution(event: Dictionary) -> void:
 	_combat_animating = true
 	await _do_play_combat(event)
 
+# Identité d'un camp d'un attack_result — le SERVEUR fait AUTORITÉ (§8.85).
+#
+# Pourquoi : le snapshot d'affichage (_displayed_owners) ne suffit PAS. Pendant un tour de bot les
+# attaques s'enchaînent toutes les ~1 s alors qu'une animation VS dure plusieurs secondes → les
+# combats s'empilent dans _combat_queue et _refresh() (qui met à jour _displayed_owners) est différé
+# jusqu'au drainage complet. Or un bot attaque très souvent DEPUIS le territoire qu'il vient de
+# conquérir : au moment où ce combat s'anime, le snapshot porte encore l'ANCIEN propriétaire (souvent
+# l'humain) → pseudo/faction/héros/couleur d'un joueur non impliqué, jusqu'au « mon personnage attaque
+# mon personnage » quand la cible est aussi à lui.
+#
+# `fallback` = la valeur historique propre à CHAQUE site d'appel (leurs sentinelles diffèrent :
+# -1 « neutre » via _owner(), -9999 « inconnu ») : elle est conservée telle quelle si le champ est
+# absent → repli SILENCIEUX sur le comportement actuel quand le VPS n'est pas encore redéployé (§9.2).
+# `defender_player_id` vaut null pour un territoire NEUTRE → -1, sentinelle « sans propriétaire »
+# déjà rendue par _owner() (aucune régression sur les attaques de neutres).
+func _event_pid(event: Dictionary, key: String, fallback: int) -> int:
+	if event.has(key):
+		var v = event.get(key)
+		return int(v) if v != null else -1
+	return fallback
+
 # Animation d'UN combat (déjà sous verrou _combat_animating). À la fin, draine la file via _combat_finished().
 func _do_play_combat(event: Dictionary) -> void:
 	var atk_tid := str(event.get("attacker_territory_id", ""))
 	var def_tid := str(event.get("defender_territory_id", ""))
-	# Propriétaires tels qu'AFFICHÉS avant le combat (snapshot de _refresh) : l'état courant
-	# est déjà post-combat (le territoire conquis appartient déjà à l'attaquant).
-	var atk_owner = _displayed_owners.get(atk_tid, _owner(atk_tid))
-	var def_owner = _displayed_owners.get(def_tid, _owner(def_tid))
+	# Identités des deux camps : champs serveur en PRIORITÉ (§8.85), repli sur les propriétaires tels
+	# qu'AFFICHÉS avant le combat (snapshot de _refresh) — l'état courant est déjà post-combat (le
+	# territoire conquis appartient déjà à l'attaquant).
+	var atk_owner := _event_pid(event, "attacker_player_id",
+		int(_displayed_owners.get(atk_tid, _owner(atk_tid))))
+	var def_owner := _event_pid(event, "defender_player_id",
+		int(_displayed_owners.get(def_tid, _owner(def_tid))))
 
 	# Rythme des combats (E8 §8.80). Mode par implication (réglage combat_display) :
 	#   cinematique = plein écran pour TOUS ; rapide = plein écran pré-accéléré ×2,5 ;
@@ -1321,8 +1345,9 @@ func _do_play_combat(event: Dictionary) -> void:
 
 	var vs_screen := SplitScreenVSScene.instantiate()
 	add_child(vs_screen) # dernier enfant de Main -> dessiné au-dessus du HUD (surcouche)
-	# §3 Warzone : on transmet les pertes + le Time Bank. local_is_attacker = c'est NOTRE tour
-	# (l'attaquant est toujours le joueur courant) → seul l'attaquant local voit « TIME BANK +10s ».
+	# §3 Warzone : on transmet les pertes + le Time Bank. local_is_attacker se base sur l'ATTAQUANT
+	# DE CE COMBAT (§8.85) et non sur GameState.current_player_id : un combat DÉFILÉ depuis la file
+	# s'anime alors que le tour courant a pu changer → « TIME BANK +10s » s'affichait au mauvais camp.
 	# Garnisons « avant ➜ après » (E2 §8.74) : avant = snapshot AFFICHÉ pré-combat (exact même
 	# en cas de conquête) ; après = état courant (déjà post-combat). Repli avant = après + pertes
 	# (1er combat avant tout _refresh — jamais le cas en pratique, garde-fou).
@@ -1339,7 +1364,7 @@ func _do_play_combat(event: Dictionary) -> void:
 			"attacker_losses": int(event.get("attacker_losses", 0)),
 			"defender_losses": int(event.get("defender_losses", 0)),
 			"time_bank_bonus": int(event.get("time_bank_bonus_seconds", 0)),
-			"local_is_attacker": int(GameState.current_player_id) == _my_id(),
+			"local_is_attacker": int(atk_owner) == _my_id(),
 			# Skins équipés (M5 §8.69) : lus du PlayerState PUBLIC de chaque camp — les DEUX
 			# joueurs voient le skin de l'autre dans le Split-Screen VS (moment vitrine).
 			"attacker_skin": _equipped_skin_of(atk_owner),
@@ -1540,17 +1565,20 @@ func _play_event_feedback(event) -> void:
 		"attack_result":
 			var atk_tid := str(event.get("attacker_territory_id", ""))
 			var def_tid := str(event.get("defender_territory_id", ""))
-			# Douleur du héros (VFX) : NOTRE héros défenseur encaisse des dégâts.
+			# Douleur du héros (VFX) : NOTRE héros défenseur encaisse des dégâts. Identités = champs
+			# serveur en priorité (§8.85) — le snapshot est périmé sur une chaîne d'attaques de bot.
 			var duel = event.get("hero_duel")
 			if typeof(duel) == TYPE_DICTIONARY and int(duel.get("damage", 0)) > 0 \
-					and int(_displayed_owners.get(def_tid, -9999)) == _my_id():
+					and _event_pid(event, "defender_player_id",
+						int(_displayed_owners.get(def_tid, -9999))) == _my_id():
 				if _vfx_enabled():
 					hud.pulse_hero_pain()
 			# Conquête : fanfare + flash radial à l'accent du conquérant.
 			if bool(event.get("conquered", false)):
 				AudioManager.play_sfx("conquest")
 				if _vfx_enabled():
-					var conqueror := int(_displayed_owners.get(atk_tid, _owner(atk_tid)))
+					var conqueror := _event_pid(event, "attacker_player_id",
+						int(_displayed_owners.get(atk_tid, _owner(atk_tid))))
 					board.conquest_flash(def_tid, board.get_player_color(conqueror))
 		"card_played", "card_kept":
 			AudioManager.play_sfx("card_draw")
@@ -1573,8 +1601,11 @@ func _feed_ctx(event) -> Dictionary:
 	if typeof(event) == TYPE_DICTIONARY and str(event.get("event_type", "")) == "attack_result":
 		var atk_tid := str(event.get("attacker_territory_id", ""))
 		var def_tid := str(event.get("defender_territory_id", ""))
-		var atk_pid := int(_displayed_owners.get(atk_tid, _owner(atk_tid)))
-		var def_pid := int(_displayed_owners.get(def_tid, _owner(def_tid)))
+		# Identités = champs serveur en priorité (§8.85), repli sur le snapshot pré-combat.
+		var atk_pid := _event_pid(event, "attacker_player_id",
+			int(_displayed_owners.get(atk_tid, _owner(atk_tid))))
+		var def_pid := _event_pid(event, "defender_player_id",
+			int(_displayed_owners.get(def_tid, _owner(def_tid))))
 		ctx["atk_pid"] = atk_pid if GameState.players.has(str(atk_pid)) else -9999
 		ctx["def_pid"] = def_pid if GameState.players.has(str(def_pid)) else -9999
 	return ctx
@@ -1614,10 +1645,13 @@ func _maybe_defense_toast(event) -> void:
 	if int(GameState.current_player_id) == _my_id():
 		return
 	var def_tid := str(event.get("defender_territory_id", ""))
-	if int(_displayed_owners.get(def_tid, -9999)) != _my_id():
+	# Identités = champs serveur en priorité (§8.85), repli sur le snapshot pré-combat.
+	if _event_pid(event, "defender_player_id",
+			int(_displayed_owners.get(def_tid, -9999))) != _my_id():
 		return
 	var atk_tid := str(event.get("attacker_territory_id", ""))
-	var atk_owner := int(_displayed_owners.get(atk_tid, _owner(atk_tid)))
+	var atk_owner := _event_pid(event, "attacker_player_id",
+		int(_displayed_owners.get(atk_tid, _owner(atk_tid))))
 	var line: String
 	if bool(event.get("conquered", false)):
 		line = tr("TOAST_TERRITORY_LOST") % [_territory_name(def_tid).to_upper(), _bb_pseudo(atk_owner)]
@@ -1781,6 +1815,10 @@ func _show_operation_report() -> void:
 		"timeline": _timeline_series(),
 		"my_stats": _my_match_stats(),
 		"xp_detail": _xp_detail(),
+		# §8.88 — mode classé (bloc PUBLIC du game_over, relayé en propriété par NetworkManager) :
+		# pilote l'affichage des points de match. Résolu ICI (main.gd) : le rapport reste une
+		# Vue pure (§6.1) et ne lit aucun manager.
+		"is_ranked": _match_is_ranked(),
 	}
 	if not _match_rankings.is_empty():
 		data["podium"] = _podium_rows()
@@ -1795,10 +1833,16 @@ func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match
 	_match_rewards = match_rewards
 	_match_rankings = rankings if typeof(rankings) == TYPE_ARRAY else []
 	if _report_node != null and is_instance_valid(_report_node):
-		_report_node.populate_rewards(_local_rewards())
+		_report_node.populate_rewards(_local_rewards(), _match_is_ranked())
 		if not _match_rankings.is_empty():
 			_report_node.populate_podium(_podium_rows())
 			_fetch_missions_for_report()
+
+# Partie CLASSÉE ? (§8.88) — bloc PUBLIC du game_over, relayé en propriété par le NetworkManager
+# (même pattern que last_objectives_reveal). Défaut `true` côté manager = comportement legacy d'un
+# serveur non redéployé, qui crédite encore le ladder sur TOUTES les parties.
+func _match_is_ranked() -> bool:
+	return bool(NetworkManager.last_match_is_ranked)
 
 # =========================================================
 # Débriefing 2.0 (E11 §8.83) — résolveurs du Rapport Post-Op (View pure §6.1)
@@ -1831,7 +1875,11 @@ func _podium_rows() -> Array:
 			"kills": WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", pid),
 			"conquests": WarRoom.stat_of(GameState.statistics, "conquests_by_player", pid),
 			"eliminations": WarRoom.stat_of(GameState.statistics, "eliminations_by_player", pid),
-			"points": int(my_rewards.get("match_points", -1)) if pid == _my_id() else -1,
+			# -1 = « aucun point à afficher » (convention du podium) : les points des AUTRES sont
+			# inconnus (redaction serveur) et, en partie NON classée (§8.88), les miens non plus
+			# n'ont pas à s'afficher — le serveur renvoie 0, aucun ladder n'est crédité.
+			"points": int(my_rewards.get("match_points", -1)) \
+				if (pid == _my_id() and _match_is_ranked()) else -1,
 		})
 	return rows
 

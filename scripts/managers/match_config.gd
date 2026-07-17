@@ -8,10 +8,12 @@ extends Node
 # mode classé). Découplage (Règle d'Or §6.1) : le menu ne fait AUCUNE logique réseau, il ne fait
 # que déclarer un choix transporté jusqu'au lobby.
 #
-# ⚠️ DÉPENDANCE BACKEND : le mode « Classée » (is_ranked, contrainte EXACTEMENT 5 joueurs, ladder)
-# n'est PAS encore appliqué côté serveur (GameRoom n'a ni is_ranked ni gate ==5 — cf. moteur
-# engine.py qui accepte tout effectif 3-6). On transporte déjà l'intention `selected_ranked` côté
-# client ; l'effectif (3-6) lui passe nativement via le champ `max_players` de create_room.
+# ✅ DÉPENDANCE BACKEND CÂBLÉE (§8.88) : le mode « Classée » est désormais appliqué de bout en bout.
+# `selected_ranked` part dans le payload de `NetworkManager.create_room(is_ranked=…)` → persisté sur
+# `GameRoom.is_ranked` → recopié sur `GameState.is_ranked` → SEUL mode à créditer le ladder
+# (points_classement + season_points) en fin de partie. Le SERVEUR fait autorité : il force
+# l'effectif à 5 (RANKED_PLAYER_COUNT) et refuse en 400 une carte qui ne le supporte pas.
+# L'effectif (3-6) passe nativement via le champ `max_players` de create_room.
 
 # Effectif visé : 3=Trio, 4=Quad, 5=Five/Classée, 6=Exa. 0 = aucune sélection (le lobby garde
 # alors son SpinBox par défaut — rétrocompatibilité avec un accès direct au lobby).

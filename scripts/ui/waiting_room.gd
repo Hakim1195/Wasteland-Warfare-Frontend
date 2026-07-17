@@ -90,7 +90,14 @@ func _on_lobby_state(players: Array, ready_ids: Array, usernames: Dictionary = {
 	# Échéance de remplissage IA (propriété du NetworkManager — le signal garde sa signature).
 	_bot_fill_at = NetworkManager.last_bot_fill_at
 	if _bot_fill_at <= 0.0:
-		network_status_label.text = tr("WR_LOBBY_STATE") % [players.size(), ready_ids.size()]
+		# Effectif de la salle (§8.87) : « X / Y joueurs » dès que le serveur le diffuse. Repli
+		# SILENCIEUX sur le libellé historique si le champ est absent (VPS non redéployé, §9.2).
+		var cap := NetworkManager.last_max_players
+		if cap > 0:
+			network_status_label.text = tr("WR_LOBBY_STATE_CAP") % [players.size(), cap,
+				ready_ids.size()]
+		else:
+			network_status_label.text = tr("WR_LOBBY_STATE") % [players.size(), ready_ids.size()]
 
 	for child in player_list.get_children():
 		child.queue_free()

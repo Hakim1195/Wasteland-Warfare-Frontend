@@ -564,9 +564,10 @@ func populate(data: Dictionary) -> void:
 	set_my_stats(data.get("my_stats", {}))
 
 	# Bloc « Récompenses » animé (si les gains du joueur local sont déjà connus à l'affichage).
+	# is_ranked (§8.88, FACULTATIF) : défaut `true` = comportement legacy (points affichés).
 	var rewards: Dictionary = data.get("rewards", {})
 	if not rewards.is_empty():
-		populate_rewards(rewards)
+		populate_rewards(rewards, bool(data.get("is_ranked", true)))
 
 # =========================================================
 # Bloc « Récompenses » (§8.47) — décompte des points + barre d'XP qui se remplit + lueur Coins
@@ -574,18 +575,22 @@ func populate(data: Dictionary) -> void:
 # Appelable séparément par main.gd quand le message game_over (porteur de match_rewards) arrive APRÈS
 # la construction du rapport (course réseau : l'état winner_id et le game_over sont 2 messages). La
 # garde _rewards_built évite tout doublon. `rewards` = match_rewards[player_id_local].
-func populate_rewards(rewards: Dictionary) -> void:
+# `is_ranked` (§8.88) : en partie NON classée, le compteur « POINTS DE MATCH » cède la place à une
+# mention « PARTIE NON CLASSÉE » (le serveur renvoie match_points = 0 : afficher « +0 » serait
+# trompeur). Défaut `true` = comportement LEGACY — un serveur antérieur ne diffuse pas le champ
+# mais crédite encore le ladder sur toutes les parties.
+func populate_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	if _rewards_built or rewards.is_empty():
 		return
 	_rewards_built = true
 	# Onglet 1 (joueur) et onglet 2 (héros) construits + animés SÉPARÉMENT (coroutines détachées :
 	# la partie synchrone — blocs + détail — est posée immédiatement, les animations suivent).
-	_build_player_rewards(rewards)
+	_build_player_rewards(rewards, is_ranked)
 	_build_hero_progress(rewards)
 
 # Onglet 1 — bloc RÉCOMPENSES animé (points de match + jauge XP/Coins + Pass + montées de niveau)
 # SUIVI du détail du barème (points & XP réconciliés aux totaux serveur). Coroutine (await l'anim).
-func _build_player_rewards(rewards: Dictionary) -> void:
+func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	var box: VBoxContainer = _player_rewards_box if _player_rewards_box != null else _attrition_ref
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 6)
@@ -596,12 +601,31 @@ func _build_player_rewards(rewards: Dictionary) -> void:
 	header.add_theme_font_size_override("font_size", 18)
 	block.add_child(header)
 
-	# Ligne « Points de Match » (décompte animé depuis 0).
-	var points_lbl := Label.new()
-	points_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
-	points_lbl.add_theme_font_size_override("font_size", 22)
-	points_lbl.text = "POINTS DE MATCH : +0"
-	block.add_child(points_lbl)
+	# Ligne « Points de Match » (décompte animé depuis 0) — EN CLASSÉE UNIQUEMENT (§8.88). Hors
+	# classée le serveur renvoie match_points = 0 : on affiche une mention muette explicite plutôt
+	# qu'un « +0 » qui laisserait croire à une contre-performance. `points_lbl` reste null dans ce
+	# cas → _run_reward_animation saute le décompte.
+	var points_lbl: Label = null
+	if is_ranked:
+		points_lbl = Label.new()
+		points_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+		points_lbl.add_theme_font_size_override("font_size", 22)
+		points_lbl.text = "POINTS DE MATCH : +0"
+		block.add_child(points_lbl)
+	else:
+		var unranked_lbl := Label.new()
+		unranked_lbl.text = "PARTIE NON CLASSÉE — AUCUN POINT DE LADDER"
+		unranked_lbl.add_theme_color_override("font_color", TEXT_MUTED)
+		unranked_lbl.add_theme_font_size_override("font_size", 15)
+		block.add_child(unranked_lbl)
+
+	# XP JOUEUR gagnée (§8.89) — compteur animé, miroir de « XP HÉROS : +N » de l'onglet héros.
+	# L'XP est créditée dans TOUS les modes (seuls les points de ladder sont conditionnels).
+	var xp_lbl := Label.new()
+	xp_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
+	xp_lbl.add_theme_font_size_override("font_size", 20)
+	xp_lbl.text = "XP JOUEUR : +0"
+	block.add_child(xp_lbl)
 
 	# Pass Spécial (M4 §8.67) : RELAIS du flag serveur (+25 % XP déjà appliqué côté serveur).
 	if bool(rewards.get("pass_bonus_applied", false)):
@@ -624,12 +648,34 @@ func _build_player_rewards(rewards: Dictionary) -> void:
 		lvl_lbl.add_theme_font_size_override("font_size", 14)
 		block.add_child(lvl_lbl)
 
+	# COINS GAGNÉS (§8.89) — TOTAL réel = coins de PROFIL (paliers de 10 niveaux) + coins de MONTÉE
+	# DE NIVEAU DU HÉROS. Les coins héros tombent sur le MÊME porte-monnaie mais n'étaient affichés
+	# NULLE PART → le joueur sous-estimait ses gains. Masqué si le total est nul.
+	var coins_profile := int(rewards.get("coins_earned", 0))
+	var coins_hero := int(rewards.get("hero_coins_earned", 0))
+	var coins_total := coins_profile + coins_hero
+	if coins_total > 0:
+		var coins_lbl := Label.new()
+		coins_lbl.text = "◈ COINS GAGNÉS : +%d" % coins_total
+		coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+		coins_lbl.add_theme_font_size_override("font_size", 18)
+		block.add_child(coins_lbl)
+		# Détail muet : uniquement quand les DEUX sources ont contribué (sinon le total se suffit).
+		# Police mono + texte acier = même registre visuel que le bloc « détail du barème ».
+		if coins_profile > 0 and coins_hero > 0:
+			var coins_sub := Label.new()
+			coins_sub.text = "profil +%d · héros +%d" % [coins_profile, coins_hero]
+			coins_sub.add_theme_color_override("font_color", TEXT_MUTED)
+			coins_sub.add_theme_font_override("font", RosterHelpers._mono_font())
+			coins_sub.add_theme_font_size_override("font_size", 13)
+			block.add_child(coins_sub)
+
 	box.add_child(block)
 	# NOUVEAU — détail ligne-à-ligne du barème (points de match + XP de profil), réconcilié aux
 	# totaux OFFICIELS serveur (match_points / xp_earned) pour ne jamais mentir sur le chiffre.
 	_build_player_detail(box, rewards)
 
-	await _run_reward_animation(points_lbl, bar, rewards)
+	await _run_reward_animation(points_lbl, xp_lbl, bar, rewards)
 
 # Onglet 2 — bloc PROGRESSION DU HÉROS animé (XP héros + niveau + barre log + paliers de stats)
 # SUIVI du détail du barème héros (réconcilié à hero_xp_earned). Coroutine (await l'animation).
@@ -650,6 +696,16 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	hero_xp_lbl.text = "XP HÉROS : +0"
 	block.add_child(hero_xp_lbl)
 
+	# COINS HÉROS (§8.89) : les montées de niveau du héros créditent des coins sur le MÊME
+	# porte-monnaie que le profil, mais ils n'étaient affichés NULLE PART. Masqué si nul.
+	var hero_coins_lbl: Label = null
+	if int(rewards.get("hero_coins_earned", 0)) > 0:
+		hero_coins_lbl = Label.new()
+		hero_coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+		hero_coins_lbl.add_theme_font_size_override("font_size", 16)
+		hero_coins_lbl.text = "◈ COINS HÉROS : +0"
+		block.add_child(hero_coins_lbl)
+
 	var hero_level_lbl := Label.new()
 	var h_old := int(rewards.get("hero_level", 1))
 	var h_new := int(rewards.get("hero_new_level", h_old))
@@ -657,6 +713,15 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	hero_level_lbl.add_theme_color_override("font_color", ACCENT_CYAN if h_new > h_old else TEXT_MUTED)
 	hero_level_lbl.add_theme_font_size_override("font_size", 14)
 	block.add_child(hero_level_lbl)
+
+	# Niveaux héros gagnés (§8.89) — ligne MIROIR du bloc joueur (« ⬆ N NIVEAU(X) GAGNÉ(S) »),
+	# pilotée par le flag SERVEUR hero_level_up plutôt que par la déduction h_new > h_old.
+	if bool(rewards.get("hero_level_up", false)):
+		var hero_gain_lbl := Label.new()
+		hero_gain_lbl.text = "⬆ %d NIVEAU(X) HÉROS GAGNÉ(S)" % int(rewards.get("hero_levels_gained", 0))
+		hero_gain_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
+		hero_gain_lbl.add_theme_font_size_override("font_size", 14)
+		block.add_child(hero_gain_lbl)
 
 	# Barre log : remplie à la fraction xp_in_level / xp_for_level (0..1) calculée serveur-side.
 	var hero_bar := ProgressBar.new()
@@ -681,7 +746,7 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	# NOUVEAU — détail du barème héros (réconcilié à hero_xp_earned).
 	_build_hero_detail(box, rewards)
 
-	await _animate_hero(hero_xp_lbl, hero_bar, rewards)
+	await _animate_hero(hero_xp_lbl, hero_bar, rewards, hero_coins_lbl)
 
 # =========================================================
 # DÉTAIL DU BARÈME (E-visuel) — helpers PURS (miroir EXACT de api/game/rewards.py) + rendu.
@@ -849,8 +914,10 @@ func _format_milestone_bonus(bonus: Dictionary) -> String:
 	return ", ".join(parts) if not parts.is_empty() else "amélioration"
 
 
-# Animation du bloc héros : décompte de l'XP gagnée puis remplissage de la barre log.
-func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionary) -> void:
+# Animation du bloc héros : décompte de l'XP gagnée, remplissage de la barre log, puis décompte
+# des coins héros (§8.89 ; `hero_coins_lbl` est null quand aucun coin n'a été gagné).
+func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionary,
+		hero_coins_lbl: Label = null) -> void:
 	var earned := int(rewards.get("hero_xp_earned", 0))
 	var t := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	t.tween_method(
@@ -864,17 +931,38 @@ func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionar
 	tb.tween_property(hero_bar, "value", frac, 0.7)
 	await tb.finished
 
-func _run_reward_animation(points_lbl: Label, bar, rewards: Dictionary) -> void:
+	if hero_coins_lbl != null:
+		var coins := int(rewards.get("hero_coins_earned", 0))
+		var tc := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tc.tween_method(
+			func(v: float): hero_coins_lbl.text = "◈ COINS HÉROS : +%d" % int(round(v)),
+			0.0, float(coins), 0.6)
+		await tc.finished
+
+# `points_lbl` est NULL en partie non classée (§8.88 : aucun compteur de points à animer) — le
+# décompte est alors sauté, le reste de la séquence est identique.
+func _run_reward_animation(points_lbl: Label, xp_lbl: Label, bar, rewards: Dictionary) -> void:
 	# Laisse le layout se résoudre (tailles des nœuds) avant les Tweens d'échelle/pivot.
 	await get_tree().process_frame
 
-	# 1) Décompte des Points de Match (0 → match_points).
-	var pts := int(rewards.get("match_points", 0))
-	var t := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	t.tween_method(
-		func(v: float): points_lbl.text = "POINTS DE MATCH : +%d" % int(round(v)),
-		0.0, float(pts), 0.9)
-	await t.finished
+	# 1) Décompte des Points de Match (0 → match_points) — EN CLASSÉE UNIQUEMENT.
+	if points_lbl != null:
+		var pts := int(rewards.get("match_points", 0))
+		var t := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		t.tween_method(
+			func(v: float): points_lbl.text = "POINTS DE MATCH : +%d" % int(round(v)),
+			0.0, float(pts), 0.9)
+		await t.finished
 
-	# 2) La barre d'XP se remplit (avec montées de niveau + lueur Coins aux paliers de 10, §4).
+	# 2) Décompte de l'XP JOUEUR (§8.89) — même pattern que les points / l'XP héros. Le montant est
+	#    DÉJÀ boosté par le serveur si le Pass est actif (le bandeau +25 % l'explique).
+	if xp_lbl != null:
+		var xp := int(rewards.get("xp_earned", 0))
+		var tx := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tx.tween_method(
+			func(v: float): xp_lbl.text = "XP JOUEUR : +%d" % int(round(v)),
+			0.0, float(xp), 0.9)
+		await tx.finished
+
+	# 3) La barre d'XP se remplit (avec montées de niveau + lueur Coins aux paliers de 10, §4).
 	await bar.play_match_result(rewards)

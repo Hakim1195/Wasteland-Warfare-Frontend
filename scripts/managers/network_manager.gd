@@ -24,6 +24,10 @@ signal lobby_state_updated(players: Array, ready: Array, usernames: Dictionary)
 # Échéance UNIX (s) du remplissage IA (G2 §8.72), lue par waiting_room.gd ; -1 = aucun fill armé.
 # Propriété (et non 4ᵉ arg du signal) pour ne pas casser les écouteurs existants de lobby_state.
 var last_bot_fill_at: float = -1.0
+# Effectif CIBLE de la salle (§8.87) = GameRoom.max_players, lu par waiting_room.gd pour
+# « X / Y joueurs ». -1 = champ absent (serveur antérieur) → repli sur l'affichage historique.
+# Propriété (et non arg de signal) : même pattern que last_bot_fill_at.
+var last_max_players: int = -1
 # Révélation des objectifs de fin de partie (E11 §8.83) — bloc PUBLIC du game_over :
 # [{ player_id, username, description, completed }] ordonné par rankings. [] avant la fin
 # (ou serveur antérieur) ; consommé par le Rapport Post-Op (podium).
@@ -105,6 +109,12 @@ signal match_over(winner_id: int, match_type: String, rankings: Array, match_rew
 # Dernier détail de récompenses reçu (cache) : lu par main.gd si le rapport Post-Op est déjà affiché
 # quand le game_over arrive (course réseau état/clôture). Vidé au démarrage d'une partie.
 var last_match_rewards: Dictionary = {}
+# Partie CLASSÉE (§8.88) — bloc PUBLIC du game_over. Pilote le Rapport Post-Op : « POINTS DE MATCH »
+# en classée, « PARTIE NON CLASSÉE » sinon. Propriété (et non arg de signal, pattern
+# last_objectives_reveal) → la signature de match_over reste inchangée.
+# ⚠️ Défaut `true` VOLONTAIRE : un serveur ANTÉRIEUR n'envoie pas le champ mais crédite ENCORE les
+# points de classement à toutes les parties — afficher « non classée » y serait un MENSONGE.
+var last_match_is_ranked: bool = true
 
 var socket = WebSocketPeer.new()
 var connected = false
@@ -227,6 +237,10 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# (le signal garde sa signature à 3 args) — waiting_room.gd la lit pour son compte à rebours.
 			var bfa = msg.get("bot_fill_at", null)
 			last_bot_fill_at = float(bfa) if (typeof(bfa) == TYPE_FLOAT or typeof(bfa) == TYPE_INT) else -1.0
+			# Effectif de la salle (§8.87) : champ ADDITIF — absent d'un serveur antérieur → -1
+			# (waiting_room.gd retombe alors sur son affichage historique).
+			var mp = msg.get("max_players", null)
+			last_max_players = int(mp) if (typeof(mp) == TYPE_FLOAT or typeof(mp) == TYPE_INT) else -1
 			lobby_state_updated.emit(msg.get("players", []), msg.get("ready", []), msg.get("usernames", {}))
 		"game_over":
 			# La victoire est déjà gérée via winner_id dans l'état ; ici on relaie le RÉSULTAT
@@ -237,6 +251,10 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# objectives_reveal est mémorisé en propriété (signal inchangé, pattern last_bot_fill_at).
 			var reveal = msg.get("objectives_reveal", [])
 			last_objectives_reveal = reveal if typeof(reveal) == TYPE_ARRAY else []
+			# §8.88 — is_ranked PUBLIC. Champ ADDITIF : ABSENT d'un serveur antérieur → défaut
+			# `true` (ce serveur-là crédite encore le ladder sur toutes les parties : le repli
+			# reproduit son comportement réel plutôt que d'annoncer à tort « non classée »).
+			last_match_is_ranked = bool(msg.get("is_ranked", true))
 			var rewards: Dictionary = msg.get("match_rewards", {})
 			last_match_rewards = rewards
 			game_event.emit({"event_type": "game_over", "winner_id": msg.get("winner_id"),
@@ -414,13 +432,18 @@ func _on_rooms_fetched(_result, response_code, _headers, body, http_node):
 # max_players par défaut = 6 (capacité maximale autorisée, cf. §4 : 3 à 6 joueurs).
 # Auparavant figé à 3, ce qui bloquait toutes les salles à 3 places.
 func create_room(is_private: bool, secret_code: String = "", max_players: int = 6,
-		map_id: String = "classic_42"):
+		map_id: String = "classic_42", is_ranked: bool = false):
 	var payload = {
 		"max_players": max_players,
 		"is_private": is_private,
 		"secret_code": secret_code if is_private else "", # <-- Correction ici ("" au lieu de null)
 		# Carte jouée (G5 §8.71) — validée serveur (400 si inconnue), max_players clampé par carte.
 		"map_id": map_id,
+		# Mode CLASSÉE (§8.88) : seule une partie classée crédite le ladder. Le SERVEUR fait
+		# autorité — il force l'effectif à 5 quel que soit max_players ci-dessus, et refuse (400)
+		# une carte qui ne supporte pas 5 joueurs. Défaut false (paramètre en QUEUE de signature →
+		# les appelants historiques restent valides).
+		"is_ranked": is_ranked,
 	}
 	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST, payload, _on_room_created)
 
