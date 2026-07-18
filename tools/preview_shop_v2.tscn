@@ -1,4 +1,4 @@
-[gd_scene load_steps=2 format=3 uid="uid://cpreviewshopv2"]
+[gd_scene format=3 uid="uid://cltl37mimgcy0"]
 
 [ext_resource type="Script" path="res://tools/preview_shop_v2.gd" id="1_pv2"]
 
