@@ -173,7 +173,7 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 	h.add_child(v)
 
 	var name_lbl := Label.new()
-	name_lbl.text = str(hero.get("faction_name", fid)).to_upper()
+	name_lbl.text = _faction_display_name(fid, hero).to_upper()
 	name_lbl.add_theme_font_override("font", _font)
 	name_lbl.add_theme_font_size_override("font_size", 16)
 	name_lbl.add_theme_color_override("font_color", TEXT)
@@ -368,7 +368,7 @@ func _populate_detail(hero: Dictionary) -> void:
 	header.add_child(chevron)
 
 	var name_lbl := Label.new()
-	name_lbl.text = str(hero.get("faction_name", fid)).to_upper()
+	name_lbl.text = _faction_display_name(fid, hero).to_upper()
 	name_lbl.add_theme_font_override("font", _font)
 	name_lbl.add_theme_font_size_override("font_size", 30)
 	name_lbl.add_theme_color_override("font_color", TEXT)
@@ -393,6 +393,17 @@ func _populate_detail(hero: Dictionary) -> void:
 	lvl_value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(lvl_value)
 
+	# Identité du meneur (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL » sous le nom
+	# de faction — rang traduit, nom/callsign invariants (lus du .tres local ; masquée si absents).
+	var leader := _leader_title(fid)
+	if leader != "":
+		var leader_lbl := Label.new()
+		leader_lbl.text = leader.to_upper()
+		leader_lbl.add_theme_font_override("font", _font)
+		leader_lbl.add_theme_font_size_override("font_size", 15)
+		leader_lbl.add_theme_color_override("font_color", Color(fac_color, 0.9))
+		detail_box.add_child(leader_lbl)
+
 	# --- Barre d'XP (remplie à xp_in_level / xp_for_level) + « XP avant niveau suivant » ---
 	detail_box.add_child(_make_xp_block(hero))
 	WarzoneUI.add_filet(detail_box)
@@ -401,9 +412,10 @@ func _populate_detail(hero: Dictionary) -> void:
 	detail_box.add_child(_section_header("CHAR_STATS_HEADER"))
 	detail_box.add_child(_make_stats_block(hero))
 
-	# --- Pouvoir de héros (description serveur, FR) ---
+	# --- Pouvoir de héros — clés locales TRADUITES par faction (i18n 2026-07-18), repli sur la
+	#     description serveur (hero_power, anglais invariant) si les clés manquent. ---
 	detail_box.add_child(_section_header("CHAR_POWER_HEADER"))
-	var power := _body_label(str(hero.get("hero_power", "")))
+	var power := _body_label(_hero_power_text(fid, hero))
 	power.add_theme_color_override("font_color", TEXT)
 	detail_box.add_child(power)
 
@@ -695,6 +707,32 @@ func _faction_color(fid: String) -> Color:
 		if f != null and f.get("accent_color") != null:
 			return f.accent_color
 	return ACCENT
+
+# Nom de faction AFFICHABLE (i18n 2026-07-18) : priorité au .tres LOCAL (nom EN invariant —
+# source unique avec le draft/VS/rapport), repli sur le faction_name du backend puis l'id.
+func _faction_display_name(fid: String, hero: Dictionary) -> String:
+	if _factions.has(fid):
+		var f = _factions[fid]
+		if f != null and f.get("name") != null and str(f.name) != "":
+			return str(f.name)
+	return str(hero.get("faction_name", fid))
+
+# Identité du meneur de la faction (rang traduit + nom/callsign invariants) — "" si .tres legacy.
+func _leader_title(fid: String) -> String:
+	if _factions.has(fid):
+		return WarzoneUI.faction_leader_title(_factions[fid])
+	return ""
+
+# Ligne « POUVOIR » du héros : clés locales traduites par faction (HERO_POWER_NAME_<ID> /
+# HERO_POWER_DESC_<ID>), repli sur le hero_power du backend (clé absente → jamais de clé brute).
+func _hero_power_text(fid: String, hero: Dictionary) -> String:
+	var key_name := "HERO_POWER_NAME_" + fid.to_upper()
+	var key_desc := "HERO_POWER_DESC_" + fid.to_upper()
+	var n := tr(key_name)
+	if n != key_name:
+		var d := tr(key_desc)
+		return (n + " — " + d) if d != key_desc else n
+	return str(hero.get("hero_power", ""))
 
 
 # =========================================================

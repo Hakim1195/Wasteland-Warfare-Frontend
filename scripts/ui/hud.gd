@@ -43,6 +43,8 @@ const KillFeedScene := preload("res://scenes/components/kill_feed.tscn")
 # Helpers partagés posés au lot E1 (dégradé de santé pv_color + _tint_progress) — réutilisés par
 # l'Intel : GUERRE (E5 §8.77) pour les barres de ratio.
 const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
+# Composeur d'objectif traduit (i18n 2026-07-18) : describe(type/params) → texte en langue courante.
+const ObjectiveTrackerModule := preload("res://scripts/ui/objective_tracker.gd")
 
 # Teinte des vignettes de cartes (refonte : plus de cartes spéciales, juste un nombre de troupes).
 const CARD_TINT := Color("2f7d8c")  # cyan-acier sombre (renforts) — charte Warzone Command
@@ -143,6 +145,9 @@ var _bottom_shown_y := 0.0
 # Tooltip « Pouvoir de Faction » : nom + description poussés par main.gd (lus du .tres local).
 var _faction_name: String = ""
 var _faction_desc: String = ""
+# Nom de faction AFFICHABLE par joueur (player_id str → nom EN invariant du .tres), poussé par
+# main.gd (_push_factions_intel) — la barre d'info du tour ne montre plus l'id snake_case brut.
+var faction_name_by_pid: Dictionary = {}
 
 # Tiroir « INTEL : ZONE » (§8.36) — état ouvert/fermé + Tween de fondu du panneau (Mémoire Tactique).
 var _intel_open := false
@@ -253,8 +258,8 @@ func _ready() -> void:
 	%LogText.meta_clicked.connect(func(meta) -> void: log_territory_clicked.emit(str(meta)))
 	# Chat de salle CÂBLÉ au réseau (§8.33) : main.gd relaie chat_send_requested -> NetworkManager
 	# et route les messages reçus vers add_chat_message. 2 canaux (Général / Privé).
-	add_chat_message("general", "[i]— Canal général ouvert. —[/i]")
-	add_chat_message("prive", "[i]— Aucune transmission privée. —[/i]")
+	add_chat_message("general", tr("HUD_CHAT_WELCOME_GENERAL"))
+	add_chat_message("prive", tr("HUD_CHAT_WELCOME_PRIVATE"))
 
 # Compte à rebours du tour courant, affiché MM:SS. Mode SERVEUR (E3 §8.75) : rebours calé sur
 # l'échéance diffusée (deadline_epoch − horloge locale corrigée de l'offset). Mode LEGACY (serveur
@@ -393,7 +398,7 @@ func _on_abandon_clicked() -> void:
 		abandon_pressed.emit()
 		return
 	_abandon_armed = true
-	%AbandonButton.text = "⚠ CONFIRMER ?"
+	%AbandonButton.text = tr("HUD_ABANDON_CONFIRM")
 	get_tree().create_timer(ABANDON_ARM_TIMEOUT).timeout.connect(_disarm_abandon)
 
 func _disarm_abandon() -> void:
@@ -402,14 +407,14 @@ func _disarm_abandon() -> void:
 	if %AbandonButton.disabled:
 		return
 	_abandon_armed = false
-	%AbandonButton.text = "☠ ABANDONNER"
+	%AbandonButton.text = tr("HUD_ABANDON")
 
 # Verrouille définitivement le bouton une fois l'abandon CONFIRMÉ par le serveur
 # (message player_abandoned nous concernant, relayé par main.gd) : évite un 2e envoi,
 # que le backend rejetterait (« Vous avez déjà abandonné la partie »).
 func lock_abandon_button() -> void:
 	_abandon_armed = false
-	%AbandonButton.text = "⚐ ABANDONNÉ"
+	%AbandonButton.text = tr("HUD_ABANDONED")
 	%AbandonButton.disabled = true
 
 # =========================================================
@@ -452,7 +457,7 @@ func show_forecast(win_prob: float, exp_losses: float) -> void:
 	elif win_prob >= 0.40:
 		col = ACCENT_GOLD
 	var losses_txt := ("%.1f" % exp_losses).replace(".", ",")
-	_odds_label.text = "PRÉVISION : victoire %d %% · pertes est. %s   (hors pouvoirs à états)" % [pct, losses_txt]
+	_odds_label.text = tr("HUD_FORECAST_FMT") % [pct, losses_txt]
 	_odds_label.add_theme_color_override("font_color", col)
 	_odds_label.visible = true
 
@@ -500,7 +505,7 @@ func set_reassault(active: bool, source_name: String = "", target_name: String =
 		return
 	_reassault_btn.visible = active
 	if active:
-		_reassault_btn.text = "⚔ RÉ-ASSAUT (%s ➜ %s)" % [source_name, target_name]
+		_reassault_btn.text = tr("HUD_REASSAULT_FMT") % [source_name, target_name]
 
 # Raccourcis de quantité +1 / +5 / MAX accolés à %AmountSpin (E7 §8.79). Émettent amount_quick
 # (delta 1 / 5 / -1=MAX) ; main.gd applique selon la phase (spin de mouvement ou tampon).
@@ -561,7 +566,7 @@ func _show_faction_tooltip() -> void:
 	if _faction_name == "":
 		return
 	%FactionTooltipTitle.text = _faction_name
-	%FactionTooltipDesc.text = _faction_desc if _faction_desc != "" else "Aucun modificateur."
+	%FactionTooltipDesc.text = _faction_desc if _faction_desc != "" else tr("HUD_NO_MODIFIER")
 	var tip: Control = %FactionTooltip
 	tip.reset_size()  # recalcule la taille (PanelContainer) avant de clamper la position.
 	var btn: Control = %FactionInfoButton
@@ -584,7 +589,7 @@ func _hide_faction_tooltip() -> void:
 # Déploie / replie le panneau Intel (fondu via Tween natif, cohérent avec les autres panneaux).
 func _toggle_intel() -> void:
 	_intel_open = not _intel_open
-	%IntelToggleButton.text = "INTEL : ZONE ▾" if _intel_open else "INTEL : ZONE ▸"
+	%IntelToggleButton.text = tr("HUD_INTEL_ZONE") + (" ▾" if _intel_open else " ▸")
 	if _intel_tween and _intel_tween.is_valid():
 		_intel_tween.kill()
 	var panel: Control = %IntelPanel
@@ -604,22 +609,22 @@ func _toggle_intel() -> void:
 #                zone, déjà résolues (pseudo + accent_color) par le contrôleur, triées et filtrées.
 func set_intel(stagnation: int, entries: Array) -> void:
 	if stagnation > 0:
-		%StagnationLabel.text = "STAGNATION : %d round(s) sans déplacement de zone" % stagnation
+		%StagnationLabel.text = tr("HUD_STAGNATION_FMT") % stagnation
 	else:
-		%StagnationLabel.text = "STAGNATION : zone instable (déplacement récent)"
+		%StagnationLabel.text = tr("HUD_STAGNATION_UNSTABLE")
 	var list: VBoxContainer = %ZoneKillsList
 	for child in list.get_children():
 		child.queue_free()
 	if entries.is_empty():
 		var empty := Label.new()
-		empty.text = "— Aucune perte enregistrée —"
+		empty.text = tr("HUD_ZONE_NO_LOSSES")
 		empty.add_theme_color_override("font_color", Color("8a8f7a"))
 		empty.add_theme_font_size_override("font_size", 13)
 		list.add_child(empty)
 		return
 	for e in entries:
 		var row := Label.new()
-		row.text = "☠ %s — %d unité(s)" % [str(e.get("pseudo", "?")), int(e.get("kills", 0))]
+		row.text = tr("HUD_ZONE_LOSS_FMT") % [str(e.get("pseudo", "?")), int(e.get("kills", 0))]
 		row.add_theme_color_override("font_color", e.get("color", Color.WHITE))
 		row.add_theme_font_size_override("font_size", 14)
 		list.add_child(row)
@@ -714,10 +719,10 @@ func set_objective_progress(data: Dictionary, tooltip: String = "") -> void:
 func set_zone_forecast(names: Array) -> void:
 	_ensure_forecast_label()
 	if names.is_empty():
-		_forecast_label.text = "☢ PROCHAINE ZONE : (non annoncée)"
+		_forecast_label.text = tr("HUD_NEXT_ZONE_NONE")
 	else:
 		var joined := ", ".join(PackedStringArray(names))
-		_forecast_label.text = "☢ PROCHAINE ZONE : " + joined
+		_forecast_label.text = tr("HUD_NEXT_ZONE_FMT") % joined
 
 
 # =========================================================
@@ -729,7 +734,7 @@ func set_zone_forecast(names: Array) -> void:
 # Déploie / replie le panneau Factions (fondu Tween natif, cohérent avec le tiroir Zone).
 func _toggle_factions_intel() -> void:
 	_factions_intel_open = not _factions_intel_open
-	%IntelFactionsToggleButton.text = "INTEL : FACTIONS ▾" if _factions_intel_open else "INTEL : FACTIONS ▸"
+	%IntelFactionsToggleButton.text = tr("HUD_INTEL_FACTIONS") + (" ▾" if _factions_intel_open else " ▸")
 	if _factions_intel_tween and _factions_intel_tween.is_valid():
 		_factions_intel_tween.kill()
 	var panel: Control = %IntelFactionsPanel
@@ -752,7 +757,7 @@ func set_factions_intel(entries: Array) -> void:
 		child.queue_free()
 	if entries.is_empty():
 		var empty := Label.new()
-		empty.text = "— Aucune faction détectée —"
+		empty.text = tr("HUD_NO_FACTION_DETECTED")
 		empty.add_theme_color_override("font_color", Color("8a8f7a"))
 		empty.add_theme_font_size_override("font_size", 13)
 		list.add_child(empty)
@@ -1079,7 +1084,7 @@ func set_territory_inspector(data: Dictionary) -> void:
 		%InspectorOwner.text = str(data.get("owner_name", "—"))
 		%InspectorOwner.add_theme_color_override("font_color", owner_col)
 	%InspectorTroops.text = str(int(data.get("troops", 0)))
-	%InspectorStatus.text = "☢ CONTAMINÉ" if bool(data.get("contaminated", false)) else ""
+	%InspectorStatus.text = tr("HUD_CONTAMINATED") if bool(data.get("contaminated", false)) else ""
 	var insp: Control = %TerritoryInspector
 	if _inspector_tween and _inspector_tween.is_valid():
 		_inspector_tween.kill()
@@ -1319,7 +1324,7 @@ func hide_player_inspector() -> void:
 # set_deploy_confirm (§8.26). L'insertion reste relative à %NextPhaseButton (robuste au re-layout).
 func _build_confirm_button() -> void:
 	_confirm_btn = Button.new()
-	_confirm_btn.text = "✔ CONFIRMER LE DÉPLOIEMENT"
+	_confirm_btn.text = tr("HUD_DEPLOY_CONFIRM")
 	_confirm_btn.visible = false
 	_confirm_btn.add_theme_font_size_override("font_size", 18)
 	_confirm_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -1363,7 +1368,7 @@ func set_deploy_confirm(active: bool, total: int = 0, quota: int = 0) -> void:
 		return
 	_confirm_btn.visible = true
 	_confirm_btn.disabled = (total != quota)
-	_confirm_btn.text = "✔ CONFIRMER (%d/%d)" % [total, quota]
+	_confirm_btn.text = tr("HUD_DEPLOY_CONFIRM_FMT") % [total, quota]
 
 # =========================================================
 # Journal de Guerre 2.0 (E4 §8.76) — flux structuré, filtres, kill feed, toasts
@@ -1557,9 +1562,9 @@ func update_display() -> void:
 			_: _turn_limit = 0.0
 
 	if stage == "playing":
-		%PhaseLabel.text = "PHASE : " + _phase_name(GameState.current_phase).to_upper()
+		%PhaseLabel.text = tr("BANNER_PHASE") % _phase_name(GameState.current_phase).to_upper()
 	else:
-		%PhaseLabel.text = "ÉTAPE : " + stage.to_upper()
+		%PhaseLabel.text = tr("HUD_STAGE_FMT") % _stage_name(stage).to_upper()
 
 	var pdata: Dictionary = GameState.players.get(str(GameState.current_player_id), {})
 	# Le serveur diffuse désormais le VRAI pseudo dans chaque PlayerState (§8.28) : on l'affiche
@@ -1567,17 +1572,25 @@ func update_display() -> void:
 	# si l'identité n'a pas pu être résolue côté serveur.
 	var uname := str(pdata.get("username", ""))
 	if uname == "":
-		uname = "JOUEUR %d" % GameState.player_number(GameState.current_player_id)
+		uname = tr("HUD_PLAYER_NUM") % GameState.player_number(GameState.current_player_id)
 	# Bot de remplissage (G2 §8.72) : préfixe « [IA] » (id négatif ou is_bot public).
 	if int(GameState.current_player_id) < 0 or bool(pdata.get("is_bot", false)):
-		uname = "[IA] " + uname
-	var who := "%s (%s)" % [uname, str(pdata.get("faction", "?"))]
-	%InfoLabel.text = "TOUR %s ▪ %s ▪ STOCK : %s" % [
+		uname = tr("COMMON_AI_PREFIX") + uname
+	# Nom de faction AFFICHABLE (EN invariant, poussé par main.gd via faction_name_by_pid) —
+	# repli sur l'id brut si la résolution n'est pas encore arrivée.
+	var fac_disp := str(faction_name_by_pid.get(str(GameState.current_player_id),
+		pdata.get("faction", "?")))
+	var who := "%s (%s)" % [uname, fac_disp]
+	%InfoLabel.text = tr("HUD_TURN_INFO_FMT") % [
 		str(GameState.current_turn), who, str(pdata.get("units_in_stock", 0))]
 
-	# Objectif secret du joueur local.
+	# Objectif secret du joueur local — COMPOSÉ localement en langue courante depuis type/params
+	# (i18n 2026-07-18) ; repli sur la description serveur (type inconnu) puis « (secret) ».
 	var obj: Dictionary = GameState.objectives.get(str(AuthManager.user_id), {})
-	%ObjectiveLabel.text = "◎ OBJECTIF : " + str(obj.get("description", "(secret)"))
+	var obj_txt := ObjectiveTrackerModule.describe(obj, _objective_target_pseudo(obj))
+	if obj_txt == "":
+		obj_txt = tr("HUD_OBJECTIVE_SECRET")
+	%ObjectiveLabel.text = tr("HUD_OBJECTIVE_FMT") % obj_txt
 
 	_refresh_cards()
 
@@ -1609,7 +1622,7 @@ func _select_chat(channel: String) -> void:
 	if _chat_target_option:
 		_chat_target_option.visible = (channel == "prive")
 	if _chat_input:
-		_chat_input.placeholder_text = "Message privé…" if channel == "prive" else "Message général…"
+		_chat_input.placeholder_text = tr("HUD_CHAT_PLACEHOLDER_PRIVATE") if channel == "prive" else tr("HUD_CHAT_PLACEHOLDER_GENERAL")
 
 # =========================================================
 # Zone de saisie du chat (§8.33) — LineEdit + sélecteur de destinataire privé + bouton d'envoi
@@ -1624,13 +1637,13 @@ func _build_chat_input() -> void:
 
 	_chat_target_option = OptionButton.new()
 	_chat_target_option.visible = false  # affiché uniquement en canal privé
-	_chat_target_option.tooltip_text = "Destinataire du message privé"
+	_chat_target_option.tooltip_text = tr("HUD_CHAT_TARGET_TOOLTIP")
 	_chat_target_option.add_theme_font_size_override("font_size", 13)
 	_chat_target_option.custom_minimum_size = Vector2(96, 0)
 	row.add_child(_chat_target_option)
 
 	_chat_input = LineEdit.new()
-	_chat_input.placeholder_text = "Message général…"
+	_chat_input.placeholder_text = tr("HUD_CHAT_PLACEHOLDER_GENERAL")
 	_chat_input.max_length = CHAT_MAX_LENGTH
 	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_input.add_theme_font_size_override("font_size", 14)
@@ -1649,7 +1662,7 @@ func _build_chat_input() -> void:
 
 	_chat_send_btn = Button.new()
 	_chat_send_btn.text = "➤"
-	_chat_send_btn.tooltip_text = "Envoyer"
+	_chat_send_btn.tooltip_text = tr("HUD_CHAT_SEND_TOOLTIP")
 	_chat_send_btn.custom_minimum_size = Vector2(36, 0)
 	_chat_send_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_chat_send_btn.add_theme_font_size_override("font_size", 16)
@@ -1686,7 +1699,7 @@ func _on_chat_submit() -> void:
 	var target_id := -1
 	if _current_chat_tab == "prive":
 		if _chat_target_option == null or _chat_target_option.item_count == 0:
-			add_chat_message("prive", "[i][color=#d6453f]— Aucun destinataire disponible. —[/color][/i]")
+			add_chat_message("prive", tr("HUD_CHAT_NO_TARGET"))
 			return
 		target_id = _chat_target_option.get_selected_id()
 	_chat_input.clear()
@@ -1865,7 +1878,7 @@ func _refresh_cards() -> void:
 	var hand: Array = my.get("cards_in_hand", [])
 	if hand.is_empty():
 		var lbl := Label.new()
-		lbl.text = "— Aucune carte en stock —"
+		lbl.text = tr("HUD_NO_CARDS")
 		lbl.add_theme_color_override("font_color", Color("8a8f7a"))
 		box.add_child(lbl)
 		return
@@ -1889,8 +1902,8 @@ func _make_card_button(value: int, index: int, playable: bool = true) -> Control
 	card.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	card.disabled = not playable
-	card.tooltip_text = ("Jouer cette carte : +%d troupes à déployer." % value) if playable \
-		else ("+%d troupes — jouable pendant votre tour." % value)
+	card.tooltip_text = (tr("HUD_CARD_PLAY_TOOLTIP") % value) if playable \
+		else (tr("HUD_CARD_LOCKED_TOOLTIP") % value)
 	card.add_theme_font_size_override("font_size", 28)
 	card.add_theme_color_override("font_color", Color("f0e6d2"))
 
@@ -1919,10 +1932,30 @@ func phase_name(phase: int) -> String:
 
 func _phase_name(phase: int) -> String:
 	match phase:
-		0: return "Contamination"
-		1: return "Renforts"
-		2: return "Déploiement"
-		3: return "Attaque"
-		4: return "Mouvement"
-		5: return "Évènement"
-		_: return "Phase " + str(phase)
+		0: return tr("PHASE_CONTAMINATION")
+		1: return tr("PHASE_REINFORCEMENT")
+		2: return tr("PHASE_DEPLOYMENT")
+		3: return tr("PHASE_ATTACK")
+		4: return tr("PHASE_MOVEMENT")
+		5: return tr("PHASE_EVENT")
+		_: return tr("PHASE_GENERIC") % phase
+
+# Libellé TRADUIT d'une étape macro de la partie ("initiative" / "placement" — i18n 2026-07-18 :
+# l'étape brute du serveur n'est plus affichée telle quelle).
+func _stage_name(stage: String) -> String:
+	match stage:
+		"initiative": return tr("STAGE_INITIATIVE")
+		"placement": return tr("STAGE_PLACEMENT")
+		_: return stage
+
+# Pseudo résolu de la cible du volet « kill » de l'objectif local (params.target_id → username
+# public de l'état). "" si irrésolu → le composeur retombe sur « #id ».
+func _objective_target_pseudo(obj: Dictionary) -> String:
+	var params = obj.get("params", {})
+	if typeof(params) != TYPE_DICTIONARY:
+		return ""
+	var tid = params.get("target_id")
+	if tid == null:
+		return ""
+	var p = GameState.players.get(str(int(tid)), {})
+	return str(p.get("username", "")) if typeof(p) == TYPE_DICTIONARY else ""

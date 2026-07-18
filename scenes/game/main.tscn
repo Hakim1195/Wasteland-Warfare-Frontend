@@ -688,7 +688,7 @@ offset_left = 50.0
 offset_top = 50.0
 offset_right = 250.0
 offset_bottom = 100.0
-text = "Initialiser la partie"
+text = "GAME_DEBUG_INIT"
 
 [node name="ConquerDialog" type="Control" parent="." unique_id=300336629]
 unique_name_in_owner = true
@@ -730,7 +730,7 @@ theme_override_constants/separation = 16
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 24
-text = "⚑ TERRITOIRE CONQUIS"
+text = "GAME_CONQUEST_TITLE"
 horizontal_alignment = 1
 
 [node name="ConquerInfo" type="Label" parent="ConquerDialog/Center/Panel/VBox" unique_id=526516861]
@@ -738,7 +738,7 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 17
-text = "Conquête !"
+text = "GAME_CONQUEST_SUB"
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -768,7 +768,7 @@ theme_override_font_sizes/font_size = 19
 theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
-text = "✔ DÉPLOYER LES TROUPES"
+text = "GAME_DEPLOY_CONFIRM"
 
 [node name="EclipseDialog" type="Control" parent="." unique_id=943669916]
 unique_name_in_owner = true
@@ -810,7 +810,7 @@ theme_override_constants/separation = 18
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 24
-text = "❖ ORDRE DE L'ÉCLIPSE"
+text = "GAME_ECLIPSE_POPUP_TITLE"
 horizontal_alignment = 1
 
 [node name="EclipseInfo" type="Label" parent="EclipseDialog/Center/Panel/VBox" unique_id=295466102]
@@ -818,7 +818,7 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 17
-text = "Choisissez la carte Événement à conserver (l'autre est défaussée) :"
+text = "GAME_ECLIPSE_POPUP_BODY"
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -889,7 +889,7 @@ theme_override_constants/separation = 16
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 24
-text = "◎ CHASSEURS D'OMBRES"
+text = "GAME_SPY_POPUP_TITLE"
 horizontal_alignment = 1
 
 [node name="SpyInfo" type="Label" parent="SpyDialog/Center/Panel/VBox" unique_id=560088618]
@@ -897,7 +897,7 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 17
-text = "Espionnez l'objectif secret d'un adversaire :"
+text = "GAME_SPY_POPUP_BODY"
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -911,7 +911,7 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 size_flags_horizontal = 0
-tooltip_text = "Renseignements — Pouvoirs passifs des factions en jeu"
+tooltip_text = "HUD_INTEL_FACTIONS_TOOLTIP"
 mouse_default_cursor_shape = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
 theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
@@ -920,7 +920,7 @@ theme_override_font_sizes/font_size = 14
 theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
-text = "INTEL : FACTIONS ▸"
+text = "HUD_INTEL_FACTIONS"
 
 [node name="IntelFactionsPanel" type="PanelContainer" parent="HUD/IntelWidget"]
 unique_name_in_owner = true
@@ -937,7 +937,7 @@ theme_override_constants/separation = 8
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 15
-text = "⚔ FORCES EN PRÉSENCE"
+text = "ROSTER_TITLE"
 
 [node name="FactionsList" type="VBoxContainer" parent="HUD/IntelWidget/IntelFactionsPanel/IntelFactionsVBox"]
 unique_name_in_owner = true
@@ -993,7 +993,7 @@ text = "✕"
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 11
-text = "❯ PROPRIÉTAIRE"
+text = "HUD_OWNER_LABEL"
 
 [node name="InspectorOwner" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
 unique_name_in_owner = true
@@ -1006,7 +1006,7 @@ text = "—"
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 11
-text = "❯ GARNISON"
+text = "HUD_GARRISON_LABEL"
 
 [node name="InspectorTroops" type="Label" parent="HUD/TerritoryInspector/InspectorVBox"]
 unique_name_in_owner = true

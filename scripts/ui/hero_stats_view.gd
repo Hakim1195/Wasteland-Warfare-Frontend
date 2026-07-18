@@ -66,7 +66,9 @@ static func build_compact_row(hero, font: Font, accent: Color, leader_fields := 
 		var sm = hero.get("stats_max", {})
 		stats_max = sm if sm is Dictionary else {}
 		level = int(hero.get("level", 0))
-		power = str(hero.get("hero_power", ""))
+		# i18n (2026-07-18) : pouvoir du héros via les clés locales TRADUITES par faction
+		# (HERO_POWER_NAME/DESC_<ID>), repli sur le hero_power serveur (anglais invariant).
+		power = _power_text(str(hero.get("faction_id", "")), hero)
 
 	var box := VBoxContainer.new()
 	box.name = "HeroStatsRow"
@@ -195,6 +197,18 @@ static func _make_mini_bar(ratio: float) -> Control:
 	bar.add_theme_stylebox_override("background", bg)
 	bar.add_theme_stylebox_override("fill", fill)
 	return bar
+
+# Ligne « POUVOIR » du héros par faction_id : clés locales TRADUITES (HERO_POWER_NAME_<ID> /
+# HERO_POWER_DESC_<ID> — TranslationServer, helper static), repli sur hero_power serveur.
+static func _power_text(fid: String, hero: Dictionary) -> String:
+	if fid != "":
+		var key_name := "HERO_POWER_NAME_" + fid.to_upper()
+		var n := TranslationServer.translate(key_name)
+		if n != key_name:
+			var key_desc := "HERO_POWER_DESC_" + fid.to_upper()
+			var d := TranslationServer.translate(key_desc)
+			return (n + " — " + d) if d != key_desc else n
+	return str(hero.get("hero_power", ""))
 
 # Encadré « POUVOIR » mis en avant : eyebrow cyan + texte du pouvoir (backend) dans un cadre au
 # liseré gauche et fond légèrement teintés à l'accent de la faction (cf. lignes de paliers §Perso).

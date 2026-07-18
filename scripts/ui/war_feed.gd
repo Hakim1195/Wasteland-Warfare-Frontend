@@ -61,13 +61,51 @@ static func parse(event, ctx: Dictionary) -> Array:
 		# Type inconnu (évolution serveur) → entrée system BRUTE : aucune perte d'info.
 		out.append(_mk(CAT_SYSTEM, "⚙", str(ctx.get("fallback", etype))))
 
-	# system_messages attachés (immunités Culte, ALERTE MÉTÉO du télégraphe G1…) : BBCode
-	# serveur conservé tel quel (comportement historique) ; « ☢ »/protection Culte → zone.
+	# Évènements système STRUCTURÉS (i18n 2026-07-18) : quand le serveur les fournit
+	# (system_events = [{code, params}]), on les traduit LOCALEMENT et on IGNORE les
+	# system_messages legacy (mêmes informations en anglais invariant — doublon sinon).
+	var sys_events = event.get("system_events", [])
+	if typeof(sys_events) == TYPE_ARRAY and not sys_events.is_empty():
+		for sev in sys_events:
+			var entry := _system_event_entry(sev, tname, ctx.get("fname", Callable()))
+			if not entry.is_empty():
+				out.append(entry)
+		return out
+
+	# system_messages legacy attachés (immunités Isotope, ALERTE MÉTÉO du télégraphe G1…) : BBCode
+	# serveur conservé tel quel ; « ☢ »/« shielded » (et l'ancien libellé FR du Culte) → zone.
 	for m in event.get("system_messages", []):
 		var txt := str(m)
-		var is_zone: bool = txt.find("☢") >= 0 or txt.find("Culte de l'Isotope a protégé") >= 0
+		var is_zone: bool = txt.find("☢") >= 0 or txt.find("shielded") >= 0 \
+			or txt.find("Culte de l'Isotope a protégé") >= 0
 		out.append(_mk(CAT_ZONE if is_zone else CAT_SYSTEM, "☢" if is_zone else "⚙", txt))
 	return out
+
+# Une entrée de journal TRADUITE pour un évènement système structuré {code, ...params} (i18n
+# 2026-07-18). Codes connus : zone_forecast {territory_ids}, zone_protected {faction_id,
+# territory_id}. Code inconnu (évolution serveur) → entrée system brute (aucune perte d'info).
+# TranslationServer.translate (et non tr()) : module RefCounted statique, hors arbre de scène.
+static func _system_event_entry(sev, tname: Callable, fname: Callable) -> Dictionary:
+	if typeof(sev) != TYPE_DICTIONARY:
+		return {}
+	var code := str(sev.get("code", ""))
+	match code:
+		"zone_forecast":
+			var names := PackedStringArray()
+			for tid in sev.get("territory_ids", []):
+				names.append(_tname_of(tname, str(tid)))
+			return _mk(CAT_ZONE, "☢",
+				TranslationServer.translate("FEED_ZONE_FORECAST_FMT") % ", ".join(names))
+		"zone_protected":
+			var fac := str(sev.get("faction_id", ""))
+			if fname.is_valid():
+				fac = str(fname.call(fac))
+			return _mk(CAT_ZONE, "☢",
+				TranslationServer.translate("FEED_ZONE_PROTECTED_FMT") % [
+					fac, _tname_of(tname, str(sev.get("territory_id", "")))],
+				str(sev.get("territory_id", "")))
+		_:
+			return _mk(CAT_SYSTEM, "⚙", code)
 
 static func _parse_attack(event: Dictionary, ctx: Dictionary,
 		bb: Callable, tname: Callable) -> Array:
@@ -79,16 +117,17 @@ static func _parse_attack(event: Dictionary, ctx: Dictionary,
 	var def_pid := int(ctx.get("def_pid", -9999))
 	var atk_label := _bb_of(bb, atk_pid) if atk_pid != -9999 else _tname_of(tname, atk_tid)
 
-	var line := "⚔ %s ➜ %s · pertes A -%d / D -%d" % [
+	var line := TranslationServer.translate("FEED_ATTACK_FMT") % [
 		atk_label, def_name,
 		int(event.get("attacker_losses", 0)), int(event.get("defender_losses", 0))]
-	# Effets de faction déclenchés (mêmes marqueurs que le texte legacy).
+	# Effets de faction déclenchés (marqueurs compacts — noms de factions EN invariants,
+	# pouvoirs traduits ; refonte identités 2026-07-18).
 	if event.get("phalanges_reroll"):
-		line += " ⚙ Phalanges"
+		line += " " + TranslationServer.translate("FEED_MARK_PHALANX")
 	if event.get("aegis_kill"):
-		line += " ◆ Aegis"
+		line += " " + TranslationServer.translate("FEED_MARK_AEGIS")
 	if event.get("terror_kill"):
-		line += " ☠ Terreur"
+		line += " " + TranslationServer.translate("FEED_MARK_TERROR")
 	out.append(_mk(CAT_COMBAT, "⚔", line, def_tid))
 
 	# Conquête → entrée MAJEURE compacte (kill feed E4 : « ⚔ Hakim ➜ Ontario (−3) »).
@@ -99,7 +138,7 @@ static func _parse_attack(event: Dictionary, ctx: Dictionary,
 	# Permadeath du héros défenseur → entrée MAJEURE (« 💀 X abattu par Y »).
 	var duel = event.get("hero_duel")
 	if typeof(duel) == TYPE_DICTIONARY and bool(duel.get("hero_died", false)):
-		out.append(_mk(CAT_COMBAT, "☠", "☠ %s abattu par %s" % [
+		out.append(_mk(CAT_COMBAT, "☠", TranslationServer.translate("FEED_HERO_DOWN_FMT") % [
 			_bb_of(bb, int(duel.get("defender_id", -9999))),
 			_bb_of(bb, int(duel.get("attacker_id", -9999)))], def_tid, true))
 	return out
@@ -115,15 +154,17 @@ static func zone_entries(ticks: Array) -> Array:
 		var nm := str(t.get("name", t.get("tid", "?")))
 		if bool(t.get("ravaged", false)):
 			# Territoire rasé par les radiations (garnison 0 → neutre) : entrée MAJEURE.
-			out.append(_mk(CAT_ZONE, "☢", "☢ %s ravagé (−1)" % nm, str(t.get("tid", "")), true))
+			out.append(_mk(CAT_ZONE, "☢",
+				TranslationServer.translate("FEED_ZONE_RAVAGED_FMT") % nm, str(t.get("tid", "")), true))
 		else:
-			out.append(_mk(CAT_ZONE, "☢", "☢ %s : −1 (radiations)" % nm, str(t.get("tid", ""))))
+			out.append(_mk(CAT_ZONE, "☢",
+				TranslationServer.translate("FEED_ZONE_TICK_FMT") % nm, str(t.get("tid", ""))))
 	return out
 
 static func _bb_of(bb: Callable, pid: int) -> String:
 	if bb.is_valid():
 		return str(bb.call(pid))
-	return "Joueur %d" % pid
+	return TranslationServer.translate("WR_PLAYER_FALLBACK") % pid
 
 static func _tname_of(tname: Callable, tid: String) -> String:
 	if tname.is_valid():

@@ -73,13 +73,13 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.8, 0.7, 1)
 theme_override_font_sizes/font_size = 22
-text = "❯ ATTAQUANT"
+text = "VS_ROLE_ATTACKER_SHORT"
 
 [node name="LeftName" type="Label" parent="Halves/LeftHalf/LeftVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 42
-text = "FACTION"
+text = "FS_FACTION_DEFAULT"
 
 [node name="LeftPortraitFrame" type="PanelContainer" parent="Halves/LeftHalf/LeftVBox"]
 unique_name_in_owner = true
@@ -139,14 +139,14 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.8, 0.7, 1)
 theme_override_font_sizes/font_size = 22
 horizontal_alignment = 2
-text = "❯ DÉFENSEUR"
+text = "VS_ROLE_DEFENDER_SHORT"
 
 [node name="RightName" type="Label" parent="Halves/RightHalf/RightVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 42
 horizontal_alignment = 2
-text = "FACTION"
+text = "FS_FACTION_DEFAULT"
 
 [node name="RightPortraitFrame" type="PanelContainer" parent="Halves/RightHalf/RightVBox"]
 unique_name_in_owner = true

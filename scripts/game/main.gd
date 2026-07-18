@@ -24,6 +24,8 @@ const WarFeed := preload("res://scripts/ui/war_feed.gd")
 const WarRoom := preload("res://scripts/ui/war_room.gd")
 # Tracker d'objectif vivant (E6 §8.78) : module de calcul PUR de la progression de l'objectif.
 const ObjectiveTracker := preload("res://scripts/ui/objective_tracker.gd")
+# Helpers de charte partagés (identité du meneur de faction — refonte 2026-07-18).
+const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 
 @onready var button = $Button
 # Depuis la refonte HUD RTS (§8.29), le SubViewport du plateau est le 1ᵉʳ enfant de Main (plateau
@@ -204,7 +206,7 @@ func _ready():
 		button.hide()
 		_refresh()
 	else:
-		button.text = "Initialiser une partie (debug)"
+		button.text = tr("GAME_DEBUG_INIT")
 
 	# Prévision de combat (G4 §8.63) : PRÉCHAUFFE la table DP au chargement de l'arène (~100 ms,
 	# invisible ici) pour que le tout premier survol d'une grosse bataille soit instantané (< 1 ms,
@@ -292,7 +294,7 @@ func _on_territory_clicked(tid: String):
 		_buffer_add(tid, step)
 		return
 	if GameState.stage == "placement":
-		hud.add_log("Pas votre tour de placement.")
+		hud.add_log(tr("GAME_NOT_YOUR_PLACEMENT"))
 	elif GameState.stage == "playing":
 		_handle_play_click(tid)
 
@@ -305,13 +307,13 @@ func _on_territory_right_clicked(tid: String):
 
 func _handle_play_click(tid: String):
 	if not _is_playing_my_turn():
-		hud.add_log("Ce n'est pas votre tour.")
+		hud.add_log(tr("GAME_NOT_YOUR_TURN"))
 		return
 	match GameState.current_phase:
 		3: _do_attack_click(tid)
 		4: _do_move_click(tid)
 		_:
-			hud.add_log("Cliquez « Fin de Phase » pour avancer.")
+			hud.add_log(tr("GAME_CLICK_NEXT_PHASE"))
 
 # Arme le verrou « attaque en vol » + un filet de sécurité anti soft-lock : si le résultat ne revient
 # jamais (message perdu / coupure-reconnexion), le verrou se lève après ATTACK_IN_FLIGHT_TIMEOUT. En
@@ -330,9 +332,9 @@ func _do_attack_click(tid: String):
 		# Choix de la source : à moi, avec au moins 2 unités.
 		if _owner(tid) == _my_id() and _garrison(tid) >= 2:
 			_select_source(tid)
-			hud.set_instruction("ATTAQUE : cliquez un territoire ENNEMI adjacent (ou la source pour annuler).")
+			hud.set_instruction(tr("GAME_ATTACK_PICK_TARGET"))
 		else:
-			hud.add_log("⛔ Source invalide (à vous, ≥ 2 unités).")
+			hud.add_log(tr("GAME_INVALID_SOURCE"))
 	else:
 		if tid == _source:
 			_clear_source()
@@ -345,7 +347,7 @@ func _do_attack_click(tid: String):
 			return
 		# Adjacence (UX) : la cible doit être frontalière de la source. Le serveur re-valide.
 		if not MapData.are_adjacent(_source, tid, GameState.map_id):
-			hud.add_log("⛔ Cible non adjacente à la source.")
+			hud.add_log(tr("GAME_TARGET_NOT_ADJACENT"))
 			return
 		# Combat VALIDÉ ici : source à moi (≥2 unités), cible ennemie adjacente (MapData).
 		# La scène Split-Screen VS (affrontement des héros de factions) se joue à la
@@ -424,20 +426,20 @@ func _do_move_click(tid: String):
 	if _source == "":
 		if _owner(tid) == _my_id() and _garrison(tid) >= 2:
 			_select_source(tid)
-			hud.set_instruction("MOUVEMENT : cliquez un territoire ALLIÉ adjacent (ou la source pour annuler).")
+			hud.set_instruction(tr("GAME_MOVE_PICK_TARGET"))
 		else:
-			hud.add_log("⛔ Source invalide (à vous, ≥ 2 unités).")
+			hud.add_log(tr("GAME_INVALID_SOURCE"))
 	else:
 		if tid == _source:
 			_clear_source()
 			_update_instruction()
 			return
 		if _owner(tid) != _my_id():
-			hud.add_log("⛔ Destination invalide (territoire allié requis).")
+			hud.add_log(tr("GAME_INVALID_DESTINATION"))
 			return
 		# Adjacence (UX) : la destination doit être frontalière de la source. Le serveur re-valide.
 		if not MapData.are_adjacent(_source, tid, GameState.map_id):
-			hud.add_log("⛔ Destination non adjacente à la source.")
+			hud.add_log(tr("GAME_DEST_NOT_ADJACENT"))
 			return
 		NetworkManager.send_action("move_units", {
 			"source_territory_id": _source,
@@ -585,13 +587,13 @@ func _pending_total() -> int:
 func _buffer_add(tid: String, delta: int) -> void:
 	if _owner(tid) != _my_id():
 		if delta > 0:
-			hud.add_log("⛔ Déployez sur VOS territoires.")
+			hud.add_log(tr("GAME_DEPLOY_OWN_ONLY"))
 		return
 	var cur := int(pending_deployments.get(tid, 0))
 	if delta > 0:
 		var remaining := _deploy_quota() - _pending_total()
 		if remaining <= 0:
-			hud.add_log("⛔ Quota atteint (%d troupe(s))." % _deploy_quota())
+			hud.add_log(tr("GAME_QUOTA_REACHED") % _deploy_quota())
 			return
 		cur += mini(delta, remaining)   # +1 / +5 / MAX (jamais au-delà du stock)
 	else:
@@ -624,7 +626,7 @@ func _on_deploy_confirmed() -> void:
 		return
 	var quota := _deploy_quota()
 	if _pending_total() != quota:
-		hud.add_log("⛔ Placez EXACTEMENT %d troupe(s) avant de confirmer." % quota)
+		hud.add_log(tr("GAME_DEPLOY_EXACT") % quota)
 		return
 	if pending_deployments.is_empty():
 		return
@@ -647,22 +649,22 @@ func _on_deploy_confirmed() -> void:
 
 func _on_pass_pressed():
 	if _pass_in_flight:
-		hud.add_log("Action en cours…")
+		hud.add_log(tr("GAME_ACTION_IN_PROGRESS"))
 		return
 	if _awaiting_conquer_move:
-		hud.add_log("Répartissez d'abord vos troupes sur le territoire conquis.")
+		hud.add_log(tr("GAME_CONQUER_FIRST"))
 		return
 	if _awaiting_eclipse:
-		hud.add_log("Choisissez d'abord votre carte Événement (Ordre de l'Éclipse).")
+		hud.add_log(tr("GAME_ECLIPSE_FIRST"))
 		return
 	if _awaiting_spy:
-		hud.add_log("Choisissez d'abord une cible à espionner (Chasseurs d'Ombres).")
+		hud.add_log(tr("GAME_SPY_FIRST"))
 		return
 	if GameState.stage != "playing":
-		hud.add_log("La partie n'a pas encore commencé.")
+		hud.add_log(tr("GAME_NOT_STARTED"))
 		return
 	if not _is_playing_my_turn():
-		hud.add_log("Ce n'est pas votre tour.")
+		hud.add_log(tr("GAME_NOT_YOUR_TURN"))
 		return
 	_clear_source()
 	# Verrou + désactivation immédiate du bouton : un seul pass_turn en vol par aller-retour serveur.
@@ -705,7 +707,7 @@ func _on_card_played(card_index: int):
 	if _input_blocked():
 		return
 	if not _is_playing_my_turn():
-		hud.add_log("Vous ne pouvez jouer une carte que pendant votre tour.")
+		hud.add_log(tr("GAME_CARD_TURN_ONLY"))
 		return
 	# Une carte = un nombre brut de troupes : on l'envoie directement par son index.
 	# Le serveur retire la carte et crédite sa valeur au stock à déployer.
@@ -803,7 +805,7 @@ func _maybe_prompt_conquer(event) -> void:
 func _show_conquer_dialog(ctx: Dictionary) -> void:
 	_awaiting_conquer_move = true
 	_conquer_ctx = ctx
-	%ConquerInfo.text = "Vous avez conquis %s !\nCombien de troupes y déplacer depuis %s ?" % [
+	%ConquerInfo.text = tr("GAME_CONQUER_INFO_FMT") % [
 		_territory_name(ctx["to"]), _territory_name(ctx["from"])]
 	%ConquerSlider.min_value = ctx["min"]
 	%ConquerSlider.max_value = ctx["max"]
@@ -818,7 +820,7 @@ func _on_conquer_slider_changed(value: float) -> void:
 func _update_conquer_value(v: int) -> void:
 	# La source conserve (total - v) troupes ; total = max + 1 (car max = total - 1).
 	var remaining: int = int(_conquer_ctx.get("max", 0)) + 1 - v
-	%ConquerValue.text = "Déplacer %d troupe(s)  —  reste %d en défense sur la source" % [v, remaining]
+	%ConquerValue.text = tr("GAME_CONQUER_VALUE_FMT") % [v, remaining]
 
 func _on_conquer_confirmed() -> void:
 	if _conquer_ctx.is_empty():
@@ -911,7 +913,7 @@ func _on_spy_target_chosen(target_id: int) -> void:
 # de la cible en couleur plateau (_bb_pseudo) ; la description est ÉCHAPPÉE (elle peut contenir
 # le pseudo d'un joueur — objectif « éliminer X » — donc des « [ » hostiles, piège n° 1).
 func _on_spy_result(target_player_id: int, description: String) -> void:
-	var line := "◎ L'objectif de %s est : [color=#c9a0ff]%s[/color]" % [
+	var line := tr("GAME_SPY_RESULT_FMT") % [
 		_bb_pseudo(target_player_id), str(description).replace("[", "[lb]")]
 	hud.add_chat_message("prive", line)
 	hud.add_log(line)
@@ -957,9 +959,14 @@ func _push_chat_targets() -> void:
 	hud.set_chat_targets(entries)
 
 func _territory_name(tid: String) -> String:
-	if MapData.TERRITORIES.has(tid):
-		return str(MapData.TERRITORIES[tid].get("name", tid))
-	return tid
+	# i18n (2026-07-18) : libellé TRADUIT via MapData (clé TERR_<ID>, repli nom FR historique).
+	return MapData.t_name(tid)
+
+# Nom AFFICHABLE d'une faction par id (EN invariant du .tres) — repli sur l'id brut. Consommé
+# par le War Feed pour traduire les évènements système structurés (zone_protected).
+func _faction_display_name(fid: String) -> String:
+	var n := str(_faction_info(fid).get("name", ""))
+	return n if n != "" else fid
 
 # Nom à afficher pour un joueur : son VRAI pseudo, désormais diffusé par le serveur dans chaque
 # PlayerState (§8.28). Replis successifs : notre pseudo local (AuthManager) si c'est nous, sinon
@@ -972,12 +979,12 @@ func _display_name(pid: int) -> String:
 	if typeof(p) == TYPE_DICTIONARY:
 		var uname := str(p.get("username", ""))
 		if uname != "":
-			return ("[IA] " + uname) if is_bot else uname
+			return (tr("COMMON_AI_PREFIX") + uname) if is_bot else uname
 	if pid == _my_id() and AuthManager.username != "":
 		return AuthManager.username
 	if is_bot:
-		return "[IA] Bot %d" % absi(pid)
-	return "Joueur %d" % GameState.player_number(pid)
+		return tr("COMMON_AI_PREFIX") + tr("CHIP_BOT_FALLBACK") % absi(pid)
+	return tr("WR_PLAYER_FALLBACK") % GameState.player_number(pid)
 
 # Pseudo PRÊT pour le BBCode (journal militaire / chat) — unification E1 §8.73 : résolu
 # (_display_name), échappé « [ » → « [lb] » (anti-injection §8.33 ; le préfixe [IA] des bots
@@ -1013,15 +1020,28 @@ func _local_faction_info() -> Dictionary:
 					if ResourceLoader.exists(full):
 						var res = load(full)
 						if res != null and str(res.get("id")) == fid:
+							# i18n (2026-07-18) : lore + pouvoir TRADUITS depuis les clés du .tres
+							# (repli sur l'ancien champ description pour un .tres legacy).
 							info = {
 								"name": str(res.get("name")),
-								"description": str(res.get("description")),
+								"description": _faction_desc_text(res),
 							}
 							break
 			file_name = dir.get_next()
 		dir.list_dir_end()
 	_faction_info_cache[fid] = info
 	return info
+
+# Texte lore + pouvoir d'une FactionData pour un affichage SANS BBCode (tooltip HUD) : lore
+# traduit (desc_key) puis ligne « Pouvoir : … » traduite (power_key). Duck-typé, replis legacy.
+func _faction_desc_text(res) -> String:
+	var dk = res.get("desc_key")
+	var pk = res.get("power_key")
+	var lore := tr(str(dk)) if (dk != null and str(dk) != "") else str(res.get("description"))
+	var power := tr(str(pk)) if (pk != null and str(pk) != "") else ""
+	if power != "":
+		return "%s\n\n%s %s" % [lore, tr("FACTION_POWER_LABEL"), power]
+	return lore
 
 # Infos de faction par id (nom + description + résumé du pouvoir passif), lues du .tres et mises en
 # cache. Sert au tiroir « INTEL : FACTIONS » (§2). Scan robuste export-safe (.remap), duck-typing.
@@ -1049,9 +1069,16 @@ func _faction_info(fid: String) -> Dictionary:
 							# §8.100 — hero_path AUSSI mis en cache (portrait du panneau héros du
 							# Rapport Post-Op). Duck-typing défensif : null si champ absent → "".
 							var hp = res.get("hero_path")
+							# i18n (2026-07-18) : pouvoir passif via power_key traduite (repli
+							# legacy : parsing de l'ancienne description). « leader » = identité du
+							# meneur (rang traduit + nom invariant) pour le rapport/les tiroirs.
+							var pk = res.get("power_key")
+							var power_txt := tr(str(pk)) if (pk != null and str(pk) != "") \
+								else _extract_power(desc)
 							info = {"name": str(res.get("name")), "description": desc,
-								"power": _extract_power(desc),
-								"hero_path": str(hp) if hp != null else ""}
+								"power": power_txt,
+								"hero_path": str(hp) if hp != null else "",
+								"leader": WarzoneUI.faction_leader_title(res)}
 							break
 			file_name = dir.get_next()
 		dir.list_dir_end()
@@ -1079,7 +1106,7 @@ func _push_inspector(tid: String) -> void:
 	var raw_owner = _terr(tid).get("owner_id")
 	var has_owner: bool = raw_owner != null
 	var owner_id: int = int(raw_owner) if has_owner else -1
-	var owner_name := "NEUTRE"
+	var owner_name := tr("HUD_NEUTRAL")
 	var owner_color := Color("8a97a5")
 	if has_owner:
 		owner_name = _display_name(owner_id)
@@ -1172,13 +1199,15 @@ func _push_factions_intel() -> void:
 		var finfo := _faction_info(fid)
 		var fname := str(finfo.get("name", ""))
 		if fname == "":
-			fname = fid.capitalize() if fid != "" else "Faction inconnue"
+			fname = fid.capitalize() if fid != "" else tr("GAME_FACTION_UNKNOWN")
 		entries.append({
 			"pseudo": _display_name(pid),
 			"faction_name": fname,
 			"color": board.get_player_color(pid),
 			"power": str(finfo.get("power", "")),
 		})
+		# Barre d'info du tour (i18n 2026-07-18) : le HUD affiche le nom EN invariant, plus l'id brut.
+		hud.faction_name_by_pid[str(pid)] = fname
 	hud.set_factions_intel(entries)
 
 # « Mémoire Tactique » (§8.35/§8.36) : extrait les statistiques GLOBALES PUBLIQUES de l'état réseau
@@ -1216,8 +1245,7 @@ func _push_intel() -> void:
 	var mine_targeted := false
 	if typeof(next_tids) == TYPE_ARRAY:
 		for tid in next_tids:
-			var info: Dictionary = MapData.TERRITORIES.get(str(tid), {})
-			forecast_names.append(str(info.get("name", tid)))
+			forecast_names.append(MapData.t_name(str(tid)))
 			if _owner(str(tid)) == _my_id():
 				mine_targeted = true
 	hud.set_zone_forecast(forecast_names)
@@ -1238,7 +1266,7 @@ func _push_war_intel() -> void:
 	var continents: Dictionary = {}
 	for cid in cont_terrs.keys():
 		continents[cid] = {
-			"name": str(MapData.CONTINENTS.get(cid, {}).get("name", cid)),
+			"name": MapData.c_name(cid),
 			"tids": cont_terrs[cid],
 		}
 	hud.set_war_intel(rows, WarRoom.continent_rows(GameState.territories, continents))
@@ -1278,10 +1306,16 @@ func _push_objective_tracker() -> void:
 		"owned_count": WarRoom.territory_count(GameState.territories, _my_id()),
 		"continents_owned": my_continents,
 		"target_alive": target_alive,
-		"target_name": _display_name(target_id) if target_id != -9999 else "cible",
+		"target_name": _display_name(target_id) if target_id != -9999 else tr("GAME_TARGET_FALLBACK"),
 	}
 	var data := ObjectiveTracker.progress(obj, ctx)
-	var tooltip := str(obj.get("description", "")) + "\n" + tr("OBJ_LAST_SURVIVOR_HINT")
+	# i18n (2026-07-18) : description composée LOCALEMENT (type/params) en langue courante,
+	# repli sur la description serveur (anglais invariant) pour un type inconnu.
+	var obj_txt := ObjectiveTracker.describe(obj,
+		_display_name(target_id) if target_id != -9999 else "")
+	if obj_txt == "":
+		obj_txt = str(obj.get("description", ""))
+	var tooltip := obj_txt + "\n" + tr("OBJ_LAST_SURVIVOR_HINT")
 	hud.set_objective_progress(data, tooltip)
 
 # =========================================================
@@ -1490,7 +1524,7 @@ func _on_game_error(message: String):
 # journalise, et si c'est NOUS on verrouille le bouton d'abandon (anti double-envoi).
 func _on_player_abandoned(player_id: int) -> void:
 	# Unification E1 : pseudo en couleur plateau (échappé), reste de la ligne en rouge charte.
-	hud.add_log("⚐ %s [color=#d6453f]a abandonné ! Défense automatique activée.[/color]" % _bb_pseudo(player_id))
+	hud.add_log(tr("GAME_PLAYER_ABANDONED_FMT") % _bb_pseudo(player_id))
 	if player_id == _my_id():
 		hud.lock_abandon_button()
 
@@ -1610,6 +1644,8 @@ func _feed_ctx(event) -> Dictionary:
 	var ctx := {
 		"bb": Callable(self, "_bb_pseudo"),
 		"tname": Callable(self, "_territory_name"),
+		# i18n (2026-07-18) : résolution id de faction → nom EN invariant (system_events).
+		"fname": Callable(self, "_faction_display_name"),
 		"fallback": _format_event(event),
 	}
 	if typeof(event) == TYPE_DICTIONARY and str(event.get("event_type", "")) == "attack_result":
@@ -1748,7 +1784,7 @@ func _maybe_show_spectator() -> void:
 	# Échec de re-queue → retour au lobby (le socket est déjà fermé par requeue()).
 	if not NetworkManager.requeue_failed.is_connected(_on_requeue_failed):
 		NetworkManager.requeue_failed.connect(_on_requeue_failed)
-	hud.add_log("[color=#e0b249]★ K.I.A. — vous passez en MODE OBSERVATEUR (caméra libre, chat ouvert).[/color]")
+	hud.add_log(tr("GAME_KIA_SPECTATOR"))
 
 func _on_spectator_requeue() -> void:
 	# Le helper réseau enchaîne quitter → radar → rejoindre/créer → waiting_room (G3 §8.70).
@@ -1781,9 +1817,9 @@ func _show_operation_report() -> void:
 	var title := ""
 	var title_color := Color("e0b249")  # or (victoire)
 	if win == _my_id():
-		title = "VICTOIRE DE %s" % _display_name(win)
+		title = tr("GAME_VICTORY_TITLE_FMT") % _display_name(win)
 	else:
-		title = "OPÉRATION TERMINÉE — %s L'EMPORTE" % _display_name(win)
+		title = tr("GAME_DEFEAT_TITLE_FMT") % _display_name(win)
 		title_color = Color("d6453f")  # rouge danger (défaite)
 	# Rapport d'Attrition depuis la Mémoire Tactique (§8.35) : pertes infligées par la zone, triées
 	# décroissant ; on met en avant le « plus lourd tribut » (médaille dorée).
@@ -2072,6 +2108,8 @@ func _hero_panel_data() -> Dictionary:
 			portrait = res
 	return {
 		"faction_name": str(info.get("name", "")),
+		# Identité du meneur (refonte 2026-07-18) : rang traduit + nom propre invariant.
+		"leader": str(info.get("leader", "")),
 		"portrait": portrait,
 		"color": board.get_player_color(pid),
 		"level": int(hero.get("level", 1)),
@@ -2175,25 +2213,25 @@ func _on_back_to_lobby():
 
 func _update_instruction():
 	if GameState.winner_id != null:
-		hud.set_instruction("★ VICTOIRE de %s !" % _display_name(int(GameState.winner_id)))
+		hud.set_instruction(tr("GAME_INSTR_VICTORY_FMT") % _display_name(int(GameState.winner_id)))
 		return
 
 	# Conquête en attente de répartition : la fenêtre fait foi (jeu figé, §8.23).
 	if _awaiting_conquer_move:
-		hud.set_instruction("⚑ Conquête ! Répartissez vos troupes dans la fenêtre.")
+		hud.set_instruction(tr("GAME_INSTR_CONQUER"))
 		return
 
 	# Choix de carte Événement / espionnage en attente (factions à états bloquants, §8.3).
 	if _awaiting_eclipse:
-		hud.set_instruction("❖ Ordre de l'Éclipse : choisissez la carte à conserver.")
+		hud.set_instruction(tr("GAME_INSTR_ECLIPSE"))
 		return
 	if _awaiting_spy:
-		hud.set_instruction("◎ Chasseurs d'Ombres : choisissez une cible à espionner.")
+		hud.set_instruction(tr("GAME_INSTR_SPY"))
 		return
 
 	# Empire déchu local : plus rien à jouer (le serveur saute nos tours), on observe.
 	if _am_abandoned():
-		hud.set_instruction("⚐ Vous avez abandonné — vos territoires se défendent automatiquement.")
+		hud.set_instruction(tr("GAME_INSTR_ABANDONED"))
 		return
 
 	match GameState.stage:
@@ -2204,19 +2242,19 @@ func _update_instruction():
 				var suffix := ""
 				if _blind_expected > 0:
 					suffix = " (%d/%d)" % [_blind_ready, _blind_expected]
-				hud.set_instruction("Déploiement validé — en attente des autres joueurs…%s" % suffix)
+				hud.set_instruction(tr("GAME_INSTR_BLIND_WAIT") % suffix)
 			else:
-				hud.set_instruction("PLACEMENT AVEUGLE : clic GAUCHE +1 / clic DROIT -1 sur VOS territoires. Posez vos %d troupes, puis CONFIRMER." % _deploy_quota())
+				hud.set_instruction(tr("GAME_INSTR_BLIND_DEPLOY") % _deploy_quota())
 		"playing":
 			if not _is_playing_my_turn():
-				hud.set_instruction("Tour de %s — patientez." % _display_name(int(GameState.current_player_id)))
+				hud.set_instruction(tr("GAME_INSTR_WAIT_TURN") % _display_name(int(GameState.current_player_id)))
 			else:
 				match GameState.current_phase:
-					1: hud.set_instruction("RENFORTS reçus. Déployez en cliquant « Fin de Phase ».")
-					2: hud.set_instruction("DÉPLOIEMENT : clic GAUCHE +1 / clic DROIT -1 sur vos territoires, puis CONFIRMER (%d à placer)." % _deploy_quota())
-					3: hud.set_instruction("ATTAQUE : cliquez votre territoire (≥2), puis un ennemi adjacent.")
-					4: hud.set_instruction("MOUVEMENT : cliquez une source, puis un territoire allié adjacent.")
-					_: hud.set_instruction("Transition… cliquez « Fin de Phase ».")
+					1: hud.set_instruction(tr("GAME_INSTR_REINFORCEMENTS"))
+					2: hud.set_instruction(tr("GAME_INSTR_DEPLOY") % _deploy_quota())
+					3: hud.set_instruction(tr("GAME_INSTR_ATTACK"))
+					4: hud.set_instruction(tr("GAME_INSTR_MOVE"))
+					_: hud.set_instruction(tr("GAME_INSTR_TRANSITION"))
 		_:
 			hud.set_instruction("")
 
@@ -2250,68 +2288,68 @@ func _format_event(e) -> String:
 		return str(e)
 	match str(e.get("event_type", "")):
 		"attack_result":
-			var s = "⚔ T%s→T%s | dés A:%s D:%s | pertes A:%s D:%s" % [
+			var s = tr("EVT_ATTACK_FMT") % [
 				e.get("attacker_territory_id"), e.get("defender_territory_id"),
 				e.get("attacker_rolls"), e.get("defender_rolls"),
 				e.get("attacker_losses"), e.get("defender_losses")]
-			# Effets de faction déclenchés ce combat (§8.3).
+			# Effets de faction déclenchés ce combat (§8.3) — noms EN invariants, pouvoirs traduits.
 			if e.get("phalanges_reroll"):
-				s += " ⚙ Phalanges (relance)"
+				s += " " + tr("EVT_MARK_PHALANX")
 			if e.get("aegis_kill"):
-				s += " ◆ Aegis (double)"
+				s += " " + tr("EVT_MARK_AEGIS")
 			if e.get("terror_kill"):
-				s += " ☠ Terreur (3e)"
+				s += " " + tr("EVT_MARK_TERROR")
 			if e.get("conquered"):
-				s += " ⚑ conquis !"
+				s += " " + tr("EVT_CONQUERED_SUFFIX")
 			return s
 		"blind_deploy_submitted":
 			# Phase 0 (§8.31) : un joueur a validé son déploiement aveugle (compteur X/Y).
-			var line := "❯ Déploiement aveugle validé (%s/%s)." % [
+			var line := tr("EVT_BLIND_SUBMITTED_FMT") % [
 				str(int(e.get("ready_count", 0))), str(int(e.get("expected_count", 0)))]
 			if e.get("setup_complete"):
-				line += " Tous prêts — la partie commence !"
+				line += tr("EVT_ALL_READY_SUFFIX")
 			return line
 		"blind_deploy_resolved":
 			# Résolution simultanée de la Phase 0 (tous soumis OU délai de 90 s écoulé, §8.31).
-			return "❯ Déploiements simultanés résolus%s — la partie commence !" % (
-				" (délai écoulé)" if e.get("forced") else "")
+			return tr("EVT_BLIND_RESOLVED_FMT") % (
+				tr("EVT_TIMEOUT_SUFFIX") if e.get("forced") else "")
 		"turn_timeout":
 			# Minuterie de tour expirée (60 s) : le serveur a passé le tour d'office (§8.31).
-			return "❯ Temps écoulé — tour de %s passé d'office." % _bb_pseudo(int(e.get("player_id", -1)))
+			return tr("EVT_TURN_TIMEOUT_FMT") % _bb_pseudo(int(e.get("player_id", -1)))
 		"initial_units_placed":
 			# Déploiement en masse (§8.26) : `deployments` = dict {tid: nb} ; l'ancien format
 			# unitaire (territory_id/amount) reste affichable proprement.
 			var msg = ""
 			if e.has("territory_id"):
-				msg = "❯ +%s sur T%s" % [e.get("amount"), e.get("territory_id")]
+				msg = tr("EVT_DEPLOY_ONE_FMT") % [e.get("amount"), e.get("territory_id")]
 			else:
-				msg = "❯ %s troupe(s) placée(s) sur %d territoire(s)" % [
+				msg = tr("EVT_PLACED_FMT") % [
 					str(e.get("amount", 0)), _deployments_count(e)]
 			if e.get("setup_complete"):
-				msg += " — placement terminé, la partie commence !"
+				msg += tr("EVT_PLACEMENT_DONE_SUFFIX")
 			return msg
 		"units_deployed":
 			if e.has("territory_id"):
-				return "❯ +%s sur T%s" % [e.get("amount"), e.get("territory_id")]
-			return "❯ %s renfort(s) déployé(s) sur %d territoire(s)" % [
+				return tr("EVT_DEPLOY_ONE_FMT") % [e.get("amount"), e.get("territory_id")]
+			return tr("EVT_REINFORCED_FMT") % [
 				str(e.get("amount", 0)), _deployments_count(e)]
 		"units_moved":
-			return "➜ %s de T%s à T%s" % [e.get("amount"), e.get("source_territory_id"), e.get("target_territory_id")]
+			return tr("EVT_MOVED_FMT") % [e.get("amount"), e.get("source_territory_id"), e.get("target_territory_id")]
 		"conquer_move_resolved":
-			return "➜ %s troupe(s) déplacée(s) de T%s vers T%s (conquête)." % [
+			return tr("EVT_CONQUER_MOVE_FMT") % [
 				str(e.get("troops")), e.get("from_tid"), e.get("to_tid")]
 		"turn_passed":
-			return "❯ Phase suivante."
+			return tr("EVT_NEXT_PHASE")
 		"card_played":
-			return "❖ Carte +%s jouée — troupes à déployer." % str(int(e.get("card_value", 0)))
+			return tr("EVT_CARD_PLAYED_FMT") % str(int(e.get("card_value", 0)))
 		"card_kept":
-			return "❖ Carte +%s conservée (Ordre de l'Éclipse)." % str(int(e.get("card_value", 0)))
+			return tr("EVT_CARD_KEPT_FMT") % str(int(e.get("card_value", 0)))
 		"spy_done":
-			return "◎ Un Chasseur d'Ombres a espionné un objectif secret."
+			return tr("EVT_SPY_DONE")
 		"game_initialized":
-			return "❯ " + str(e.get("message", "Partie initialisée."))
+			return "❯ " + str(e.get("message", tr("EVT_GAME_INITIALIZED")))
 		"game_over":
-			return "★ Partie terminée — vainqueur : %s (%s)" % [
+			return tr("EVT_GAME_OVER_FMT") % [
 				_bb_pseudo(int(e.get("winner_id", -1))), str(e.get("match_type"))]
 		_:
 			return str(e.get("event_type", e))
@@ -2322,11 +2360,11 @@ func _format_event(e) -> String:
 
 func _on_debug_init():
 	button.disabled = true
-	button.text = "Connexion..."
+	button.text = tr("GAME_DEBUG_CONNECTING")
 	if not NetworkManager.connected:
 		NetworkManager.connect_to_server(test_room_id)
 		await NetworkManager.server_connected
-	button.text = "Initialisation..."
+	button.text = tr("GAME_DEBUG_INITIALIZING")
 	NetworkManager.send_init_game()
 	button.disabled = false
 	button.hide()

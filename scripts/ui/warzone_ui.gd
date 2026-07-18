@@ -303,3 +303,31 @@ static func _refresh_language_selector(buttons: Dictionary, active_code: String)
 		btn.add_theme_stylebox_override("focus", sb)
 		btn.add_theme_color_override("font_color", TEXT if active else MUTED)
 		btn.add_theme_color_override("font_hover_color", TEXT)
+
+# =========================================================================
+# Identité du meneur de faction (refonte 2026-07-18)
+# =========================================================================
+# « GÉNÉRAL VIKTOR "IRONLINE" STAHL » : rang TRADUIT (clés RANK_GENERAL / RANK_CAPTAIN, via
+# TranslationServer — utilisable depuis un helper static) + nom propre et callsign INVARIANTS
+# (anglais, identiques dans toutes les langues). `f` = FactionData duck-typé (.get()) : un
+# .tres legacy sans champs héros renvoie "" et l'appelant masque la ligne.
+static func faction_leader_title(f) -> String:
+	if f == null:
+		return ""
+	var raw_name = f.get("hero_name")
+	var hero_name := str(raw_name) if raw_name != null else ""
+	if hero_name == "":
+		return ""
+	var raw_rank = f.get("hero_rank")
+	var rank_key := "RANK_GENERAL" if str(raw_rank) == "general" else "RANK_CAPTAIN"
+	var rank := TranslationServer.translate(rank_key)
+	var raw_callsign = f.get("hero_callsign")
+	var callsign := str(raw_callsign) if raw_callsign != null else ""
+	var full := hero_name
+	if callsign != "":
+		var parts := hero_name.split(" ", false, 1)
+		if parts.size() == 2:
+			full = "%s \"%s\" %s" % [parts[0], callsign, parts[1]]
+		else:
+			full = "%s \"%s\"" % [hero_name, callsign]
+	return "%s %s" % [rank, full]

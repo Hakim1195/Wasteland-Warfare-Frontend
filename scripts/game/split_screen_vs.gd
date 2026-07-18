@@ -349,7 +349,7 @@ func _setup_side(is_left: bool, faction: Dictionary) -> void:
 	var placeholder: ColorRect = %LeftPlaceholder if is_left else %RightPlaceholder
 	var background: TextureRect = %LeftBackground if is_left else %RightBackground
 
-	role_label.text = "❯ ATTAQUANT" if is_left else "❯ DÉFENSEUR"
+	role_label.text = tr("VS_ROLE_ATTACKER_SHORT") if is_left else tr("VS_ROLE_DEFENDER_SHORT")
 	name_label.text = str(faction["name"]).to_upper()
 	name_label.add_theme_color_override("font_color", accent.lightened(0.35))
 

@@ -833,6 +833,17 @@ func populate_hero_identity(h: Dictionary) -> void:
 	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_row.add_child(name_lbl)
 	name_row.add_child(_title_badge(tr("REPORT_HERO_LEVEL") % int(h.get("level", 1))))
+	# Identité du meneur (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL » sous le nom
+	# de faction (rang traduit + nom propre invariant, résolu par main._hero_panel_data).
+	var leader := str(h.get("leader", ""))
+	if leader != "":
+		var leader_lbl := Label.new()
+		leader_lbl.text = leader.to_upper()
+		leader_lbl.add_theme_font_size_override("font_size", 13)
+		var lc = h.get("color", ACCENT_CYAN)
+		leader_lbl.add_theme_color_override("font_color",
+			Color(lc if lc is Color else ACCENT_CYAN, 0.9))
+		col.add_child(leader_lbl)
 	var state_lbl := Label.new()
 	state_lbl.add_theme_font_override("font", RosterHelpers._mono_font())
 	state_lbl.add_theme_font_size_override("font_size", 12)

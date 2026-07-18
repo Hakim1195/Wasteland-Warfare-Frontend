@@ -44,6 +44,31 @@ static func leg_progress(objective: Dictionary, ctx: Dictionary) -> Dictionary:
 	return {"label": str(objective.get("description", TranslationServer.translate("OBJ_SECRET_FALLBACK"))),
 		"ratio": 0.0, "done": false}
 
+# Description COMPLÈTE traduite d'un objectif, composée de type/params (i18n 2026-07-18 — la
+# `description` serveur, désormais en anglais invariant, ne sert que de repli pour un type
+# inconnu). `target_name` optionnel = pseudo résolu de la cible du volet kill (sinon « #id »).
+static func describe(objective: Dictionary, target_name: String = "") -> String:
+	var otype := str(objective.get("type", ""))
+	var params: Dictionary = objective.get("params", {}) if typeof(objective.get("params")) == TYPE_DICTIONARY else {}
+	if otype == "double":
+		var classic = objective.get("classic_objective")
+		var classic_txt := describe(classic) if typeof(classic) == TYPE_DICTIONARY else ""
+		var who := target_name
+		if who == "":
+			who = "#" + str(params.get("target_id", "?"))
+		return "%s %s %s" % [TranslationServer.translate("OBJ_DESC_KILL_FMT") % who,
+			TranslationServer.translate("OBJ_OR"), classic_txt]
+	if otype == "conquer_territories":
+		return TranslationServer.translate("OBJ_DESC_CONQUER_FMT") % int(params.get("n", 24))
+	if otype == "control_continents":
+		return TranslationServer.translate("OBJ_DESC_CONTINENTS_FMT") % int(params.get("n", 2))
+	if otype == "eliminate_player":
+		var who2 := target_name
+		if who2 == "":
+			who2 = "#" + str(params.get("target_id", "?"))
+		return TranslationServer.translate("OBJ_DESC_ELIMINATE_FMT") % who2
+	return str(objective.get("description", ""))
+
 # Progression complète. Pour un objectif DOUBLE (§8.61) : DEUX mini-lignes (kill / classique),
 # la PLUS AVANCÉE en tête. Sinon une seule ligne.
 static func progress(objective: Dictionary, ctx: Dictionary) -> Dictionary:
