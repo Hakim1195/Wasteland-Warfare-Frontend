@@ -793,13 +793,17 @@ func _rules_row(label: String, value: String, value_color: Color) -> HBoxContain
 	h.add_child(_mini_label(value, 15, value_color, false, HORIZONTAL_ALIGNMENT_RIGHT))
 	return h
 
-# Nom AFFICHÉ d'une division. Les IDS réseau sont ASCII (« ELITE ») ; l'affichage suit la charte FR
-# accentuée — miroir de seasons.DIVISION_LABELS côté serveur, qui compose déjà `rp_label` = « ÉLITE »
-# pour le Rapport Post-Op. Sans ce mapping, le Rapport disait « ÉLITE » et le Classement « ELITE ».
-const DIVISION_LABELS := {"ELITE": "ÉLITE"}
+# Nom AFFICHÉ d'une division. Les IDS réseau sont ASCII (« ELITE ») ; l'affichage passe par une
+# clé i18n (valeur du mapping = clé, traduite au point d'affichage : DIVISION_ELITE → « ÉLITE » fr,
+# « ELITE » en/it) — miroir de seasons.DIVISION_LABELS côté serveur, qui compose déjà `rp_label` =
+# « ÉLITE » pour le Rapport Post-Op. Sans ce mapping, le Rapport disait « ÉLITE » et le Classement
+# « ELITE ». Les ids NON mappés (BRONZE/ARGENT/OR/PLATINE) restent affichés tels quels.
+const DIVISION_LABELS := {"ELITE": "DIVISION_ELITE"}
 
 func _division_name(division: String) -> String:
-	return str(DIVISION_LABELS.get(division, division))
+	if DIVISION_LABELS.has(division):
+		return tr(str(DIVISION_LABELS[division]))
+	return division
 
 # Libellé « OR II » / « ÉLITE » — miroir de seasons.rank_info().label côté serveur (le bloc `me` ne
 # transporte que division + division_tier, pas le libellé composé).

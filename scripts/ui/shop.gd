@@ -261,10 +261,11 @@ func _format_credits(value: int) -> String:
 		out = "-" + out
 	return out
 
-# Formate un prix fiat (en centimes d'euro) en « 4,99 € » (virgule décimale française).
+# Formate un prix fiat (en centimes d'euro) selon la locale — clé SHOP_PRICE_EUR_FMT :
+# « 4,99 € » fr/it (virgule décimale), « €4.99 » en (symbole en tête, point décimal).
 func _format_fiat(cents: int) -> String:
 	@warning_ignore("integer_division")  # division entière VOULUE : part entière = euros.
-	return "%d,%02d €" % [cents / 100, cents % 100]
+	return tr("SHOP_PRICE_EUR_FMT") % [cents / 100, cents % 100]
 
 # Couleur d'accent (liseré + eyebrow + badge) d'une carte selon sa catégorie :
 #   • faction → couleur SIGNATURE de la faction (par son id).

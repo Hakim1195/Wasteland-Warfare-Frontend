@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "chasseurs_ombres"
-name = "Les Chasseurs d'Ombres"
-description = "Réseau d'espions et d'assassins qui vendent l'information au prix du sang. Avant même le premier coup de feu, ils savent déjà ce que leurs rivaux convoitent en secret.
-
-[b]Pouvoir :[/b] regardent secrètement l'objectif d'un joueur ciblé au début de la partie."
+name = "Shadow Hunters"
+description = ""
+desc_key = "FACTION_DESC_CHASSEURS_OMBRES"
+power_key = "FACTION_POWER_CHASSEURS_OMBRES"
+hero_name = "Sable Renko"
+hero_callsign = "Ghost"
+hero_rank = "captain"
 modifiers = {
 "peek_objective": 1
 }

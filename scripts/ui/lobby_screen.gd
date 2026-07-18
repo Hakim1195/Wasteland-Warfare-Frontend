@@ -264,9 +264,11 @@ func _lock_map_selector_for_ranked() -> void:
 
 # Casual (§8.103) — miroir du principe classé ci-dessus : le MODE choisi au menu fait foi, la
 # carte doit le supporter. Toute carte dont les bornes ne couvrent pas l'effectif du mode est
-# DÉSACTIVÉE dans le sélecteur (libellé suffixé « — MAX N JOUEURS ») au lieu de laisser la
-# création clamper en silence (EXA 6 sur Théâtre Atlantique → partie à 4). Garde d'avenir : si
-# la carte déjà retenue devenait incompatible, on retombe sur la carte par défaut (couvre 3-6).
+# DÉSACTIVÉE dans le sélecteur, avec une INFOBULLE « MAX N JOUEURS » — surtout PAS un suffixe de
+# libellé : l'OptionButton se dimensionne sur l'item le plus long (fit_to_longest_item) et un
+# libellé rallongé élargissait tout le Centre de Commandement en FIVE/HEXA (retour Hakim). La
+# taille du panneau doit rester IDENTIQUE dans tous les modes. Garde d'avenir : si la carte
+# déjà retenue devenait incompatible, on retombe sur la carte par défaut (couvre 3-6).
 func _restrict_map_selector_to_mode() -> void:
 	if _map_option == null:
 		return
@@ -277,8 +279,7 @@ func _restrict_map_selector_to_mode() -> void:
 		if _required_players > max_p or _required_players < min_p:
 			_map_option.set_item_disabled(i, true)
 			if _required_players > max_p:
-				_map_option.set_item_text(i, _map_option.get_item_text(i)
-					+ " — " + tr("LOBBY_MAP_MAX_PLAYERS") % max_p)
+				_map_option.get_popup().set_item_tooltip(i, tr("LOBBY_MAP_MAX_PLAYERS") % max_p)
 	var kept: Dictionary = MapData.MAP_DEFS.get(_selected_map_id, {})
 	if _required_players > int(kept.get("max_players", 6)) \
 			or _required_players < int(kept.get("min_players", 3)):

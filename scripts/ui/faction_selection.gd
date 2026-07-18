@@ -97,6 +97,9 @@ var _owned_ids: Dictionary = {}       # fid -> true
 var _rotation_ids: Dictionary = {}    # fid -> true
 # Bandeau « GRATUITE CETTE SEMAINE » / « VERROUILLÉE » créé par code au-dessus du nom.
 var _access_banner: Label = null
+# Ligne d'identité du MENEUR (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL », créée
+# par code SOUS le nom de faction (aucune retouche .tscn — même pattern que _access_banner).
+var _leader_line: Label = null
 # Skins équipés par faction (M5 §8.69) : { faction_id: skin_id } — bloc `equipped` de l'inventaire.
 var _equipped_map: Dictionary = {}
 const SKINS_DIR := "res://resources/skins/"
@@ -257,8 +260,13 @@ func _apply_card_content() -> void:
 	var f = _factions[_index]
 	faction_name_label.text = f.name
 	faction_name_label.add_theme_color_override("font_color", f.accent_color)
-	# Dossier : lore + rappel du pouvoir (les modificateurs bruts ne sont plus listés — cf. §UI).
-	description_label.text = f.description
+	# Identité du meneur (refonte 2026-07-18) : rang traduit + nom propre invariant, sous le nom.
+	_ensure_leader_line()
+	_leader_line.text = WarzoneUI.faction_leader_title(f).to_upper()
+	_leader_line.add_theme_color_override("font_color", Color(f.accent_color, 0.85))
+	_leader_line.visible = _leader_line.text != ""
+	# Dossier : lore + rappel du pouvoir — TRADUITS via les clés du .tres (i18n 2026-07-18).
+	description_label.text = _dossier_text(f)
 	_set_portrait(f)
 	# Caractéristiques chiffrées du héros de la faction centrée, SOUS la description (IntelColumn).
 	_render_hero_stats(f)
@@ -340,7 +348,8 @@ func _apply_access_state(f) -> void:
 		confirm_button.disabled = locked
 		confirm_button.text = tr("FS_LOCKED_BTN") if locked else tr("FS_CONFIRM")
 
-# Bandeau d'accès créé par code SOUS le nom de faction (aucune retouche .tscn).
+# Bandeau d'accès créé par code SOUS le nom de faction (aucune retouche .tscn). Placé APRÈS la
+# ligne d'identité du meneur quand elle existe (ordre : nom → meneur → bandeau).
 func _ensure_access_banner() -> void:
 	if _access_banner != null and is_instance_valid(_access_banner):
 		return
@@ -351,7 +360,31 @@ func _ensure_access_banner() -> void:
 	_access_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var parent := faction_name_label.get_parent()
 	parent.add_child(_access_banner)
-	parent.move_child(_access_banner, faction_name_label.get_index() + 1)
+	var anchor := _leader_line if (_leader_line != null and is_instance_valid(_leader_line)) else faction_name_label
+	parent.move_child(_access_banner, anchor.get_index() + 1)
+
+# Ligne d'identité du meneur, créée une fois SOUS le nom de faction (pattern _ensure_access_banner).
+func _ensure_leader_line() -> void:
+	if _leader_line != null and is_instance_valid(_leader_line):
+		return
+	_leader_line = Label.new()
+	_leader_line.name = "LeaderLine"
+	_leader_line.add_theme_font_size_override("font_size", 16)
+	_leader_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var parent := faction_name_label.get_parent()
+	parent.add_child(_leader_line)
+	parent.move_child(_leader_line, faction_name_label.get_index() + 1)
+
+# Texte du dossier : lore traduit (desc_key) + ligne de pouvoir traduite (power_key), même
+# gabarit BBCode que l'ancien champ `description` en dur ("[b]Pouvoir :[/b] …"). Replis
+# gracieux : .tres legacy sans clés → description en dur ; clé absente du CSV → clé brute
+# évitée par le repli sur description.
+func _dossier_text(f) -> String:
+	var lore := tr(str(f.desc_key)) if str(f.desc_key) != "" else str(f.description)
+	var power := tr(str(f.power_key)) if str(f.power_key) != "" else ""
+	if power != "":
+		return "%s\n\n[b]%s[/b] %s" % [lore, tr("FACTION_POWER_LABEL"), power]
+	return lore
 
 # =========================================================
 # Caractéristiques du héros (panneau de stats du draft — sprint RPG)

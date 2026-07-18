@@ -72,10 +72,12 @@ func setup(pid: int, compact: bool = false) -> void:
 
 	# Pseudo résolu comme main._display_name : username serveur (§8.28), préfixe « [IA] » pour un
 	# bot (id négatif OU is_bot public), repli « Joueur N » séquentiel (GameState.player_number).
+	# i18n : replis traduits (CHIP_BOT_FALLBACK / WR_PLAYER_FALLBACK — clé partagée waiting_room).
 	var is_bot: bool = int(pid) < 0 or bool(p.get("is_bot", false))
 	var uname := str(p.get("username", ""))
 	if uname == "":
-		uname = ("Bot %d" % absi(int(pid))) if is_bot else ("Joueur %d" % GameState.player_number(pid))
+		uname = (tr("CHIP_BOT_FALLBACK") % absi(int(pid))) if is_bot \
+			else (tr("WR_PLAYER_FALLBACK") % GameState.player_number(pid))
 	var display := ("[IA] " + uname) if is_bot else uname
 	# Troncature d'affichage compacte SEULEMENT — le tooltip garde toujours le pseudo COMPLET.
 	var label_text := display
@@ -97,7 +99,7 @@ func setup(pid: int, compact: bool = false) -> void:
 	_faction_mark.visible = has_accent
 	if has_accent:
 		_faction_mark.add_theme_color_override("font_color", accent)
-	tooltip_text = display + (("\nFaction : " + fid.capitalize()) if fid != "" else "")
+	tooltip_text = display + (("\n" + (tr("CHIP_FACTION_TOOLTIP") % fid.capitalize())) if fid != "" else "")
 
 # Couleur plateau du joueur — TOUJOURS board.get_player_color (source unique E1) ; gris neutre
 # si le plateau est absent (boot isolé du composant). Engine.get_main_loop() plutôt que

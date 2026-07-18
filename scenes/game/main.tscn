@@ -296,7 +296,7 @@ text = "❯ —"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(26, 26)
 layout_mode = 2
-tooltip_text = "Pouvoir de faction"
+tooltip_text = "HUD_FACTION_POWER_TOOLTIP"
 mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 14
 theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
@@ -312,7 +312,7 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 22
-text = "PHASE : —"
+text = "HUD_PHASE_PLACEHOLDER"
 
 [node name="VSeparator1" type="VSeparator" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=485128774]
 layout_mode = 2
@@ -361,7 +361,7 @@ theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
 theme_override_styles/normal = SubResource("StyleBoxFlat_abandon")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_abandon_pressed")
 theme_override_styles/hover = SubResource("StyleBoxFlat_abandon_hover")
-text = "☠ ABANDONNER"
+text = "HUD_ABANDON"
 
 [node name="SidePanelWidget" type="Control" parent="HUD" unique_id=1478926449]
 layout_mode = 1
@@ -393,7 +393,7 @@ theme_override_constants/separation = 6
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 14
-text = "COMMUNICATIONS"
+text = "HUD_COMMS_TITLE"
 horizontal_alignment = 1
 
 [node name="ChatIconBar" type="HBoxContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=150589755]
@@ -405,7 +405,7 @@ alignment = 1
 unique_name_in_owner = true
 custom_minimum_size = Vector2(46, 34)
 layout_mode = 2
-tooltip_text = "Canal général"
+tooltip_text = "HUD_CHAT_GENERAL_TOOLTIP"
 theme_override_font_sizes/font_size = 18
 theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_hover")
@@ -413,20 +413,20 @@ theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
 toggle_mode = true
 button_pressed = true
 button_group = SubResource("ButtonGroup_chat")
-text = "GÉN"
+text = "HUD_CHAT_TAB_GENERAL_SHORT"
 
 [node name="TabBtnPrive" type="Button" parent="HUD/SidePanelWidget/GlassBody/SideVBox/ChatIconBar" unique_id=335293751]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(46, 34)
 layout_mode = 2
-tooltip_text = "Canal privé"
+tooltip_text = "HUD_CHAT_PRIVATE_TOOLTIP"
 theme_override_font_sizes/font_size = 18
 theme_override_styles/normal = SubResource("StyleBoxFlat_btn")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
 toggle_mode = true
 button_group = SubResource("ButtonGroup_chat")
-text = "PRIV"
+text = "HUD_CHAT_TAB_PRIVATE_SHORT"
 
 [node name="ChatTabs" type="TabContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=842572557]
 unique_name_in_owner = true
@@ -467,7 +467,7 @@ theme_override_constants/separation = 4
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 16
-text = "▣ JOURNAL MILITAIRE"
+text = "HUD_LOG_TITLE"
 horizontal_alignment = 1
 
 [node name="LogText" type="RichTextLabel" parent="HUD/SidePanelWidget/GlassBody/SideVBox/MilitaryLog/LogVBox" unique_id=723422796]
@@ -489,7 +489,7 @@ offset_top = -42.0
 offset_bottom = 42.0
 grow_horizontal = 0
 grow_vertical = 2
-tooltip_text = "Replier / déployer le panneau"
+tooltip_text = "HUD_TOGGLE_SIDE_TOOLTIP"
 theme_override_font_sizes/font_size = 18
 theme_override_styles/normal = SubResource("StyleBoxFlat_glass")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_glass")
@@ -514,7 +514,7 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(120, 22)
 layout_mode = 2
 size_flags_horizontal = 4
-tooltip_text = "Replier / déployer le panneau inférieur"
+tooltip_text = "HUD_TOGGLE_BOTTOM_TOOLTIP"
 theme_override_font_sizes/font_size = 14
 theme_override_styles/normal = SubResource("StyleBoxFlat_glass")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_glass")
@@ -533,7 +533,7 @@ theme_override_constants/separation = 6
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 13
-text = "▤ INVENTAIRE — CARTES ÉVÈNEMENT"
+text = "HUD_CARDS_TITLE"
 horizontal_alignment = 1
 
 [node name="CardsBox" type="HBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox" unique_id=1649655257]
@@ -548,7 +548,7 @@ custom_minimum_size = Vector2(560, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 13
-text = "◎ OBJECTIF : —"
+text = "HUD_OBJECTIVE_PLACEHOLDER"
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -560,7 +560,7 @@ alignment = 1
 [node name="AmountLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox/ActionRow" unique_id=784556440]
 layout_mode = 2
 theme_override_font_sizes/font_size = 13
-text = "QUANTITÉ :"
+text = "HUD_AMOUNT_LABEL"
 
 [node name="AmountSpin" type="SpinBox" parent="HUD/BottomCenterWidget/GlassBody/BottomVBox/ActionRow" unique_id=1885257618]
 unique_name_in_owner = true
@@ -582,7 +582,7 @@ theme_override_colors/font_pressed_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
-text = "FIN DE PHASE ▶"
+text = "HUD_NEXT_PHASE"
 
 [node name="IntelWidget" type="VBoxContainer" parent="HUD"]
 layout_mode = 1
@@ -603,7 +603,7 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 size_flags_horizontal = 0
-tooltip_text = "Renseignements — Zone de Contamination"
+tooltip_text = "HUD_INTEL_ZONE_TOOLTIP"
 mouse_default_cursor_shape = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
 theme_override_colors/font_hover_color = Color(0.211765, 0.772549, 0.85098, 1)
@@ -612,7 +612,7 @@ theme_override_font_sizes/font_size = 14
 theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
-text = "INTEL : ZONE ▸"
+text = "HUD_INTEL_ZONE"
 
 [node name="IntelPanel" type="PanelContainer" parent="HUD/IntelWidget"]
 unique_name_in_owner = true
@@ -629,7 +629,7 @@ theme_override_constants/separation = 8
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 15
-text = "☢ MÉMOIRE TACTIQUE"
+text = "HUD_INTEL_ZONE_TITLE"
 
 [node name="StagnationLabel" type="Label" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
 unique_name_in_owner = true
@@ -637,7 +637,7 @@ custom_minimum_size = Vector2(224, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 14
-text = "STAGNATION ZONE : —"
+text = "HUD_INTEL_STAGNATION_PLACEHOLDER"
 autowrap_mode = 3
 
 [node name="IntelSep" type="HSeparator" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
@@ -647,7 +647,7 @@ layout_mode = 2
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 13
-text = "☠ PERTES INFLIGÉES PAR LA ZONE"
+text = "HUD_INTEL_ZONE_KILLS_TITLE"
 
 [node name="ZoneKillsList" type="VBoxContainer" parent="HUD/IntelWidget/IntelPanel/IntelVBox"]
 unique_name_in_owner = true

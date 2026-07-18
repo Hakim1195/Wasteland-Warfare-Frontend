@@ -114,7 +114,7 @@ func register(p_username, email, password):
 	)
 	
 	if err != OK:
-		emit_signal("auth_failed", "Impossible d'envoyer la requête d'enregistrement")
+		emit_signal("auth_failed", tr("AUTHM_REGISTER_SEND_FAILED"))
 
 func login(p_username, password):
 	# Format data as application/x-www-form-urlencoded.
@@ -132,12 +132,12 @@ func login(p_username, password):
 	)
 	
 	if err != OK:
-		emit_signal("auth_failed", "Impossible d'envoyer la requête de connexion")
+		emit_signal("auth_failed", tr("AUTHM_LOGIN_SEND_FAILED"))
 
 func get_profile():
 	# Check if we have a token
 	if jwt_token == "":
-		emit_signal("auth_failed", "Aucun token d'authentification disponible")
+		emit_signal("auth_failed", tr("AUTHM_NO_TOKEN"))
 		return
 	
 	# Set headers with Authorization
@@ -151,7 +151,7 @@ func get_profile():
 	)
 	
 	if err != OK:
-		emit_signal("auth_failed", "Impossible d'envoyer la requête de profil")
+		emit_signal("auth_failed", tr("AUTHM_PROFILE_SEND_FAILED"))
 
 func _on_request_completed(_result, response_code, _headers, body):
 	var response_text = body.get_string_from_utf8()
@@ -174,7 +174,7 @@ func _on_request_completed(_result, response_code, _headers, body):
 				var sub := _username_from_jwt(jwt_token)
 				if sub != "":
 					username = sub
-				emit_signal("auth_success", "Connexion réussie")
+				emit_signal("auth_success", tr("AUTHM_LOGIN_SUCCESS"))
 				# Dès qu'on a le token, on récupère l'ID numérique du joueur en arrière-plan.
 				_fetch_user_id()
 			elif data.has("username") and data.has("email"):
@@ -185,24 +185,29 @@ func _on_request_completed(_result, response_code, _headers, body):
 					emit_signal("user_id_loaded", user_id)
 				emit_signal("profile_loaded", data)
 			elif data.has("message"):
-				emit_signal("auth_success", "Succès : " + str(data["message"]))
+				emit_signal("auth_success", tr("AUTHM_SUCCESS_DETAIL") % str(data["message"]))
 			else:
-				emit_signal("auth_success", "Opération réussie")
+				emit_signal("auth_success", tr("AUTHM_OPERATION_SUCCESS"))
 		else:
-			emit_signal("auth_success", "Succès (Réponse non-JSON)")
+			emit_signal("auth_success", tr("AUTHM_SUCCESS_NON_JSON"))
 			
 	# Codes HTTP d'erreur (400, 401, 500...)
 	else:
-		var error_msg = "Erreur " + str(response_code)
+		# i18n : gabarits traduits (AUTHM_HTTP_ERROR*) — le détail renvoyé par le serveur reste
+		# dynamique (intraduisible côté client), il est injecté via %s.
+		var detail := ""
 		if data != null:
 			if data.has("detail"):
-				error_msg += " : " + str(data["detail"])
+				detail = str(data["detail"])
 			elif data.has("message"):
-				error_msg += " : " + str(data["message"])
+				detail = str(data["message"])
 		else:
 			# Si ce n'est pas du JSON (ex: Erreur 500 brute), on affiche le texte reçu
-			error_msg += " : " + response_text
-			
+			detail = response_text
+
+		var error_msg: String = tr("AUTHM_HTTP_ERROR") % response_code
+		if detail != "":
+			error_msg = tr("AUTHM_HTTP_ERROR_DETAIL") % [response_code, detail]
 		emit_signal("auth_failed", error_msg)
 
 # =========================================================
@@ -240,16 +245,16 @@ func clear_session() -> void:
 # On ne fait JAMAIS confiance au token local seul : seul /auth/me fait foi (il a pu expirer).
 func try_restore_session() -> void:
 	if not FileAccess.file_exists(SESSION_PATH):
-		emit_signal("auth_failed", "Aucune session sauvegardée")
+		emit_signal("auth_failed", tr("AUTHM_NO_SAVED_SESSION"))
 		return
 	var f := FileAccess.open(SESSION_PATH, FileAccess.READ)
 	if f == null:
-		emit_signal("auth_failed", "Session illisible")
+		emit_signal("auth_failed", tr("AUTHM_SESSION_UNREADABLE"))
 		return
 	var t := f.get_as_text().strip_edges()
 	f.close()
 	if t == "":
-		emit_signal("auth_failed", "Session vide")
+		emit_signal("auth_failed", tr("AUTHM_SESSION_EMPTY"))
 		return
 	jwt_token = t
 	# Pseudo provisoire depuis le claim "sub" (confirmé ensuite par /auth/me).

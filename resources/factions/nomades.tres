@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "pillards_poussiere"
-name = "Les Nomades de la Poussière"
-description = "Caravanes pillardes qui ne dorment jamais deux nuits au même endroit. Là où les autres factions creusent des tranchées, les Nomades frappent et disparaissent dans les tempêtes de cendres.
-
-[b]Pouvoir :[/b] droit à 2 déplacements stratégiques distincts en fin de tour."
+name = "Dust Reavers"
+description = ""
+desc_key = "FACTION_DESC_PILLARDS_POUSSIERE"
+power_key = "FACTION_POWER_PILLARDS_POUSSIERE"
+hero_name = "Malik Sarran"
+hero_callsign = "Duststorm"
+hero_rank = "captain"
 modifiers = {
 "bonus_strategic_moves": 1
 }

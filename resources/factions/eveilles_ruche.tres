@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "eveilles_ruche"
-name = "Les Éveillés de la Ruche"
-description = "Conscience collective mutante reliée par un réseau de spores souterraines. Leurs troupes se déplacent comme une seule pensée à travers les terres qu'elles contrôlent.
-
-[b]Pouvoir :[/b] mouvement stratégique à longue distance via une chaîne de territoires alliés."
+name = "Hive Ascendant"
+description = ""
+desc_key = "FACTION_DESC_EVEILLES_RUCHE"
+power_key = "FACTION_POWER_EVEILLES_RUCHE"
+hero_name = "Nyx Vireo"
+hero_callsign = "Synapse"
+hero_rank = "captain"
 modifiers = {
 "long_range_movement": true
 }

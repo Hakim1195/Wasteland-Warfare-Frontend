@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "ecorcheurs_cendres"
-name = "Les Écorcheurs des Cendres"
-description = "Maraudeurs qui font de la terreur une arme. Le seul bruit de leurs lames suffit à briser le moral des garnisons : ce qui survit à l'assaut fuit dans la poussière.
-
-[b]Pouvoir :[/b] éliminer 2 unités en une attaque force le retrait d'une 3e par la terreur."
+name = "Ash Flayers"
+description = ""
+desc_key = "FACTION_DESC_ECORCHEURS_CENDRES"
+power_key = "FACTION_POWER_ECORCHEURS_CENDRES"
+hero_name = "Diego Vasquez"
+hero_callsign = "Cinder"
+hero_rank = "captain"
 modifiers = {
 "terror_extra_kill": true
 }

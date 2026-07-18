@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "culte_isotope"
-name = "Les Rad-Hunters"
-description = "Fanatiques de l'isotope qui ont appris à respirer la mort lente. Le rayonnement qui décime les armées n'est pour eux qu'une bénédiction à orienter sur leurs propres bastions.
-
-[b]Pouvoir :[/b] immunise 1 territoire allié de son choix contre la zone radioactive à chaque tour."
+name = "Isotope Covenant"
+description = ""
+desc_key = "FACTION_DESC_CULTE_ISOTOPE"
+power_key = "FACTION_POWER_CULTE_ISOTOPE"
+hero_name = "Ezra Voss"
+hero_callsign = "Halflife"
+hero_rank = "captain"
 modifiers = {
 "free_contamination_immunity": 1
 }

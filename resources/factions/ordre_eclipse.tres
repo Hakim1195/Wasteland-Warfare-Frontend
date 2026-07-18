@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "ordre_eclipse"
-name = "L'Ordre de l'Éclipse"
-description = "Secte mystique qui lit l'avenir dans les éclipses de cendres. Ses devins anticipent les bouleversements du champ de bataille et ne gardent que les présages les plus favorables.
-
-[b]Pouvoir :[/b] pioche 2 cartes Événement, en garde 1, remet l'autre sous le deck."
+name = "Eclipse Order"
+description = ""
+desc_key = "FACTION_DESC_ORDRE_ECLIPSE"
+power_key = "FACTION_POWER_ORDRE_ECLIPSE"
+hero_name = "Kael Draven"
+hero_callsign = "Omen"
+hero_rank = "general"
 modifiers = {
 "event_draw_pick_count": 2
 }

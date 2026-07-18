@@ -100,7 +100,7 @@ theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
 theme_override_font_sizes/font_size = 46
 horizontal_alignment = 1
 autowrap_mode = 3
-text = "OPÉRATION TERMINÉE"
+text = "REPORT_TITLE_DEFAULT"
 
 [node name="Sep" type="HSeparator" parent="Center/ReportPanel/ReportVBox"]
 layout_mode = 2
@@ -109,7 +109,7 @@ layout_mode = 2
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 14
-text = "❯ RAPPORT D'ATTRITION"
+text = "REPORT_ATTRITION_EYEBROW"
 
 [node name="StagnationReport" type="Label" parent="Center/ReportPanel/ReportVBox"]
 unique_name_in_owner = true
@@ -137,4 +137,4 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_cta")
 theme_override_styles/hover = SubResource("StyleBoxFlat_cta_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_cta_hover")
 theme_override_styles/focus = SubResource("StyleBoxFlat_cta")
-text = "❮ RETOURNER AU LOBBY"
+text = "REPORT_BACK_TO_LOBBY"

@@ -97,11 +97,13 @@ const DEFAULT_MAP_ID := "classic_42"
 const MAP_DEFS := {
 	"classic_42": {
 		"label": "Guerre Mondiale",
+		"label_key": "MAP_CLASSIC_LABEL",
 		"continent_ids": ["north_america", "south_america", "europe", "africa", "asia", "oceania"],
 		"min_players": 3, "max_players": 6,
 	},
 	"skirmish_atlantic": {
 		"label": "Théâtre Atlantique",
+		"label_key": "MAP_ATLANTIC_LABEL",
 		"continent_ids": ["north_america", "south_america", "europe"],
 		"min_players": 3, "max_players": 4,
 	},
@@ -143,9 +145,37 @@ func get_map(map_id: String) -> Dictionary:
 func map_territories(map_id: String = DEFAULT_MAP_ID) -> Dictionary:
 	return get_map(map_id)["territories"]
 
-# Libellé lisible d'une carte (radar du lobby, sélecteur de création).
+# Libellé lisible d'une carte (radar du lobby, sélecteur de création) — TRADUIT (i18n
+# 2026-07-18) via `label_key`, repli sur le label FR historique si la clé manque.
 func map_label(map_id: String) -> String:
-	return str(get_map(map_id)["label"])
+	var mid: String = map_id if MAP_DEFS.has(map_id) else DEFAULT_MAP_ID
+	var key := str(MAP_DEFS[mid].get("label_key", ""))
+	if key != "":
+		var out := tr(key)
+		if out != key:
+			return out
+	return str(get_map(mid)["label"])
+
+# =====================================================================================
+# i18n (2026-07-18) — libellés TRADUITS des territoires et continents
+# =====================================================================================
+# Clés ui_strings.csv : TERR_<ID> / CONT_<ID> (id en majuscules). Les champs `name` FR des
+# registres restent comme REPLI (et pour tout vieux code) : la clé brute n'est jamais montrée.
+# Tous les affichages (plateau, toasts, war room, prévision de zone) passent par ces helpers.
+
+func t_name(territory_id: String) -> String:
+	var key := "TERR_" + territory_id.to_upper()
+	var out := tr(key)
+	if out == key:
+		return str(TERRITORIES.get(territory_id, {}).get("name", territory_id))
+	return out
+
+func c_name(continent_id: String) -> String:
+	var key := "CONT_" + continent_id.to_upper()
+	var out := tr(key)
+	if out == key:
+		return str(CONTINENTS.get(continent_id, {}).get("name", continent_id))
+	return out
 
 # Adjacence SUR LA CARTE DONNÉE (G5) : les voisins des sous-cartes sont filtrés — passer
 # GameState.map_id en jeu. Sans map_id → carte classique (comportement historique intact).

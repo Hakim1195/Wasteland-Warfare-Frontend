@@ -144,7 +144,7 @@ func connect_to_server(room_id: String):
 	# Le serveur écoute sur /ws/{room_id}/{player_id}. On a besoin de notre ID numérique.
 	if AuthManager.user_id < 0:
 		print("NETWORK: player_id inconnu, connexion WebSocket impossible. As-tu bien fini le login ?")
-		lobby_error.emit("Identité joueur non chargée, réessayez.")
+		lobby_error.emit(tr("NET_IDENTITY_NOT_LOADED"))
 		return
 
 	# Version du client (auto-updater §9) jointe en query string : le serveur la compare à
@@ -197,7 +197,7 @@ func _process(_delta):
 		var code := socket.get_close_code()
 		if code == 4000:
 			var reason := socket.get_close_reason()
-			var msg := reason if reason != "" else "Version du jeu obsolète : mettez à jour."
+			var msg := reason if reason != "" else tr("NET_VERSION_OUTDATED")
 			print("NETWORK: connexion refusée par le serveur (version) : " + msg)
 			game_error.emit(msg)
 			lobby_error.emit(msg)
@@ -206,7 +206,7 @@ func _process(_delta):
 			# expiré ou identité incohérente ; 4003 = pas membre de la salle demandée. On remonte
 			# le message serveur (raison ASCII) tel quel — l'écran courant l'affiche en rouge.
 			var auth_reason := socket.get_close_reason()
-			var auth_msg := auth_reason if auth_reason != "" else "Connexion refusée : session invalide, reconnectez-vous."
+			var auth_msg := auth_reason if auth_reason != "" else tr("NET_SESSION_INVALID")
 			print("NETWORK: connexion refusée par le serveur (auth %d) : %s" % [code, auth_msg])
 			game_error.emit(auth_msg)
 			lobby_error.emit(auth_msg)
@@ -227,7 +227,7 @@ func _handle_server_message(msg: Dictionary) -> void:
 			if msg.has("event"):
 				game_event.emit(msg["event"])
 		"error":
-			var err_msg = str(msg.get("message", "Erreur inconnue"))
+			var err_msg = str(msg.get("message", tr("NET_UNKNOWN_ERROR")))
 			print("NETWORK: action refusée par le serveur : " + err_msg)
 			game_error.emit(err_msg)
 		"player_disconnected":
@@ -343,7 +343,7 @@ func _next_action_id() -> String:
 func send_action(action_type: String, payload: Dictionary = {}) -> void:
 	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		print("NETWORK: WebSocket non ouvert, action '" + action_type + "' ignorée.")
-		game_error.emit("Pas connecté au serveur temps réel.")
+		game_error.emit(tr("NET_NOT_CONNECTED"))
 		return
 	# On DUPLIQUE la charge utile pour y injecter action_id SANS muter le dict de l'appelant.
 	var pl := payload.duplicate(true)
@@ -381,7 +381,7 @@ func request_draft_state() -> void:
 # compris) → on n'affiche jamais nos propres messages localement, on attend cet écho.
 func send_chat_message(tab: String, text: String, target_id: int = -1) -> void:
 	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
-		game_error.emit("Pas connecté au serveur temps réel.")
+		game_error.emit(tr("NET_NOT_CONNECTED"))
 		return
 	var message := {"type": "send_chat_message", "tab": tab, "text": text}
 	if tab == "private" and target_id >= 0:
@@ -412,7 +412,7 @@ func _send_api_request(endpoint: String, method: int, data: Dictionary = {}, cal
 	var err = http.request(base_url + endpoint, headers, method, json_string)
 	
 	if err != OK:
-		lobby_error.emit("Impossible de contacter le serveur.")
+		lobby_error.emit(tr("NET_SERVER_UNREACHABLE"))
 		http.queue_free()
 
 # 1. Récupérer les salles
@@ -426,7 +426,7 @@ func _on_rooms_fetched(_result, response_code, _headers, body, http_node):
 		if typeof(data) == TYPE_ARRAY:
 			rooms_loaded.emit(data)
 	else:
-		lobby_error.emit("Erreur lors de la récupération des salles.")
+		lobby_error.emit(tr("NET_ROOMS_FETCH_FAILED"))
 
 # 2. Créer une salle
 # max_players par défaut = 6 (capacité maximale autorisée, cf. §4 : 3 à 6 joueurs).
@@ -453,7 +453,7 @@ func _on_room_created(_result, response_code, _headers, body, http_node):
 	if response_code == 200 or response_code == 201:
 		lobby_action_success.emit("create", data)
 	else:
-		lobby_error.emit("Impossible de créer la salle.")
+		lobby_error.emit(tr("NET_ROOM_CREATE_FAILED"))
 
 # 3. Rejoindre une salle
 func join_room(room_id: int):
@@ -468,7 +468,7 @@ func _on_room_joined(_result, response_code, _headers, _body, http_node):
 	if response_code == 200:
 		lobby_action_success.emit("join", {"id": _pending_join_id})
 	else:
-		lobby_error.emit("Impossible de rejoindre cette salle.")
+		lobby_error.emit(tr("NET_ROOM_JOIN_FAILED"))
 
 # 4. Classement mondial (R3 — §9.2) : GET /leaderboard?limit=&offset= (public ; enrichi du bloc `me`
 # si le token est joint). Le serveur trie par victoires décroissantes et renvoie une enveloppe
@@ -496,7 +496,7 @@ func fetch_leaderboard(limit: int = 20, offset: int = 0, scope: String = "season
 func _on_leaderboard_fetched(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
 	if response_code != 200:
-		lobby_error.emit("Erreur lors de la récupération du classement.")
+		lobby_error.emit(tr("NET_LEADERBOARD_FETCH_FAILED"))
 		return
 	var data = JSON.parse_string(body.get_string_from_utf8())
 	# Forme CANONIQUE §9.2 : enveloppe {entries, me} (+ bloc `season` depuis M6).
@@ -531,7 +531,7 @@ func _on_profile_stats_fetched(_result, response_code, _headers, body, http_node
 		if typeof(data) == TYPE_DICTIONARY:
 			profile_stats_loaded.emit(data)
 	else:
-		lobby_error.emit("Erreur lors de la récupération du profil.")
+		lobby_error.emit(tr("NET_PROFILE_FETCH_FAILED"))
 
 # 6. Historique récent : GET /profile/history?limit=N (authentifié). Liste {win, faction_id, detail}.
 func fetch_profile_history(limit: int = 5):
@@ -544,7 +544,7 @@ func _on_profile_history_fetched(_result, response_code, _headers, body, http_no
 		if typeof(data) == TYPE_ARRAY:
 			profile_history_loaded.emit(data)
 	else:
-		lobby_error.emit("Erreur lors de la récupération de l'historique.")
+		lobby_error.emit(tr("NET_HISTORY_FETCH_FAILED"))
 
 # =========================================================
 # PARTIE 3bis : HÉROS / ROSTER (sprint RPG & Survie — écran « Personnages »)
@@ -567,7 +567,7 @@ func _on_heroes_fetched(_result, response_code, _headers, body, http_node):
 				heroes = []
 			heroes_loaded.emit(heroes)
 	else:
-		lobby_error.emit("Erreur lors de la récupération des héros.")
+		lobby_error.emit(tr("NET_HEROES_FETCH_FAILED"))
 
 # =========================================================
 # PARTIE 4 : BOUTIQUE / INVENTAIRE / ÉCONOMIE (R1 — §9.3)
@@ -587,7 +587,7 @@ func _on_shop_catalog_fetched(_result, response_code, _headers, body, http_node)
 		if typeof(data) == TYPE_ARRAY:
 			shop_catalog_loaded.emit(data)
 	else:
-		lobby_error.emit("Erreur lors de la récupération du catalogue.")
+		lobby_error.emit(tr("NET_CATALOG_FETCH_FAILED"))
 
 # 8. Inventaire + solde : GET /shop/inventory (authentifié). Dict {credits, items}.
 func fetch_shop_inventory():
@@ -600,7 +600,7 @@ func _on_shop_inventory_fetched(_result, response_code, _headers, body, http_nod
 		if typeof(data) == TYPE_DICTIONARY:
 			shop_inventory_loaded.emit(data)
 	else:
-		lobby_error.emit("Erreur lors de la récupération de l'inventaire.")
+		lobby_error.emit(tr("NET_INVENTORY_FETCH_FAILED"))
 
 # 9. Achat en COINS : POST /shop/purchase/virtual {item_id} (authentifié). Pour les articles en jeu
 # (faction / skin / Pass Spécial). Succès → {credits, items, has_active_pass} ; échec (HTTP 400) →
@@ -625,7 +625,7 @@ func _on_purchase_completed(_result, response_code, _headers, body, http_node):
 		shop_purchase_success.emit(data)
 	else:
 		# Message d'erreur lisible : on privilégie le `detail` JSON renvoyé par le backend.
-		var msg := "Achat impossible."
+		var msg := tr("NET_PURCHASE_FAILED")
 		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
 			msg = str(data["detail"])
 		shop_purchase_failed.emit(msg)
@@ -668,11 +668,11 @@ func _requeue_scan() -> void:
 func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
 	if response_code != 200:
-		_requeue_fail("Radar injoignable — retour au lobby.")
+		_requeue_fail(tr("NET_REQUEUE_RADAR_UNREACHABLE"))
 		return
 	var data = JSON.parse_string(body.get_string_from_utf8())
 	if typeof(data) != TYPE_ARRAY:
-		_requeue_fail("Radar illisible — retour au lobby.")
+		_requeue_fail(tr("NET_REQUEUE_RADAR_UNREADABLE"))
 		return
 	# Première salle `waiting` PUBLIQUE non pleine (piège JSON §5 : int() sur tous les nombres).
 	for room in data:
@@ -704,12 +704,12 @@ func _on_requeue_joined(_result, response_code, _headers, _body, http_node, rid:
 func _on_requeue_created(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
 	if response_code != 200 and response_code != 201:
-		_requeue_fail("Impossible de créer une salle — retour au lobby.")
+		_requeue_fail(tr("NET_REQUEUE_CREATE_FAILED"))
 		return
 	var data = JSON.parse_string(body.get_string_from_utf8())
 	var rid := int(data.get("id", -1)) if typeof(data) == TYPE_DICTIONARY else -1
 	if rid <= 0:
-		_requeue_fail("Salle créée illisible — retour au lobby.")
+		_requeue_fail(tr("NET_REQUEUE_ROOM_UNREADABLE"))
 		return
 	_requeue_enter(rid)
 
@@ -742,7 +742,7 @@ func _on_skin_equipped(_result, response_code, _headers, body, http_node):
 	if response_code == 200 and typeof(data) == TYPE_DICTIONARY:
 		skin_equipped.emit(data)
 	else:
-		var msg := "Équipement impossible."
+		var msg := tr("NET_EQUIP_FAILED")
 		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
 			msg = str(data["detail"])
 		skin_equip_failed.emit(msg)
@@ -774,7 +774,7 @@ func _on_missions_fetched(_result, response_code, _headers, body, http_node):
 		if typeof(data) == TYPE_DICTIONARY:
 			missions_loaded.emit(data)
 	else:
-		lobby_error.emit("Erreur lors de la récupération des missions.")
+		lobby_error.emit(tr("NET_MISSIONS_FETCH_FAILED"))
 
 # 12. Réclame la récompense d'une mission COMPLÉTÉE : POST /missions/claim {mission_id}.
 # Succès → { coins_balance, reward_paid, pass_bonus_applied } (bonus Pass ×1.5 appliqué serveur).
@@ -789,7 +789,7 @@ func _on_mission_claimed(_result, response_code, _headers, body, http_node):
 	if response_code == 200 and typeof(data) == TYPE_DICTIONARY:
 		mission_claimed.emit(data)
 	else:
-		var msg := "Réclamation impossible."
+		var msg := tr("NET_CLAIM_FAILED")
 		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
 			msg = str(data["detail"])
 		mission_claim_failed.emit(msg)

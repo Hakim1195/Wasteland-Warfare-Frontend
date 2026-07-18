@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "barons_ferraille"
-name = "Les Barons de la Ferraille"
-description = "Seigneurs des décharges et des casses du vieux monde, les Barons forgent des légions à partir des rebuts de l'humanité. Là où d'autres voient des ruines, eux voient un arsenal inépuisable.
-
-[b]Pouvoir :[/b] +1 unité bonus fixe à chaque phase de renforts."
+name = "Scrap Barons"
+description = ""
+desc_key = "FACTION_DESC_BARONS_FERRAILLE"
+power_key = "FACTION_POWER_BARONS_FERRAILLE"
+hero_name = "Kord Maddox"
+hero_callsign = "Rustlord"
+hero_rank = "general"
 modifiers = {
 "bonus_reinforcement_flat": 1
 }

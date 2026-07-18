@@ -49,6 +49,10 @@ var _grabber_tex: ImageTexture
 # Boutons de résolution générés en code — référencés pour les griser en plein écran (la résolution
 # fenêtrée n'a alors aucun effet visible, cf. SettingsManager._apply_display).
 var _resolution_buttons: Array[Button] = []
+# Nœuds de la section CONFORT construits par code — mémorisés pour pouvoir les RECONSTRUIRE au
+# changement de langue (i18n 2026-07-18 : les libellés posés par tr() en code ne se re-traduisent
+# pas tout seuls, contrairement aux nœuds .tscn).
+var _comfort_nodes: Array[Node] = []
 
 func _ready() -> void:
 	_font = SystemFont.new()
@@ -97,6 +101,11 @@ func _ready() -> void:
 	_build_comfort_section()
 
 	_set_status(tr("SETTINGS_STATUS"))
+
+	# i18n (2026-07-18) : le sélecteur de langue vit SUR cet écran → re-traduire à chaud les
+	# libellés construits par code (section confort + statut). Les nœuds .tscn se re-traduisent
+	# tout seuls ; le désabonnement est implicite (signal coupé à la libération du nœud).
+	LocaleManager.locale_changed.connect(_on_locale_changed_rebuild)
 
 # --- Audio : sliders de volume ---------------------------------------------
 func _setup_volume_slider(slider: HSlider, value_label: Label, bus: String) -> void:
@@ -285,7 +294,8 @@ func _style_logout_button(btn: Button) -> void:
 func _build_comfort_section() -> void:
 	# RootVBox = ancêtre commun des rows (via un nœud @export fiable).
 	var root := resolution_box.get_parent().get_parent()
-	root.add_child(HSeparator.new())
+	var sep := HSeparator.new()
+	root.add_child(sep)
 	var eyebrow := Label.new()
 	eyebrow.text = tr("SETTINGS_COMFORT_EYEBROW")
 	eyebrow.add_theme_font_override("font", _font)
@@ -293,16 +303,34 @@ func _build_comfort_section() -> void:
 	eyebrow.add_theme_color_override("font_color", ACCENT)
 	root.add_child(eyebrow)
 
-	# combat_display : 3 segments (E8).
-	root.add_child(_comfort_segments("SETTINGS_COMBAT_DISPLAY", "combat_display",
-		[["cinematique", "CINÉMATIQUE"], ["rapide", "RAPIDE"], ["bandeau", "BANDEAU"]]))
-	# ui_scale : 4 segments numériques.
-	root.add_child(_comfort_segments("SETTINGS_UI_SCALE", "ui_scale",
-		[[0.9, "90 %"], [1.0, "100 %"], [1.15, "115 %"], [1.3, "130 %"]]))
+	# combat_display : 3 segments (E8) — libellés TRADUITS (i18n 2026-07-18, ex-dur FR).
+	var combat_row := _comfort_segments("SETTINGS_COMBAT_DISPLAY", "combat_display",
+		[["cinematique", tr("SETTINGS_COMBAT_CINEMATIC")], ["rapide", tr("SETTINGS_COMBAT_FAST")],
+		["bandeau", tr("SETTINGS_COMBAT_BANNER")]])
+	root.add_child(combat_row)
+	# ui_scale : 4 segments numériques (libellés % neutres — pas de traduction).
+	var scale_row := _comfort_segments("SETTINGS_UI_SCALE", "ui_scale",
+		[[0.9, "90 %"], [1.0, "100 %"], [1.15, "115 %"], [1.3, "130 %"]])
+	root.add_child(scale_row)
 	# Bascules booléennes.
-	root.add_child(_comfort_toggle("SETTINGS_REDUCED_MOTION", "reduced_motion"))
-	root.add_child(_comfort_toggle("SETTINGS_COLORBLIND", "colorblind_mode"))
-	root.add_child(_comfort_toggle("SETTINGS_DAMAGE_NUMBERS", "damage_numbers"))
+	var t1 := _comfort_toggle("SETTINGS_REDUCED_MOTION", "reduced_motion")
+	var t2 := _comfort_toggle("SETTINGS_COLORBLIND", "colorblind_mode")
+	var t3 := _comfort_toggle("SETTINGS_DAMAGE_NUMBERS", "damage_numbers")
+	root.add_child(t1)
+	root.add_child(t2)
+	root.add_child(t3)
+	# Mémorisés pour la reconstruction au changement de langue (_on_locale_changed_rebuild).
+	_comfort_nodes = [sep, eyebrow, combat_row, scale_row, t1, t2, t3]
+
+# Changement de langue À CHAUD : purge et reconstruit la section confort (seul bloc de cet écran
+# dont les libellés sont posés par code), puis re-traduit la ligne de statut.
+func _on_locale_changed_rebuild(_code: String) -> void:
+	for n in _comfort_nodes:
+		if is_instance_valid(n):
+			n.queue_free()
+	_comfort_nodes.clear()
+	_build_comfort_section()
+	_set_status(tr("SETTINGS_STATUS"))
 
 # Rangée « libellé + segments » : un bouton par valeur, le courant actif. `values` =
 # Array[[valeur, libellé]]. La valeur peut être String (combat_display) ou float (ui_scale).

@@ -18,25 +18,31 @@ extends RefCounted
 const NEAR_WIN := 0.8   # seuil du pulse « proche de la victoire » (piloté côté HUD).
 
 # Progression d'UN volet simple (conquer / continents / eliminate). Renvoie {label, ratio, done}.
+# i18n : module STATIQUE (aucune instance → pas de tr() d'Object) — les libellés passent par
+# TranslationServer.translate() (clés OBJ_* de translations/ui_strings.csv, locale gérée par
+# LocaleManager). La ponctuation « %s : %s » est aussi une clé (espace fine FR avant les deux-points).
 static func leg_progress(objective: Dictionary, ctx: Dictionary) -> Dictionary:
 	var otype := str(objective.get("type", ""))
 	var params: Dictionary = objective.get("params", {}) if typeof(objective.get("params")) == TYPE_DICTIONARY else {}
 	if otype == "conquer_territories":
 		var n := maxi(int(params.get("n", 24)), 1)
 		var have := int(ctx.get("owned_count", 0))
-		return {"label": "%d/%d territoires" % [have, n],
+		return {"label": TranslationServer.translate("OBJ_TERRITORIES_FMT") % [have, n],
 			"ratio": clampf(float(have) / float(n), 0.0, 1.0), "done": have >= n}
 	if otype == "control_continents":
 		var n2 := maxi(int(params.get("n", 2)), 1)
 		var have2 := int(ctx.get("continents_owned", 0))
-		return {"label": "%d/%d continents" % [have2, n2],
+		return {"label": TranslationServer.translate("OBJ_CONTINENTS_FMT") % [have2, n2],
 			"ratio": clampf(float(have2) / float(n2), 0.0, 1.0), "done": have2 >= n2}
 	if otype == "eliminate_player":
-		var name := str(ctx.get("target_name", "cible"))
+		var name := str(ctx.get("target_name", TranslationServer.translate("OBJ_TARGET_FALLBACK")))
 		var alive := bool(ctx.get("target_alive", true))
-		return {"label": "%s : %s" % [name, ("VIVANT" if alive else "ABATTU ✔")],
+		return {"label": TranslationServer.translate("OBJ_TARGET_LINE_FMT") % [name,
+				(TranslationServer.translate("OBJ_TARGET_ALIVE") if alive
+					else TranslationServer.translate("OBJ_TARGET_DOWN"))],
 			"ratio": 0.0 if alive else 1.0, "done": not alive}
-	return {"label": str(objective.get("description", "(secret)")), "ratio": 0.0, "done": false}
+	return {"label": str(objective.get("description", TranslationServer.translate("OBJ_SECRET_FALLBACK"))),
+		"ratio": 0.0, "done": false}
 
 # Progression complète. Pour un objectif DOUBLE (§8.61) : DEUX mini-lignes (kill / classique),
 # la PLUS AVANCÉE en tête. Sinon une seule ligne.

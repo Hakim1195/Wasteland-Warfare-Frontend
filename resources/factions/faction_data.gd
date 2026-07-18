@@ -11,10 +11,22 @@ class_name FactionData
 
 # Identifiant technique (clé du registre backend, ex: "phalanges_acier"). Envoyé au serveur.
 @export var id: String = ""
-# Nom affiché de la faction (ex: "Les Phalangistes").
+# Nom PROPRE de la faction, ANGLAIS INVARIANT (refonte 2026-07-18, ex: "Steel Phalanx").
+# Identique dans toutes les langues (marque) — ne passe PAS par tr().
 @export var name: String = ""
-# Description / lore + résumé du pouvoir (affiché dans le carrousel).
+# (Legacy) Description en dur — conservée pour compat de chargement, VIDE désormais :
+# le lore vit dans les clés de traduction ci-dessous (desc_key / power_key).
 @export_multiline var description: String = ""
+# Clé i18n du lore de la faction (ui_strings.csv, ex: "FACTION_DESC_PHALANGES_ACIER").
+@export var desc_key: String = ""
+# Clé i18n du pouvoir passif de la faction (ex: "FACTION_POWER_PHALANGES_ACIER").
+@export var power_key: String = ""
+# --- Identité du héros (refonte 2026-07-18) : le héros est le Général/Capitaine NOMMÉ de la
+#     faction. Nom et indicatif INVARIANTS (non localisés) ; le rang est un code traduit par
+#     l'UI via RANK_GENERAL / RANK_CAPTAIN. ---
+@export var hero_name: String = ""      # ex: "Viktor Stahl"
+@export var hero_callsign: String = ""  # ex: "Ironline"
+@export var hero_rank: String = ""      # "general" | "captain"
 # Modificateurs de règles (miroir frontend du registre backend §4.3). Clé -> valeur.
 @export var modifiers: Dictionary = {}
 # Chemin res:// vers le logo de la faction (optionnel ; placeholder si absent).

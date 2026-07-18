@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "corporation_aegis"
-name = "La Corporation Aegis"
-description = "Conglomérat militaro-industriel retranché derrière des boucliers énergétiques de récupération. Toute attaque mal préparée se brise sur leurs défenses automatisées.
-
-[b]Pouvoir :[/b] un double aux dés de défense élimine d'office 1 unité attaquante."
+name = "Aegis Corporation"
+description = ""
+desc_key = "FACTION_DESC_CORPORATION_AEGIS"
+power_key = "FACTION_POWER_CORPORATION_AEGIS"
+hero_name = "Adrian Cross"
+hero_callsign = "Aegis-One"
+hero_rank = "general"
 modifiers = {
 "defense_double_extra_kill": true
 }

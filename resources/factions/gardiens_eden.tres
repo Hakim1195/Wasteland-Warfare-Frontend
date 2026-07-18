@@ -5,10 +5,13 @@
 [resource]
 script = ExtResource("1_fd")
 id = "gardiens_eden"
-name = "Les Gardiens d'Éden"
-description = "Sentinelles du dernier sanctuaire verdoyant, les Gardiens d'Éden protègent jalousement les rares terres encore fertiles. Leur emprise sur un continent entier est une forteresse vivante.
-
-[b]Pouvoir :[/b] +1 au bonus de chaque continent entièrement contrôlé."
+name = "Eden Wardens"
+description = ""
+desc_key = "FACTION_DESC_GARDIENS_EDEN"
+power_key = "FACTION_POWER_GARDIENS_EDEN"
+hero_name = "Lyra Thorn"
+hero_callsign = "Verdant"
+hero_rank = "general"
 modifiers = {
 "continent_bonus_plus": 1
 }

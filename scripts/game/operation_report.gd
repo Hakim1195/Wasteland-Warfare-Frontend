@@ -525,7 +525,7 @@ func _make_podium_row(r: Dictionary) -> Control:
 	pts_lbl.add_theme_font_override("font", RosterHelpers._mono_font())
 	pts_lbl.add_theme_font_size_override("font_size", 14)
 	if pts >= 0:
-		pts_lbl.text = "+%d PTS" % pts
+		pts_lbl.text = ("+%d" % pts) + tr("REPORT_UNIT_PTS")
 		pts_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 	else:
 		pts_lbl.text = tr("REPORT_POINTS_HIDDEN")
@@ -557,7 +557,7 @@ func _make_podium_row(r: Dictionary) -> Control:
 	obj.mouse_filter = Control.MOUSE_FILTER_PASS
 	line2.add_child(obj)
 	var stats := Label.new()
-	stats.text = "K %d · C %d · E %d" % [int(r.get("kills", 0)), int(r.get("conquests", 0)),
+	stats.text = tr("REPORT_STATS_LINE") % [int(r.get("kills", 0)), int(r.get("conquests", 0)),
 		int(r.get("eliminations", 0))]
 	stats.add_theme_font_override("font", RosterHelpers._mono_font())
 	stats.add_theme_font_size_override("font_size", 11)
@@ -601,12 +601,13 @@ func populate_debrief(rows: Array) -> void:
 	var heads := HBoxContainer.new()
 	heads.add_theme_constant_override("separation", 0)
 	heads.add_child(_spacer(ROW_PAD_L))
-	heads.add_child(_fixed_cell("JOUEUR", DBF_NAME_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_LEFT))
-	for h in ["TERR", "CONQ", "KILLS", "ÉLIM", "HÉROS"]:
-		heads.add_child(_fixed_cell(h, DBF_COL_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_RIGHT))
-	for h in ["UNITÉS", "ZONE"]:
-		heads.add_child(_fixed_cell(h, DBF_LOSS_W, DANGER, 10, HORIZONTAL_ALIGNMENT_RIGHT))
-	heads.add_child(_fixed_cell("ÉCHANGE", DBF_BAR_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_CENTER))
+	heads.add_child(_fixed_cell(tr("COMMON_OPERATOR"), DBF_NAME_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_LEFT))
+	for h in ["REPORT_DBF_COL_TERR", "REPORT_DBF_COL_CONQ", "REPORT_DBF_COL_KILLS",
+			"REPORT_DBF_COL_ELIM", "REPORT_DBF_COL_HEROES"]:
+		heads.add_child(_fixed_cell(tr(h), DBF_COL_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_RIGHT))
+	for h in ["REPORT_DBF_COL_UNITS", "REPORT_DBF_COL_ZONE"]:
+		heads.add_child(_fixed_cell(tr(h), DBF_LOSS_W, DANGER, 10, HORIZONTAL_ALIGNMENT_RIGHT))
+	heads.add_child(_fixed_cell(tr("REPORT_DBF_COL_TRADE"), DBF_BAR_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_CENTER))
 	_debrief_rows_box.add_child(heads)
 	_debrief_rows_box.add_child(_spacer_v(3.0))
 
@@ -648,7 +649,7 @@ func _make_debrief_row(r: Dictionary, odd: bool) -> Control:
 	sw.custom_minimum_size = Vector2(10, 10)
 	sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_box.add_child(sw)
-	var tag := "[IA] " if bool(r.get("is_bot", false)) else ""
+	var tag := tr("REPORT_BOT_TAG") if bool(r.get("is_bot", false)) else ""
 	var name_lbl := Label.new()
 	name_lbl.text = "%s%s" % [tag, str(r.get("username", "?"))]
 	name_lbl.add_theme_color_override("font_color", tint)
@@ -839,7 +840,7 @@ func populate_hero_identity(h: Dictionary) -> void:
 		state_lbl.text = tr("REPORT_HERO_DOWN")
 		state_lbl.add_theme_color_override("font_color", DANGER)
 	else:
-		state_lbl.text = "PV %d/%d · PA %d · PP %+d" % [int(h.get("pv_current", 0)),
+		state_lbl.text = tr("REPORT_HERO_STATE") % [int(h.get("pv_current", 0)),
 			int(h.get("pv_max", 0)), int(h.get("pa", 0)), int(h.get("pp", 0))]
 		state_lbl.add_theme_color_override("font_color", Color("c8cdd6"))
 	col.add_child(state_lbl)
@@ -876,7 +877,7 @@ func set_missions_summary(progressed: int, claimable: int) -> void:
 #   hero_panel: Dictionary (FACULTATIF, §8.100) — identité du héros local (populate_hero_identity),
 #   podium_provisional: bool (FACULTATIF, §8.100) — podium issu du repli LOCAL (mention discrète) }
 func populate(data: Dictionary) -> void:
-	%ReportTitle.text = str(data.get("title", "OPÉRATION TERMINÉE")).to_upper()
+	%ReportTitle.text = str(data.get("title", tr("REPORT_TITLE_DEFAULT"))).to_upper()
 	%ReportTitle.add_theme_color_override("font_color", data.get("title_color", ACCENT_GOLD))
 	# Entrées brutes du détail du barème (FACULTATIF, E-visuel) — stockées AVANT populate_rewards,
 	# qui peut arriver plus tard (course réseau) et en aura besoin pour reconstruire les postes.
@@ -994,7 +995,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	block.add_theme_constant_override("separation", 6)
 
 	var header := Label.new()
-	header.text = "❯ RÉCOMPENSES DE FIN D'OPÉRATION"
+	header.text = tr("REPORT_REWARDS_HEADER")
 	header.add_theme_color_override("font_color", ACCENT_CYAN)
 	header.add_theme_font_size_override("font_size", 18)
 	block.add_child(header)
@@ -1005,7 +1006,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	# un bloc de zéros silencieux qui passerait pour un résultat normal.
 	if rewards.is_empty():
 		var anomaly := Label.new()
-		anomaly.text = "AUCUNE RÉCOMPENSE REÇUE DU SERVEUR"
+		anomaly.text = tr("REPORT_REWARDS_NONE")
 		anomaly.add_theme_color_override("font_color", DANGER)
 		anomaly.add_theme_font_size_override("font_size", 13)
 		block.add_child(anomaly)
@@ -1019,11 +1020,11 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 		points_lbl = Label.new()
 		points_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 		points_lbl.add_theme_font_size_override("font_size", 22)
-		points_lbl.text = "POINTS DE MATCH : +0"
+		points_lbl.text = tr("REPORT_MATCH_POINTS") % 0
 		block.add_child(points_lbl)
 	else:
 		var unranked_lbl := Label.new()
-		unranked_lbl.text = "PARTIE NON CLASSÉE — AUCUN POINT DE LADDER"
+		unranked_lbl.text = tr("REPORT_UNRANKED")
 		unranked_lbl.add_theme_color_override("font_color", TEXT_MUTED)
 		unranked_lbl.add_theme_font_size_override("font_size", 15)
 		block.add_child(unranked_lbl)
@@ -1039,13 +1040,13 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	var xp_lbl := Label.new()
 	xp_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 	xp_lbl.add_theme_font_size_override("font_size", 20)
-	xp_lbl.text = "XP JOUEUR : +0"
+	xp_lbl.text = tr("REPORT_PLAYER_XP") % 0
 	block.add_child(xp_lbl)
 
 	# Pass Spécial (M4 §8.67) : RELAIS du flag serveur (+25 % XP déjà appliqué côté serveur).
 	if bool(rewards.get("pass_bonus_applied", false)):
 		var pass_lbl := Label.new()
-		pass_lbl.text = "★ +25 % XP — PASS SPÉCIAL ACTIF"
+		pass_lbl.text = tr("REPORT_PASS_BONUS")
 		pass_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 		pass_lbl.add_theme_font_size_override("font_size", 13)
 		block.add_child(pass_lbl)
@@ -1058,7 +1059,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	if rewards.get("level_up_triggered", false):
 		var lvl_lbl := Label.new()
 		var gained := int(rewards.get("levels_gained", 0))
-		lvl_lbl.text = "▲ %d NIVEAU(X) GAGNÉ(S) — NIVEAU %d" % [gained, int(rewards.get("new_level", 1))]
+		lvl_lbl.text = tr("REPORT_LEVELS_GAINED") % [gained, int(rewards.get("new_level", 1))]
 		lvl_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		lvl_lbl.add_theme_font_size_override("font_size", 14)
 		block.add_child(lvl_lbl)
@@ -1077,7 +1078,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	coin_ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	coins_row.add_child(coin_ic)
 	var coins_lbl := Label.new()
-	coins_lbl.text = "COINS GAGNÉS : +%d" % coins_total
+	coins_lbl.text = tr("REPORT_COINS_EARNED") % coins_total
 	coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 	coins_lbl.add_theme_font_size_override("font_size", 18)
 	coins_row.add_child(coins_lbl)
@@ -1086,7 +1087,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	# n'est pas un compteur masqué mais une RÉPARTITION, et la part héros reste lisible onglet 2).
 	if coins_profile > 0 and coins_hero > 0:
 		var coins_sub := Label.new()
-		coins_sub.text = "profil +%d · héros +%d" % [coins_profile, coins_hero]
+		coins_sub.text = tr("REPORT_COINS_SPLIT") % [coins_profile, coins_hero]
 		coins_sub.add_theme_color_override("font_color", TEXT_MUTED)
 		coins_sub.add_theme_font_override("font", RosterHelpers._mono_font())
 		coins_sub.add_theme_font_size_override("font_size", 13)
@@ -1118,7 +1119,7 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	block.add_theme_constant_override("separation", 6)
 
 	var hero_header := Label.new()
-	hero_header.text = "❯ PROGRESSION DU HÉROS"
+	hero_header.text = tr("REPORT_HERO_PROGRESS_HEADER")
 	hero_header.add_theme_color_override("font_color", ACCENT_CYAN)
 	hero_header.add_theme_font_size_override("font_size", 18)
 	block.add_child(hero_header)
@@ -1126,7 +1127,7 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	var hero_xp_lbl := Label.new()
 	hero_xp_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 	hero_xp_lbl.add_theme_font_size_override("font_size", 20)
-	hero_xp_lbl.text = "XP HÉROS : +0"
+	hero_xp_lbl.text = tr("REPORT_HERO_XP") % 0
 	block.add_child(hero_xp_lbl)
 
 	# COINS HÉROS (§8.89/§8.99) : les montées de niveau du héros créditent des coins sur le MÊME
@@ -1142,14 +1143,15 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	var hero_coins_lbl := Label.new()
 	hero_coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 	hero_coins_lbl.add_theme_font_size_override("font_size", 16)
-	hero_coins_lbl.text = "COINS HÉROS : +0"
+	hero_coins_lbl.text = tr("REPORT_HERO_COINS") % 0
 	hero_coins_row.add_child(hero_coins_lbl)
 	block.add_child(hero_coins_row)
 
 	var hero_level_lbl := Label.new()
 	var h_old := int(rewards.get("hero_level", 1))
 	var h_new := int(rewards.get("hero_new_level", h_old))
-	hero_level_lbl.text = ("NIVEAU HÉROS %d ❯ %d" % [h_old, h_new]) if h_new > h_old else ("NIVEAU HÉROS %d" % h_new)
+	hero_level_lbl.text = (tr("REPORT_HERO_LEVEL_CHANGE") % [h_old, h_new]) if h_new > h_old \
+			else (tr("REPORT_HERO_LEVEL_CURRENT") % h_new)
 	hero_level_lbl.add_theme_color_override("font_color", ACCENT_CYAN if h_new > h_old else TEXT_MUTED)
 	hero_level_lbl.add_theme_font_size_override("font_size", 14)
 	block.add_child(hero_level_lbl)
@@ -1158,7 +1160,7 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	# pilotée par le flag SERVEUR hero_level_up plutôt que par la déduction h_new > h_old.
 	if bool(rewards.get("hero_level_up", false)):
 		var hero_gain_lbl := Label.new()
-		hero_gain_lbl.text = "▲ %d NIVEAU(X) HÉROS GAGNÉ(S)" % int(rewards.get("hero_levels_gained", 0))
+		hero_gain_lbl.text = tr("REPORT_HERO_LEVELS_GAINED") % int(rewards.get("hero_levels_gained", 0))
 		hero_gain_lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		hero_gain_lbl.add_theme_font_size_override("font_size", 14)
 		block.add_child(hero_gain_lbl)
@@ -1188,7 +1190,7 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	# Pop-up « Statistiques Améliorées » : un palier franchi → bonus de stats (ex. +50 PV, +1 PA).
 	for ms in rewards.get("hero_milestones", []):
 		var ms_lbl := Label.new()
-		ms_lbl.text = "▲ STATISTIQUES AMÉLIORÉES (Niv %d) : %s" % [
+		ms_lbl.text = tr("REPORT_HERO_MILESTONE") % [
 			int(ms.get("level", 0)), _format_milestone_bonus(ms.get("bonus", {}))]
 		ms_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
 		ms_lbl.add_theme_font_size_override("font_size", 14)
@@ -1358,15 +1360,16 @@ func _detail_line(box: VBoxContainer, label: String, value: int, unit_key: Strin
 
 
 # Formate un bonus de palier ({pv_max:50, pa:1, pb:0.01}) en libellé lisible (« +50 PV, +1 PA »).
+# Abréviations de stats i18n : réutilise CHAR_STAT_* (PV/PA/PB → HP/ATK/DEF en anglais).
 func _format_milestone_bonus(bonus: Dictionary) -> String:
 	var parts: Array[String] = []
 	if int(bonus.get("pv_max", 0)) != 0:
-		parts.append("+%d PV" % int(bonus.get("pv_max", 0)))
+		parts.append("+%d %s" % [int(bonus.get("pv_max", 0)), tr("CHAR_STAT_PV")])
 	if int(bonus.get("pa", 0)) != 0:
-		parts.append("+%d PA" % int(bonus.get("pa", 0)))
+		parts.append("+%d %s" % [int(bonus.get("pa", 0)), tr("CHAR_STAT_PA")])
 	if float(bonus.get("pb", 0.0)) != 0.0:
-		parts.append("+%d%% PB" % int(round(float(bonus.get("pb", 0.0)) * 100.0)))
-	return ", ".join(parts) if not parts.is_empty() else "amélioration"
+		parts.append("+%d%% %s" % [int(round(float(bonus.get("pb", 0.0)) * 100.0)), tr("CHAR_STAT_PB")])
+	return ", ".join(parts) if not parts.is_empty() else tr("REPORT_MILESTONE_FALLBACK")
 
 
 # Animation du bloc héros : décompte de l'XP gagnée, remplissage de la barre log, puis décompte
@@ -1379,7 +1382,7 @@ func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionar
 	var earned := int(rewards.get("hero_xp_earned", 0))
 	var t := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	t.tween_method(
-		func(v: float): hero_xp_lbl.text = "XP HÉROS : +%d" % int(round(v)),
+		func(v: float): hero_xp_lbl.text = tr("REPORT_HERO_XP") % int(round(v)),
 		0.0, float(earned), 0.8)
 	await t.finished
 
@@ -1393,7 +1396,7 @@ func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionar
 		var coins := int(rewards.get("hero_coins_earned", 0))
 		var tc := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tc.tween_method(
-			func(v: float): hero_coins_lbl.text = "COINS HÉROS : +%d" % int(round(v)),
+			func(v: float): hero_coins_lbl.text = tr("REPORT_HERO_COINS") % int(round(v)),
 			0.0, float(coins), 0.6)
 		await tc.finished
 
@@ -1408,7 +1411,7 @@ func _run_reward_animation(points_lbl: Label, xp_lbl: Label, bar, rewards: Dicti
 		var pts := int(rewards.get("match_points", 0))
 		var t := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		t.tween_method(
-			func(v: float): points_lbl.text = "POINTS DE MATCH : +%d" % int(round(v)),
+			func(v: float): points_lbl.text = tr("REPORT_MATCH_POINTS") % int(round(v)),
 			0.0, float(pts), 0.9)
 		await t.finished
 
@@ -1418,7 +1421,7 @@ func _run_reward_animation(points_lbl: Label, xp_lbl: Label, bar, rewards: Dicti
 		var xp := int(rewards.get("xp_earned", 0))
 		var tx := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tx.tween_method(
-			func(v: float): xp_lbl.text = "XP JOUEUR : +%d" % int(round(v)),
+			func(v: float): xp_lbl.text = tr("REPORT_PLAYER_XP") % int(round(v)),
 			0.0, float(xp), 0.9)
 		await tx.finished
 
