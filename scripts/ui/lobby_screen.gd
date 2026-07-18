@@ -125,6 +125,11 @@ func _ready():
 		_selected_map_id = RANKED_MAP_ID
 		_lock_map_selector_for_ranked()
 		_show_ranked_badge()
+	else:
+		# Casual (§8.103) : une carte trop petite pour l'effectif du mode (Théâtre Atlantique
+		# borné 3-4 face à FIVE 5 / EXA 6) laissait la création CLAMPER en silence — un joueur
+		# en mode EXA(6) démarrait à 4. Le mode fait foi : ces cartes sont désactivées.
+		_restrict_map_selector_to_mode()
 	_refresh_headcount_display()
 
 	# Mise en place de la couche 2.5D (repos des calques + dimensionnement des cendres).
@@ -257,6 +262,31 @@ func _lock_map_selector_for_ranked() -> void:
 	_map_option.disabled = true
 	_map_option.tooltip_text = tr("LOBBY_RANKED_MAP_LOCKED")
 
+# Casual (§8.103) — miroir du principe classé ci-dessus : le MODE choisi au menu fait foi, la
+# carte doit le supporter. Toute carte dont les bornes ne couvrent pas l'effectif du mode est
+# DÉSACTIVÉE dans le sélecteur (libellé suffixé « — MAX N JOUEURS ») au lieu de laisser la
+# création clamper en silence (EXA 6 sur Théâtre Atlantique → partie à 4). Garde d'avenir : si
+# la carte déjà retenue devenait incompatible, on retombe sur la carte par défaut (couvre 3-6).
+func _restrict_map_selector_to_mode() -> void:
+	if _map_option == null:
+		return
+	for i in range(_MAP_CHOICES.size()):
+		var def: Dictionary = MapData.MAP_DEFS.get(_MAP_CHOICES[i], {})
+		var max_p := int(def.get("max_players", 6))
+		var min_p := int(def.get("min_players", 3))
+		if _required_players > max_p or _required_players < min_p:
+			_map_option.set_item_disabled(i, true)
+			if _required_players > max_p:
+				_map_option.set_item_text(i, _map_option.get_item_text(i)
+					+ " — " + tr("LOBBY_MAP_MAX_PLAYERS") % max_p)
+	var kept: Dictionary = MapData.MAP_DEFS.get(_selected_map_id, {})
+	if _required_players > int(kept.get("max_players", 6)) \
+			or _required_players < int(kept.get("min_players", 3)):
+		_selected_map_id = MapData.DEFAULT_MAP_ID
+		var idx := _MAP_CHOICES.find(_selected_map_id)
+		if idx >= 0:
+			_map_option.select(idx)
+
 # Effectif de création CLAMPÉ aux bornes de la carte choisie (G5) : le serveur re-clampe de
 # toute façon, mais on évite de créer une salle qui ne matcherait pas le mode du joueur.
 func _create_headcount() -> int:
@@ -307,6 +337,11 @@ func _on_rooms_loaded(rooms: Array):
 			continue # On ne montre pas les salles privées dans la liste publique
 		if int(room.get("max_players", 0)) != _required_players:
 			continue # Capacité ≠ effectif du mode sélectionné → masquée du Radar
+		# Étanchéité CLASSÉE ↔ casual (§8.103) : à capacité égale (5), le Radar du mode FIVE
+		# listait aussi les salles CLASSÉE (et réciproquement, faussant l'attente de ladder).
+		# room.get DÉFENSIF : un backend antérieur à §8.88 n'envoie pas is_ranked (→ casual).
+		if bool(room.get("is_ranked", false)) != _required_ranked:
+			continue # Intention classée ≠ intention du mode → masquée du Radar
 		room_list_container.add_child(_build_room_row(room))
 		shown += 1
 
