@@ -207,8 +207,27 @@ func _on_catalog_loaded(items: Array) -> void:
 			"hero_key": str(it.get("hero_key", "")) if it.get("hero_key") != null else "",
 			# purchasable (§8.102) : absent sur un serveur antérieur → true (comportement historique).
 			"purchasable": bool(it.get("purchasable", true)),
+			# --- Les 3 Pass (chantier R) : enrichissement SERVEUR des articles « pass ». Le client
+			# ne connaît AUCUN chiffre du barème : il affiche les clés i18n que le serveur lui donne.
+			# Absents (serveur antérieur / autre catégorie) → valeurs neutres, aucune carte cassée.
+			"tier": str(it.get("tier", "")),
+			"rank": int(it.get("rank", 0)),
+			"perk_keys": _as_string_array(it.get("perk_keys", [])),
 		})
+	# Table { niveau: rang } dérivée du catalogue — sert à comparer un niveau au sien (S.2).
+	_pass_ranks.clear()
+	for entry in _catalog:
+		if str(entry.get("tier", "")) != "":
+			_pass_ranks[str(entry["tier"])] = int(entry.get("rank", 0))
 	_populate()
+
+# Normalise une liste JSON en tableau de String (piège JSON §5 : on ne fait jamais confiance au type).
+func _as_string_array(value) -> Array:
+	var out: Array = []
+	if typeof(value) == TYPE_ARRAY:
+		for v in value:
+			out.append(str(v))
+	return out
 
 # Solde + inventaire (id -> quantité). Piège JSON float §5 : quantités/solde -> int().
 func _on_inventory_loaded(data: Dictionary) -> void:
@@ -227,6 +246,11 @@ func _on_inventory_loaded(data: Dictionary) -> void:
 	# Date d'expiration du Pass (peut arriver à null → "").
 	var pe = data.get("pass_expires_at", "")
 	_pass_expires_at = str(pe) if pe != null else ""
+	# NIVEAU du Pass détenu (chantier R) — absent (serveur antérieur / snapshot d'achat) → on GARDE
+	# la dernière valeur connue, comme `payments_enabled` : sinon la vitrine perdrait l'état
+	# « ACTIF / AMÉLIORER / INCLUS » juste après un achat.
+	if data.has("pass_tier"):
+		_pass_tier = str(data.get("pass_tier", ""))
 	_owned.clear()
 	var items_data = data.get("items", {})
 	if typeof(items_data) == TYPE_DICTIONARY:
@@ -315,12 +339,53 @@ func _pass_days_left() -> int:
 # muette → aucune bannière, aucun badge.
 var _rotation_ids: Dictionary = {}
 var _rotation_banner: Label = null
+# --- Crédit de parties gratuites (chantier Q) : compteurs servis par GET /shop/rotation quand le
+# joueur est AUTHENTIFIÉ. -1 = INCONNU (visiteur anonyme ou serveur antérieur) → on retombe alors
+# sur l'ancien badge « GRATUITE CETTE SEMAINE », sans jamais afficher un faux « 0/5 ». ---
+var _free_games_left: int = -1
+var _free_games_max: int = -1
+# --- Les 3 Pass (chantier R) --------------------------------------------------
+# Niveau détenu ("" = aucun) et rang de chaque niveau { "plus": 1, … }, DÉRIVÉ du catalogue : le
+# client ne code EN DUR ni l'ordre des niveaux ni leurs valeurs — il ne fait que comparer des rangs.
+var _pass_tier: String = ""
+var _pass_ranks: Dictionary = {}
+# Niveau mis en avant par un badge « POPULAIRE ». C'est un choix de MERCHANDISING (pas une donnée
+# dérivable du barème) : il est isolé ici pour se changer en UNE ligne. "" = aucun badge.
+const POPULAR_PASS_TIER := "premium"
+
+# Rang le plus élevé du catalogue (le niveau « haut de gamme ») — 0 si aucun Pass n'est listé.
+func _max_pass_rank() -> int:
+	var top := 0
+	for t in _pass_ranks:
+		top = maxi(top, int(_pass_ranks[t]))
+	return top
+
 # --- Saison courante (M4 §8.67) : { id, ends_at } lu du bloc `season` de GET /shop/inventory. ---
 var _season: Dictionary = {}
 # --- Skins équipés (M5 §8.69) : { faction_id: skin_id } lu du bloc `equipped` de l'inventaire. ---
 var _equipped: Dictionary = {}
 # Compteur « EN DÉPÔT » de l'onglet courant (§8.102), inséré au-dessus de la grille.
 var _owned_count_label: Label = null
+
+# Ids des factions PAYANTES, DÉRIVÉS du catalogue (aucune liste dupliquée côté client : le jour où
+# une faction devient payante, il n'y a rien à changer ici).
+func _paid_faction_ids() -> Dictionary:
+	var out: Dictionary = {}
+	for entry in _catalog:
+		if str(entry.get("category", "")) == "faction":
+			out[str(entry.get("id", ""))] = true
+	return out
+
+# Le personnage lié à ce skin est-il possédé DÉFINITIVEMENT ? (§2.5 — gate d'achat des skins.)
+# Les factions GRATUITES sont réputées possédées par tout le monde ; une PAYANTE ne l'est que si
+# elle figure à l'inventaire. Un skin sans personnage lié (cas théorique) n'est jamais bloqué.
+func _hero_owned_for_skin(item: Dictionary) -> bool:
+	var hero_key := str(item.get("hero_key", ""))
+	if hero_key == "":
+		return true
+	if not _paid_faction_ids().has(hero_key):
+		return true          # faction gratuite → accessible en permanence.
+	return _owned.has(hero_key)
 
 # Vrai si CE skin est celui actuellement équipé pour sa faction.
 func _is_skin_equipped(item: Dictionary) -> bool:
@@ -381,8 +446,16 @@ func _on_rotation_loaded(data: Dictionary) -> void:
 	_rotation_ids.clear()
 	for fid in data.get("free_faction_ids", []):
 		_rotation_ids[str(fid)] = true
+	# Crédit de parties gratuites (chantier Q.6) : servi UNIQUEMENT à un joueur authentifié. Lecture
+	# DÉFENSIVE — champs absents → -1 (inconnu) → l'affichage retombe sur l'ancien badge.
+	_free_games_max = int(data.get("free_games_max", -1)) if data.has("free_games_max") else -1
+	_free_games_left = int(data.get("free_games_left", -1)) if data.has("free_games_left") else -1
 	_render_rotation_banner()
 	_populate()
+
+# Vrai si le serveur nous a bien donné le compteur de parties gratuites (joueur authentifié).
+func _has_free_games_counter() -> bool:
+	return _free_games_left >= 0 and _free_games_max > 0
 
 # (Re)compose le texte de la bannière de rotation (appelé au chargement ET au changement de
 # langue). La VISIBILITÉ effective est arbitrée par _populate (onglet PERSONNAGES seulement).
@@ -395,7 +468,15 @@ func _render_rotation_banner() -> void:
 	for fid in _rotation_ids:
 		names.append(_faction_name(str(fid)).to_upper())
 	names.sort()
-	_rotation_banner.text = tr("SHOP_ROTATION_BANNER").format({"factions": " · ".join(PackedStringArray(names))})
+	var joined := " · ".join(PackedStringArray(names))
+	# Chantier Q : la rotation n'offre plus qu'UN personnage, et pour un NOMBRE LIMITÉ de parties.
+	# Quand le compteur est connu (joueur authentifié), la bannière l'annonce — c'est l'information
+	# qui manquait le plus : sans elle, le joueur découvrait la limite au moment d'être refusé.
+	if _has_free_games_counter():
+		_rotation_banner.text = tr("SHOP_ROTATION_BANNER_GAMES").format(
+			{"faction": joined, "left": _free_games_left, "max": _free_games_max})
+	else:
+		_rotation_banner.text = tr("SHOP_ROTATION_BANNER").format({"factions": joined})
 
 # Bannière de rotation + compteur « EN DÉPÔT », insérés juste AU-DESSUS de la grille (même
 # parent), sans retouche .tscn. Créés une seule fois, à la demande.
@@ -473,6 +554,18 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 	var owned := _owned.has(id)                          # factions / skins (achat définitif)
 	var purchasable := bool(item.get("purchasable", true))
 	var pass_active := category == "pass" and _has_active_pass
+	# --- Vitrine des 3 Pass (chantier R) : niveau de CETTE carte vs niveau DÉTENU (rangs serveur). ---
+	var tier := str(item.get("tier", ""))
+	var rank := int(item.get("rank", 0))
+	var my_rank := int(_pass_ranks.get(_pass_tier, 0)) if _has_active_pass else 0
+
+	# Le niveau HAUT DE GAMME est couronné d'un liseré or COMPLET (les autres cartes n'ont qu'une
+	# arête gauche) → la hiérarchie des offres se lit d'un coup d'œil, sans lire les prix.
+	if category == "pass" and rank > 0 and rank >= _max_pass_rank():
+		var crown := _make_card_style(GOLD)
+		crown.set_border_width_all(2)
+		crown.border_width_left = 3
+		card.add_theme_stylebox_override("panel", crown)
 
 	# Ligne haute : catégorie (eyebrow À L'ACCENT de la carte) + badge prix hexagonal OR. Pour un
 	# pack fiat, le prix est en euros (« 4,99 € ») ; sinon en Coins. Un article possédé NON
@@ -494,16 +587,32 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 	# Nom de l'article (valeur primaire, MAJUSCULES) — clé traduite (R4).
 	v.add_child(_title_label(tr(str(item.get("name", "—"))).to_upper(), 20))
 
+	# Badge « POPULAIRE » (choix de merchandising, cf. POPULAR_PASS_TIER) sur un seul niveau.
+	if category == "pass" and tier != "" and tier == POPULAR_PASS_TIER:
+		var popular := _eyebrow(tr("SHOP_PASS_POPULAR"))
+		popular.add_theme_color_override("font_color", GOLD)
+		v.add_child(popular)
+
 	# Skin : on rappelle le héros lié (nom de faction résolu), à sa couleur signature.
 	if category == "skin" and str(item.get("hero_key", "")) != "":
 		var hero := _eyebrow(tr("SHOP_SKIN_HERO") % _faction_name(str(item.get("hero_key", ""))).to_upper())
 		hero.add_theme_color_override("font_color", text_accent)
 		v.add_child(hero)
 
-	# Rotation (M3 §8.66) : la faction est jouable GRATUITEMENT cette semaine — badge or.
-	if category == "faction" and _rotation_ids.has(id):
-		var rot := _eyebrow(tr("SHOP_ROTATION_BADGE"))
-		rot.add_theme_color_override("font_color", GOLD)
+	# Rotation (M3 §8.66, enrichie chantier Q) : la faction est jouable GRATUITEMENT cette semaine,
+	# dans la limite d'un CRÉDIT de parties. Le badge affiche le restant dès qu'il est connu ;
+	# épuisé (0 restant) il passe en MUET — la carte redevient une simple invitation à l'achat.
+	if category == "faction" and _rotation_ids.has(id) and not owned:
+		var rot_text := tr("SHOP_ROTATION_BADGE")
+		var rot_color := GOLD
+		if _has_free_games_counter():
+			if _free_games_left > 0:
+				rot_text = tr("SHOP_ROTATION_BADGE_GAMES") % [_free_games_left, _free_games_max]
+			else:
+				rot_text = tr("SHOP_ROTATION_BADGE_EXHAUSTED")
+				rot_color = MUTED
+		var rot := _eyebrow(rot_text)
+		rot.add_theme_color_override("font_color", rot_color)
 		v.add_child(rot)
 
 	# Description (texte muet, retour à la ligne) — clé traduite (R4).
@@ -517,12 +626,27 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		grant.add_theme_color_override("font_color", GOLD)
 		v.add_child(grant)
 
-	# Pass Spécial (M4 §8.67) : les 4 AVANTAGES CONCRETS + skin exclusif + fin de saison.
+	# PASS (M4 §8.67, porté à 3 niveaux au chantier R) : les avantages CONCRETS du niveau, puis le
+	# nombre de personnages débloqués, le skin exclusif et la fin de saison.
 	if category == "pass":
-		for i in range(1, 5):
-			var perk := _body_label(tr("SHOP_PASS_PERK_%d" % i))
+		# Les clés d'avantages viennent du SERVEUR (pass_catalog.perk_keys) : le client n'écrit
+		# aucun chiffre du barème — rééquilibrer un Pass ne touche pas une ligne de GDScript.
+		# Repli sur les 4 clés historiques si le serveur ne les fournit pas (§1.5, client défensif).
+		# ⚠️ `.duplicate()` : en GDScript un Array est une RÉFÉRENCE. Sans copie, le repli
+		# ci-dessous écrirait les clés historiques DANS l'entrée de `_catalog` — l'état client
+		# divergerait silencieusement de ce que le serveur a envoyé.
+		var perks: Array = (item.get("perk_keys", []) as Array).duplicate()
+		if perks.is_empty():
+			for i in range(1, 5):
+				perks.append("SHOP_PASS_PERK_%d" % i)
+		for key in perks:
+			var perk := _body_label(tr(str(key)))
 			perk.add_theme_color_override("font_color", TEXT)
 			v.add_child(perk)
+		# ⚠️ PAS de ligne « personnages débloqués » ICI : le DERNIER avantage de `perk_keys` la porte
+		# déjà (« 1 personnage / la MOITIÉ / TOUS … pour la saison »). Le prompt demandait les deux ;
+		# à l'écran cela affichait deux fois la même information sur chaque carte (vérifié en
+		# capture). On garde la version SERVEUR, data-driven, et on supprime le doublon client.
 		var skin_line := _eyebrow(tr("SHOP_PASS_SEASON_SKIN").format({"season": str(_season.get("id", "S?"))}))
 		skin_line.add_theme_color_override("font_color", GOLD)
 		v.add_child(skin_line)
@@ -532,9 +656,12 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 				{"season": str(_season.get("id", "S?")), "days": days_left}))
 			v.add_child(season_line)
 
-	# Pass déjà actif : on le signale avec les jours restants (sans empêcher un futur ré-achat en
-	# saison suivante — le serveur refuse un double achat tant qu'il est actif, M4).
-	if pass_active:
+	# Pass déjà actif : jours restants. ⚠️ Chantier R — le badge ne s'affiche QUE sur la carte du
+	# niveau RÉELLEMENT détenu : avec 3 cartes en vitrine, l'afficher sur toutes laisserait croire
+	# que les trois sont acquis. `rank == 0` = serveur antérieur (un seul Pass, aucun niveau
+	# transmis) → comportement historique conservé.
+	var is_my_tier := pass_active and (rank == 0 or rank == my_rank)
+	if is_my_tier:
 		var days := _pass_days_left()
 		var active := _eyebrow((tr("SHOP_PASS_ACTIVE_DAYS") % days) if days > 0 else tr("SHOP_PASS_ACTIVE"))
 		active.add_theme_color_override("font_color", GOLD)
@@ -548,6 +675,21 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		# Skin possédé (M5 §8.69) : bouton ÉQUIPER / ÉQUIPÉ ✓ (un skin équipé par faction).
 		if category == "skin":
 			v.add_child(_make_equip_button(item))
+	elif category == "skin" and not _hero_owned_for_skin(item):
+		# GATE DES SKINS (§2.5) : on n'achète le skin QUE d'un personnage possédé DÉFINITIVEMENT.
+		# Un accès temporaire (rotation, Pass) ne suffit pas — on paierait le cosmétique d'un
+		# personnage qu'on va perdre. Le SERVEUR refuse de toute façon (shop._apply_virtual_purchase) :
+		# ce verrou-ci n'est qu'un confort, il explique POURQUOI plutôt que de laisser échouer l'achat.
+		var need := _body_label(tr("SHOP_SKIN_REQUIRES_HERO") % _faction_name(str(item.get("hero_key", ""))).to_upper())
+		need.add_theme_color_override("font_color", MUTED)
+		v.add_child(need)
+	elif category == "pass" and is_my_tier:
+		pass   # C'est DÉJÀ votre niveau : aucun bouton (le badge « PASS ACTIF · J-N » suffit).
+	elif category == "pass" and pass_active and rank > 0 and rank < my_rank:
+		# Niveau INFÉRIEUR à celui détenu : ses avantages sont déjà couverts → grisé, non cliquable.
+		var lower := _body_label(tr("SHOP_PASS_LOWER"))
+		lower.add_theme_color_override("font_color", MUTED)
+		v.add_child(lower)
 	elif is_fiat and not _payments_enabled:
 		# Gate paiements (§8.102) : pack fiat proposé alors que les paiements réels sont fermés →
 		# CTA neutralisé « BIENTÔT DISPONIBLE » (au lieu d'un achat voué à l'échec 501).
@@ -568,9 +710,12 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		soon.add_theme_color_override("font_disabled_color", MUTED)
 		v.add_child(soon)
 	else:
-		# CTA d'achat (cyan). Libellé « ACHETER » pour un pack fiat (argent réel), « ACQUÉRIR » sinon.
+		# CTA d'achat (cyan). Libellé « ACHETER » pour un pack fiat (argent réel), « ACQUÉRIR » sinon,
+		# et « AMÉLIORER ❯ » pour un Pass de niveau SUPÉRIEUR à celui déjà détenu (§2.10).
 		var buy := Button.new()
 		buy.text = tr("SHOP_GET") if is_fiat else tr("SHOP_BUY")
+		if category == "pass" and pass_active and rank > my_rank:
+			buy.text = tr("SHOP_PASS_UPGRADE")
 		buy.custom_minimum_size = Vector2(0, 44)
 		_style_cta_button(buy)
 		buy.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
@@ -604,6 +749,12 @@ func _on_purchase_success(data: Dictionary) -> void:
 
 # Échec (HTTP 400/501) : on affiche le message du serveur EN ROUGE (« Crédits insuffisants »…).
 func _on_purchase_failed(message: String) -> void:
+	# Chantier S.5 : un 501 n'est pas un refus d'achat, c'est le gate « paiements réels pas encore
+	# branchés » (§2.1). On le traduit en message PRODUIT plutôt que de relayer le texte technique
+	# du serveur. Défensif : sans code disponible (ancien NetworkManager), on garde le message brut.
+	if NetworkManager.get("last_purchase_http_code") == 501:
+		_set_status(tr("SHOP_PAYMENTS_SOON"), true)
+		return
 	_set_status(message, true)
 
 # --- Fabriques de nœuds (charte §2) -----------------------------------------

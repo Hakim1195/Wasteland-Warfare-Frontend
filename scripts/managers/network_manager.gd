@@ -104,6 +104,10 @@ signal shop_inventory_loaded(data: Dictionary)
 signal shop_purchase_success(data: Dictionary)
 # Achat refusé par le serveur (HTTP 400) : message d'erreur prêt à afficher (« Crédits insuffisants »…).
 signal shop_purchase_failed(message: String)
+# Code HTTP du DERNIER échec d'achat (0 = aucun). Complète `shop_purchase_failed`, qui ne
+# transporte qu'un message : la vue y lit 501 (paiements réels désactivés, gate C3) pour afficher
+# une explication produit au lieu du texte brut du serveur. Additif — aucune signature modifiée.
+var last_purchase_http_code: int = 0
 # Rotation gratuite hebdomadaire des factions payantes (M3 §8.66) :
 # { week_key, free_faction_ids: [id, id], rotates_at } — émis par fetch_shop_rotation.
 signal shop_rotation_loaded(data: Dictionary)
@@ -723,6 +727,10 @@ func _on_purchase_completed(_result, response_code, _headers, body, http_node):
 		var msg := tr("NET_PURCHASE_FAILED")
 		if typeof(data) == TYPE_DICTIONARY and data.has("detail"):
 			msg = str(data["detail"])
+		# Chantier S.5 : on EXPOSE aussi le code HTTP du dernier échec, sans toucher à la signature
+		# du signal (un paramètre supplémentaire casserait toute callable déjà connectée). La vue
+		# le lit juste après réception pour distinguer 501 « paiements fermés » d'un vrai refus 400.
+		last_purchase_http_code = int(response_code)
 		shop_purchase_failed.emit(msg)
 
 # =========================================================
