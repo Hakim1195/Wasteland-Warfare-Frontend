@@ -1,0 +1,92 @@
+[gd_scene format=3 uid="uid://bq7wpx3n8kv12"]
+
+[ext_resource type="Texture2D" uid="uid://dl6ps8pllyfe" path="res://assets/images/bg_wasteland.png" id="1_bgw"]
+[ext_resource type="Script" path="res://scripts/ui/public_profile.gd" id="2_pub"]
+
+[sub_resource type="SystemFont" id="font_warzone"]
+font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
+font_weight = 700
+
+[sub_resource type="StyleBoxFlat" id="bg_panel"]
+content_margin_left = 36.0
+content_margin_top = 28.0
+content_margin_right = 36.0
+content_margin_bottom = 24.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.9)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.211765, 0.772549, 0.85098, 1)
+
+[sub_resource type="StyleBoxLine" id="filet_cyan"]
+color = Color(0.211765, 0.772549, 0.85098, 0.5)
+thickness = 2
+
+[node name="PublicProfileScreen" type="Control" node_paths=PackedStringArray("panel", "header_slot", "content_box", "status_label")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_pub")
+panel = NodePath("CenterContainer/MainPanel")
+header_slot = NodePath("CenterContainer/MainPanel/RootVBox/HeaderSlot")
+content_box = NodePath("CenterContainer/MainPanel/RootVBox/ContentScroll/ContentBox")
+status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("1_bgw")
+expand_mode = 2
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 100.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MainPanel" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(1240, 840)
+layout_mode = 2
+theme_override_styles/panel = SubResource("bg_panel")
+
+[node name="RootVBox" type="VBoxContainer" parent="CenterContainer/MainPanel"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="HeaderSlot" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 28
+
+[node name="FiletTop" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("filet_cyan")
+
+[node name="ContentScroll" type="ScrollContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="ContentBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/ContentScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="StatusLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 14
+text = "COMMON_SYNCING"
+horizontal_alignment = 1

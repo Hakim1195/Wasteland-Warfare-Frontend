@@ -82,6 +82,11 @@ signal profile_history_page_loaded(entries: Array, request: Dictionary)
 signal profile_finance_loaded(data: Dictionary, request: Dictionary)
 # Réponse à fetch_profile_pass : dict {active, expires_at, tier_id, tiers[], granted_items[], gains}.
 signal profile_pass_loaded(data: Dictionary)
+# §8.107 — PROFIL PUBLIC d'un autre opérateur (palmarès consultable depuis le Classement) :
+# dict {username, level, games_played, wins, losses, heaviest_toll, favorite_faction, season,
+# factions[], modes, form[], maps[]}. `username` échoué pour que l'écran ignore une réponse
+# obsolète (l'utilisateur peut cliquer deux lignes de suite). {} = introuvable / serveur ancien.
+signal public_profile_loaded(data: Dictionary, username: String)
 # --- Héros / Roster (sprint RPG & Survie — écran « Personnages ») ---
 # Réponse à fetch_heroes : liste des 10 héros de l'opérateur (1 par faction), chacun avec stats
 # détaillées (au niveau courant ET au niveau 100), progression XP et paliers (GET /api/v1/heroes,
@@ -618,6 +623,23 @@ func _on_profile_pass_fetched(_result, response_code, _headers, body, http_node)
 	http_node.queue_free()
 	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
 	profile_pass_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
+
+
+# 9. PROFIL PUBLIC (§8.107) : GET /profile/public/{username} (authentifié). Palmarès d'un AUTRE
+# opérateur — ni finances ni pass (le serveur ne les calcule même pas pour un tiers).
+# L'identifiant est le PSEUDO : le classement n'expose délibérément aucun id technique, et router
+# par pseudo évite d'introduire un identifiant séquentiel énumérable. `uri_encode` est
+# indispensable (un pseudo peut contenir des caractères réservés d'URL).
+# 404 (opérateur inconnu) / serveur ancien → dict VIDE : l'écran affiche un état « introuvable ».
+func fetch_public_profile(username: String):
+	_send_api_request("/profile/public/" + username.uri_encode(),
+		HTTPClient.METHOD_GET, {}, _on_public_profile_fetched.bind(username))
+
+# Ordre des paramètres liés : cf. la note de _on_profile_history_fetched (http_node AVANT l'arg lié).
+func _on_public_profile_fetched(_result, response_code, _headers, body, http_node, username):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	public_profile_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {}, str(username))
 
 # =========================================================
 # PARTIE 3bis : HÉROS / ROSTER (sprint RPG & Survie — écran « Personnages »)

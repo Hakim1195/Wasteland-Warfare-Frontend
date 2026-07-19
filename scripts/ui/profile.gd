@@ -66,6 +66,15 @@ const DIVISION_COLORS := {
 # à l'écran (tr() sur une clé absente renvoie la clé elle-même).
 const DIVISION_LABELS := {"ELITE": "DIVISION_ELITE"}
 
+# Libellés i18n des CARTES (§8.107) : le serveur ne renvoie que l'id ASCII du registre G5 (R4 —
+# aucun texte affichable côté réseau), le client le résout ici. Même repli défensif que les
+# divisions : un id inconnu (carte ajoutée par un serveur plus récent) s'affiche tel quel plutôt
+# que sous forme de clé i18n crue.
+const MAP_LABELS := {
+	"classic_42": "MAP_CLASSIC_LABEL",
+	"skirmish_atlantic": "MAP_ATLANTIC_LABEL",
+}
+
 # --- Onglets (index = ordre d'ajout au TabContainer) ---
 const TAB_OVERVIEW := 0
 const TAB_STATS := 1
@@ -111,6 +120,8 @@ var _season: Dictionary = {}
 var _factions_stats: Array = []
 var _modes: Dictionary = {}
 var _form: Array = []
+# §8.107 — agrégat PAR CARTE (vide sur un serveur antérieur : la vue affiche son état vide).
+var _maps_stats: Array = []
 
 # Repli LEGACY de la carte division : division + points lus de /auth/me (utilisé UNIQUEMENT si le
 # bloc `season` de /profile/stats est absent, c.-à-d. serveur non redéployé).
@@ -121,7 +132,7 @@ var _legacy_division: String = ""
 var _tabs: TabContainer = null
 # Onglets déjà chargés (index -> true) : le fetch différé n'est émis QU'UNE fois par onglet.
 var _loaded_tabs: Dictionary = {}
-# Vue de l'onglet STATISTIQUES : "hero" (par personnage, défaut) ou "mode".
+# Vue de l'onglet STATISTIQUES : "hero" (par personnage, défaut), "mode" ou "map" (§8.107).
 var _stats_view: String = "hero"
 # Filtre de l'onglet HISTORIQUE : "wins" (défaut — demande produit), "all" ou "ranked".
 var _history_filter: String = "wins"
@@ -233,6 +244,8 @@ func _on_profile_loaded(data: Dictionary):
 		_modes = data["modes"]
 	if typeof(data.get("form")) == TYPE_ARRAY:
 		_form = data["form"]
+	if typeof(data.get("maps")) == TYPE_ARRAY:
+		_maps_stats = data["maps"]
 
 	_refresh_all()
 	_set_status(tr("PROFILE_STATUS_LOADED"))
@@ -598,12 +611,17 @@ func _populate_stats_tab() -> void:
 		func() -> void: _set_stats_view("hero")))
 	chips.add_child(_make_chip(tr("PROFILE_STATS_BY_MODE"), _stats_view == "mode",
 		func() -> void: _set_stats_view("mode")))
+	chips.add_child(_make_chip(tr("PROFILE_STATS_BY_MAP"), _stats_view == "map",
+		func() -> void: _set_stats_view("map")))
 	_stats_box.add_child(_spacer(4))
 
-	if _stats_view == "hero":
-		_build_stats_by_hero()
-	else:
-		_build_stats_by_mode()
+	match _stats_view:
+		"mode":
+			_build_stats_by_mode()
+		"map":
+			_build_stats_by_map()
+		_:
+			_build_stats_by_hero()
 
 	# Monitoring de progression (commun aux deux vues) : courbe des RP cumulés.
 	_build_rp_chart()
@@ -742,6 +760,59 @@ func _make_mode_card(title: String, data: Dictionary, accent: Color, show_rp: bo
 	wr_line.add_child(_mini("%d%%" % wr, 15, accent))
 	WarzoneUI.add_corner_notches(card)
 	return card
+
+
+# --- Vue PAR CARTE (§8.107) : sur quelle carte l'opérateur performe le mieux ---
+func _build_stats_by_map() -> void:
+	if _maps_stats.is_empty():
+		_stats_box.add_child(_muted_note(tr("PROFILE_STATS_EMPTY")))
+		return
+	for entry in _maps_stats:
+		if typeof(entry) == TYPE_DICTIONARY:
+			_stats_box.add_child(_make_map_stat_row(entry))
+	# Honnêteté des données : le serveur EXCLUT les matchs sans carte connue (tous ceux joués avant
+	# cette mise à jour). La note est INCONDITIONNELLE — le client ne peut pas savoir combien de
+	# lignes ont été écartées, et prétendre le contraire serait pire que de le dire simplement.
+	_stats_box.add_child(_muted_note(tr("PROFILE_MAP_LEGACY_NOTE")))
+
+
+func _make_map_stat_row(e: Dictionary) -> PanelContainer:
+	var row := PanelContainer.new()
+	row.add_theme_stylebox_override("panel", _make_card_style(ACCENT))
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 16)
+	row.add_child(h)
+
+	# Gauche : nom de carte résolu localement (repli sur l'id brut si le serveur en connaît une
+	# que ce client ignore — jamais une clé i18n crue à l'écran).
+	var mid := str(e.get("map_id", ""))
+	var label := tr(str(MAP_LABELS[mid])) if MAP_LABELS.has(mid) else mid
+	var left := _mini(label.to_upper(), 17, TEXT)
+	left.custom_minimum_size = Vector2(260, 0)
+	h.add_child(left)
+
+	# Centre : volume + barre de winrate (mêmes briques que la vue PAR PERSONNAGE).
+	var center := VBoxContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.add_theme_constant_override("separation", 4)
+	h.add_child(center)
+	center.add_child(_mini(tr("PROFILE_GAMES_WL_FMT")
+		% [int(e.get("games", 0)), int(e.get("wins", 0)), int(e.get("losses", 0))], 13, MUTED))
+	var wr := int(e.get("winrate", 0))
+	var wr_line := HBoxContainer.new()
+	wr_line.add_theme_constant_override("separation", 10)
+	center.add_child(wr_line)
+	var bar := _make_ratio_bar(wr, GOLD, 0.0)
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	wr_line.add_child(bar)
+	wr_line.add_child(_mini("%d%%" % wr, 15, GOLD))
+
+	# Droite : place moyenne (DIXIÈMES → « 2.5 »), « — » si aucune place connue.
+	var avg := int(e.get("avg_rank_x10", 0))
+	h.add_child(_make_metric(tr("PROFILE_AVG_RANK"),
+		("%.1f" % (avg / 10.0)) if avg > 0 else "—", TEXT if avg > 0 else MUTED))
+	return row
 
 
 # --- Courbe « RP cumulés » (chantier L.4) : polyline native, AUCUNE lib externe ---

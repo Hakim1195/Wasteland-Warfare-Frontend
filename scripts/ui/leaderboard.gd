@@ -28,6 +28,9 @@ extends Control
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 # Header CANONIQUE partagé (§8.94) — remplace l'ex-en-tête (titre + RETOUR).
 const TopNav = preload("res://scripts/ui/top_nav.gd")
+# §8.107 — écran de PROFIL PUBLIC ouvert au clic sur une ligne (le pseudo transite par son
+# `static var target_username`, cf. `_open_public_profile`).
+const PublicProfileScreen = preload("res://scripts/ui/public_profile.gd")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -1218,7 +1221,30 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(value_label)
 
+	# §8.107 — la ligne ouvre le PROFIL PUBLIC de l'opérateur. AJOUT PUR : le rendu construit
+	# ci-dessus n'est pas touché, on ne fait que rendre la ligne cliquable (curseur + infobulle +
+	# gestionnaire d'entrée). Le Classement reste le SEUL accès à cet écran (demande produit).
+	# On route par PSEUDO : `LeaderboardEntry` n'expose délibérément aucun id technique (« Données
+	# PUBLIQUES uniquement »), décision maintenue — pas d'identifiant séquentiel énumérable.
+	var uname := str(entry.get("username", ""))
+	if uname != "":
+		row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		row.tooltip_text = tr("LEADERBOARD_VIEW_PROFILE")
+		row.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed \
+					and ev.button_index == MOUSE_BUTTON_LEFT:
+				_open_public_profile(uname))
+
 	return row
+
+
+# §8.107 — ouvre le profil public. Le pseudo transite par un `static var` du script de l'écran
+# cible : `TransitionManager.change_scene` ne transporte aucun paramètre, et cette voie évite
+# d'ajouter un champ étranger à un autoload existant (aucune modification de l'existant).
+func _open_public_profile(username: String) -> void:
+	AudioManager.play_sfx("click")
+	PublicProfileScreen.target_username = username
+	TransitionManager.change_scene("res://scenes/ui/public_profile.tscn")
 
 # --- Fabriques de styles (charte §2, cohérent avec shop.gd / profile.gd) ----
 # Style d'une carte de podium : surface gunmetal + bordure d'accent (or pour le #1).

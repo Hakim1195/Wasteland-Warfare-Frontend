@@ -533,7 +533,16 @@ Réponse (les 10 clés historiques sont **INCHANGÉES** ; les 4 blocs sont ADDIT
              "casual": { "games": 23, "wins": 7,  "winrate": 30, "rp_net": 0 } },
 
   // --- ADDITIF — bande de FORME : 10 derniers matchs, le plus RÉCENT d'abord ---
-  "form": [ { "win": true, "is_ranked": true } ]
+  "form": [ { "win": true, "is_ranked": true } ],
+
+  // --- ADDITIF §8.107 — agrégat PAR CARTE (GROUP BY match_history.map_id) ---
+  "maps": [ { "map_id": "classic_42", "games": 30, "wins": 18, "losses": 12,
+              "winrate": 60, "avg_rank_x10": 25 } ]
+  // `map_id` = id ASCII du registre multi-cartes (G5) — le serveur n'envoie AUCUN libellé
+  // affichable (R4) : le client résout via ses clés MAP_*_LABEL. Volontairement plus maigre que
+  // `factions` (ni XP ni RP) : le mode CLASSÉ impose sa carte, un « RP par carte » serait dégénéré.
+  // ⚠️ Les lignes de carte INCONNUE (`map_id == ""`, tous les matchs antérieurs à §8.107) sont
+  // EXCLUES de l'agrégat — les inclure créerait une « carte fantôme » sans nom.
 }
 ```
 - **Tri `factions`** : `games` décroissant, départage par `faction_id` (ordre STABLE d'un appel à l'autre).
@@ -556,6 +565,18 @@ Réponse (les 10 clés historiques sont **INCHANGÉES** ; les 4 blocs sont ADDIT
   "hero_xp_earned": 525, "coins_earned": 118 }   // coins = paliers de niveau + niveaux de héros
 ```
 > ⚠️ `final_rank` est **1-based** ici, alors que `MatchParticipant.rank` (télémétrie G6) est **0-based**. Conventions volontairement différentes : le 0 est réservé au « inconnu ». Ne pas les confondre.
+
+#### `GET /profile/public/{username}` — profil PUBLIC d'un autre opérateur **(NOUVEAU §8.107)**
+Palmarès consultable **uniquement depuis le Classement** (demande produit). **Authentifié** — contrairement à `GET /leaderboard` qui est public : l'écran n'est atteignable que depuis le jeu, et l'exiger limite le moissonnage. `404` si le pseudo est inconnu.
+```jsonc
+{ "username": "RAVAGEUR_PRIME", "level": 58,
+  "games_played": 500, "wins": 412, "losses": 88, "heaviest_toll": 12000,
+  "favorite_faction": "barons_ferraille",
+  "season": { … }, "factions": [ … ], "modes": { … }, "form": [ … ], "maps": [ … ] }
+```
+- **IDENTIFIANT = LE PSEUDO, pas l'id technique.** `LeaderboardEntry` exclut délibérément l'id (« Données PUBLIQUES uniquement (pas d'email ni d'id technique) ») et **cette décision est maintenue** : router par `username` évite d'exposer un identifiant séquentiel, qui permettrait d'énumérer tous les profils par simple incrément. Le pseudo est déjà affiché par le Classement, est `unique` et indexé → aucune donnée nouvelle n'est divulguée. **Aucun changement au contrat du Classement (§9.2).**
+- ⚠️ **FRONTIÈRE DE CONFIDENTIALITÉ.** La réponse est bornée par `PublicProfileResponse`, une **LISTE BLANCHE explicite** — surtout PAS un héritage de `ProfileStatsResponse`, sinon tout champ ajouté demain au profil privé deviendrait public tout seul. Sont **absents par construction et ne doivent jamais y entrer** : `credits`, tout le bloc FINANCES (solde, transactions, potentiel), tout le bloc PASS (état, gains, coût, objets), `email`, l'`id`, `xp`. `/profile/finance` et `/profile/pass` n'acceptent d'ailleurs **aucun paramètre de cible** : ils ne lisent que `current_user`. Verrou de non-régression : `test_profile_data.py`, suite [H].
+- ⚠️ **LECTURE SEULE.** L'endpoint n'appelle **ni `settle_previous_season` ni `ensure_season`** sur le joueur consulté : ce serait ÉCRIRE dans la ligne d'un tiers au passage d'un visiteur (reset de saison déclenché par un GET, avec course entre visiteurs simultanés). Conséquence assumée : si `season_id` n'est plus la saison courante, le joueur n'a pas joué cette saison → **0 RP et rang inconnu**, sans rien persister. Son reset restera déclenché par sa propre activité.
 
 #### `GET /profile/finance?limit=20&offset=0` — livre de comptes Coins **(NOUVEAU)**
 ```jsonc
@@ -861,3 +882,15 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
 > - **Stubs de test mis à jour** (5 suites) : les doublures `models.models` doivent exposer `CoinTransaction`. `economy` l'importe **à l'appel** (convention de `state_manager`) pour ne pas forcer toute suite important `economy` à connaître une table qu'elle ne teste pas.
 > - ⚠️ **Piège rencontré.** `record_coins` ne doit PAS faire `int()` sur `user.id` : c'est une clé étrangère repassée telle quelle, et les doublures maison exposent un objet-colonne quand l'instance ne shadowe pas l'attribut de classe (`TypeError` dans `test_rewards`). Garde bots réécrite en `isinstance(user_id, int) and user_id < 0`.
 > - **Archive** : `backend/migration_profile.sql` (7+3 colonnes + table + index), patron `migration_seasons.sql`.
+### 8.107. Stats par CARTE + PROFIL PUBLIC consultable depuis le Classement (Backend, 2026-07-19)
+> **Options 1 et 2 du §9 de `PROMPT_PROFIL_REFONTE.md`, validées par Hakim.** Consigne : **strictement ADDITIF, ne rien modifier à l'existant**. Contrat détaillé en **§9.1**. ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**.
+> - **`MatchHistory.map_id`** (additive, auto-migrée). ⚠️ `server_default=""` = carte **INCONNUE**, et NON `"classic_42"` comme sur `game_rooms` : les lignes legacy couvrent aussi des parties POSTÉRIEURES au registre multi-cartes (G5), les estampiller « classique » inventerait une donnée. L'agrégat EXCLUT les `""` (patron de `faction_id != ""`).
+> - **`process_match_results(…, map_id: str = "")`** — paramètre à **défaut neutre** : tous les appelants historiques et les tests restent valides sans modification. Seul `router._finalize_if_over` passe la vraie valeur (`getattr(state, "map_id", "")`, même garde défensive que `is_ranked`). `game.py` n'appelle pas cette fonction (vérifié).
+> - **Bloc `maps` ADDITIF** sur `/profile/stats` + helpers PURS `profile_stats.map_entry` / `sort_maps`.
+> - **`GET /profile/public/{username}` NEUF** — palmarès d'un tiers.
+>   - **Routé par PSEUDO, pas par id.** `LeaderboardEntry` exclut délibérément l'id technique ; la décision est **maintenue** plutôt que contournée. Router par `username` (déjà public, `unique`, indexé) évite d'introduire un identifiant **séquentiel énumérable** — et ne change RIEN au contrat du Classement (§9.2).
+>   - **`PublicProfileResponse` = LISTE BLANCHE explicite**, jamais un héritage de `ProfileStatsResponse` : par héritage, tout champ ajouté demain au profil privé (un solde, un bloc finance) deviendrait public **tout seul**. Ni `credits`, ni FINANCES, ni PASS, ni `email`/`id`/`xp`.
+>   - ⚠️ **LECTURE SEULE** : `_public_season_block` n'appelle **ni `settle_previous_season` ni `ensure_season`**. Les déclencher ferait ÉCRIRE dans la ligne d'un AUTRE joueur au passage d'un visiteur (reset de saison provoqué par un GET d'un tiers, course entre visiteurs). Joueur hors saison courante → **0 RP et rang inconnu**, sans persistance.
+> - **Tests.** `test_profile_data.py` **85 ✅ / 0 ❌** (+19 : suite [G] cartes, suite [H] **frontière de confidentialité** — liste blanche EXACTE, aucun champ interdit, non-héritage du schéma privé, témoin `credits` côté privé). `test_rewards.py` : `map_id` persisté sur chaque ligne du match, et `""` quand l'appelant ne le fournit pas. `test_game_over_redaction.py` **30 ✅ / 0 ❌** (+1 : propagation du `map_id` de l'état).
+> - ⚠️ **Piège rencontré (2ᵉ fois).** Les stubs `_fake_pmr` de `test_game_over_redaction.py` doivent suivre la signature RÉELLE de `process_match_results` : un stub trop étroit lève un `TypeError` **AVALÉ par le try/except fail-safe du routeur** → récompenses vides et test faussement rouge (4 KO). Le fichier le documentait déjà pour `is_ranked` ; l'avertissement a été étendu à `map_id`. **Élargir CES stubs à chaque paramètre ajouté.**
+> - Régression : suite backend **35/38 vertes** — les 3 rouges (`test_missions` 37/4, `test_seasons`, `test_simulation`) sont **PRÉEXISTANTES et identiques sur HEAD**.
