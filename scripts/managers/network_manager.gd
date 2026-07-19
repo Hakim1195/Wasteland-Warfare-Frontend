@@ -48,10 +48,12 @@ var last_draft_deadline_at: float = -1.0
 # avec le message (is_active=false, tour éventuellement déjà passé) est appliqué à GameState
 # AVANT l'émission — les écouteurs peuvent donc lire player_number/players directement.
 signal player_abandoned(player_id: int)
-# Espionnage (Chasseurs d'Ombres, §8.3) : réponse PRIVÉE du serveur à l'action spy_objective.
+# Espionnage (Shadow Hunters, §8.3) : réponse PRIVÉE du serveur à l'action spy_objective.
 # Reçue uniquement par l'espion (le secret n'est jamais diffusé). target_player_id = id de la
-# cible espionnée ; description = libellé de son objectif secret.
-signal spy_result(target_player_id: int, description: String)
+# cible espionnée ; description = libellé serveur (anglais invariant, REPLI) ; objective =
+# forme STRUCTURÉE {type, params, volets} dont le client compose le libellé TRADUIT (§8.104).
+# `objective` est {} sur un serveur antérieur → repli automatique sur `description`.
+signal spy_result(target_player_id: int, description: String, objective: Dictionary)
 # Chat de salle (§8.33) : message relayé par le serveur, ESTAMPILLÉ (sender_id + sender_name réels,
 # pas d'usurpation). tab ∈ {"general","private"} ; target_id renseigné uniquement en privé (sinon -1).
 signal chat_message_received(tab: String, sender_id: int, sender_name: String, text: String, target_id: int)
@@ -65,7 +67,21 @@ signal leaderboard_loaded(entries: Array, me: Dictionary)
 # losses, heaviest_toll, favorite_faction, credits, username) — lu défensivement par profile.gd.
 signal profile_stats_loaded(data: Dictionary)
 # Réponse à fetch_profile_history : liste d'objets {win, faction_id, detail} (le plus récent d'abord).
+# ⚠️ Émis UNIQUEMENT pour une requête NON FILTRÉE (aucun filtre, offset 0) — cf. la note de
+# fetch_profile_history : ses écouteurs (main_menu, top_nav) veulent « les N derniers matchs »
+# tout court, jamais une liste filtrée demandée par un autre écran.
 signal profile_history_loaded(entries: Array)
+# Chantier J — même réponse, mais accompagnée de la REQUÊTE qui l'a produite
+# ({limit, offset, wins_only, ranked_only}). Indispensable à l'écran Profil, qui émet plusieurs
+# requêtes d'historique de natures différentes (liste filtrée paginée + série RP des classées) :
+# sans l'écho de la requête, deux réponses en vol se rangeraient dans la mauvaise vue.
+signal profile_history_page_loaded(entries: Array, request: Dictionary)
+# --- Profil : FINANCES & PASS (refonte Profil, chantier J) ---
+# Réponse à fetch_profile_finance : dict {balance, total_earned, total_spent, by_reason,
+# entries[], hero_potential[], constants}. `request` échoie la requête (pagination « AFFICHER PLUS »).
+signal profile_finance_loaded(data: Dictionary, request: Dictionary)
+# Réponse à fetch_profile_pass : dict {active, expires_at, tier_id, tiers[], granted_items[], gains}.
+signal profile_pass_loaded(data: Dictionary)
 # --- Héros / Roster (sprint RPG & Survie — écran « Personnages ») ---
 # Réponse à fetch_heroes : liste des 10 héros de l'opérateur (1 par faction), chacun avec stats
 # détaillées (au niveau courant ET au niveau 100), progression XP et paliers (GET /api/v1/heroes,
@@ -294,9 +310,13 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# Piège Godot des ids JSON (§5) : player_id arrive en float -> int().
 			player_abandoned.emit(int(msg.get("player_id", -1)))
 		"spy_result":
-			# Espionnage (Chasseurs d Ombres) : message PRIVE recu uniquement par l espion.
+			# Espionnage (Shadow Hunters) : message PRIVE recu uniquement par l espion.
 			# Piege des ids JSON : target_player_id arrive en float -> int().
-			spy_result.emit(int(msg.get("target_player_id", -1)), str(msg.get("description", "")))
+			# §8.104 : `objective` (forme structuree) est ADDITIF — absent d un serveur
+			# anterieur -> {} et le consommateur retombe sur `description`.
+			var spy_obj = msg.get("objective", {})
+			spy_result.emit(int(msg.get("target_player_id", -1)), str(msg.get("description", "")),
+				spy_obj if typeof(spy_obj) == TYPE_DICTIONARY else {})
 		"timer_update":
 			# Chrono SERVEUR (E3 §8.75) : (ré)armement de minuterie ou extension Time Bank.
 			# reason ∈ {"turn_start", "phase_change", "time_bank"}. main.gd relaie au HUD.
@@ -533,18 +553,71 @@ func _on_profile_stats_fetched(_result, response_code, _headers, body, http_node
 	else:
 		lobby_error.emit(tr("NET_PROFILE_FETCH_FAILED"))
 
-# 6. Historique récent : GET /profile/history?limit=N (authentifié). Liste {win, faction_id, detail}.
-func fetch_profile_history(limit: int = 5):
-	_send_api_request("/profile/history?limit=" + str(limit), HTTPClient.METHOD_GET, {}, _on_profile_history_fetched)
+# 6. Historique récent : GET /profile/history (authentifié). Liste {win, faction_id, detail, …}.
+# Chantier J — filtres et pagination ADDITIFS, tous à défaut NEUTRE : l'appel historique
+# `fetch_profile_history(5)` (main_menu, top_nav) produit EXACTEMENT la même requête qu'avant.
+func fetch_profile_history(limit: int = 5, offset: int = 0, wins_only: bool = false,
+		ranked_only: bool = false):
+	var path := "/profile/history?limit=%d&offset=%d" % [limit, offset]
+	if wins_only:
+		path += "&wins_only=true"
+	if ranked_only:
+		path += "&ranked_only=true"
+	# La requête est BINDÉE au callback : le signal ne rappelant pas ses paramètres, c'est le seul
+	# moyen pour un écran de savoir à quelle demande répond une liste (même piège que la file de
+	# requêtes du leaderboard, §8.95).
+	var request := {"limit": limit, "offset": offset,
+					"wins_only": wins_only, "ranked_only": ranked_only}
+	_send_api_request(path, HTTPClient.METHOD_GET, {}, _on_profile_history_fetched.bind(request))
 
-func _on_profile_history_fetched(_result, response_code, _headers, body, http_node):
+# ⚠️ ORDRE DES PARAMÈTRES LIÉS : `_send_api_request` fait `callback.bind(http)` sur un callable
+# DÉJÀ lié par `.bind(request)`. Or un second bind INSÈRE ses arguments AVANT ceux du premier
+# (f.bind(a).bind(b) → f(args…, b, a)) : `http_node` arrive donc AVANT `request`. Inverser les deux
+# fait échouer la toute première ligne (`http_node.queue_free()` sur un Dictionary) — la requête ne
+# serait jamais relayée ET le nœud HTTPRequest fuirait à chaque appel.
+func _on_profile_history_fetched(_result, response_code, _headers, body, http_node, request):
 	http_node.queue_free()
 	if response_code == 200:
 		var data = JSON.parse_string(body.get_string_from_utf8())
 		if typeof(data) == TYPE_ARRAY:
-			profile_history_loaded.emit(data)
+			# ⚠️ Le signal LEGACY n'est émis que pour une requête NON FILTRÉE. Ses écouteurs
+			# (main_menu, top_nav — ce dernier monté sur TOUS les écrans, Profil COMPRIS) veulent
+			# « les N derniers matchs » ; leur servir la liste filtrée demandée par l'onglet
+			# HISTORIQUE ou la courbe RP leur ferait afficher un héros / un récap FAUX.
+			if not bool(request.get("wins_only", false)) \
+					and not bool(request.get("ranked_only", false)) \
+					and int(request.get("offset", 0)) == 0:
+				profile_history_loaded.emit(data)
+			profile_history_page_loaded.emit(data, request)
 	else:
 		lobby_error.emit(tr("NET_HISTORY_FETCH_FAILED"))
+
+
+# 7. FINANCES (chantier J) : GET /profile/finance?limit&offset (authentifié). Livre de comptes
+# Coins — solde, gains/dépenses par source, transactions, potentiel de gain par personnage.
+# ⚠️ Route ABSENTE d'un serveur non redéployé → 404 : on émet alors un dict VIDE plutôt qu'une
+# erreur globale, et l'écran affiche « DONNÉES INDISPONIBLES » (dégradation propre, jamais un crash).
+func fetch_profile_finance(limit: int = 20, offset: int = 0):
+	var request := {"limit": limit, "offset": offset}
+	_send_api_request("/profile/finance?limit=%d&offset=%d" % [limit, offset],
+		HTTPClient.METHOD_GET, {}, _on_profile_finance_fetched.bind(request))
+
+# Même ordre de paramètres liés que _on_profile_history_fetched (cf. la note qui y détaille le piège).
+func _on_profile_finance_fetched(_result, response_code, _headers, body, http_node, request):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	profile_finance_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {}, request)
+
+
+# 8. PASS (chantier J) : GET /profile/pass (authentifié). État, avantages data-driven, gain réel
+# mesuré, objets obtenus grâce au Pass. Même dégradation propre qu'au-dessus sur un serveur ancien.
+func fetch_profile_pass():
+	_send_api_request("/profile/pass", HTTPClient.METHOD_GET, {}, _on_profile_pass_fetched)
+
+func _on_profile_pass_fetched(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	profile_pass_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
 
 # =========================================================
 # PARTIE 3bis : HÉROS / ROSTER (sprint RPG & Survie — écran « Personnages »)

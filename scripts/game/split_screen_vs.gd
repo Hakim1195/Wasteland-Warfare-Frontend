@@ -51,6 +51,8 @@ const COLOR_PP_UP := Color("#36c5d9")
 const COLOR_PP_DOWN := Color("#e0862f")
 # Dégradé de santé PARTAGÉ (source unique : war_roster.pv_color, posé au lot E1 §8.73).
 const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
+# Helpers de charte partagés — identité du meneur de faction (§8.104).
+const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 
 # Esthétique militaire (§5) : chiffres énormes, bords anguleux, accents très assombris.
 const DIE_FONT_SIZE := 96
@@ -246,11 +248,15 @@ func _load_faction(faction_id: String, fallback_accent: Color, equipped_skin: St
 				"accent": accent if accent is Color else fallback_accent,
 				"hero_path": hero if hero is String else "",
 				"hero_model_path": model if model is String else "",
+				# Identité du meneur (§8.104) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL » — rang
+				# traduit + nom/callsign invariants. "" sur un .tres legacy → ligne masquée.
+				"leader": WarzoneUI.faction_leader_title(res),
 			}
 			break
 	if out.is_empty():
-		var pretty := faction_id.capitalize() if faction_id != "" else "Faction Inconnue"
-		out = {"name": pretty, "accent": fallback_accent, "hero_path": "", "hero_model_path": ""}
+		var pretty := faction_id.capitalize() if faction_id != "" else tr("GAME_FACTION_UNKNOWN")
+		out = {"name": pretty, "accent": fallback_accent, "hero_path": "",
+			"hero_model_path": "", "leader": ""}
 
 	# --- Skin équipé (M5 §8.69) : surcharge data-driven des visuels du héros. Un SkinData dont
 	#     l'id ET la faction correspondent surcharge portrait/modèle (si ses chemins EXISTENT)
@@ -352,6 +358,8 @@ func _setup_side(is_left: bool, faction: Dictionary) -> void:
 	role_label.text = tr("VS_ROLE_ATTACKER_SHORT") if is_left else tr("VS_ROLE_DEFENDER_SHORT")
 	name_label.text = str(faction["name"]).to_upper()
 	name_label.add_theme_color_override("font_color", accent.lightened(0.35))
+	# Identité du meneur SOUS le nom de faction (§8.104), créée par code (aucune retouche .tscn).
+	_apply_leader_line(is_left, name_label, str(faction.get("leader", "")), accent)
 
 	# Fond de moitié : gradient horizontal accent TRÈS assombri -> noir vers le centre (§5).
 	background.texture = _make_gradient(accent, is_left)
@@ -389,6 +397,37 @@ func _setup_side(is_left: bool, faction: Dictionary) -> void:
 		portrait.visible = false
 		placeholder.visible = true
 		placeholder.color = accent.darkened(0.25)
+
+# Ligne « GÉNÉRAL VIKTOR "IRONLINE" STAHL » insérée juste SOUS le nom de faction (§8.104).
+# Idempotente (réutilise le nœud si l'écran est re-peuplé) ; `leader` vide (.tres legacy) →
+# aucune ligne créée, layout strictement inchangé. Alignée à droite côté défenseur, comme la
+# chip de niveau de _apply_side_identity.
+func _apply_leader_line(is_left: bool, name_label: Label, leader: String, accent: Color) -> void:
+	var node_name := "LeftLeaderLine" if is_left else "RightLeaderLine"
+	var parent := name_label.get_parent()
+	if parent == null:
+		return
+	var lbl: Label = parent.get_node_or_null(node_name)
+	if leader == "":
+		if lbl != null:
+			lbl.visible = false
+		return
+	if lbl == null:
+		lbl = Label.new()
+		lbl.name = node_name
+		lbl.add_theme_font_size_override("font_size", 18)
+		lbl.add_theme_constant_override("outline_size", 4)
+		lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		# Contenu DYNAMIQUE (nom propre invariant + rang déjà traduit) → pas d'auto-traduction.
+		lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		if not is_left:
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		parent.add_child(lbl)
+	lbl.visible = true
+	lbl.text = leader.to_upper()
+	lbl.add_theme_color_override("font_color", Color(accent.lightened(0.2), 0.9))
+	# Positionnement calculé À L'INSERTION (robuste à la chip de niveau ajoutée avant le nom).
+	parent.move_child(lbl, name_label.get_index() + 1)
 
 # Monte (une seule fois par camp) le composant héros 3D dans le cadre du portrait. Renvoie
 # l'instance (ou null si le cadre manque). Non typé → appels dynamiques set_model/set_accent.

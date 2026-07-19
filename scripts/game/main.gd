@@ -912,11 +912,30 @@ func _on_spy_target_chosen(target_id: int) -> void:
 # le chat "Privé" ET le journal militaire — le secret n'est pas diffusé. Unification E1 : pseudo
 # de la cible en couleur plateau (_bb_pseudo) ; la description est ÉCHAPPÉE (elle peut contenir
 # le pseudo d'un joueur — objectif « éliminer X » — donc des « [ » hostiles, piège n° 1).
-func _on_spy_result(target_player_id: int, description: String) -> void:
+func _on_spy_result(target_player_id: int, description: String, objective: Dictionary) -> void:
+	# i18n (§8.104) : libellé COMPOSÉ localement depuis la forme structurée {type, params} —
+	# repli sur la description serveur (anglais invariant) si le serveur ne l'envoie pas encore.
+	var txt := _objective_text(objective, description)
 	var line := tr("GAME_SPY_RESULT_FMT") % [
-		_bb_pseudo(target_player_id), str(description).replace("[", "[lb]")]
+		_bb_pseudo(target_player_id), txt.replace("[", "[lb]")]
 	hud.add_chat_message("prive", line)
 	hud.add_log(line)
+
+# Libellé d'un objectif RÉVÉLÉ (espionnage / fin de partie) dans la langue courante : composé
+# depuis `objective` ({type, params, volets} — §8.104), avec résolution du pseudo de la cible du
+# volet « tuer ». Repli sur `fallback` (description serveur en anglais invariant) si la forme
+# structurée est absente (serveur antérieur) ou d'un type inconnu.
+func _objective_text(objective: Dictionary, fallback: String) -> String:
+	if objective.is_empty():
+		return fallback
+	var params = objective.get("params", {})
+	var target_name := ""
+	if typeof(params) == TYPE_DICTIONARY and params.get("target_id") != null:
+		var tid := int(params.get("target_id"))
+		if GameState.players.has(str(tid)):
+			target_name = _display_name(tid)
+	var out := ObjectiveTracker.describe(objective, target_name)
+	return out if out != "" else fallback
 
 # =========================================================
 # Chat de salle (§8.33) — Général / Privé (l'onglet « Alliés » est abandonné, chacun-pour-soi)
@@ -2007,11 +2026,16 @@ func _podium_rows(rankings: Array) -> Array:
 	for i in range(pids.size()):
 		var pid := int(pids[i])
 		var rev: Dictionary = reveal_by_pid.get(pid, {})
+		# i18n (§8.104) : objectif révélé COMPOSÉ dans la langue courante depuis sa forme
+		# structurée ; repli sur la description serveur (anglais invariant) si absente.
+		var rev_obj = rev.get("objective", {})
 		rows.append({
 			"pid": pid,
 			"medal": OperationReportScript.medal_for(i),
 			"titles": titles.get(pid, []),
-			"objective": str(rev.get("description", "")),
+			"objective": _objective_text(
+				rev_obj if typeof(rev_obj) == TYPE_DICTIONARY else {},
+				str(rev.get("description", ""))),
 			"completed": bool(rev.get("completed", false)),
 			"has_reveal": not rev.is_empty(),
 			"kills": WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", pid),

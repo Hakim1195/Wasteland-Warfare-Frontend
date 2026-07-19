@@ -499,26 +499,100 @@ tour). ⚠️ Runtime complet (FastAPI/Redis) à revalider sur le VPS après red
 
 > **🤖 À L'ATTENTION DE L'AGENT IA BACKEND.** Section **rédigée par l'agent Frontend** (procédure « signalement » du protocole inter-IA en tête de fichier — *« signale-le… pour que l'agent Backend ajoute le champ au schéma ET à ce fichier »*). Les écrans **R1 Boutique/Inventaire**, **R2 Profil** et **R3 Classement mondial** sont **déjà réalisés côté client** (§8.39 / §8.40 / §8.41 dans [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)) mais tournent sur des **données MOCK** faute d'endpoints. Ci-dessous, le **contrat dont le client a besoin**, ancré sur ce qu'il **lit déjà défensivement** → une fois l'endpoint livré, **« seul le peuplement changera »** côté client (aucune refonte UI). Les clés proposées sont **canoniques** : si le backend en retient d'autres, **documenter le choix ICI** pour que le client s'aligne (il accepte aujourd'hui plusieurs alias, listés par écran). **Rappels normatifs :** piège **JSON float §5** (ids/nombres → `int()`, clés de dict indexées = `string`) ; auth **JWT** (`Authorization: Bearer`), préfixe **`/api/v1`** ; aujourd'hui le client lit le profil via **`GET /api/v1/auth/me`** (`UserResponse` : `id`, `username`, `email`, `niveau`/`level`) et n'a **aucun** autre endpoint joueur. ⚠️ **Backend → push + redéploiement VPS requis** (§1) ; tant que le VPS n'est pas à jour, le client garde ses mocks (lecture défensive).
 
-### 9.1. R2 — Profil & statistiques joueur *(à spécifier en premier : alimente aussi R3)*
-Soit en **étendant `UserResponse`** (`/auth/me`), soit via un endpoint dédié **`GET /profile/stats`** (au choix backend ; le client lit déjà ces champs sur la réponse de `/auth/me`). Champs attendus (clé canonique → alias acceptés aujourd'hui) :
+### 9.1. R2 — Profil & statistiques joueur ✅ LIVRÉ (refonte §8.106 : hub à onglets)
+**QUATRE routes**, toutes **authentifiées** (JWT `Authorization: Bearer`, préfixe `/api/v1`). Tout est **ADDITIF** : aucune clé historique n'a été renommée ni supprimée, tout champ neuf a un **défaut sûr**, et les deux routes NEUVES répondent **404** sur un serveur non redéployé → le client dégrade proprement (jamais un écran vide, jamais un crash).
+
+> ⚠️ **Piège JSON float §5.** Aucune valeur fractionnaire ne circule. Les grandeurs naturellement décimales sont transportées en **ENTIER MIS À L'ÉCHELLE** : taux en **pourcentage arrondi** (`winrate: 60`), place moyenne en **DIXIÈMES** (`avg_rank_x10: 24` = 2,4ᵉ). Les multiplicateurs du Pass sont exposés en **bonus % entier** (×1.25 → `25`).
+
+#### `GET /profile/stats` — identité, progression, agrégats
+Réponse (les 10 clés historiques sont **INCHANGÉES** ; les 4 blocs sont ADDITIFS) :
 ```jsonc
 {
-  "level": 12,            // int — niveau (DÉJÀ exposé ; alias lus : "niveau" | "level")
-  "xp": 640,              // int — alias : "xp" | "experience" | "exp" | "points"
-  "xp_max": 1000,         // int — alias : "xp_max" | "xp_next" | "next_level_xp" | "niveau_suivant_xp"
-  "games_played": 47,     // int — alias : "parties_jouees" | "games_played" | "matches"
-  "wins": 29,             // int — alias : "victoires" | "wins"
-  "losses": 18,           // int — alias : "defaites" | "losses"
-  "heaviest_toll": 1842,  // int — unités perdues cumulées ; alias : "tribut" | "plus_lourd_tribut" | "heaviest_toll" | "units_lost"
-  "favorite_faction": "barons_ferraille", // string — id snake_case (miroir factions.py) ; alias : "faction_favorite" | "favorite_faction" | "faction" | "main_faction"
-  "credits": 2500         // int — solde Boutique (R1) ; alias : "credits" | "credit" | "solde" | "monnaie" | "currency"
+  "username": "HAKIM", "level": 27, "xp": 1200, "xp_max": 4000,
+  "games_played": 48, "wins": 21, "losses": 27,   // losses DÉRIVÉ (games_played - wins)
+  "heaviest_toll": 1843,                          // = User.units_lost (pertes cumulées)
+  "favorite_faction": "barons_ferraille",         // id snake_case (miroir factions.py)
+  "credits": 12450,                               // = User.coins (solde Boutique R1)
+
+  // --- ADDITIF §8.106 — carte DIVISION de l'en-tête (source : seasons.rank_info + ladder) ---
+  "season": { "rp": 1405, "division": "OR", "tier": "II", "label": "OR II",
+              "tier_floor": 1400, "tier_span": 200, "rp_in_tier": 5,
+              "global_rank": 37, "season_ends_at": "2026-09-29T04:00:00Z" },
+  // tier_span == 0  ⇒  AUCUNE barre d'échelon (ÉLITE, ladder ouvert — ou repli). Le client ne
+  // distingue pas les deux cas : il masque la barre dans les deux.
+
+  // --- ADDITIF — agrégat PAR PERSONNAGE (GROUP BY match_history.faction_id + HeroProgression) ---
+  "factions": [ { "faction_id": "phalanges_acier", "games": 20, "wins": 12, "losses": 8,
+                  "winrate": 60,          // % ENTIER arrondi
+                  "avg_rank_x10": 24,     // DIXIÈMES ; 0 = aucune place connue (lignes legacy)
+                  "xp_total": 15400, "rp_net": 130,   // rp_net SIGNÉ
+                  "hero_xp_total": 22000, "hero_level": 18 } ],   // source : HeroProgression (XP à VIE)
+
+  // --- ADDITIF — agrégat PAR MODE (GROUP BY is_ranked) ---
+  "modes": { "ranked": { "games": 25, "wins": 14, "winrate": 56, "rp_net": 130 },
+             "casual": { "games": 23, "wins": 7,  "winrate": 30, "rp_net": 0 } },
+
+  // --- ADDITIF — bande de FORME : 10 derniers matchs, le plus RÉCENT d'abord ---
+  "form": [ { "win": true, "is_ranked": true } ]
 }
 ```
-- **Historique récent** — `GET /profile/history?limit=5` → `Array` (le plus récent en premier) :
+- **Tri `factions`** : `games` décroissant, départage par `faction_id` (ordre STABLE d'un appel à l'autre).
+- **Reset lazy de saison** : la route appelle `settle_previous_season(db)` **puis** `ensure_season(user)` (+ commit si reset) — **même séquence et même ordre** que `/auth/me` et le bloc `me` du classement (§8.98 : régler d'abord, reseter ensuite).
+- **`global_rank`** vient de `api/game/ladder.season_rank_of` — **SOURCE UNIQUE partagée** avec `GET /leaderboard` (§9.2) : le rang annoncé au Profil est toujours celui qu'occupe le joueur dans la liste du Classement.
+- ⚠️ **Honnêteté des lignes LEGACY** : les matchs antérieurs à §8.106 ont `is_ranked = false` et `final_rank = 0` (défauts d'auto-migration). Ils comptent donc en **NORMALES** même s'ils étaient classés, et leur place est **INCONNUE** — jamais « 1ᵉʳ ». Le client l'explicite (`PROFILE_MODE_LEGACY_NOTE`) et affiche « — ».
+
+#### `GET /profile/history?limit=15&offset=0&wins_only=&ranked_only=` — matchs, filtrables et paginés
+`limit` 1-50 (défaut **5**), `offset` ≥ 0, `wins_only` / `ranked_only` booléens **cumulables**. **Tous les paramètres neufs ont un défaut NEUTRE** : l'appel historique `?limit=5` produit exactement la requête d'avant.
 ```jsonc
-{ "win": true, "faction_id": "barons_ferraille", "detail": "12 territoires · 8 tours" } // bool / string / string
+// Les 3 clés historiques (win, faction_id, detail) sont INCHANGÉES ; le reste est ADDITIF.
+{ "win": true, "faction_id": "barons_ferraille", "detail": "Victoire · 12 territoires · 8 tours",
+  "created_at": "2026-07-19T08:00:00Z",   // ISO 8601 « Z » ; "" si absente
+  "territories": 12, "turns": 8, "units_lost": 4,
+  "is_ranked": true,
+  "final_rank": 1,        // 1-BASED ; 0 = place INCONNUE (ligne legacy), surtout pas « 1ᵉʳ »
+  "players_count": 5,     // effectif TOTAL de la partie, bots compris
+  "xp_earned": 472,       // XP RÉELLEMENT créditée (bonus Pass ×1.25 déjà appliqué)
+  "rp_delta": 32,         // SIGNÉ ; toujours 0 hors partie classée
+  "hero_xp_earned": 525, "coins_earned": 118 }   // coins = paliers de niveau + niveaux de héros
 ```
-- **Consommé par :** `scripts/ui/profile.gd` (`_on_profile_loaded` / `_history`). *(Détail mock : §8.40.)*
+> ⚠️ `final_rank` est **1-based** ici, alors que `MatchParticipant.rank` (télémétrie G6) est **0-based**. Conventions volontairement différentes : le 0 est réservé au « inconnu ». Ne pas les confondre.
+
+#### `GET /profile/finance?limit=20&offset=0` — livre de comptes Coins **(NOUVEAU)**
+```jsonc
+{ "balance": 12450, "total_earned": 31000, "total_spent": 18600,   // total_spent POSITIF
+  "by_reason": { "match_level_coins": 8000, "hero_level_coins": 4500, "mission_claim": 12500,
+                 "season_reward": 6000, "shop_purchase": -13600, "pass_purchase": -5000 },
+  "entries": [ { "delta": -500, "balance_after": 12450, "reason": "pass_purchase",
+                 "ref": "special_pass", "created_at": "2026-07-18T09:12:00Z" } ],
+  "hero_potential": [ { "faction_id": "phalanges_acier", "hero_level": 18, "levels_left": 32,
+                        "coins_min": 32, "coins_max": 160,
+                        "coins_min_pass": 320, "coins_max_pass": 640 } ],
+  "constants": { "hero_coins": [1, 5], "hero_coins_pass": [10, 20],
+                 "level_milestone": { "every": 10, "amount": 100 }, "hero_level_max": 50 } }
+```
+- **RAISONS CANONIQUES** (valeurs **persistées** → stables à vie ; définies dans `api/game/economy.py`) : `match_level_coins`, `hero_level_coins`, `mission_claim`, `shop_purchase`, `pass_purchase`, `coin_pack`, `season_reward`. Le serveur ne renvoie **jamais** de texte affichable : le client dérive la clé i18n `PROFILE_FIN_SRC_<RAISON_MAJ>` et retombe sur la raison brute en muet si elle lui est inconnue → **on peut en ajouter sans casser les clients**.
+- **Ordre de `by_reason`** : canonique (gains puis dépenses), conservé par la sérialisation → le client itère sans retrier.
+- **`constants`** existe pour que le client n'écrive **aucun barème en dur** (règle §6).
+- ⚠️ **AUCUNE donnée rétroactive** : le ledger démarre à §8.106. `balance` est le solde RÉEL (`User.coins`) et **n'est donc PAS égal à `total_earned - total_spent`** pour un joueur préexistant. **Ne jamais reconstruire un solde en sommant les deltas** — c'est `users.coins` qui fait foi.
+
+#### `GET /profile/pass` — Pass Spécial **(NOUVEAU)**
+```jsonc
+{ "active": true, "expires_at": "2026-09-29T04:00:00Z", "tier_id": "special",
+  "tiers": [ { "id": "special", "name_key": "PASS_TIER_SPECIAL", "benefits": [
+      { "id": "xp_mult",      "kind": "percent", "value": 25,       "desc_key": "PASS_BENEFIT_XP" },
+      { "id": "hero_coins",   "kind": "range",   "value": [10, 20], "desc_key": "PASS_BENEFIT_HERO_COINS" },
+      { "id": "mission_mult", "kind": "percent", "value": 50,       "desc_key": "PASS_BENEFIT_MISSIONS" },
+      { "id": "season_skin",  "kind": "grant",   "value": "",       "desc_key": "PASS_BENEFIT_SKIN" } ] } ],
+  "granted_items": [ { "item_id": "skin_pass_s1", "name_key": "SHOP_SKIN_PASS_S1", "category": "skin" } ],
+  "gains": { "bonus_xp_total": 1240, "bonus_mission_coins_total": 380,
+             "hero_coins_with_pass_total": 210, "coins_spent_on_pass": 500 } }
+```
+- **`active` / `expires_at`** : dérivés par les **mêmes helpers que la boutique** (`shop._has_active_pass` / `_pass_expires_iso`) — une seule convention dans tout le dépôt, jamais une troisième. `expires_at` est `null` si le Pass n'est plus actif.
+- **`tiers`** vient du registre PUR `api/game/pass_catalog.py`. Les valeurs sont **DÉRIVÉES** des constantes de `rewards.py` (source unique du barème), jamais dupliquées. `kind` ∈ {`percent`, `range`, `grant`} pilote le seul FORMATAGE ; un `kind` inconnu d'un client ancien retombe sur le libellé seul. **Ajouter un tier ici le fait apparaître au client SANS modification cliente.**
+- **`granted_items`** = inventaire ∩ articles `purchasable == false` (par construction, ils ne s'obtiennent QUE par le Pass). Rendu client **générique par `category`** (clé `SHOP_CAT_<CATEGORY>`) → le jour où un Pass offrira une FACTION, la ligne s'affiche sans une ligne de code de plus.
+- **`gains`** = MESURE RÉELLE, pas une estimation : compteurs incrémentés au point exact où chaque avantage s'applique. Les deux premiers sont **DIFFÉRENTIELS** (le « en plus » dû au Pass) ; `hero_coins_with_pass_total` est un **TOTAL** (le barème premium étant un tirage aléatoire, le « sans Pass » correspondant n'existe pas et serait une invention). ⚠️ Mesure démarrée à §8.106 → un Pass acheté avant affiche 0 (le client l'explicite, `PASS_GAINS_NOTE`).
+
+- **Consommé par :** `scripts/ui/profile.gd` (hub à onglets §8.106) et, pour `/profile/history` non filtré uniquement, `main_menu.gd` + `top_nav.gd`.
 
 ### 9.2. R3 — Classement mondial — `GET /leaderboard?limit=50&offset=0` ✅ LIVRÉ & ALIGNÉ
 Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc, puis **points de classement** desc, puis **id** asc → rang déterministe et pagination cohérente). Pagination par `limit` (1–100, défaut 20) / `offset` (≥ 0). **PUBLIC** ; le bloc **`me`** n'est renseigné que si la requête porte un **token Bearer valide** (sinon `null` — l'endpoint reste accessible sans auth).
@@ -762,3 +836,28 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
 > - **Objectifs — descriptions serveur en anglais invariant** (`objectives.py` : « Control at least N territories. », « Kill the hero of player #X — OR — … »). Le client compose la description TRADUITE de **son propre** objectif à partir de `type`/`params` (composeur `objective_tracker.describe`, clés `OBJ_DESC_*`) ; les descriptions serveur ne servent plus qu'aux révélations de fin de partie et au `spy_result` (affichées telles quelles, EN).
 > - **Bots :** indicatif `HALFLIFE` → `ASHFANG` (collision avec le callsign du héros Ezra « Halflife » Voss). `PlayerState.username` et le préfixe client « [IA] » sont inchangés.
 > - **Périmètre stable :** `PlayerState.faction` = id ; `faction_id` partout (draft, boutique, télémétrie, DB) ; drapeaux de combat (`phalanges_reroll`, `aegis_kill`, `terror_kill`, `first_strike`, `razzia_reroll`) = clés réseau inchangées.
+
+### 8.105. Objectifs révélés/espionnés TRADUISIBLES — forme structurée additive (Backend, 2026-07-18)
+> **Finition de §8.104.** Les deux seuls endroits où un objectif devient légitimement visible envoyaient uniquement une `description` texte (anglais invariant depuis §8.104) : le client ne pouvait donc pas la traduire. Ils portent désormais AUSSI la forme **structurée**. ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**.
+> - **Helper `objectives.public_shape(objective) -> dict`** : renvoie `{type, params}` (+ `kill_objective` / `classic_objective` pour un objectif DOUBLE, même forme), **SANS `description`**, avec **copies défensives** des `params` (muter le retour ne touche jamais l'état de la partie). Entrée vide/mal formée → `{}`.
+> - **`game_over.objectives_reveal[]` += `objective`** (bloc PUBLIC, inchangé par ailleurs : `player_id`, `username`, `description`, `completed`).
+> - **`spy_result` += `objective`** (message PRIVÉ à l'espion). Lu APRÈS `GameEngine.resolve_spy` (qui ne mute que les drapeaux de l'ESPION, jamais l'objectif de la cible).
+> - **Aucune fuite nouvelle** (piège n° 9) : c'est le MÊME contenu que la `description` déjà envoyée à côté, sous forme exploitable. `public_shape` n'est appelée qu'à ces 2 points — jamais dans l'état diffusé en cours de partie, où la redaction reste intacte.
+> - **Rétro-compat DOUBLE SENS :** champ ADDITIF → un vieux client l'ignore ; un client à jour face à un serveur non redéployé reçoit `{}` et **retombe sur `description`** (`main._objective_text`).
+> - **Tests.** `test_objectives_double.py` **40 ✅ / 0 ❌** (suite [6] NEUVE, 12 cas : type/params/volets conservés, aucune `description`, non-aliasing des `params`, objectif simple, entrées dégénérées `{}`/`None`/sans type). Régression : 19 suites backend vertes (`test_missions.py` échoue **à l'identique sur HEAD** — préexistant, vérifié en worktree isolé).
+
+### 8.106. Refonte PROFIL — fondations de données, livre de comptes Coins, 4 endpoints (Backend, 2026-07-19)
+> **Chantier J de `PROMPT_PROFIL_REFONTE.md`.** L'écran Profil devient un hub à onglets (volet client : §8.106 de `FRONTEND_INTERFACES.md`) ; le backend lui livre tout ce qui lui manquait. Contrat détaillé **réécrit en §9.1**. ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**.
+> - **`MatchHistory` += 7 colonnes ADDITIVES** (`is_ranked`, `final_rank`, `players_count`, `xp_earned`, `rp_delta`, `hero_xp_earned`, `coins_earned`), toutes `server_default` → auto-migrées au boot (`db_migrations.sync_missing_columns`). Écrites par `process_match_results`, qui disposait déjà de toutes ces valeurs sans les persister. ⚠️ **`db.add(MatchHistory(...))` a été DÉPLACÉ après le crédit héros** : `coins_earned` doit totaliser les DEUX sources de Coins du match — le laisser en place l'aurait sous-évalué silencieusement.
+> - **`final_rank` est 1-BASED** (0 = place INCONNUE, réservé aux lignes legacy), alors que `MatchParticipant.rank` (télémétrie G6) est 0-based. Divergence VOULUE et commentée aux deux endroits.
+> - **LIVRE DE COMPTES `CoinTransaction`** (table neuve) + module DB-aware **`api/game/economy.py`** : `record_coins(db, user, delta, reason, ref)` devient l'**UNIQUE point de mutation de `User.coins`** du dépôt. Delta 0 → no-op total (aucune ligne). Garde bots (id < 0). Débit insolvable → clamp à 0 + WARNING, en journalisant le delta RÉELLEMENT appliqué (le ledger ne ment jamais sur le solde). Ne commit pas (transaction de l'appelant).
+> - **6 sites de mutation refactorés** — le prompt en listait 5, le 6ᵉ (`season_settlement.py`, primes de podium) a été trouvé au grep et inclus : `state_manager` ×2 (paliers de niveau / niveaux de héros), `missions.claim`, `shop._charge_coins` (débit), `shop.purchase_fiat` (crédit), `season_settlement`. **Comportement extérieur et montants strictement INCHANGÉS.** Vérification : `\.coins\s*=` ne matche plus QUE `economy.py:129` en code de production.
+> - **Compteurs de GAIN RÉEL du Pass** sur `User` (`pass_bonus_xp_total`, `pass_bonus_mission_coins_total`, `pass_hero_coins_total`), incrémentés au point exact où chaque avantage s'applique. Les deux premiers sont **DIFFÉRENTIELS** (surplus seul) ; le troisième est un TOTAL assumé (tirage aléatoire → le « sans Pass » n'existe pas).
+> - **Registre PUR `api/game/pass_catalog.py`** (multi-tiers prêt) : valeurs DÉRIVÉES de `rewards.py`, jamais dupliquées. ⚠️ Les multiplicateurs y sont convertis en **bonus % ENTIER** (1.25 → 25) : le piège JSON float §5 interdit d'exposer un flottant, et c'est aussi la forme qu'attendent les libellés i18n (`%d %%`).
+> - **`api/game/ladder.py` NEUF** : `season_rank_of` + `SEASON_ORDER_BY` EXTRAITS de `leaderboard.py` (plus de copie). Le Profil et le Classement annoncent désormais le même rang par construction — une seconde implémentation aurait dérivé.
+> - **`api/game/profile_stats.py` NEUF** (PUR) : tout le post-traitement des GROUP BY (winrate, place moyenne en dixièmes, tris stables, repli du bloc `season`). Règle d'Or §6 : le SQL reste dans l'endpoint, le CALCUL vit dans `api/game/*` — et devient testable sans DB ni FastAPI.
+> - **4 endpoints** : `/profile/stats` ÉTENDU (+`season`/`factions`/`modes`/`form`), `/profile/history` ÉTENDU (filtres `wins_only`/`ranked_only` + `offset`, tous à défaut neutre), `/profile/finance` NEUF, `/profile/pass` NEUF.
+> - **Tests.** `test_economy.py` NEUF **76 ✅ / 0 ❌** ; `test_profile_data.py` NEUF **66 ✅ / 0 ❌** ; `test_rewards.py` ÉTENDU (2 suites : détail de match persisté, ledger, compteurs Pass, cas non classé). Régression : suite backend complète **au niveau du BASELINE** — les 3 seuls échecs restants (`test_missions` 37/4, `test_seasons`, `test_simulation`) sont **PRÉEXISTANTS et identiques sur HEAD**, vérifiés dans un worktree isolé (`git worktree` sur HEAD) avant/après.
+> - **Stubs de test mis à jour** (5 suites) : les doublures `models.models` doivent exposer `CoinTransaction`. `economy` l'importe **à l'appel** (convention de `state_manager`) pour ne pas forcer toute suite important `economy` à connaître une table qu'elle ne teste pas.
+> - ⚠️ **Piège rencontré.** `record_coins` ne doit PAS faire `int()` sur `user.id` : c'est une clé étrangère repassée telle quelle, et les doublures maison exposent un objet-colonne quand l'instance ne shadowe pas l'attribut de classe (`TypeError` dans `test_rewards`). Garde bots réécrite en `isinstance(user_id, int) and user_id < 0`.
+> - **Archive** : `backend/migration_profile.sql` (7+3 colonnes + table + index), patron `migration_seasons.sql`.
