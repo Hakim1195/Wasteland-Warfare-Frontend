@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="SkinData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/skins/skin_data.gd" id="1_sd"]
+
+[resource]
+script = ExtResource("1_sd")
+id = "skin_ecorcheurs_braise"
+faction_id = "ecorcheurs_cendres"
+name_key = "SHOP_ITEM_SKIN_ECORCHEURS_NAME"
+portrait_path = ""
+model_path = ""
+accent_override = Color(0.95,0.42,0.1,1)

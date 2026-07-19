@@ -146,6 +146,35 @@ func _build_cards() -> void:
 		hero_list.add_child(card)
 		_cards.append(card)
 
+# Chip d'accès TEMPORAIRE (chantier T) — même fabrique que le chip « SÉLECTIONNÉ » (§8.93) pour
+# rester dans la charte : encoches de coin, fond translucide, filet 1 px à la couleur donnée.
+func _access_chip(text: String, color: Color, tip: String) -> PanelContainer:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.tooltip_text = tip
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", color)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var style := StyleBoxFlat.new()
+	style.set_corner_radius_all(0)
+	style.bg_color = Color(color, 0.14)
+	style.set_border_width_all(1)
+	style.border_color = color
+	style.content_margin_left = 8.0
+	style.content_margin_right = 8.0
+	style.content_margin_top = 3.0
+	style.content_margin_bottom = 3.0
+	var box := PanelContainer.new()
+	box.add_theme_stylebox_override("panel", style)
+	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.tooltip_text = tip
+	box.add_child(lbl)
+	WarzoneUI.add_corner_notches(box, 5.0, color)
+	return box
+
+
 func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 	var fid := str(hero.get("faction_id", ""))
 	var owned := bool(hero.get("owned", true))
@@ -217,16 +246,33 @@ func _make_hero_card(index: int, hero: Dictionary) -> PanelContainer:
 	WarzoneUI.add_corner_notches(chip_box, 5.0, GOLD)
 	_chips[index] = chip_box
 
-	# Cadenas si non possédé (déblocage boutique non câblé → owned == true partout pour l'instant).
-	if not owned:
-		var lock := Label.new()
-		lock.text = "✕"
-		lock.tooltip_text = tr("CHAR_LOCKED")
-		lock.add_theme_font_size_override("font_size", 18)
-		lock.add_theme_color_override("font_color", MUTED)
-		lock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		lock.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		h.add_child(lock)
+	# --- ÉTAT D'ACCÈS (chantier T) : 4 rendus au lieu du seul cadenas. Le serveur envoie désormais
+	# un accès RÉEL par personnage (`access.type`) — fini le « owned: true partout ».
+	#   free / owned → rien (état normal)                  rotation → chip OR « ★ n/m »
+	#   pass         → chip CYAN « PASS »                  locked   → cadenas ✕ + prix
+	# Repli : un serveur antérieur n'envoie pas `access` → on retombe sur `owned` (comportement
+	# historique), ce qui donne exactement l'ancien écran.
+	var access: Dictionary = hero.get("access", {}) if typeof(hero.get("access")) == TYPE_DICTIONARY else {}
+	var access_type := str(access.get("type", "owned" if owned else "locked"))
+	match access_type:
+		"rotation":
+			var rot_txt := "★ %d/%d" % [int(access.get("free_games_left", 0)),
+				int(access.get("free_games_max", 0))]
+			h.add_child(_access_chip(rot_txt, GOLD, tr("CHAR_ROTATION_TIP")))
+		"pass":
+			h.add_child(_access_chip(tr("CHAR_PASS_CHIP"), ACCENT, tr("CHAR_PASS_TIP")))
+		"locked":
+			var lock := Label.new()
+			lock.text = "✕"
+			# Le prix rend le cadenas ACTIONNABLE (« combien pour le débloquer ? ») au lieu d'un
+			# simple refus ; 0 = prix inconnu (serveur antérieur) → on garde le libellé seul.
+			var price := int(access.get("price", 0))
+			lock.tooltip_text = (tr("CHAR_LOCKED_PRICE") % price) if price > 0 else tr("CHAR_LOCKED")
+			lock.add_theme_font_size_override("font_size", 18)
+			lock.add_theme_color_override("font_color", MUTED)
+			lock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			lock.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			h.add_child(lock)
 
 	# Bouton transparent superposé : capte le clic sur toute la carte (le contenu ignore la souris ;
 	# même pattern que main_menu._make_mode_card). Ajouté en DERNIER → au-dessus, donc cliquable.
@@ -392,6 +438,20 @@ func _populate_detail(hero: Dictionary) -> void:
 	lvl_value.add_theme_color_override("font_color", GOLD)
 	lvl_value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(lvl_value)
+
+	# --- AVERTISSEMENT DE PERTE DE PROGRESSION (chantier T) ---------------------------------------
+	# Honnêteté indispensable : la progression d'un héros joué sous un accès TEMPORAIRE (rotation
+	# de la semaine, déblocage par un Pass) est PURGÉE à l'expiration de cet accès (chantier Q).
+	# Le joueur doit le savoir AVANT d'y investir des heures — pas le découvrir un lundi matin.
+	var acc: Dictionary = hero.get("access", {}) if typeof(hero.get("access")) == TYPE_DICTIONARY else {}
+	if str(acc.get("type", "")) in ["rotation", "pass"]:
+		var warn := Label.new()
+		warn.text = tr("CHAR_TEMP_WARNING")
+		warn.add_theme_font_override("font", _font)
+		warn.add_theme_font_size_override("font_size", 13)
+		warn.add_theme_color_override("font_color", MUTED)
+		warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		detail_box.add_child(warn)
 
 	# Identité du meneur (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL » sous le nom
 	# de faction — rang traduit, nom/callsign invariants (lus du .tres local ; masquée si absents).

@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="SkinData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/skins/skin_data.gd" id="1_sd"]
+
+[resource]
+script = ExtResource("1_sd")
+id = "skin_chasseurs_spectre"
+faction_id = "chasseurs_ombres"
+name_key = "SHOP_ITEM_SKIN_CHASSEURS_NAME"
+portrait_path = ""
+model_path = ""
+accent_override = Color(0.55,0.75,0.8,1)

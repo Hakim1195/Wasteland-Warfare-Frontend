@@ -95,6 +95,13 @@ var _owned_ids: Dictionary = {}       # fid -> true
 # REPLI GRACIEUX grise toutes les payantes non possédées (comportement sûr — le serveur
 # refuse de toute façon un choix verrouillé, erreur privée §8.66).
 var _rotation_ids: Dictionary = {}    # fid -> true
+# --- Accès TEMPORAIRES (chantiers Q/R) ---
+# Crédit de parties gratuites de la semaine ; -1 = INCONNU (anonyme / serveur antérieur) → aucun
+# compteur affiché et aucun verrouillage supplémentaire (le serveur reste l'autorité).
+var _free_games_left: int = -1
+var _free_games_max: int = -1
+# Ids débloqués par le PASS pour la saison en cours (bloc `pass_faction_grants` de l'inventaire).
+var _pass_granted_ids: Dictionary = {}   # fid -> true
 # Bandeau « GRATUITE CETTE SEMAINE » / « VERROUILLÉE » créé par code au-dessus du nom.
 var _access_banner: Label = null
 # Ligne d'identité du MENEUR (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL », créée
@@ -298,6 +305,13 @@ func _on_shop_inventory_for_draft(data: Dictionary) -> void:
 	# héros AVEC son propre skin équipé (même résolution que le Split-Screen VS).
 	var eq = data.get("equipped", {})
 	_equipped_map = eq if typeof(eq) == TYPE_DICTIONARY else {}
+	# Personnages débloqués par le PASS pour la saison en cours (chantier R.6) : jouables au draft
+	# au même titre qu'une faction possédée, mais l'accès est TEMPORAIRE (bandeau dédié).
+	_pass_granted_ids.clear()
+	var grants = data.get("pass_faction_grants", [])
+	if typeof(grants) == TYPE_ARRAY:
+		for fid in grants:
+			_pass_granted_ids[str(fid)] = true
 	_refresh_access()
 	_refresh_card(true)
 
@@ -305,16 +319,33 @@ func _on_shop_rotation_for_draft(data: Dictionary) -> void:
 	_rotation_ids.clear()
 	for fid in data.get("free_faction_ids", []):
 		_rotation_ids[str(fid)] = true
+	# Crédit de parties gratuites (chantier Q.6). -1 = INCONNU (visiteur anonyme, serveur antérieur)
+	# → on n'affiche aucun compteur et on ne verrouille RIEN de plus qu'avant (client défensif).
+	_free_games_max = int(data.get("free_games_max", -1)) if data.has("free_games_max") else -1
+	_free_games_left = int(data.get("free_games_left", -1)) if data.has("free_games_left") else -1
 	_refresh_access()
 
-# Vrai si la faction est VERROUILLÉE pour ce joueur : payante, non possédée, hors rotation.
-# Tant que le catalogue n'a pas répondu, rien n'est payant côté client (le serveur reste
-# l'autorité et refusera un choix verrouillé — erreur privée, draft non cassé).
+# Vrai si le serveur nous a donné le compteur de parties gratuites (joueur authentifié).
+func _has_free_games_counter() -> bool:
+	return _free_games_left >= 0 and _free_games_max > 0
+
+# Vrai si la faction est en rotation mais que le CRÉDIT de parties est ÉPUISÉ (chantier Q) : elle
+# redevient alors injouable cette semaine — le serveur refuse le verrouillage.
+func _rotation_exhausted(fid: String) -> bool:
+	return (_rotation_ids.has(fid) and not _owned_ids.has(fid)
+			and _has_free_games_counter() and _free_games_left <= 0)
+
+# Vrai si la faction est VERROUILLÉE pour ce joueur : payante, non possédée, non débloquée par le
+# Pass, et (hors rotation OU rotation épuisée). Tant que le catalogue n'a pas répondu, rien n'est
+# payant côté client (le serveur reste l'autorité et refusera un choix verrouillé — erreur privée,
+# draft non cassé).
 func _is_locked(fid: String) -> bool:
 	if not _paid_ids.has(fid):
 		return false
-	if _owned_ids.has(fid):
+	if _owned_ids.has(fid) or _pass_granted_ids.has(fid):
 		return false
+	if _rotation_exhausted(fid):
+		return true
 	return not _rotation_ids.has(fid)
 
 func _refresh_access() -> void:
@@ -331,10 +362,25 @@ func _apply_access_state(f) -> void:
 	var locked := _is_locked(fid)
 	var in_rotation: bool = _rotation_ids.has(fid) and not _owned_ids.has(fid)
 
-	if in_rotation:
+	# Ordre des cas, du plus SPÉCIFIQUE au plus général (chantier T) : un crédit épuisé doit dire
+	# POURQUOI c'est verrouillé, et un déblocage par Pass doit se distinguer d'une possession.
+	if _rotation_exhausted(fid):
 		_access_banner.visible = true
-		_access_banner.text = tr("FS_ROTATION_FREE")
+		_access_banner.text = tr("FS_ROTATION_EXHAUSTED") % int(_paid_ids.get(fid, 0))
+		_access_banner.add_theme_color_override("font_color", Color("8a97a5"))
+	elif in_rotation:
+		_access_banner.visible = true
+		# Compteur de parties restantes dès qu'il est connu — sinon libellé historique.
+		if _has_free_games_counter():
+			_access_banner.text = tr("FS_ROTATION_FREE_GAMES") % [_free_games_left, _free_games_max]
+		else:
+			_access_banner.text = tr("FS_ROTATION_FREE")
 		_access_banner.add_theme_color_override("font_color", Color("e0b249"))
+	elif _pass_granted_ids.has(fid) and not _owned_ids.has(fid):
+		# Débloquée par le Pass pour la saison : jouable, mais TEMPORAIRE (cyan, pas or).
+		_access_banner.visible = true
+		_access_banner.text = tr("FS_PASS_UNLOCKED")
+		_access_banner.add_theme_color_override("font_color", Color("36c5d9"))
 	elif locked:
 		_access_banner.visible = true
 		_access_banner.text = tr("FS_LOCKED_PAID").format({"price": _paid_ids.get(fid, 0)})

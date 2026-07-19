@@ -198,8 +198,11 @@ func _ready():
 	NetworkManager.profile_history_page_loaded.connect(_on_history_page_loaded)
 	NetworkManager.profile_finance_loaded.connect(_on_finance_loaded)
 	NetworkManager.profile_pass_loaded.connect(_on_pass_loaded)
+	# Chantier U : personnage GRATUIT de la semaine + crédit de parties (GET /shop/rotation).
+	NetworkManager.shop_rotation_loaded.connect(_on_rotation_loaded)
 
 	NetworkManager.fetch_profile_stats()
+	NetworkManager.fetch_shop_rotation()
 	_fetch_history(true)
 	# Saison — REPLI LEGACY uniquement : si /profile/stats ne porte pas de bloc `season` (serveur
 	# non redéployé), la division vient encore de /auth/me. Sur un serveur à jour, `season` gagne.
@@ -561,6 +564,15 @@ func _populate_overview_tab() -> void:
 	grid.add_child(_make_stat_card(tr("PROFILE_FAVORITE_FACTION"),
 		fav_name if fav_name != "" else "—", fav_color))
 
+	# --- PERSONNAGE GRATUIT DE LA SEMAINE (chantier U) : jauge de parties restantes. -------------
+	# Placé AVANT la bande de forme — celle-ci sort de la fonction par un `return` quand
+	# l'historique est vide, ce qui masquerait le widget pour un nouveau joueur (précisément celui
+	# à qui la rotation s'adresse le plus).
+	var freeplay := _build_freeplay_card()
+	if freeplay != null:
+		_overview_box.add_child(_spacer(8))
+		_overview_box.add_child(freeplay)
+
 	# --- Bande de FORME : les 10 derniers résultats, le plus récent à DROITE. ---
 	_overview_box.add_child(_spacer(8))
 	_overview_box.add_child(_eyebrow(tr("PROFILE_FORM_TITLE")))
@@ -577,6 +589,123 @@ func _populate_overview_tab() -> void:
 		if typeof(e) != TYPE_DICTIONARY:
 			continue
 		strip.add_child(_make_form_square(bool(e.get("win", false)), bool(e.get("is_ranked", false))))
+
+
+# =========================================================
+# PERSONNAGE GRATUIT DE LA SEMAINE (chantier U)
+# =========================================================
+# Données servies par GET /shop/rotation (auth OPTIONNELLE) : le personnage offert, le plafond de
+# parties gratuites et — pour un joueur authentifié seulement — son crédit restant.
+var _rot_faction_id: String = ""
+var _rot_rotates_at: String = ""
+var _rot_games_left: int = -1
+var _rot_games_max: int = -1
+
+
+func _on_rotation_loaded(data: Dictionary) -> void:
+	var ids = data.get("free_faction_ids", [])
+	_rot_faction_id = str(ids[0]) if typeof(ids) == TYPE_ARRAY and not ids.is_empty() else ""
+	_rot_rotates_at = str(data.get("rotates_at", ""))
+	# -1 = champ ABSENT (visiteur anonyme ou serveur antérieur) → le widget se masque plutôt que
+	# d'afficher une jauge inventée (§1.5 : toute lecture nouvelle a un défaut silencieux).
+	_rot_games_max = int(data.get("free_games_max", -1)) if data.has("free_games_max") else -1
+	_rot_games_left = int(data.get("free_games_left", -1)) if data.has("free_games_left") else -1
+	# Ne re-peupler que si l'onglet APERÇU est À L'ÉCRAN : la rotation arrive de façon asynchrone,
+	# et reconstruire un onglet masqué serait du travail perdu (il se peuple à son ouverture).
+	if _tabs != null and _tabs.current_tab == TAB_OVERVIEW:
+		_populate_overview_tab()
+
+
+# Jours restants avant la prochaine rotation (0 si la date est inconnue / non parsable).
+func _rotation_days_left() -> int:
+	if _rot_rotates_at == "":
+		return 0
+	var at := int(Time.get_unix_time_from_datetime_string(_rot_rotates_at.trim_suffix("Z")))
+	# `ceil` : à J-0,3 il reste bien « 1 jour » à jouer, pas zéro.
+	return maxi(0, int(ceil(float(at - int(Time.get_unix_time_from_system())) / 86400.0)))
+
+
+# Un PIP hexagonal de la jauge (5 au total) — même langage visuel que le badge de Coins de la nav.
+# Plein = partie encore disponible (or) ; éteint = déjà consommée (surface + bord muet).
+func _make_freeplay_pip(filled: bool) -> Control:
+	var pip := Label.new()
+	pip.text = "◆" if filled else "◇"
+	pip.add_theme_font_override("font", _font)
+	pip.add_theme_font_size_override("font_size", 20)
+	pip.add_theme_color_override("font_color", GOLD if filled else MUTED)
+	pip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return pip
+
+
+# Carte « PERSONNAGE GRATUIT DE LA SEMAINE ». Renvoie null (widget MASQUÉ) si la rotation est
+# inconnue, si le joueur n'est pas authentifié, ou si le serveur ne sert pas encore les compteurs.
+func _build_freeplay_card() -> Control:
+	if _rot_faction_id == "" or _rot_games_max <= 0 or _rot_games_left < 0:
+		return null
+
+	var info: Dictionary = _factions.get(_rot_faction_id, {})
+	var fac_name := str(info.get("name", _rot_faction_id)).to_upper()
+	var fac_color: Color = info.get("color", ACCENT) if not info.is_empty() else ACCENT
+	var exhausted := _rot_games_left <= 0
+
+	var card := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = SURFACE
+	style.set_corner_radius_all(0)
+	style.border_width_left = 3
+	style.border_color = MUTED if exhausted else GOLD
+	style.content_margin_left = 16.0
+	style.content_margin_top = 12.0
+	style.content_margin_right = 14.0
+	style.content_margin_bottom = 12.0
+	card.add_theme_stylebox_override("panel", style)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	card.add_child(v)
+
+	v.add_child(_eyebrow(tr("PROFILE_FREEPLAY_TITLE")))
+
+	# Ligne d'identité : pastille à la couleur SIGNATURE + nom du personnage offert.
+	var idline := HBoxContainer.new()
+	idline.add_theme_constant_override("separation", 10)
+	v.add_child(idline)
+	var dot := ColorRect.new()
+	dot.color = fac_color
+	dot.custom_minimum_size = Vector2(8, 22)
+	idline.add_child(dot)
+	var name_lbl := Label.new()
+	name_lbl.text = fac_name
+	name_lbl.add_theme_font_override("font", _font)
+	name_lbl.add_theme_font_size_override("font_size", 20)
+	name_lbl.add_theme_color_override("font_color", TEXT)
+	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	idline.add_child(name_lbl)
+
+	# Jauge : un pip par partie du plafond, les `left` premiers ALLUMÉS.
+	var pips := HBoxContainer.new()
+	pips.add_theme_constant_override("separation", 6)
+	v.add_child(pips)
+	for i in range(_rot_games_max):
+		pips.add_child(_make_freeplay_pip(i < _rot_games_left))
+
+	if exhausted:
+		var done := _muted_note(tr("PROFILE_FREEPLAY_EXHAUSTED"))
+		v.add_child(done)
+	else:
+		var left := Label.new()
+		left.text = tr("PROFILE_FREEPLAY_LEFT") % [_rot_games_left, _rot_games_max]
+		left.add_theme_font_override("font", _font)
+		left.add_theme_font_size_override("font_size", 14)
+		left.add_theme_color_override("font_color", GOLD)
+		v.add_child(left)
+
+	var days := _rotation_days_left()
+	if days > 0:
+		v.add_child(_muted_note(tr("PROFILE_FREEPLAY_RESET") % days))
+
+	WarzoneUI.add_corner_notches(card)
+	return card
 
 
 # Un carré de la bande de forme : or = victoire, rouge = défaite ; liseré cyan = partie classée.
