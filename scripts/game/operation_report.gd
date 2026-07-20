@@ -183,6 +183,12 @@ func _ready() -> void:
 
 # Bouton « REJOUER » (G3 §8.70), construit par code À CÔTÉ du retour lobby (aucune retouche
 # .tscn) : or (CTA de relance), anti double-clic, émet requeue_requested (main.gd décide).
+# Références conservées (B.5) : au clic le bouton passe en RECHERCHE (libellé + pulsation sobre) ;
+# main.gd le RÉACTIVE via reset_requeue_button() si le re-queue échoue alors que le rapport reste
+# affiché.
+var _requeue_btn: Button = null
+var _requeue_pulse: Tween = null
+
 func _build_requeue_button() -> void:
 	var anchor: Button = %BackToLobbyButton
 	var parent := anchor.get_parent()
@@ -209,9 +215,36 @@ func _build_requeue_button() -> void:
 	btn.pressed.connect(func() -> void:
 		AudioManager.play_sfx("confirm")
 		btn.disabled = true
+		# État RECHERCHE : le joueur voit que la relance tourne (registre militaire, aucun emoji).
+		btn.text = tr("REPORT_REQUEUE_SEARCHING")
+		_start_requeue_pulse()
 		requeue_requested.emit())
+	_requeue_btn = btn
 	parent.add_child(btn)
 	parent.move_child(btn, anchor.get_index())
+
+# Pulsation discrète de l'alpha du bouton (bordure or comprise) pendant la recherche : Tween en
+# boucle 1.0 ↔ 0.72, ~0.9 s par aller-retour, sinus adouci — sobre, sans clignotement agressif.
+func _start_requeue_pulse() -> void:
+	if not is_instance_valid(_requeue_btn):
+		return
+	if _requeue_pulse != null and _requeue_pulse.is_valid():
+		_requeue_pulse.kill()
+	_requeue_btn.modulate.a = 1.0
+	_requeue_pulse = create_tween().set_loops()
+	_requeue_pulse.tween_property(_requeue_btn, "modulate:a", 0.72, 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_requeue_pulse.tween_property(_requeue_btn, "modulate:a", 1.0, 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+# Réactive le bouton REJOUER si la relance échoue mais que le rapport reste affiché (appelé par
+# main.gd::_on_requeue_failed, défensif via has_method) : stoppe la pulsation, restaure le libellé.
+func reset_requeue_button() -> void:
+	if _requeue_pulse != null and _requeue_pulse.is_valid():
+		_requeue_pulse.kill()
+	_requeue_pulse = null
+	if is_instance_valid(_requeue_btn):
+		_requeue_btn.modulate.a = 1.0
+		_requeue_btn.text = tr("REPORT_REQUEUE")
+		_requeue_btn.disabled = false
 
 # Refonte EN ONGLETS (E-visuel) PAR CODE : un TabContainer s'insère dans ReportVBox à l'emplacement
 # de l'eyebrow d'attrition ; 4 pages (ScrollContainer > VBox) — XP JOUEUR / XP HÉROS / CLASSEMENT /
@@ -1243,17 +1276,18 @@ static func player_points_breakdown(rank: int, territories: int, continents: int
 		items.append({"key": "REPORT_PT_TERR", "value": territories})
 	return _nonzero(items)
 
-# XP de profil (rewards.compute_match_xp) : +5/continent et +100 forfait réservés au haut du tableau ;
-# Pass Spécial → ×1.25 (floor) sur le TOTAL, matérialisé par un poste bonus (miroir process_match_results).
+# XP de profil (rewards.compute_match_xp) : +10/conquête, +2/kill, +5/continent et +150 forfait
+# réservés au haut du tableau ; Pass Spécial → ×1.25 (floor) sur le TOTAL, matérialisé par un poste
+# bonus (miroir process_match_results).
 static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 		continents_conquered: int, pass_applied: bool) -> Array:
 	var items: Array = []
-	items.append({"key": "REPORT_XP_CONQ", "value": conquests})
-	items.append({"key": "REPORT_XP_KILL", "value": enemy_kills})
+	items.append({"key": "REPORT_XP_CONQ", "value": 10 * conquests})
+	items.append({"key": "REPORT_XP_KILL", "value": 2 * enemy_kills})
 	if rank <= 1:
 		items.append({"key": "REPORT_XP_CONT", "value": 5 * continents_conquered})
 	if rank == 0:
-		items.append({"key": "REPORT_XP_WIN", "value": 100})
+		items.append({"key": "REPORT_XP_WIN", "value": 150})
 	items = _nonzero(items)
 	if pass_applied:
 		var base_total := _breakdown_total(items)
@@ -1263,17 +1297,17 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 			items.append({"key": "REPORT_XP_PASS", "value": bonus})
 	return items
 
-# XP HÉROS (rewards.compute_hero_match_xp) : +1/10 unités tuées (arrondi SUP.), +150 objectif,
-# +5/territoire en fin, +100/coup de grâce, +1/10 PV de dégâts héros.
+# XP HÉROS (rewards.compute_hero_match_xp) : +1/unité tuée, +150 objectif, +5/territoire en fin,
+# +100/coup de grâce, +1/PV de dégâts héros.
 static func hero_xp_breakdown(enemy_units_killed: int, objective_win: bool,
 		territories_end: int, hero_kills: int, hero_damage: int) -> Array:
 	var items: Array = []
-	items.append({"key": "REPORT_HXP_UNITS", "value": int(ceil(float(enemy_units_killed) / 10.0))})
+	items.append({"key": "REPORT_HXP_UNITS", "value": enemy_units_killed})
 	if objective_win:
 		items.append({"key": "REPORT_HXP_OBJ", "value": 150})
 	items.append({"key": "REPORT_HXP_TERR", "value": 5 * territories_end})
 	items.append({"key": "REPORT_HXP_GRAVE", "value": 100 * hero_kills})
-	items.append({"key": "REPORT_HXP_DMG", "value": hero_damage / 10})
+	items.append({"key": "REPORT_HXP_DMG", "value": hero_damage})
 	return _nonzero(items)
 
 # Somme des postes d'un breakdown (le « total reconstruit »).
@@ -1301,12 +1335,12 @@ static func _self_check() -> void:
 	assert(_breakdown_total(player_points_breakdown(1, 3, 0, 1, 40)) == 18)   # 10+3+0+5
 	assert(_breakdown_total(player_points_breakdown(2, 4, 1, 3, 500)) == 4)   # 1×4 territoires
 	# XP de profil — miroir de rewards.compute_match_xp (+ Pass ×1.25 floor).
-	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false)) == 118)  # 3+10+5+100
-	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 147)   # floor(1.25×118)
-	assert(_breakdown_total(player_xp_breakdown(2, 3, 10, 5, false)) == 13)   # rang 3+ : ni cont ni win
+	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false)) == 205)  # 30+20+5+150
+	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 256)   # floor(1.25×205)
+	assert(_breakdown_total(player_xp_breakdown(2, 3, 10, 5, false)) == 50)   # rang 3+ : ni cont ni win
 	# XP héros — miroir de rewards.compute_hero_match_xp.
-	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55)) == 278)    # 3+150+20+100+5
-	assert(_breakdown_total(hero_xp_breakdown(9, false, 0, 0, 9)) == 1)       # ceil(0.9)=1 ; reste nul
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55)) == 350)    # 25+150+20+100+55
+	assert(_breakdown_total(hero_xp_breakdown(9, false, 0, 0, 9)) == 18)      # 9+9
 
 # Détail des POINTS DE MATCH + XP DE PROFIL (onglet 1) — depuis les entrées brutes _detail_inputs,
 # réconcilié aux totaux serveur (rewards.match_points / rewards.xp_earned).

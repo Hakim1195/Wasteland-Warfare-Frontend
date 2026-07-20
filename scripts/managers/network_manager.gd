@@ -740,11 +740,29 @@ func _on_purchase_completed(_result, response_code, _headers, body, http_node):
 # `waiting` non pleine, sinon CRÉE une salle (publique, 6 places par défaut), puis navigue vers
 # waiting_room. Toute erreur → requeue_failed(message) (l'appelant retombe sur le lobby).
 var _requeue_active := false
+# Anti-boucle & anti-blocage (correctif bouton REJOUER) : on BORNE les jointures d'un cycle et on
+# EXCLUT les salles déjà tentées ; un chien de garde libère le bouton si un callback ne revient
+# jamais. `_requeue_cycle` = jeton de cycle → un chien de garde périmé (cycle déjà terminé, ou un
+# nouveau cycle ré-armé depuis) devient inoffensif au lieu d'abattre un cycle neuf.
+var _requeue_tried: Dictionary = {}    # ids des salles déjà tentées CE cycle
+var _requeue_attempts := 0             # jointures tentées CE cycle (borne dure)
+var _requeue_cycle := 0                # jeton de cycle (le chien de garde n'abat que le sien)
+const REQUEUE_MAX_ATTEMPTS := 4
+const REQUEUE_WATCHDOG_SECONDS := 12.0
 
 func requeue() -> void:
 	if _requeue_active:
 		return
 	_requeue_active = true
+	# Réinitialise l'état du cycle (salles exclues + borne d'essais) et incrémente le jeton.
+	_requeue_tried.clear()
+	_requeue_attempts = 0
+	_requeue_cycle += 1
+	# Chien de garde : même si un callback ne revient JAMAIS (err d'envoi, réponse perdue), ce cycle
+	# ne peut plus geler le bouton pour toute la session. Le jeton rend inoffensif un timer périmé
+	# (cycle déjà clôturé par _requeue_enter/_requeue_fail, ou un NOUVEAU cycle ré-armé depuis).
+	get_tree().create_timer(REQUEUE_WATCHDOG_SECONDS).timeout.connect(
+		_on_requeue_watchdog.bind(_requeue_cycle))
 	# 1) Fermer proprement le WebSocket de la salle courante (le serveur traite la déconnexion :
 	#    un éliminé ne déclenche NI abandon NI minuterie — garanti côté backend §8.70).
 	if socket.get_ready_state() == WebSocketPeer.STATE_OPEN \
@@ -783,14 +801,26 @@ func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
 			continue
 		if bool(room.get("is_private", false)):
 			continue
+		# On ne re-queue JAMAIS dans une file CLASSÉE sans accord explicite : un « rejouer » après une
+		# partie normale ne doit pas déposer le joueur dans une classée à 5.
+		if bool(room.get("is_ranked", false)):
+			continue
+		var rid := int(room.get("id", -1))
+		# Salle déjà tentée CE cycle (join échoué / bouclé dessus) → on ne la re-propose pas.
+		if rid <= 0 or _requeue_tried.has(rid):
+			continue
 		var maxp := int(room.get("max_players", 0))
 		var cur := int(room.get("current_players", 0))
 		if str(room.get("status", "waiting")) == "waiting" and cur < maxp and maxp > 0:
-			var rid := int(room.get("id", -1))
-			if rid > 0:
-				_send_api_request("/lobby/rooms/" + str(rid) + "/join",
-					HTTPClient.METHOD_POST, {}, _on_requeue_joined.bind(rid))
+			# Avant CHAQUE tentative de join : marque la salle et borne le nombre d'essais du cycle.
+			_requeue_tried[rid] = true
+			_requeue_attempts += 1
+			if _requeue_attempts > REQUEUE_MAX_ATTEMPTS:
+				_requeue_fail(tr("NET_REQUEUE_RADAR_UNREACHABLE"))
 				return
+			_send_api_request("/lobby/rooms/" + str(rid) + "/join",
+				HTTPClient.METHOD_POST, {}, _on_requeue_joined.bind(rid))
+			return
 	# Aucune salle disponible → on en CRÉE une (défauts §8.70 : publique, 6 places).
 	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST,
 		{"max_players": 6, "is_private": false, "secret_code": ""}, _on_requeue_created)
@@ -828,6 +858,14 @@ func _requeue_enter(room_id: int) -> void:
 func _requeue_fail(message: String) -> void:
 	_requeue_active = false
 	requeue_failed.emit(message)
+
+# Chien de garde d'un cycle de re-queue : n'ABAT que si CE cycle tourne TOUJOURS. Un timer périmé
+# (cycle déjà clôturé → `_requeue_active` faux, ou un nouveau cycle ré-armé → jeton différent) est
+# inerte. Sans lui, un `_send_api_request` dont le callback ne revient jamais laisserait
+# `_requeue_active` bloqué à true pour toute la session (les clics suivants sortiraient au garde).
+func _on_requeue_watchdog(cycle: int) -> void:
+	if _requeue_active and _requeue_cycle == cycle:
+		_requeue_fail(tr("NET_REQUEUE_RADAR_UNREACHABLE"))
 
 # 10 ter. Équipe un SKIN possédé (M5 §8.69) : POST /shop/equip {skin_id} — la faction est
 # dérivée côté serveur (hero_key). Réponse = inventaire complet (bloc `equipped` à jour).

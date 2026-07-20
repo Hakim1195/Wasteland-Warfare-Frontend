@@ -1818,6 +1818,11 @@ func _on_spectator_quit() -> void:
 	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 func _on_requeue_failed(_message: String) -> void:
+	# B.5 : si le rapport est ENCORE affiché, on RÉACTIVE son bouton REJOUER (stoppe la pulsation,
+	# restaure le libellé + `disabled=false`) avant de basculer — défensif via has_method. Le bouton
+	# n'est réactivé que si le rapport reste vivant (sinon reset_requeue_button est un no-op interne).
+	if _report_node != null and is_instance_valid(_report_node) and _report_node.has_method("reset_requeue_button"):
+		_report_node.reset_requeue_button()
 	# Repli : retour au lobby (l'écran lobby réaffiche le radar ; le message est déjà explicite).
 	TransitionManager.change_scene("res://scenes/ui/lobby_screen.tscn")
 
