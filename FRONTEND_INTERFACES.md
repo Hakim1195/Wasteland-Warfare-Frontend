@@ -1029,3 +1029,75 @@ Accessible par l'onglet de nav **OPÉRATEUR** et par la jauge d'XP cliquable. É
 > - ⚠️ **`Array` = RÉFÉRENCE en GDScript (trouvé en revue).** Le repli des `perk_keys` faisait `var perks := item.get("perk_keys", [])` puis `perks.append(...)` : il écrivait donc les clés de repli **dans l'entrée de `_catalog`**, faisant diverger silencieusement l'état client de ce que le serveur avait envoyé. Corrigé par `.duplicate()`.
 > - **i18n : 28 clés** ajoutées/mises à jour en fr/en/it (954 au total), 3 supprimées (doublon ci-dessus).
 > - **VALIDATION.** `--import` **0 ERROR** ; boot headless **0 ERROR** sur `shop`, `characters_screen`, `profile`, `main_menu`, `faction_selection` ; **captures PNG** des 4 onglets boutique + Profil conformes aux critères d'acceptation (gate skin visible sur Eclipse, « ★ GRATUITE — 3/5 PARTIES », **3 pips pleins sur 5** avec « 3/5 PARTIES RESTANTES »).
+### 8.111. Refonte PERSONNAGES — roster en cartes + fiche à 4 onglets (Frontend, 2026-07-20)
+> **But.** L'écran Personnages était une **liste verticale + un panneau de détail** : le titre affiché
+> était le nom de la FACTION (les personnages n'avaient pas d'identité à l'écran), et toute
+> l'information tenait dans une seule colonne défilante. Il devient un **ROSTER en grille de cartes**
+> (chantier W) ouvrant une **FICHE à 4 onglets** (chantiers X/Y), personnage en grand à gauche.
+> Chantiers V (backend) et W (roster) livrés dans une passe antérieure ; **X/Y/Z ici**.
+>
+> - **Identité enfin affichée.** Les cartes et l'en-tête de fiche portent le **nom du personnage**
+>   (`identity.display_name` de `GET /api/v1/heroes`, chantier V) et non plus le nom de faction —
+>   les deux vues désignaient jusqu'ici la même entité par deux noms différents. En-tête de fiche :
+>   `PRÉNOM NOM` (34 px) + indicatif entre guillemets + code `CHAR-NNN` aligné à droite.
+> - **Hiérarchie typographique de la carte (demande produit).** Nom du personnage **22 px** (blanc
+>   froid, 2 lignes max) contre **11 px** pour la faction, cette dernière passée du gris muet à la
+>   **couleur d'accent de sa faction** — même signal que le liseré gauche et les encoches de la
+>   carte, donc trois rappels cohérents. `CARD_SIZE` porté de `(200, 260)` à `(200, 286)` : sans ça
+>   les cartes à nom long dépassaient leur taille minimale et déformaient leur rangée.
+> - **Fiche en deux colonnes (`SheetBody` passé de `VBoxContainer` à `HBoxContainer`).** Personnage
+>   à **gauche, 42 %** de largeur et pleine hauteur (~517×660 px au lieu d'une bande de 300 px) :
+>   `hero_viewport_3d` est un `SubViewportContainer` plein-cadre `stretch = true`, il remplit donc le
+>   nouvel emplacement sans réglage. Ajout d'un **présentoir** (`_stage_frame`) — fond gunmetal +
+>   liseré à la couleur effective (faction, ou skin prévisualisé) + encoches : sans lui le héros
+>   « flottait » dans le panneau. Identité + onglets à **droite, 58 %**.
+> - **4 onglets** (`TabContainer`, pattern et `_style_tabs` repris VERBATIM du Profil §8.106) :
+>   **INFORMATIONS** (progression XP, palmarès `record`, pouvoir encadré, état d'accès détaillé),
+>   **STATISTIQUES** (PV/PA/PB/PP/Régén en **ACTUEL / RESTANT / NIV. 50**), **ÉVOLUTION** (frise des
+>   5 paliers en pastilles hexagonales, XP totale, Coins gagnés, comparatif des 3 Pass),
+>   **SKINS**. Aucun chargement différé par onglet : tout vient de données déjà en mémoire.
+> - **Colonne DELTA** (`_make_stats_block(hero, show_delta := false)`) : « +228 », « +9 % »,
+>   limitée à PV/PA/PB (PP est une fourchette, Régén un taux → « — »). **Le défaut `false` est ce
+>   qui garantit que le draft ne bouge pas** — `faction_selection` passe d'ailleurs par
+>   `HeroStatsView.build_compact_row`, intouché.
+> - **Comparatif des Pass sans aucune constante recopiée.** Les taux par niveau (1-5 / 2-10 / 4-20 /
+>   5-25) sont **dérivés** de `evolution.coins_potential ÷ levels_left` — le potentiel étant par
+>   construction `niveaux restants × barème`, la division est exacte. Ligne omise au niveau 50
+>   (division par zéro) plutôt que remplie de zéros. La colonne du Pass ACTIF (`pass_tier` de
+>   `/shop/inventory`) est surlignée en or.
+> - **SKINS avec prévisualisation.** Le clic sur une vignette applique le skin au **grand viewer sans
+>   l'équiper** (`_preview_skin`, remis à `""` au changement de personnage et à l'équipement réel) —
+>   liseré cyan « APERÇU ». Le mécanisme visuel est celui du **Split-Screen VS** (`SkinData` de
+>   `resources/skins/`, duck-typing `id`+`faction_id`, surcharge `portrait_path`/`model_path`/
+>   `accent_override`) : aucun 2ᵉ mécanisme à maintenir. Skin catalogué mais sans ressource → teinte
+>   déterministe dérivée du hash de l'id (jamais d'image inventée). ÉQUIPER/RETIRER via
+>   `equip_skin`/`unequip_skin` ; l'ACHAT reste en Boutique (CTA de redirection).
+> - ✅ **Aucun paramètre serveur à ajouter.** Le prompt demandait `?include_exclusive=true` sur
+>   `/shop/catalog` pour voir les skins exclusifs Pass : **`?include_all=1` existe déjà** (§8.102) et
+>   `NetworkManager.fetch_shop_catalog()` le passe déjà. Réutilisé tel quel.
+> - **Navigation.** Flèches `❮`/`❯` (personnage précédent/suivant, **boucle** via `posmod` — un
+>   modulo brut donnait `-1` au premier « précédent ») **en conservant l'onglet actif**. `_unhandled_input` :
+>   **ÉCHAP ferme d'abord la FICHE** (`set_input_as_handled()` empêche `top_nav` de voir l'évènement) —
+>   avant, ÉCHAP depuis une fiche quittait l'écran entier ; ←/→ changent de personnage.
+> - **★ FAVORI** devient un bouton explicite de la fiche (remplace la persistance « au clic sur la
+>   carte », chantier F §8.93) ; re-cliquer le favori courant le RETIRE.
+> - **Chemin d'erreur du roster (préexistant, corrigé).** `NetworkManager.lobby_error` n'était pas
+>   connecté : un `/heroes` en échec laissait l'écran bloqué **indéfiniment** sur « SYNCHRONISATION… ».
+>   Message + bouton `COMMON_RETRY` désormais. Une erreur tardive n'efface pas un roster déjà affiché.
+> - **Code mort supprimé** après migration : `_populate_detail`, `_make_milestone_row`, l'export
+>   `detail_box` et les nœuds `DetailScroll`/`DetailBox`, plus l'entrée `back_button` **fantôme** du
+>   `node_paths` de la scène (déclarée, jamais assignée, aucun `@export` correspondant).
+> - **i18n : 12 clés** ajoutées en fr/en/it (`CHAR_SECTION_PROGRESSION`, `CHAR_RECORD_WINS/LOSSES`,
+>   `CHAR_ACCESS_LOCKED`, `CHAR_EVO_XP_TOTAL`, `CHAR_EVO_NO_PASS`, `CHAR_SHOP_CTA`, et les 5
+>   `FACTION_CATEGORY_*`). Les blocs `CHAR_TAB_*`/`CHAR_EVO_*`/`CHAR_SKIN_*` étaient déjà provisionnés.
+> - ⚠️ **DEUX DÉFAUTS TROUVÉS EN CAPTURE, pas à la lecture.** (1) Le titre « PROGRESSION » sortait
+>   **en double** dans l'onglet INFORMATIONS : `_make_xp_block` pose déjà son propre en-tête de
+>   section. (2) Le chip « PROCHAIN — dans N niveaux », posé en FRÈRE de droite d'une colonne en
+>   `EXPAND_FILL`, était **poussé contre le bord et rogné** dès que la traduction s'allongeait
+>   (visible en italien : « PROSSIMO — tra 8 livelli ») → déplacé DANS la colonne. Un boot headless
+>   à 0 ERROR ne dit rien de la mise en page : seule la capture les a montrés.
+> - **VALIDATION.** `--import` **0 ERROR** ; boot headless **0 ERROR** sur `characters_screen`,
+>   `faction_selection` (draft intact), `main_menu`, `shop` ; backend `test_heroes_roster.py`
+>   **483 ✅ / 0 ❌** ; **6 captures** (roster, les 4 onglets, bas de l'onglet ÉVOLUTION) relues une
+>   à une, dont la contre-vérification que les taux dérivés du comparatif donnent bien 1-5 / 2-10 /
+>   4-20 / 5-25 et que la colonne PREMIUM se surligne pour un joueur de ce tier.

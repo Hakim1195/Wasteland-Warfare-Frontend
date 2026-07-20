@@ -23,7 +23,7 @@ border_color = Color(0.211765, 0.772549, 0.85098, 1)
 color = Color(0.211765, 0.772549, 0.85098, 0.5)
 thickness = 2
 
-[node name="CharactersScreen" type="Control" node_paths=PackedStringArray("panel", "back_button", "roster_view", "hero_grid", "roster_count_label", "sheet_view", "sheet_back_button", "hero_stage", "detail_box", "status_label")]
+[node name="CharactersScreen" type="Control" node_paths=PackedStringArray("panel", "roster_view", "hero_grid", "roster_count_label", "sheet_view", "sheet_back_button", "sheet_prev_button", "sheet_next_button", "hero_stage", "identity_box", "tabs_slot", "status_label")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -37,8 +37,11 @@ hero_grid = NodePath("CenterContainer/MainPanel/RootVBox/RosterView/RosterScroll
 roster_count_label = NodePath("CenterContainer/MainPanel/RootVBox/RosterView/HeaderRow/CountLabel")
 sheet_view = NodePath("CenterContainer/MainPanel/RootVBox/SheetView")
 sheet_back_button = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow/BackButton")
+sheet_prev_button = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow/PrevButton")
+sheet_next_button = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow/NextButton")
 hero_stage = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/HeroStage")
-detail_box = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/DetailScroll/DetailBox")
+identity_box = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/SheetRight/IdentityBox")
+tabs_slot = NodePath("CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/SheetRight/TabsSlot")
 status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
 
 [node name="Background" type="TextureRect" parent="."]
@@ -131,6 +134,7 @@ theme_override_constants/separation = 12
 
 [node name="SheetHeaderRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView"]
 layout_mode = 2
+theme_override_constants/separation = 10
 
 [node name="BackButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow"]
 layout_mode = 2
@@ -140,24 +144,53 @@ theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 15
 text = "CHAR_BACK_ROSTER"
 
-[node name="SheetBody" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView"]
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 12
-
-[node name="HeroStage" type="Control" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody"]
-custom_minimum_size = Vector2(0, 300)
-layout_mode = 2
-
-[node name="DetailScroll" type="ScrollContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody"]
-layout_mode = 2
-size_flags_vertical = 3
-horizontal_scroll_mode = 0
-
-[node name="DetailBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/DetailScroll"]
+[node name="HeaderSpacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 10
+mouse_filter = 2
+
+[node name="PrevButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 0
+custom_minimum_size = Vector2(54, 40)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 17
+text = "❮"
+
+[node name="NextButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetHeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 0
+custom_minimum_size = Vector2(54, 40)
+theme_override_fonts/font = SubResource("font_warzone")
+theme_override_font_sizes/font_size = 17
+text = "❯"
+
+[node name="SheetBody" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 18
+
+[node name="HeroStage" type="Control" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody"]
+custom_minimum_size = Vector2(380, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 42.0
+
+[node name="SheetRight" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 58.0
+theme_override_constants/separation = 12
+
+[node name="IdentityBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/SheetRight"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="TabsSlot" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/SheetView/SheetBody/SheetRight"]
+layout_mode = 2
+size_flags_vertical = 3
 
 [node name="StatusLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
 layout_mode = 2

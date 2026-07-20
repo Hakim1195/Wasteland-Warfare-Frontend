@@ -25,8 +25,11 @@ extends Control
 @export var roster_count_label: Label      # « X/Y PERSONNAGES POSSÉDÉS » dans l'en-tête du roster
 @export var sheet_view: Control            # conteneur plein-cadre : FICHE du héros ouvert
 @export var sheet_back_button: Button      # « ❮ ROSTER » — referme la fiche, retour à la grille
+@export var sheet_prev_button: Button      # « ❮ » — personnage PRÉCÉDENT (boucle), onglet CONSERVÉ
+@export var sheet_next_button: Button      # « ❯ » — personnage SUIVANT (boucle), onglet CONSERVÉ
 @export var hero_stage: Control            # FICHE : emplacement 3D/portrait (rempli en code)
-@export var detail_box: VBoxContainer      # FICHE : détail textuel (reconstruit à l'ouverture)
+@export var identity_box: VBoxContainer    # FICHE : en-tête d'identité (rebâti à chaque personnage)
+@export var tabs_slot: VBoxContainer       # FICHE : hôte du TabContainer (4 onglets, bâti UNE fois)
 @export var status_label: Label
 
 # Helpers de charte (§2) + composant héros 3D — préchargés (pas de class_name, prudence cache d'import).
@@ -47,10 +50,37 @@ const SURFACE := Color(0.101961, 0.12549, 0.156863, 1)  # surface secondaire
 const DANGER := Color(0.839216, 0.270588, 0.247059, 1)  # rouge
 
 # --- Roster (chantier W) : dimensions de carte + hauteur de vignette ---
-const CARD_SIZE := Vector2(200, 260)
+# Hauteur portée de 260 à 286 px quand le nom du personnage est passé de 15 à 22 px (2 lignes
+# possibles) : sans ça, la carte dépassait sa taille MINIMALE et la grille devenait irrégulière
+# (les cartes à nom long poussaient leur rangée, pas les autres).
+const CARD_SIZE := Vector2(200, 286)
 const CARD_THUMB_HEIGHT := 112.0
 # Transition ROSTER <-> FICHE : fondu alpha seul (cf. _fade_in plus bas pour le pourquoi).
 const VIEW_FADE_TIME := 0.15
+
+# --- FICHE à onglets (chantiers X/Y) : index des 4 onglets = ordre d'ajout au TabContainer. ---
+const TAB_INFO := 0
+const TAB_STATS := 1
+const TAB_EVOLUTION := 2
+const TAB_SKINS := 3
+# Titres des onglets, dans l'ordre ci-dessus (re-traduits à chaud par _refresh_tab_titles).
+const TAB_KEYS := ["CHAR_TAB_INFO", "CHAR_TAB_STATS", "CHAR_TAB_EVOLUTION", "CHAR_TAB_SKINS"]
+
+# --- SKINS (chantier Y) : registre data-driven, MÊME dossier et MÊME duck-typing que le
+# Split-Screen VS (split_screen_vs.gd:_find_skin) — un SkinData porte id / faction_id /
+# portrait_path / model_path / accent_override. Aucun 2ᵉ mécanisme visuel à maintenir. ---
+const SKINS_DIR := "res://resources/skins/"
+# Colonnes du comparatif des Pass (§Y.4) : clés du bloc `evolution.coins_potential` servi par
+# /heroes, dans l'ordre croissant de tier. « base » = sans Pass. Le libellé de chaque colonne est
+# volontairement NON traduit (« PLUS », « PREMIUM », « INFINITY » = noms commerciaux invariants,
+# même règle que les noms propres de personnages, §1.8).
+# « SANS PASS » est en revanche une vraie phrase d'interface → clé i18n (CHAR_EVO_NO_PASS).
+const PASS_COLUMNS := [
+	{"key": "base", "label": "", "i18n": "CHAR_EVO_NO_PASS", "tier": ""},
+	{"key": "plus", "label": "PLUS", "i18n": "", "tier": "plus"},
+	{"key": "premium", "label": "PREMIUM", "i18n": "", "tier": "premium"},
+	{"key": "infinity", "label": "INFINITY", "i18n": "", "tier": "infinity"},
+]
 
 # --- Factions data-driven (id -> ressource .tres), garde-fous de profile.gd / faction_selection.gd ---
 const FACTIONS_DIR := "res://resources/factions/"
@@ -80,6 +110,7 @@ var _sheet_index: int = -1         # index dans _heroes de la fiche actuellement
 var _hero3d = null                 # instance hero_viewport_3d (API non typée : set_model/set_accent)
 var _portrait: TextureRect = null  # repli portrait 2D
 var _placeholder: ColorRect = null # repli carte colorée
+var _stage_frame: Panel = null     # cadre du présentoir (fond + liseré à la couleur effective)
 
 # Tween de transition ROSTER <-> FICHE (revue de code, point 4) : UNE seule référence, quel que
 # soit le Control animé (roster_view ou sheet_view) — tuée avant toute nouvelle bascule pour ne
@@ -87,6 +118,24 @@ var _placeholder: ColorRect = null # repli carte colorée
 # laisse l'ANCIEN Tween forcer modulate:a à 1 en pleine rampe du NOUVEAU → flash/saut visible. Même
 # pattern que hud.gd (_fade_tween) / phase_banner.gd (_tween).
 var _view_tween: Tween
+
+# --- FICHE à onglets (chantiers X/Y) ------------------------------------------------------------
+var _tabs: TabContainer = null      # bâti UNE fois (_build_tabs), jamais reconstruit d'un héros à l'autre
+var _tab_pages: Array = []          # VBoxContainer de contenu, index = TAB_* (vidé/repeuplé par héros)
+
+# --- Données BOUTIQUE de l'onglet SKINS (fetch UNE fois à la 1ʳᵉ ouverture d'une fiche, partagées
+# entre les 10 personnages : le catalogue et l'inventaire ne dépendent pas du héros affiché). ---
+var _shop_items: Array = []         # /shop/catalog?include_all=1 → exclusifs Pass COMPRIS (purchasable=false)
+var _owned_items: Dictionary = {}   # item_id -> quantité possédée (/shop/inventory)
+var _equipped: Dictionary = {}      # faction_id -> skin_id RÉELLEMENT équipé (serveur)
+var _pass_tier: String = ""         # tier du Pass actif ("" = aucun) → surligne SA colonne au comparatif
+var _shop_requested: bool = false   # anti-refetch : une seule paire de requêtes pour tout l'écran
+var _shop_failed: bool = false      # échec catalogue/inventaire → SKINS dégradé, le reste INTACT
+
+# Skin PRÉVISUALISÉ dans le grand viewer (§Y.2) — JAMAIS équipé : c'est un état purement local,
+# remis à "" au changement de personnage et à la fermeture de la fiche (le viewer retombe alors sur
+# le skin réellement équipé). Ne jamais confondre avec _equipped.
+var _preview_skin: String = ""
 
 
 func _ready() -> void:
@@ -121,6 +170,21 @@ func _ready() -> void:
 		WarzoneUI.wire_button_feedback(sheet_back_button)
 		sheet_back_button.pressed.connect(_show_roster)
 
+	# Flèches PRÉCÉDENT / SUIVANT de la fiche (chantier X.1) : naviguent d'un personnage à l'autre
+	# SANS repasser par le roster, dans l'ordre de la grille, avec BOUCLE aux extrémités.
+	if sheet_prev_button:
+		WarzoneUI.apply_ghost_button(sheet_prev_button)
+		WarzoneUI.wire_button_feedback(sheet_prev_button)
+		sheet_prev_button.pressed.connect(func() -> void: _step_sheet(-1))
+	if sheet_next_button:
+		WarzoneUI.apply_ghost_button(sheet_next_button)
+		WarzoneUI.wire_button_feedback(sheet_next_button)
+		sheet_next_button.pressed.connect(func() -> void: _step_sheet(1))
+
+	# Barre d'onglets de la fiche (chantier X.3) : bâtie UNE fois ici, pas à chaque ouverture — le
+	# changement de personnage ne fait que VIDER/REPEUPLER la page active (cf. _populate_active_tab).
+	_build_tabs()
+
 	# État initial (chantier W) : on ouvre TOUJOURS sur le roster, AUCUNE fiche pré-ouverte. Le
 	# personnage persisté (SettingsManager) ne sert plus qu'à marquer le badge ★ FAVORI dans la
 	# grille — il ne choisit plus jamais de fiche d'ouverture (comportement RETIRÉ, cf. rapport).
@@ -134,7 +198,19 @@ func _ready() -> void:
 
 	# Réseau (R/RPG) : roster des héros via NetworkManager (GET /api/v1/heroes).
 	NetworkManager.heroes_loaded.connect(_on_heroes_loaded)
+	# Chemin d'ERREUR du roster (chantier Z.3) : sans lui, un /heroes en échec laissait l'écran bloqué
+	# INDÉFINIMENT sur « SYNCHRONISATION… » (aucun message, aucune sortie). `lobby_error` est le signal
+	# d'échec générique qu'émet NetworkManager pour cette route.
+	NetworkManager.lobby_error.connect(_on_roster_error)
 	NetworkManager.fetch_heroes()
+
+	# Boutique (onglet SKINS) : catalogue + inventaire. Signaux connectés DÈS le _ready (et non à la
+	# 1ʳᵉ ouverture de fiche) pour ne jamais rater une réponse ; les requêtes, elles, ne partent qu'à
+	# la 1ʳᵉ ouverture d'une fiche (_ensure_shop_data) — le roster seul n'en a pas besoin.
+	NetworkManager.shop_catalog_loaded.connect(_on_shop_catalog_loaded)
+	NetworkManager.shop_inventory_loaded.connect(_on_shop_inventory_loaded)
+	NetworkManager.skin_equipped.connect(_on_skin_equipped)
+	NetworkManager.skin_equip_failed.connect(_on_skin_equip_failed)
 
 
 # =========================================================
@@ -185,11 +261,26 @@ func _show_sheet(index: int) -> void:
 	if sheet_view:
 		sheet_view.visible = true
 		_fade_in(sheet_view)
-	# Contenu PROVISOIRE (chantier W) : réutilise TEL QUEL le viewer + le détail EXISTANTS pour ce
-	# héros — la tâche suivante construit la fiche définitive à onglets par-dessus cette structure
-	# d'accueil (on ne réécrit ni _apply_hero_stage, ni _populate_detail).
+	# Changement de personnage = l'aperçu de skin de l'ANCIEN n'a plus aucun sens (§Y.2) : on
+	# retombe sur le skin RÉELLEMENT équipé du nouveau. Fait AVANT _apply_hero_stage, qui lit
+	# _preview_skin pour décider quel visuel monter.
+	_preview_skin = ""
+	# Données boutique de l'onglet SKINS : demandées à la 1ʳᵉ ouverture d'une fiche seulement.
+	_ensure_shop_data()
 	_apply_hero_stage(str(hero.get("faction_id", "")))
-	_populate_detail(hero)
+	_build_identity_header(hero)
+	# L'onglet ACTIF est CONSERVÉ d'un personnage à l'autre (critère d'acceptation X) : on ne
+	# réinitialise jamais _tabs.current_tab ici — seul son CONTENU est repeuplé.
+	_populate_active_tab()
+
+# Personnage précédent (-1) / suivant (+1) dans l'ordre de la grille, avec BOUCLE aux extrémités
+# (§X.1). L'onglet actif ne bouge pas : _show_sheet repeuple la page courante sans la fermer.
+func _step_sheet(delta: int) -> void:
+	if _heroes.is_empty() or _sheet_index < 0:
+		return
+	# posmod() plutôt qu'un modulo brut : en GDScript, (-1) % 10 vaut -1, ce qui sortirait du roster
+	# au premier « précédent » depuis la carte 0. posmod ramène toujours dans [0, size).
+	_show_sheet(posmod(_sheet_index + delta, _heroes.size()))
 
 # Transition entre les deux vues : fondu alpha seul (0,15 s), PAS de glissement de position. Les
 # deux vues sont enfants directs d'un VBoxContainer qui recalcule leur position à chaque passe de
@@ -288,22 +379,28 @@ func _make_roster_card(index: int, hero: Dictionary) -> PanelContainer:
 	v.add_child(_make_roster_thumbnail(fid, accent))
 
 	# --- 2. Prénom NOM (identity.display_name -> hero_name -> faction_name), 2 lignes max. ---
+	# Hiérarchie VOULUE (demande de Hakim) : c'est le NOM DU PERSONNAGE qui porte la carte, pas sa
+	# faction — d'où une taille franchement dominante (22 px contre 11 px pour le sous-titre, ratio
+	# 2:1) et le blanc froid réservé au texte primaire. Le nom est ce qu'on lit à un mètre de l'écran.
 	var name_lbl := Label.new()
 	name_lbl.text = _roster_card_name(hero, fid).to_upper()
 	name_lbl.add_theme_font_override("font", _font)
-	name_lbl.add_theme_font_size_override("font_size", 15)
+	name_lbl.add_theme_font_size_override("font_size", 22)
 	name_lbl.add_theme_color_override("font_color", TEXT)
 	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	name_lbl.max_lines_visible = 2
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(name_lbl)
 
-	# --- 3. Sous-titre : nom de la faction, plus petit et muet. ---
+	# --- 3. Sous-titre : nom de la faction — PETIT et à la COULEUR D'ACCENT DE SA FACTION.
+	# L'accent (et non le gris muet) fait de cette ligne le repère d'appartenance immédiat : la même
+	# couleur que le liseré gauche et que les encoches de la carte, donc trois rappels cohérents du
+	# même signal. C'est aussi ce qui permet de garder la ligne à 11 px sans la rendre illisible. ---
 	var fac_lbl := Label.new()
 	fac_lbl.text = _faction_display_name(fid, hero).to_upper()
 	fac_lbl.add_theme_font_override("font", _font)
 	fac_lbl.add_theme_font_size_override("font_size", 11)
-	fac_lbl.add_theme_color_override("font_color", MUTED)
+	fac_lbl.add_theme_color_override("font_color", accent)
 	fac_lbl.clip_text = true
 	fac_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(fac_lbl)
@@ -499,7 +596,19 @@ func _on_card_pressed(index: int) -> void:
 func _build_hero_stage() -> void:
 	if hero_stage == null:
 		return
-	# Carte colorée (toujours présente, dessous).
+	# PRÉSENTOIR (chantier X.1) : cadre de fond posé SOUS tous les visuels — surface gunmetal +
+	# liseré à la couleur de la faction (ou du skin prévisualisé). Il donne au personnage un vrai
+	# volume à l'écran : sans lui, le héros « flotte » dans le panneau et la moitié gauche de la
+	# fiche paraît vide. Sa couleur est réglée par _style_stage_frame à chaque changement.
+	_stage_frame = Panel.new()
+	_stage_frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_stage_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hero_stage.add_child(_stage_frame)
+	_style_stage_frame(ACCENT)
+	# Encoches biseautées sur le présentoir lui-même (ADN angulaire §2), à la taille du grand cadre.
+	WarzoneUI.add_corner_notches(hero_stage, 16.0, ACCENT)
+
+	# Carte colorée (toujours présente, dessous les visuels mais AU-DESSUS du cadre).
 	_placeholder = ColorRect.new()
 	_placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_placeholder.color = SURFACE
@@ -514,9 +623,24 @@ func _build_hero_stage() -> void:
 	_portrait.visible = false
 	hero_stage.add_child(_portrait)
 	# Héros 3D (au-dessus) — son .tscn porte des ancres plein-cadre + stretch → remplit l'emplacement.
+	# Avec la fiche en deux colonnes (§X.1), cet emplacement fait désormais ~517×660 px au lieu de la
+	# bande de 300 px de haut d'avant : le modèle est vu en pied, en grand, sans réglage à faire ici.
 	_hero3d = HeroViewport3DScene.instantiate()
 	hero_stage.add_child(_hero3d)
 	_hero3d.visible = false
+
+# Habillage du présentoir : fond gunmetal profond + liseré fin à la couleur donnée. Recalculé à
+# chaque personnage / aperçu de skin (un StyleBox est partagé s'il n'est pas dupliqué → on en
+# refabrique un, c'est le pattern des autres écrans).
+func _style_stage_frame(accent: Color) -> void:
+	if _stage_frame == null:
+		return
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(0.058824, 0.07451, 0.094118, 0.85)
+	sb.set_border_width_all(2)
+	sb.border_color = Color(accent, 0.55)
+	_stage_frame.add_theme_stylebox_override("panel", sb)
 
 func _apply_hero_stage(fid: String) -> void:
 	var accent: Color = SURFACE
@@ -531,6 +655,32 @@ func _apply_hero_stage(fid: String) -> void:
 				model_path = str(f.get("hero_model_path"))
 			if f.get("hero_path") != null:
 				img_path = str(f.get("hero_path"))
+
+	# --- SKIN (chantier Y) : surcharge data-driven des visuels, MÊME mécanisme que le Split-Screen
+	# VS (split_screen_vs._load_faction). Le skin retenu est l'APERÇU en cours s'il y en a un
+	# (le joueur est en train d'essayer), sinon celui réellement équipé sur ce personnage. Un chemin
+	# de skin qui n'existe pas ne remplace RIEN : on garde le visuel de faction plutôt que du vide. ---
+	var skin_id := _preview_skin if _preview_skin != "" else str(_equipped.get(fid, ""))
+	if skin_id != "":
+		var skin = _find_skin_res(skin_id, fid)
+		if skin != null:
+			var s_portrait := str(skin.get("portrait_path") if skin.get("portrait_path") != null else "")
+			var s_model := str(skin.get("model_path") if skin.get("model_path") != null else "")
+			if s_portrait != "" and ResourceLoader.exists(s_portrait):
+				img_path = s_portrait
+			if s_model != "" and ResourceLoader.exists(s_model):
+				model_path = s_model
+			var s_accent = skin.get("accent_override")
+			if s_accent is Color:
+				accent = s_accent
+		else:
+			# Aucun SkinData pour cet id (skin catalogué mais pas encore produit, M5) : repli HONNÊTE
+			# — variation de teinte déterministe, jamais une image inventée (§2.6).
+			accent = _skin_swatch_color(fid, skin_id)
+
+	# Cadre du présentoir : liseré à la couleur effective (faction ou skin prévisualisé) — le
+	# personnage est ainsi ENCADRÉ comme une pièce de collection, pas posé sur du vide.
+	_style_stage_frame(accent)
 
 	# --- Chemin 3D : .glb présent → héros 3D, replis masqués. ---
 	if _hero3d != null and _hero3d.set_model(model_path):
@@ -560,99 +710,989 @@ func _apply_hero_stage(fid: String) -> void:
 
 
 # =========================================================
-# FICHE — DÉTAIL TEXTUEL DU HÉROS (reconstruit à chaque ouverture)
+# FICHE — EN-TÊTE D'IDENTITÉ (§X.2, rebâti à chaque personnage)
 # =========================================================
-func _populate_detail(hero: Dictionary) -> void:
-	_clear(detail_box)
+# Visible QUEL QUE SOIT l'onglet (il est hors du TabContainer) : c'est la carte d'identité du
+# dossier. Trois lignes, dans l'ordre de lecture voulu par Hakim :
+#   1. PRÉNOM NOM en grand + indicatif entre guillemets + code CHAR-NNN aligné à droite ;
+#   2. nom de FACTION à la couleur d'accent de la faction (petit) + catégorie/rôle en muet ;
+#   3. chip d'état d'accès + CTA contextuel, et le bouton ★ FAVORI.
+func _build_identity_header(hero: Dictionary) -> void:
+	if identity_box == null:
+		return
+	_clear(identity_box)
 	var fid := str(hero.get("faction_id", ""))
 	var fac_color := _faction_color(fid)
+	var identity: Dictionary = hero.get("identity", {}) if typeof(hero.get("identity")) == TYPE_DICTIONARY else {}
 
-	# --- En-tête : chevron coloré + nom de faction (grand) ▸ niveau (or) ---
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 10)
-	detail_box.add_child(header)
-
-	var chevron := Label.new()
-	chevron.text = "❯"
-	chevron.add_theme_font_override("font", _font)
-	chevron.add_theme_font_size_override("font_size", 28)
-	chevron.add_theme_color_override("font_color", fac_color)
-	chevron.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	header.add_child(chevron)
+	# --- Ligne 1 : PRÉNOM NOM (grand) + « indicatif » + code CHAR-NNN ---------------------------
+	var line1 := HBoxContainer.new()
+	line1.add_theme_constant_override("separation", 10)
+	identity_box.add_child(line1)
 
 	var name_lbl := Label.new()
-	name_lbl.text = _faction_display_name(fid, hero).to_upper()
+	# Nom du PERSONNAGE (identity.display_name, déjà prêt à afficher côté serveur) et non plus le nom
+	# de faction : c'est la correction de fond de la refonte — la fiche et la carte du roster
+	# désignent enfin la même entité par le même nom.
+	name_lbl.text = _roster_card_name(hero, fid).to_upper()
+	name_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # nom propre, pas une clé
 	name_lbl.add_theme_font_override("font", _font)
-	name_lbl.add_theme_font_size_override("font_size", 30)
+	name_lbl.add_theme_font_size_override("font_size", 34)
 	name_lbl.add_theme_color_override("font_color", TEXT)
-	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	header.add_child(name_lbl)
+	line1.add_child(name_lbl)
 
-	var level := int(hero.get("level", 1))
-	var lvl_eyebrow := Label.new()
-	lvl_eyebrow.text = tr("COMMON_LEVEL")
-	lvl_eyebrow.add_theme_font_override("font", _font)
-	lvl_eyebrow.add_theme_font_size_override("font_size", 13)
-	lvl_eyebrow.add_theme_color_override("font_color", ACCENT)
-	lvl_eyebrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	header.add_child(lvl_eyebrow)
+	# Indicatif (« Enclume ») — muet, entre guillemets, à côté du nom.
+	var callsign := str(identity.get("callsign", ""))
+	if callsign == "":
+		callsign = str(hero.get("hero_callsign", ""))
+	if callsign != "":
+		var cs := Label.new()
+		cs.text = "« " + callsign + " »"
+		cs.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		cs.add_theme_font_override("font", _font)
+		cs.add_theme_font_size_override("font_size", 16)
+		cs.add_theme_color_override("font_color", MUTED)
+		cs.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		line1.add_child(cs)
 
-	var lvl_value := Label.new()
-	lvl_value.text = str(level)
-	lvl_value.add_theme_font_override("font", _font)
-	lvl_value.add_theme_font_size_override("font_size", 30)
-	lvl_value.add_theme_color_override("font_color", GOLD)
-	lvl_value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	header.add_child(lvl_value)
+	# Le code dossier `CHAR-NNN` n'est PLUS affiché (demande produit) : c'est une référence de
+	# production (registre `factions.py`, `TEMPLATE_PERSONNAGES.md`), pas une information de jeu —
+	# elle encombrait la ligne de titre sans rien apprendre au joueur. Le champ reste servi par
+	# `identity.char_code` dans /heroes : rien à changer côté serveur, et il redevient affichable
+	# ici en une ligne si besoin.
 
-	# --- AVERTISSEMENT DE PERTE DE PROGRESSION (chantier T) ---------------------------------------
-	# Honnêteté indispensable : la progression d'un héros joué sous un accès TEMPORAIRE (rotation
-	# de la semaine, déblocage par un Pass) est PURGÉE à l'expiration de cet accès (chantier Q).
-	# Le joueur doit le savoir AVANT d'y investir des heures — pas le découvrir un lundi matin.
-	var acc: Dictionary = hero.get("access", {}) if typeof(hero.get("access")) == TYPE_DICTIONARY else {}
-	if str(acc.get("type", "")) in ["rotation", "pass"]:
-		var warn := Label.new()
-		warn.text = tr("CHAR_TEMP_WARNING")
-		warn.add_theme_font_override("font", _font)
-		warn.add_theme_font_size_override("font_size", 13)
-		warn.add_theme_color_override("font_color", MUTED)
-		warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		detail_box.add_child(warn)
+	# --- Ligne 2 : FACTION (couleur d'accent, petit) + catégorie/rôle (muet) --------------------
+	var line2 := HBoxContainer.new()
+	line2.add_theme_constant_override("separation", 8)
+	identity_box.add_child(line2)
 
-	# Identité du meneur (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL » sous le nom
-	# de faction — rang traduit, nom/callsign invariants (lus du .tres local ; masquée si absents).
-	var leader := _leader_title(fid)
-	if leader != "":
-		var leader_lbl := Label.new()
-		leader_lbl.text = leader.to_upper()
-		leader_lbl.add_theme_font_override("font", _font)
-		leader_lbl.add_theme_font_size_override("font_size", 15)
-		leader_lbl.add_theme_color_override("font_color", Color(fac_color, 0.9))
-		detail_box.add_child(leader_lbl)
+	var fac_lbl := Label.new()
+	fac_lbl.text = _faction_display_name(fid, hero).to_upper()
+	fac_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	fac_lbl.add_theme_font_override("font", _font)
+	fac_lbl.add_theme_font_size_override("font_size", 14)
+	fac_lbl.add_theme_color_override("font_color", fac_color)
+	line2.add_child(fac_lbl)
 
-	# --- Barre d'XP (remplie à xp_in_level / xp_for_level) + « XP avant niveau suivant » ---
-	detail_box.add_child(_make_xp_block(hero))
-	WarzoneUI.add_filet(detail_box)
+	# Catégorie de faction (combat / cartes / zone / mouvement / renforts / pré-game) — exposée par
+	# le bloc `faction_category` de /heroes (chantier V). Traduite par une clé dérivée ; si la clé
+	# manque, tr() rend la clé elle-même → on préfère alors masquer la ligne que montrer du charabia.
+	var category := str(hero.get("faction_category", ""))
+	if category != "":
+		var cat_key := "FACTION_CATEGORY_" + category.to_upper()
+		var cat_text := tr(cat_key)
+		if cat_text != cat_key:
+			var sep := Label.new()
+			sep.text = "·"
+			sep.add_theme_font_override("font", _font)
+			sep.add_theme_font_size_override("font_size", 14)
+			sep.add_theme_color_override("font_color", MUTED)
+			line2.add_child(sep)
+			var cat := Label.new()
+			cat.text = cat_text.to_upper()
+			cat.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+			cat.add_theme_font_override("font", _font)
+			cat.add_theme_font_size_override("font_size", 14)
+			cat.add_theme_color_override("font_color", MUTED)
+			line2.add_child(cat)
 
-	# --- Statistiques détaillées (actuel vs niveau 50 = cap) + descriptions joueur ---
-	detail_box.add_child(_section_header("CHAR_STATS_HEADER"))
-	detail_box.add_child(_make_stats_block(hero))
+	# --- Ligne 3 : chip d'ACCÈS + CTA boutique + ★ FAVORI ---------------------------------------
+	var line3 := HBoxContainer.new()
+	line3.add_theme_constant_override("separation", 10)
+	identity_box.add_child(line3)
 
-	# --- Pouvoir de héros — clés locales TRADUITES par faction (i18n 2026-07-18), repli sur la
-	#     description serveur (hero_power, anglais invariant) si les clés manquent. ---
-	detail_box.add_child(_section_header("CHAR_POWER_HEADER"))
-	var power := _body_label(_hero_power_text(fid, hero))
-	power.add_theme_color_override("font_color", TEXT)
-	detail_box.add_child(power)
+	var chip := _access_chip(hero)
+	if chip != null:
+		line3.add_child(chip)
 
-	# --- Paliers d'amélioration (franchis vs à venir) ---
-	detail_box.add_child(_section_header("CHAR_MILESTONES_HEADER"))
+	# CTA « VOIR EN BOUTIQUE ❯ » : uniquement pour un personnage VERROUILLÉ (l'achat reste dans la
+	# Boutique, §2.7 — on n'entretient pas un 2ᵉ tunnel d'achat ici).
+	if _access_type(hero) == "locked":
+		var shop_btn := Button.new()
+		shop_btn.text = tr("CHAR_SHOP_CTA")
+		shop_btn.custom_minimum_size = Vector2(0, 34)
+		shop_btn.focus_mode = Control.FOCUS_NONE
+		shop_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		shop_btn.add_theme_font_override("font", _font)
+		shop_btn.add_theme_font_size_override("font_size", 13)
+		WarzoneUI.apply_ghost_button(shop_btn)
+		WarzoneUI.wire_button_feedback(shop_btn)
+		shop_btn.pressed.connect(_goto_shop)
+		line3.add_child(shop_btn)
+
+	var spacer3 := Control.new()
+	spacer3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer3.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line3.add_child(spacer3)
+	line3.add_child(_make_favorite_button(fid))
+
+	WarzoneUI.add_filet(identity_box)
+
+
+# Bouton ★ FAVORI (§X.2) : REMPLACE l'ancienne persistance « au clic sur la carte » (§2.3). Étoile
+# pleine = personnage actuellement affiché au menu principal. Le clic persiste LOCALEMENT
+# (SettingsManager) puis reconstruit la grille pour que le badge ★ suive immédiatement.
+func _make_favorite_button(fid: String) -> Button:
+	var is_fav := SettingsManager.get_selected_faction() == fid and fid != ""
+	var btn := Button.new()
+	btn.text = ("★ " if is_fav else "☆ ") + tr("CHAR_FAVORITE").replace("★ ", "")
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.tooltip_text = tr("CHAR_FAVORITE_TIP")
+	btn.custom_minimum_size = Vector2(0, 34)
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.add_theme_color_override("font_color", GOLD if is_fav else MUTED)
+	WarzoneUI.apply_ghost_button(btn)
+	WarzoneUI.wire_button_feedback(btn)
+	btn.pressed.connect(func() -> void: _on_favorite_pressed(fid))
+	return btn
+
+func _on_favorite_pressed(fid: String) -> void:
+	if fid == "":
+		return
+	# Re-clic sur le favori courant = on le RETIRE ("" = aucun choix explicite, cf. SettingsManager) :
+	# sans ça le joueur ne pourrait jamais annuler son choix depuis cet écran.
+	var already := SettingsManager.get_selected_faction() == fid
+	SettingsManager.set_selected_faction("" if already else fid)
+	# La grille porte le badge ★ : elle doit refléter le nouveau favori dès le retour au roster.
+	_build_roster_grid()
+	# Et l'en-tête doit montrer l'étoile pleine/vide immédiatement, sans changer d'onglet.
+	if _sheet_index >= 0 and _sheet_index < _heroes.size():
+		var hero = _heroes[_sheet_index]
+		if typeof(hero) == TYPE_DICTIONARY:
+			_build_identity_header(hero)
+
+# Type d'accès NORMALISÉ ("free" | "owned" | "rotation" | "pass" | "locked"), avec le MÊME repli que
+# _make_access_badge pour un serveur antérieur sans bloc `access` (source unique : _is_permanent).
+func _access_type(hero: Dictionary) -> String:
+	var access: Dictionary = hero.get("access", {}) if typeof(hero.get("access")) == TYPE_DICTIONARY else {}
+	if access.is_empty():
+		return "owned" if _is_permanent(hero) else "locked"
+	return str(access.get("type", "owned"))
+
+# Chip d'état d'accès de la FICHE : mêmes 4 états et MÊMES couleurs que le badge de carte du roster
+# (_make_access_badge), mais en version longue — ici on a la place d'écrire une phrase complète.
+func _access_chip(hero: Dictionary) -> Control:
+	var access: Dictionary = hero.get("access", {}) if typeof(hero.get("access")) == TYPE_DICTIONARY else {}
+	var t := _access_type(hero)
+	var text := ""
+	var color := MUTED
+	match t:
+		"free", "owned":
+			text = tr("CHAR_ACCESS_OWNED")
+			color = GOLD
+		"rotation":
+			text = tr("CHAR_ACCESS_ROTATION") % [int(access.get("free_games_left", 0)),
+					int(access.get("free_games_max", 0))]
+			color = GOLD
+		"pass":
+			text = tr("CHAR_ACCESS_PASS")
+			color = ACCENT
+		"locked":
+			var price := int(access.get("price", 0))
+			# Prix inconnu (0, serveur antérieur) → libellé court, jamais « 0 Coins » trompeur.
+			text = (tr("CHAR_ACCESS_LOCKED") % price) if price > 0 else tr("CHAR_LOCKED")
+			color = MUTED
+		_:
+			return null
+	var chip := PanelContainer.new()
+	chip.add_theme_stylebox_override("panel", _make_card_style(color))
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # déjà traduit + formaté
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_color", color)
+	chip.add_child(lbl)
+	return chip
+
+func _goto_shop() -> void:
+	AudioManager.play_sfx("click")
+	TransitionManager.change_scene("res://scenes/ui/shop.tscn")
+
+
+# =========================================================
+# FICHE — BARRE D'ONGLETS (§X.3) : bâtie UNE fois, contenu repeuplé par personnage
+# =========================================================
+# Pattern IDENTIQUE au Profil (profile.gd:_build_tabs/_add_tab_page/_style_tabs) et au Rapport
+# post-op : TabContainer + une page ScrollContainer>VBox par onglet. Différence assumée avec le
+# Profil : ici AUCUN chargement différé par onglet (tout le contenu des 4 onglets vient de données
+# DÉJÀ en mémoire — le roster /heroes et, pour SKINS, le couple catalogue/inventaire chargé une
+# fois pour tout l'écran). Un onglet ne déclenche donc jamais de requête à son ouverture.
+func _build_tabs() -> void:
+	if tabs_slot == null:
+		return
+	_tabs = TabContainer.new()
+	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_style_tabs(_tabs)
+	tabs_slot.add_child(_tabs)
+
+	_tab_pages = [
+		_add_tab_page("TabInfo"),
+		_add_tab_page("TabStats"),
+		_add_tab_page("TabEvolution"),
+		_add_tab_page("TabSkins"),
+	]
+	_refresh_tab_titles()
+	_tabs.tab_changed.connect(_on_tab_changed)
+
+func _add_tab_page(id: String) -> VBoxContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = id  # nom ASCII : le TITRE visible est posé à part (set_tab_title), donc traduisible
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tabs.add_child(scroll)
+	var page := VBoxContainer.new()
+	page.add_theme_constant_override("separation", 12)
+	page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(page)
+	return page
+
+func _refresh_tab_titles() -> void:
+	if _tabs == null:
+		return
+	for i in range(mini(TAB_KEYS.size(), _tabs.get_tab_count())):
+		_tabs.set_tab_title(i, tr(TAB_KEYS[i]))
+
+func _on_tab_changed(_idx: int) -> void:
+	AudioManager.play_sfx("click")
+	_populate_active_tab()
+
+# Repeuple la SEULE page active, à partir du héros actuellement ouvert. Appelée au changement
+# d'onglet ET au changement de personnage (flèches ❮❯) — d'où la conservation de l'onglet actif.
+func _populate_active_tab() -> void:
+	if _tabs == null or _sheet_index < 0 or _sheet_index >= _heroes.size():
+		return
+	var hero = _heroes[_sheet_index]
+	if typeof(hero) != TYPE_DICTIONARY:
+		return
+	var idx := _tabs.current_tab
+	if idx < 0 or idx >= _tab_pages.size():
+		return
+	var page: VBoxContainer = _tab_pages[idx]
+	if page == null:
+		return
+	_clear(page)
+	match idx:
+		TAB_INFO: _populate_tab_info(page, hero)
+		TAB_STATS: _populate_tab_stats(page, hero)
+		TAB_EVOLUTION: _populate_tab_evolution(page, hero)
+		TAB_SKINS: _populate_tab_skins(page, hero)
+
+# Habillage du TabContainer — repris VERBATIM du Profil (profile.gd:_style_tabs) pour que les deux
+# écrans à onglets soient indiscernables : filet cyan en haut de l'onglet actif, angles vifs.
+func _style_tabs(tc: TabContainer) -> void:
+	var panel_sb := StyleBoxFlat.new()
+	panel_sb.bg_color = Color(0.058824, 0.07451, 0.094118, 0.55)
+	panel_sb.border_color = Color(ACCENT, 0.35)
+	panel_sb.set_border_width_all(1)
+	panel_sb.set_corner_radius_all(0)
+	panel_sb.set_content_margin_all(14)
+	tc.add_theme_stylebox_override("panel", panel_sb)
+
+	var sel := StyleBoxFlat.new()
+	sel.bg_color = Color(ACCENT, 0.16)
+	sel.set_corner_radius_all(0)
+	sel.border_width_top = 2
+	sel.border_color = ACCENT
+	sel.content_margin_left = 18
+	sel.content_margin_right = 18
+	sel.content_margin_top = 8
+	sel.content_margin_bottom = 8
+
+	var unsel := StyleBoxFlat.new()
+	unsel.bg_color = Color(SURFACE, 0.5)
+	unsel.set_corner_radius_all(0)
+	unsel.content_margin_left = 18
+	unsel.content_margin_right = 18
+	unsel.content_margin_top = 8
+	unsel.content_margin_bottom = 8
+
+	var hover := unsel.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT, 0.08)
+	tc.add_theme_stylebox_override("tab_selected", sel)
+	tc.add_theme_stylebox_override("tab_unselected", unsel)
+	tc.add_theme_stylebox_override("tab_hovered", hover)
+	tc.add_theme_color_override("font_selected_color", ACCENT)
+	tc.add_theme_color_override("font_unselected_color", MUTED)
+	tc.add_theme_color_override("font_hovered_color", TEXT)
+
+
+# =========================================================
+# ONGLET 1 — INFORMATIONS (§X) : progression, palmarès, pouvoir, état
+# =========================================================
+func _populate_tab_info(page: VBoxContainer, hero: Dictionary) -> void:
+	var fid := str(hero.get("faction_id", ""))
+
+	# --- PROGRESSION : chip niveau + barre d'XP (bloc EXISTANT, réutilisé tel quel) -------------
+	# ⚠️ Ne PAS ajouter _section_header("CHAR_XP_HEADER") ici : _make_xp_block pose DÉJÀ son propre
+	# en-tête de section (vérifié en capture — le titre « PROGRESSION » sortait en double).
+	page.add_child(_make_xp_block(hero))
+
+	# --- PALMARÈS (bloc `record` de /heroes, chantier V.3) --------------------------------------
+	page.add_child(_section_header("CHAR_SECTION_RECORD"))
+	var record: Dictionary = hero.get("record", {}) if typeof(hero.get("record")) == TYPE_DICTIONARY else {}
+	var games := int(record.get("games", 0))
+	if games <= 0:
+		# Jamais joué : on le DIT, on n'affiche pas quatre zéros qui ressembleraient à un bug.
+		page.add_child(_body_label(tr("CHAR_RECORD_EMPTY")))
+	else:
+		var grid := GridContainer.new()
+		grid.columns = 4
+		grid.add_theme_constant_override("h_separation", 12)
+		grid.add_theme_constant_override("v_separation", 12)
+		grid.add_child(_readout_card(tr("CHAR_RECORD_GAMES"), _format_thousands(games), TEXT))
+		grid.add_child(_readout_card(tr("CHAR_RECORD_WINS"), _format_thousands(int(record.get("wins", 0))), GOLD))
+		grid.add_child(_readout_card(tr("CHAR_RECORD_LOSSES"), _format_thousands(int(record.get("losses", 0))), DANGER))
+		grid.add_child(_readout_card(tr("CHAR_RECORD_WINRATE"), str(int(record.get("winrate", 0))) + "%", ACCENT))
+		page.add_child(grid)
+		page.add_child(_make_ratio_bar(int(record.get("winrate", 0)), ACCENT))
+
+	# --- POUVOIR DE FACTION (encadré teinté accent, §X.1.3) -------------------------------------
+	page.add_child(_section_header("CHAR_POWER_HEADER"))
+	page.add_child(_make_power_panel(_hero_power_text(fid, hero), _faction_color(fid)))
+
+	# --- ÉTAT : rappel textuel COMPLET de l'accès (version détaillée de la chip d'en-tête) ------
+	page.add_child(_section_header("CHAR_SECTION_STATE"))
+	for line in _access_detail_lines(hero):
+		page.add_child(_body_label(line))
+
+
+# =========================================================
+# ONGLET 2 — STATISTIQUES (§X) : PV/PA/PB/PP/Régén, actuel ET niveau 50, avec DELTA
+# =========================================================
+func _populate_tab_stats(page: VBoxContainer, hero: Dictionary) -> void:
+	# `true` = colonne DELTA (« RESTANT ») activée. Le draft (faction_selection) n'appelle JAMAIS
+	# cette fonction — il passe par HeroStatsView.build_compact_row, intouché : son aspect ne peut
+	# donc pas bouger (critère d'acceptation X « draft VISUELLEMENT INCHANGÉ »).
+	page.add_child(_make_stats_block(hero, true))
+	# Le POUVOIR reste visible ici aussi (il fait partie des 6 informations demandées).
+	page.add_child(_section_header("CHAR_POWER_HEADER"))
+	page.add_child(_make_power_panel(_hero_power_text(str(hero.get("faction_id", "")), hero),
+			_faction_color(str(hero.get("faction_id", "")))))
+
+# =========================================================
+# ONGLET 3 — ÉVOLUTION (§Y) : paliers, XP acquise, Coins gagnés, comparatif des Pass
+# =========================================================
+func _populate_tab_evolution(page: VBoxContainer, hero: Dictionary) -> void:
+	# C'est ICI que la perte de progression sous accès temporaire doit être la plus visible (§Y.5) :
+	# l'onglet entier parle d'investissement à long terme sur un personnage qu'on peut perdre.
+	if _access_type(hero) in ["rotation", "pass"]:
+		var warn := _body_label(tr("CHAR_TEMP_WARNING"))
+		warn.add_theme_color_override("font_color", GOLD)
+		page.add_child(warn)
+
+	# --- 1. Frise des PALIERS (« tranches d'augmentation ») ------------------------------------
+	page.add_child(_section_header("CHAR_MILESTONES_HEADER"))
 	var milestones = hero.get("milestones", [])
-	if typeof(milestones) == TYPE_ARRAY:
+	var level := int(hero.get("level", 1))
+	if typeof(milestones) == TYPE_ARRAY and not milestones.is_empty():
+		var next_shown := false  # le chip « PROCHAIN » ne se pose que sur le PREMIER palier non atteint
 		for m in milestones:
-			if typeof(m) == TYPE_DICTIONARY:
-				detail_box.add_child(_make_milestone_row(m))
+			if typeof(m) != TYPE_DICTIONARY:
+				continue
+			var unlocked := bool(m.get("unlocked", false))
+			var is_next := (not unlocked) and (not next_shown)
+			if is_next:
+				next_shown = true
+			page.add_child(_make_milestone_step(m, unlocked, is_next, level))
+
+	# --- 2. Points acquis : XP totale + rappel « NIVEAU N / 50 » --------------------------------
+	page.add_child(_section_header("CHAR_SECTION_PROGRESSION"))
+	var xp_row := GridContainer.new()
+	xp_row.columns = 2
+	xp_row.add_theme_constant_override("h_separation", 12)
+	xp_row.add_theme_constant_override("v_separation", 12)
+	xp_row.add_child(_readout_card(tr("CHAR_EVO_XP_TOTAL"),
+			_format_thousands(int(hero.get("xp_total", 0))), ACCENT))
+	xp_row.add_child(_readout_card(tr("COMMON_LEVEL"), str(level) + " / 50", GOLD))
+	page.add_child(xp_row)
+
+	# --- 3. Coins gagnés PAR ce personnage (ledger réel, V.4) ----------------------------------
+	# Clé ABSENTE = ledger non déployé → carte MASQUÉE. On n'affiche jamais « 0 » à la place d'une
+	# donnée qu'on n'a pas : ce serait un mensonge, pas un repli (§Y.3).
+	var evolution: Dictionary = hero.get("evolution", {}) if typeof(hero.get("evolution")) == TYPE_DICTIONARY else {}
+	if evolution.has("coins_earned"):
+		# La clé porte DÉJÀ son nombre (« … : %d ») : on la rend telle quelle dans une carte bordée
+		# d'or, sans répéter la valeur en dessous (ce serait la même donnée écrite deux fois).
+		var coins_card := PanelContainer.new()
+		coins_card.add_theme_stylebox_override("panel", _make_card_style(GOLD))
+		var coins_lbl := Label.new()
+		coins_lbl.text = tr("CHAR_EVO_COINS_EARNED") % int(evolution.get("coins_earned", 0))
+		coins_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		coins_lbl.add_theme_font_override("font", _font)
+		coins_lbl.add_theme_font_size_override("font_size", 15)
+		coins_lbl.add_theme_color_override("font_color", GOLD)
+		coins_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		coins_card.add_child(coins_lbl)
+		page.add_child(coins_card)
+
+	# --- 4. Comparatif des Pass (§Y.4) ---------------------------------------------------------
+	_build_pass_table(page, evolution)
+
+# Une étape de la frise : pastille hexagonale « NIV. N » (or si franchie, contour muet sinon),
+# le détail du bonus en clair, et le chip « PROCHAIN — dans N niveaux » sur la prochaine étape.
+func _make_milestone_step(m: Dictionary, unlocked: bool, is_next: bool, level: int) -> Control:
+	var lvl := int(m.get("level", 0))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+
+	# Pastille hexagonale : le remplissage or ne signale QUE le palier réellement franchi.
+	var fill := GOLD if unlocked else Color(MUTED, 0.25)
+	var fg := WarzoneUI.GUNMETAL if unlocked else MUTED
+	row.add_child(WarzoneUI.make_hex_badge(str(lvl), _font, 15, fill, fg, 46))
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(col)
+
+	var title := Label.new()
+	title.text = tr("CHAR_MILESTONE_LEVEL") % lvl
+	title.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	title.add_theme_font_override("font", _font)
+	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_color_override("font_color", TEXT if unlocked else MUTED)
+	col.add_child(title)
+
+	# Détail du bonus (« +32 PV · +3 PA · +1 % PB ») — MÊME formatage que partout ailleurs.
+	var bonus := Label.new()
+	bonus.text = _format_bonus(m.get("bonus", {}))
+	bonus.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	bonus.add_theme_font_override("font", _font)
+	bonus.add_theme_font_size_override("font_size", 13)
+	bonus.add_theme_color_override("font_color", GOLD if unlocked else MUTED)
+	col.add_child(bonus)
+
+	# Chip « PROCHAIN — dans N niveaux » : placé DANS la colonne (3ᵉ ligne) et non en frère de droite.
+	# En frère, il était poussé contre le bord par la colonne en EXPAND_FILL et se faisait rogner dès
+	# que la traduction s'allongeait (constaté en capture sur l'italien « PROSSIMO — tra 8 livelli »).
+	if is_next:
+		var next_lbl := Label.new()
+		next_lbl.text = tr("CHAR_EVO_NEXT") + " — " + (tr("CHAR_EVO_IN_LEVELS") % maxi(0, lvl - level))
+		next_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		next_lbl.add_theme_font_override("font", _font)
+		next_lbl.add_theme_font_size_override("font_size", 12)
+		next_lbl.add_theme_color_override("font_color", ACCENT)
+		next_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(next_lbl)
+	return row
+
+# Comparatif chiffré des Pass (§Y.4). Deux lignes : « Coins par niveau » et « Potentiel restant ».
+# REPLI : si le serveur n'a servi que la colonne `base` (pass_catalog absent), on n'affiche PAS un
+# tableau à une seule colonne — on se contente du potentiel « sans Pass », sans comparatif trompeur.
+func _build_pass_table(page: VBoxContainer, evolution: Dictionary) -> void:
+	var potential: Dictionary = evolution.get("coins_potential", {}) if typeof(evolution.get("coins_potential")) == TYPE_DICTIONARY else {}
+	if potential.is_empty():
+		return
+	var levels_left := int(evolution.get("levels_left", 0))
+
+	# Colonnes RÉELLEMENT servies par le serveur, dans l'ordre du registre.
+	var cols: Array = []
+	for c in PASS_COLUMNS:
+		if potential.has(str(c["key"])):
+			cols.append(c)
+	if cols.size() <= 1:
+		return  # une seule colonne → pas de comparatif possible, bloc masqué (repli honnête)
+
+	page.add_child(_section_header("CHAR_EVO_PASS_TABLE"))
+	var grid := GridContainer.new()
+	grid.columns = cols.size() + 1
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 8)
+
+	# En-tête : cellule vide puis un titre par colonne, celle du Pass ACTIF surlignée en or.
+	grid.add_child(_table_cell("", MUTED, 12))
+	for c in cols:
+		var label := tr(str(c["i18n"])) if str(c["i18n"]) != "" else str(c["label"])
+		var active := str(c["tier"]) != "" and str(c["tier"]) == _pass_tier
+		grid.add_child(_table_cell(label, GOLD if active else ACCENT, 12))
+
+	# Ligne 1 : Coins PAR NIVEAU. Dérivée du potentiel (potentiel = niveaux restants × barème), donc
+	# aucune constante 1-5/2-10/… recopiée côté client. Indisponible au niveau MAX (division par 0) :
+	# la ligne est alors omise plutôt que remplie de zéros.
+	if levels_left > 0:
+		grid.add_child(_table_cell(tr("CHAR_EVO_PER_LEVEL"), MUTED, 13))
+		for c in cols:
+			var rng = potential.get(str(c["key"]), [])
+			var txt := "—"
+			if typeof(rng) == TYPE_ARRAY and rng.size() >= 2:
+				txt = "%d-%d" % [int(rng[0]) / levels_left, int(rng[1]) / levels_left]
+			var is_active := str(c["tier"]) != "" and str(c["tier"]) == _pass_tier
+			grid.add_child(_table_cell(txt, GOLD if is_active else TEXT, 14))
+
+	# Ligne 2 : potentiel RESTANT (fourchettes exactes du serveur, telles quelles).
+	grid.add_child(_table_cell(tr("CHAR_EVO_REMAINING") % levels_left, MUTED, 13))
+	for c in cols:
+		var rng2 = potential.get(str(c["key"]), [])
+		var txt2 := "—"
+		if typeof(rng2) == TYPE_ARRAY and rng2.size() >= 2:
+			txt2 = "%s-%s" % [_format_thousands(int(rng2[0])), _format_thousands(int(rng2[1]))]
+		var is_active2 := str(c["tier"]) != "" and str(c["tier"]) == _pass_tier
+		grid.add_child(_table_cell(txt2, GOLD if is_active2 else TEXT, 14))
+
+	page.add_child(grid)
+	var note := _body_label(tr("CHAR_EVO_PASS_NOTE"))
+	note.add_theme_font_size_override("font_size", 12)
+	page.add_child(note)
+
+func _table_cell(text: String, color: Color, size: int) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # déjà traduit / déjà formaté
+	l.add_theme_font_override("font", _font)
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", color)
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return l
+
+
+# =========================================================
+# ONGLET 4 — SKINS (§Y) : liste, exclusifs Pass, états, PRÉVISUALISATION au clic
+# =========================================================
+func _populate_tab_skins(page: VBoxContainer, hero: Dictionary) -> void:
+	var fid := str(hero.get("faction_id", ""))
+	var permanent := _is_permanent(hero)
+
+	# Personnage non possédé DÉFINITIVEMENT : l'onglet reste consultable (vitrine), mais aucun
+	# bouton ÉQUIPER — la règle est rappelée en clair plutôt que subie (§Y.4).
+	if not permanent:
+		page.add_child(_body_label(tr("CHAR_SKINS_REQUIRES_OWNED")))
+
+	# Échec des fetchs boutique : SEUL cet onglet est dégradé, le reste de la fiche est intact (Z.3).
+	if _shop_failed:
+		page.add_child(_body_label(tr("CHAR_SKIN_SOON")))
+
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	page.add_child(grid)
+
+	# Vignette 1 : APPARENCE DE BASE — toujours possédée, skin_id vide (convention serveur).
+	grid.add_child(_make_skin_tile(fid, "", tr("CHAR_SKIN_BASE"), 0, true, true, permanent))
+
+	var skins := _skins_for(fid)
+	for item in skins:
+		var id := str(item.get("id", ""))
+		var owned := _owned_items.has(id)
+		# `purchasable == false` = skin EXCLUSIF (récompense de Pass) : jamais achetable en Coins.
+		var purchasable := bool(item.get("purchasable", true))
+		grid.add_child(_make_skin_tile(fid, id, tr(str(item.get("name_key", id))),
+				int(item.get("price", 0)), owned, purchasable, permanent))
+
+	# Catalogue muet pour ce personnage (aucun skin encore produit) : vignette fantôme « À VENIR »
+	# — état d'attente honnête et propre, jamais une grille vide sans explication.
+	if skins.is_empty() and not _shop_failed:
+		grid.add_child(_make_ghost_tile(tr("CHAR_SKIN_SOON")))
+
+# Une vignette de skin : aplat teinté (aperçu placeholder), nom, chip d'état, bouton d'action.
+# TOUT le pavé est cliquable → PRÉVISUALISATION dans le grand viewer (sans équiper, §Y.2).
+func _make_skin_tile(fid: String, skin_id: String, label: String, price: int,
+		owned: bool, purchasable: bool, permanent: bool) -> PanelContainer:
+	var equipped_id := str(_equipped.get(fid, ""))
+	var is_equipped := equipped_id == skin_id
+	var is_preview := _preview_skin == skin_id and _preview_skin != ""
+	# Liseré : cyan « APERÇU » prioritaire sur tout le reste (c'est l'état que le joueur manipule),
+	# puis or si équipé, sinon muet.
+	var border := ACCENT if is_preview else (GOLD if is_equipped else Color(MUTED, 0.5))
+
+	var tile := PanelContainer.new()
+	tile.custom_minimum_size = Vector2(0, 172)
+	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tile.add_theme_stylebox_override("panel", _make_card_style(border))
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tile.add_child(v)
+
+	# Aplat représentatif : la teinte RÉELLE du skin si sa ressource existe, sinon une variation
+	# déterministe dérivée de son id (§2.6) — jamais une image inventée.
+	var swatch := ColorRect.new()
+	swatch.custom_minimum_size = Vector2(0, 72)
+	swatch.color = _skin_swatch_color(fid, skin_id)
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(swatch)
+
+	var name_lbl := Label.new()
+	name_lbl.text = label.to_upper()
+	name_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	name_lbl.add_theme_font_override("font", _font)
+	name_lbl.add_theme_font_size_override("font_size", 13)
+	name_lbl.add_theme_color_override("font_color", TEXT)
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_lbl.max_lines_visible = 2
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(name_lbl)
+
+	# Chip d'état, du plus spécifique au plus général (même ordre de cas que le draft, §E2).
+	if is_preview:
+		v.add_child(_roster_badge_label(tr("CHAR_SKIN_PREVIEW"), ACCENT))
+	elif is_equipped:
+		v.add_child(_roster_badge_label(tr("CHAR_SKIN_EQUIPPED"), ACCENT))
+	elif owned:
+		v.add_child(_roster_badge_label(tr("CHAR_SKIN_OWNED"), TEXT))
+	elif not purchasable:
+		v.add_child(_roster_badge_label(tr("CHAR_SKIN_PASS"), GOLD))
+	elif price > 0:
+		v.add_child(_roster_badge_label(str(price), GOLD))
+
+	# --- Actions (jamais pour un personnage non possédé définitivement) ------------------------
+	if permanent:
+		if owned and not is_equipped:
+			v.add_child(_make_skin_action(tr("SHOP_EQUIP"), GOLD,
+					func() -> void: NetworkManager.equip_skin(skin_id)))
+		elif is_equipped and skin_id != "":
+			# Retour à l'apparence de base (le serveur attend un skin_id nul + la faction).
+			v.add_child(_make_skin_action(tr("CHAR_SKIN_REMOVE"), MUTED,
+					func() -> void: NetworkManager.unequip_skin(fid)))
+		elif not owned and purchasable and price > 0:
+			# L'ACHAT reste dans la Boutique (§2.7) : ici on ne fait que rediriger.
+			v.add_child(_make_skin_action(tr("CHAR_SHOP_CTA"), ACCENT, _goto_shop))
+		# Exclusif Pass non possédé → aucun bouton : le chip « EXCLUSIF PASS » suffit.
+
+	# Bouton transparent plein cadre = PRÉVISUALISATION au clic. Même pattern que la carte du
+	# roster : contenu en MOUSE_FILTER_IGNORE, bouton ajouté EN DERNIER pour gagner l'ordre de pioche.
+	var hit := Button.new()
+	hit.flat = true
+	hit.focus_mode = Control.FOCUS_NONE
+	hit.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var empty_sb := StyleBoxEmpty.new()
+	hit.add_theme_stylebox_override("normal", empty_sb)
+	hit.add_theme_stylebox_override("hover", empty_sb)
+	hit.add_theme_stylebox_override("pressed", empty_sb)
+	hit.add_theme_stylebox_override("focus", empty_sb)
+	hit.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hit.pressed.connect(func() -> void: _on_skin_preview(skin_id))
+	WarzoneUI.wire_button_sfx(hit)
+	tile.add_child(hit)
+	# ⚠️ Les BOUTONS d'action sont ajoutés à `v` AVANT ce bouton plein cadre : sans précaution ils
+	# seraient couverts. On remonte donc `v` au-dessus une fois `hit` posé — les Control enfants de
+	# `v` restent en IGNORE (ils laissent passer le clic vers `hit`), mais les Button, eux, ont leur
+	# propre mouse_filter STOP et récupèrent le leur.
+	tile.move_child(v, tile.get_child_count() - 1)
+	return tile
+
+func _make_skin_action(text: String, color: Color, on_press: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.custom_minimum_size = Vector2(0, 30)
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 12)
+	btn.add_theme_color_override("font_color", color)
+	WarzoneUI.apply_ghost_button(btn)
+	WarzoneUI.wire_button_feedback(btn)
+	btn.pressed.connect(on_press)
+	return btn
+
+# Vignette fantôme « À VENIR » : occupe la place d'un futur skin sans rien promettre.
+func _make_ghost_tile(text: String) -> PanelContainer:
+	var tile := PanelContainer.new()
+	tile.custom_minimum_size = Vector2(0, 172)
+	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tile.add_theme_stylebox_override("panel", _make_card_style(Color(MUTED, 0.35)))
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_color", MUTED)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	tile.add_child(lbl)
+	return tile
+
+# Clic sur une vignette : PRÉVISUALISATION seule. Le skin n'est PAS équipé (aucun appel réseau) —
+# c'est tout l'intérêt : essayer avant de décider. Re-cliquer la vignette déjà prévisualisée annule
+# l'aperçu et rend le viewer au skin réellement équipé.
+func _on_skin_preview(skin_id: String) -> void:
+	_preview_skin = "" if _preview_skin == skin_id else skin_id
+	if _sheet_index >= 0 and _sheet_index < _heroes.size():
+		var hero = _heroes[_sheet_index]
+		if typeof(hero) == TYPE_DICTIONARY:
+			_apply_hero_stage(str(hero.get("faction_id", "")))
+	_populate_active_tab()  # déplace le liseré « APERÇU » sur la bonne vignette
+
+# Skins du CATALOGUE pour ce personnage (category=skin ET hero_key=faction), ordre du catalogue.
+func _skins_for(fid: String) -> Array:
+	var out: Array = []
+	for item in _shop_items:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		if str(item.get("category", "")) != "skin":
+			continue
+		if str(item.get("hero_key", "")) != fid:
+			continue
+		out.append(item)
+	return out
+
+# Ressource SkinData (id + faction cohérents) — MÊME duck-typing que split_screen_vs._find_skin.
+func _find_skin_res(skin_id: String, fid: String):
+	if skin_id == "":
+		return null
+	var dir := DirAccess.open(SKINS_DIR)
+	if dir == null:
+		return null
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	var found = null
+	while file_name != "":
+		if not dir.current_is_dir():
+			var fn := file_name
+			if fn.ends_with(".remap"):
+				fn = fn.trim_suffix(".remap")
+			if fn.ends_with(".tres"):
+				var full := SKINS_DIR + fn
+				if ResourceLoader.exists(full):
+					var res = load(full)
+					if res != null and str(res.get("id")) == skin_id \
+							and str(res.get("faction_id")) == fid:
+						found = res
+						break
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	return found
+
+# Teinte de l'aplat d'une vignette : accent_override de la ressource si elle existe, sinon
+# VARIATION DÉTERMINISTE dérivée de l'id (§2.6) — deux skins différents ne se ressemblent jamais,
+# et le même skin garde toujours la même teinte d'une session à l'autre.
+func _skin_swatch_color(fid: String, skin_id: String) -> Color:
+	var base := _faction_color(fid)
+	if skin_id == "":
+		return base.darkened(0.25)
+	var res = _find_skin_res(skin_id, fid)
+	if res != null:
+		var over = res.get("accent_override")
+		if over is Color:
+			return over.darkened(0.15)
+	# hash() est stable pour une chaîne donnée → décalage de teinte reproductible.
+	var shift := float(absi(hash(skin_id)) % 360) / 360.0
+	var c := Color.from_hsv(fposmod(base.h + shift, 1.0), clampf(base.s, 0.35, 0.9), 0.45)
+	return c
+
+
+# =========================================================
+# DONNÉES BOUTIQUE (onglet SKINS) — catalogue + inventaire, chargés UNE fois pour l'écran
+# =========================================================
+func _ensure_shop_data() -> void:
+	if _shop_requested:
+		return
+	_shop_requested = true
+	# `fetch_shop_catalog` passe DÉJÀ ?include_all=1 (network_manager.gd) : les skins EXCLUSIFS du
+	# Pass (purchasable=false) sont donc inclus — c'est exactement ce que demande §Y, sans nouveau
+	# paramètre serveur à inventer.
+	NetworkManager.fetch_shop_catalog()
+	NetworkManager.fetch_shop_inventory()
+
+func _on_shop_catalog_loaded(items: Array) -> void:
+	if not is_inside_tree():
+		return
+	_shop_items = items
+	_shop_failed = false
+	if _state == "sheet":
+		_populate_active_tab()
+
+func _on_shop_inventory_loaded(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	var items = data.get("items", {})
+	_owned_items = items if typeof(items) == TYPE_DICTIONARY else {}
+	var eq = data.get("equipped", {})
+	_equipped = eq if typeof(eq) == TYPE_DICTIONARY else {}
+	_pass_tier = str(data.get("pass_tier", ""))
+	_shop_failed = false
+	# L'inventaire porte le skin RÉELLEMENT équipé : le grand viewer doit s'y conformer (sauf si un
+	# aperçu est en cours — l'intention du joueur prime sur un rafraîchissement de fond).
+	if _state == "sheet" and _sheet_index >= 0 and _sheet_index < _heroes.size():
+		var hero = _heroes[_sheet_index]
+		if typeof(hero) == TYPE_DICTIONARY and _preview_skin == "":
+			_apply_hero_stage(str(hero.get("faction_id", "")))
+		_populate_active_tab()
+
+# Équipement réussi : le serveur renvoie l'INVENTAIRE COMPLET (même charge utile que
+# GET /shop/inventory) → on le rejoue tel quel, aucune synchronisation manuelle d'état.
+func _on_skin_equipped(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	# Ce que le joueur vient d'équiper devient la vérité : l'aperçu n'a plus lieu d'être.
+	_preview_skin = ""
+	_on_shop_inventory_loaded(data)
+
+func _on_skin_equip_failed(message: String) -> void:
+	if not is_inside_tree():
+		return
+	_set_status(message)
+
+# Échec du roster (§Z.3) : message clair + bouton RÉESSAYER, au lieu d'un « SYNCHRONISATION… »
+# éternel. Ne touche PAS aux fetchs boutique (eux ne dégradent que l'onglet SKINS).
+func _on_roster_error(message: String) -> void:
+	if not is_inside_tree():
+		return
+	if not _heroes.is_empty():
+		return  # roster déjà affiché : une erreur tardive ne doit pas effacer un écran qui marche
+	_set_status(message)
+	if roster_count_label:
+		roster_count_label.text = ""
+	_clear(hero_grid)
+	var retry := Button.new()
+	retry.text = tr("COMMON_RETRY")
+	retry.custom_minimum_size = Vector2(180, 40)
+	retry.focus_mode = Control.FOCUS_NONE
+	retry.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	retry.add_theme_font_override("font", _font)
+	retry.add_theme_font_size_override("font_size", 15)
+	WarzoneUI.apply_ghost_button(retry)
+	WarzoneUI.wire_button_feedback(retry)
+	retry.pressed.connect(func() -> void:
+		_set_status(tr("CHAR_STATUS_LOADING"))
+		_clear(hero_grid)
+		NetworkManager.fetch_heroes())
+	hero_grid.add_child(retry)
+
+
+# =========================================================
+# CLAVIER (§Z.2) — ÉCHAP ferme la FICHE avant de quitter l'écran ; ←/→ changent de personnage
+# =========================================================
+# ⚠️ Sans ce handler, ÉCHAP depuis une fiche quittait l'écran ENTIER (top_nav._unhandled_input
+# ramène au QG) : le joueur perdait sa fiche ET l'écran d'un seul geste. On intercepte donc AVANT
+# la nav — `set_input_as_handled()` empêche la nav de voir l'évènement — et UNIQUEMENT quand une
+# fiche est ouverte. Au roster, ÉCHAP retrouve son comportement normal (retour au QG par la nav).
+func _unhandled_input(event: InputEvent) -> void:
+	if _state != "sheet":
+		return
+	if event.is_action_pressed("ui_cancel"):
+		_show_roster()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("ui_left"):
+		_step_sheet(-1)
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("ui_right"):
+		_step_sheet(1)
+		get_viewport().set_input_as_handled()
+
+
+# =========================================================
+# FABRIQUES DE CARTES / BLOCS PARTAGÉS PAR LES ONGLETS
+# =========================================================
+# Carte readout « eyebrow + grande valeur » — même fabrique que le Profil (_make_stat_card) pour que
+# les deux écrans aient exactement le même grain.
+func _readout_card(label: String, value: String, value_color: Color) -> PanelContainer:
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _make_card_style(value_color))
+	card.custom_minimum_size = Vector2(150, 82)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	card.add_child(v)
+
+	var eb := Label.new()
+	eb.text = label
+	eb.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	eb.add_theme_font_override("font", _font)
+	eb.add_theme_font_size_override("font_size", 12)
+	eb.add_theme_color_override("font_color", ACCENT)
+	eb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(eb)
+
+	var val := Label.new()
+	val.text = value
+	val.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	val.add_theme_font_override("font", _font)
+	val.add_theme_font_size_override("font_size", 26)
+	val.add_theme_color_override("font_color", value_color)
+	v.add_child(val)
+
+	WarzoneUI.add_corner_notches(card, 12.0, value_color)
+	return card
+
+# Style de carte : surface gunmetal + liseré GAUCHE à la couleur sémantique (profile.gd:_make_card_style).
+func _make_card_style(accent: Color = ACCENT) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = SURFACE
+	sb.set_corner_radius_all(0)
+	sb.border_width_left = 3
+	sb.border_color = accent
+	sb.content_margin_left = 14.0
+	sb.content_margin_top = 10.0
+	sb.content_margin_right = 14.0
+	sb.content_margin_bottom = 10.0
+	return sb
+
+# Mini-barre de proportion (taux de victoire) — fond gunmetal, remplissage à la couleur donnée.
+func _make_ratio_bar(percent: int, color: Color) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.custom_minimum_size = Vector2(0, 8)
+	bar.show_percentage = false
+	bar.max_value = 100
+	bar.value = clampi(percent, 0, 100)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.058824, 0.07451, 0.094118, 1)
+	bg.set_corner_radius_all(0)
+	var fg := StyleBoxFlat.new()
+	fg.bg_color = color
+	fg.set_corner_radius_all(0)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fg)
+	return bar
+
+# Encadré « POUVOIR » teinté à l'accent de la faction — même habillage que le bloc partagé du draft
+# (hero_stats_view._make_power_block), redéclaré ici pour ne pas appeler une fonction privée d'un
+# autre fichier.
+func _make_power_panel(power: String, accent: Color) -> PanelContainer:
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(accent, 0.10)
+	sb.border_width_left = 3
+	sb.border_color = accent
+	sb.content_margin_left = 10.0
+	sb.content_margin_top = 8.0
+	sb.content_margin_right = 10.0
+	sb.content_margin_bottom = 8.0
+	panel.add_theme_stylebox_override("panel", sb)
+
+	var lbl := Label.new()
+	lbl.text = power
+	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # contenu dynamique, pas une clé
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 15)
+	lbl.add_theme_color_override("font_color", TEXT)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	panel.add_child(lbl)
+	return panel
+
+# Rappel TEXTUEL complet de l'état d'accès (onglet INFORMATIONS). On ne dit QUE ce qu'on sait : la
+# date d'acquisition n'est pas connue du client, donc elle n'est pas inventée.
+func _access_detail_lines(hero: Dictionary) -> Array:
+	var access: Dictionary = hero.get("access", {}) if typeof(hero.get("access")) == TYPE_DICTIONARY else {}
+	var lines: Array = []
+	match _access_type(hero):
+		"free", "owned":
+			lines.append(tr("CHAR_ACCESS_OWNED"))
+		"rotation":
+			lines.append(tr("CHAR_ACCESS_ROTATION") % [int(access.get("free_games_left", 0)),
+					int(access.get("free_games_max", 0))])
+			lines.append(tr("CHAR_ROTATION_RESET"))
+			lines.append(tr("CHAR_TEMP_WARNING"))
+		"pass":
+			lines.append(tr("CHAR_ACCESS_PASS"))
+			lines.append(tr("CHAR_TEMP_WARNING"))
+		"locked":
+			var price := int(access.get("price", 0))
+			lines.append((tr("CHAR_ACCESS_LOCKED") % price) if price > 0 else tr("CHAR_LOCKED"))
+	return lines
+
 
 # Bloc XP « PROGRESSION » : eyebrow + barre cyan + « X / Y XP DANS LE NIVEAU » (les points possédés
 # dans le niveau en cours) + « X XP AVANT LE NIVEAU SUIVANT » (ou « NIVEAU MAX ») + total cumulé à vie.
@@ -709,7 +1749,9 @@ func _make_xp_block(hero: Dictionary) -> VBoxContainer:
 # Bloc de stats : en-tête de colonnes (ACTUEL / NIV. 50) puis, PAR stat, une ligne
 # « ABRÉV — NOM COMPLET » + valeurs (actuel / max en colonnes fixes alignées à droite) et, en dessous,
 # une DESCRIPTION joueur (muette, retour à la ligne) pour que chaque statistique soit comprise.
-func _make_stats_block(hero: Dictionary) -> VBoxContainer:
+# `show_delta` (§X.2.2) : ajoute une colonne « RESTANT » (+N, cyan) ENTRE l'actuel et le niveau 50.
+# Défaut `false` — c'est ce défaut qui garantit qu'aucun autre appelant ne change d'aspect.
+func _make_stats_block(hero: Dictionary, show_delta: bool = false) -> VBoxContainer:
 	var stats = hero.get("stats", {})
 	var stats_max = hero.get("stats_max", {})
 	if typeof(stats) != TYPE_DICTIONARY: stats = {}
@@ -725,6 +1767,8 @@ func _make_stats_block(hero: Dictionary) -> VBoxContainer:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(spacer)
 	head.add_child(_value_col(tr("CHAR_COL_CURRENT"), ACCENT, 13))
+	if show_delta:
+		head.add_child(_value_col(tr("CHAR_STATS_DELTA"), MUTED, 13))
 	head.add_child(_value_col(tr("CHAR_COL_MAX"), MUTED, 13))
 	box.add_child(head)
 
@@ -743,6 +1787,8 @@ func _make_stats_block(hero: Dictionary) -> VBoxContainer:
 		name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		line.add_child(name_lbl)
 		line.add_child(_value_col(HeroStatsView.format_stat(stats, row), TEXT, 18))
+		if show_delta:
+			line.add_child(_value_col(_delta_text(stats, stats_max, row), ACCENT, 15))
 		line.add_child(_value_col(HeroStatsView.format_stat(stats_max, row), MUTED, 18))
 		item.add_child(line)
 
@@ -769,53 +1815,21 @@ func _value_col(text: String, color: Color, size: int) -> Label:
 	l.custom_minimum_size = Vector2(92, 0)
 	return l
 
-# Ligne de palier : « NIV X » (or si franchi) ▸ bonus formaté ▸ état (✓ franchi / À VENIR).
-func _make_milestone_row(m: Dictionary) -> PanelContainer:
-	var unlocked := bool(m.get("unlocked", false))
-	var lvl := int(m.get("level", 0))
-
-	var row := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.set_corner_radius_all(0)
-	sb.bg_color = Color(ACCENT, 0.08) if unlocked else SURFACE
-	sb.border_width_left = 3
-	sb.border_color = ACCENT if unlocked else Color(MUTED, 0.5)
-	sb.content_margin_left = 12.0
-	sb.content_margin_top = 8.0
-	sb.content_margin_right = 12.0
-	sb.content_margin_bottom = 8.0
-	row.add_theme_stylebox_override("panel", sb)
-
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 12)
-	row.add_child(h)
-
-	var lvl_lbl := Label.new()
-	lvl_lbl.text = tr("CHAR_MILESTONE_LEVEL") % lvl
-	lvl_lbl.add_theme_font_override("font", _font)
-	lvl_lbl.add_theme_font_size_override("font_size", 15)
-	lvl_lbl.add_theme_color_override("font_color", GOLD if unlocked else MUTED)
-	lvl_lbl.custom_minimum_size = Vector2(74, 0)
-	lvl_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(lvl_lbl)
-
-	var bonus_lbl := Label.new()
-	bonus_lbl.text = _format_bonus(m.get("bonus", {}))
-	bonus_lbl.add_theme_font_override("font", _font)
-	bonus_lbl.add_theme_font_size_override("font_size", 15)
-	bonus_lbl.add_theme_color_override("font_color", TEXT if unlocked else MUTED)
-	bonus_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bonus_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(bonus_lbl)
-
-	var status := Label.new()
-	status.text = "✓" if unlocked else tr("CHAR_MILESTONE_UPCOMING")
-	status.add_theme_font_override("font", _font)
-	status.add_theme_font_size_override("font_size", 14)
-	status.add_theme_color_override("font_color", ACCENT if unlocked else MUTED)
-	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(status)
-	return row
+# Colonne DELTA de l'onglet STATISTIQUES (§X.2.2) : ce qu'il RESTE à gagner d'ici le niveau 50.
+# Limitée à PV/PA/PB (demande explicite) — PP est une fourchette et RÉGÉN un taux de soin : un
+# « +N » n'y voudrait pas dire grand-chose, donc « — » plutôt qu'un chiffre douteux.
+# Zéro ou négatif (stat déjà au plafond) → « — » : on ne montre jamais « +0 ».
+func _delta_text(stats: Dictionary, stats_max: Dictionary, row: Dictionary) -> String:
+	var field := str(row.get("field", ""))
+	if not (field in ["pv_max", "pa", "pb"]):
+		return "—"
+	var diff := HeroStatsView.stat_scalar(stats_max, row) - HeroStatsView.stat_scalar(stats, row)
+	if str(row.get("kind", "int")) == "pct":
+		# pb est un TAUX (0.05 = 5 %) : le delta se lit en POINTS de pourcentage, comme la colonne.
+		var pts := int(round(diff * 100.0))
+		return "—" if pts <= 0 else "+%d%%" % pts
+	var n := int(round(diff))
+	return "—" if n <= 0 else "+%d" % n
 
 # Formate le bonus additif d'un palier en libellé lisible (ex. « +50 PV, +1 PA », « +30 PV, +1% PB »).
 # Ordre fixe pv_max → pa → pb ; pb est un taux affiché en %. Entrées JSON en float → int() (piège §5).

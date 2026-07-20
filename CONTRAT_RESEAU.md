@@ -948,3 +948,38 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
 > - **Outil de validation `tools/preview_shop_v2.gd` remis à jour** (catalogue miroir, 3 Pass, compteurs) et **2 bugs corrigés** : il appelait encore `_on_history_loaded` (renommé `_on_history_page_loaded` en §8.106), et son chemin de sortie absolu datait d'une session morte (→ variable d'environnement `WW_PREVIEW_OUT`, repli `user://`).
 > - ⚠️ **PIÈGE DE VALIDATION VISUELLE (2 fois de suite).** (1) Éditer un `.gd` **après** un `--import` ne suffit pas : il faut **ré-importer** avant de relancer, sinon le script exécuté est celui du cache. (2) Le `_ready()` de `shop.tscn` lance de VRAIS fetchs : si un backend est joignable, sa réponse **écrase** les données de démonstration ~1 s plus tard — on capture alors le catalogue du serveur **déployé** (périmé) en croyant valider le code local. L'outil injecte désormais APRÈS que le réseau ait parlé.
 > - **Validation.** `--import` **0 ERROR** ; boot headless **0 ERROR** sur `shop`, `characters_screen`, `profile`, `main_menu`, `faction_selection` ; captures PNG des 4 onglets boutique + profil conformes aux critères d'acceptation (3 pips pleins sur 5 pour « 3/5 parties restantes »). **28 clés i18n** ajoutées/mises à jour en fr/en/it (954 au total).
+### 8.111. `GET /api/v1/heroes` ENRICHI — identité, palmarès, évolution (Backend + Frontend, 2026-07-20)
+> **But.** Alimenter la refonte de l'écran Personnages (roster en cartes + fiche à 4 onglets,
+> `FRONTEND_INTERFACES.md` §8.111). **Blocs 100 % ADDITIFS** : aucune clé existante n'est renommée
+> ni supprimée (`faction_id, faction_name, hero_power, level, xp_*, stats, stats_max, milestones,
+> owned, access` inchangés) — un client antérieur qui les ignore fonctionne à l'identique (§1.5).
+>
+> - **`identity`** `{first_name, last_name, callsign, char_code, rank, display_name}` — noms propres
+>   **INVARIANTS** (non localisés : ce sont des données, pas des libellés). `display_name` est
+>   **PRÊT À AFFICHER** : le client ne concatène ni ne découpe jamais lui-même. Repli si une faction
+>   n'a pas d'identité : `display_name` = nom de la faction (jamais la chaîne « None »).
+> - **`faction_category`** `str` — `combat` / `cartes` / `zone` / `mouvement` / `renforts`. Jusqu'ici
+>   le client devait redemander `/factions` pour l'obtenir. Traduit côté client par
+>   `FACTION_CATEGORY_<CATEGORIE>` ; clé absente → la mention est masquée, jamais affichée brute.
+> - **`record`** `{games, wins, losses, winrate}` — palmarès **par personnage**, agrégé sur
+>   `MatchHistory` en **UNE requête `GROUP BY faction_id`** pour les 10 factions (pas 10 requêtes).
+>   Bloc TOUJOURS présent, zéros compris : « jamais joué » est une donnée, pas une absence.
+> - **`evolution`** `{levels_left, coins_potential{base, plus, premium, infinity}, coins_earned}` —
+>   `levels_left` et `coins_potential` sont **PURS** (`pass_catalog.hero_coin_potential`, aucune DB) ;
+>   `coins_earned` vient du **ledger** (`CoinTransaction`, `reason = hero_level_coins`, `ref =
+>   faction_id`) et est injecté par l'endpoint, qui seul a la session. Fourchettes `[min, max]`
+>   d'**entiers purs**. Niveau 50 → `levels_left = 0` et toutes les fourchettes à `[0, 0]`.
+>   ⚠️ **`coins_earned` ABSENT** (ledger non déployé) est un cas légitime : le client MASQUE la carte
+>   plutôt que d'afficher « 0 », qui serait un mensonge et non un repli.
+> - **Dérivation côté client, pas de barème dupliqué.** Le comparatif des Pass affiche les Coins
+>   **par niveau** en divisant `coins_potential[tier]` par `levels_left` (exact par construction) —
+>   les valeurs 1-5 / 2-10 / 4-20 / 5-25 ne sont recopiées nulle part dans le client.
+> - **Aucun paramètre neuf sur `/shop/catalog`.** Les skins EXCLUSIFS de Pass (`purchasable: false`)
+>   sont déjà servis par **`?include_all=1`** (§8.102), que `NetworkManager.fetch_shop_catalog()`
+>   passe déjà — le paramètre `?include_exclusive=true` initialement envisagé aurait été un synonyme.
+> - **`pass_tier`** (déjà servi par `GET /shop/inventory`) sert à surligner la colonne du Pass ACTIF.
+> - **Correction documentaire.** Les docstrings parlaient de stats « au niveau 100 » alors que le cap
+>   réel est `HERO_LEVEL_MAX = 50` et que `stats_max` était déjà calculé à 50.
+> - **Validation.** `backend/test_heroes_roster.py` **483 ✅ / 0 ❌** (forme des 4 blocs, fourchettes
+>   exactes par tier, niveau 50 → zéros, absence propre des blocs optionnels, pureté JSON : aucun
+>   float hors `pb`/`regen`).
