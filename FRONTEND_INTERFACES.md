@@ -1057,6 +1057,31 @@ Accessible par l'onglet de nav **OPÉRATEUR** et par la jauge d'XP cliquable. É
 > - ⚠️ **Valider une chaîne FR sur cette machine exige de FORCER la locale** (`TranslationServer.
 >   set_locale("fr")` dans le harnais de capture) : le poste rend en **italien** par défaut, on
 >   validerait donc une autre langue que celle qu'on vient d'éditer.
+> - **Pouvoir expliqué au joueur (onglet INFORMATIONS).** L'encadré POUVOIR ne montrait que le
+>   libellé technique (« Frappe d'Acier — PA élevé et plafond de PP maximal ») : parlant pour qui
+>   connaît déjà les sigles, opaque pour un nouveau venu. Ajout de **10 clés `HERO_POWER_HINT_<FID>`**
+>   (fr/en/it) — une phrase par personnage qui dit l'AVANTAGE EN PARTIE **sans nommer une seule
+>   statistique**, rendue sous le libellé en muet 13 px : l'habitué lit la 1ʳᵉ ligne et s'arrête, le
+>   débutant lit la 2ᵉ. `_make_power_panel(power, accent, hint := "")` — le défaut vide fait que
+>   **l'onglet STATISTIQUES, déjà dense, garde l'encadré court** sans condition à écrire.
+>   `_hero_power_hint()` renvoie `""` si la clé manque : une faction non rédigée n'affiche jamais sa
+>   clé brute. ⚠️ **Textes ADOSSÉS aux stats réelles du registre**, pas au libellé existant — celui-ci
+>   contient deux approximations relevées au passage (`PHALANGES_ACIER` annonce un « plafond de PP
+>   maximal » à 16 quand pillards/chasseurs sont à 18 ; `PILLARDS_POUSSIERE` annonce un « PA maximal »
+>   à 37 quand chasseurs est à 40). Les nouvelles phrases ne les reprennent pas ; les anciens
+>   libellés n'ont pas été touchés (hors périmètre).
+> - **POUVOIR DE FACTION dans l'onglet STATISTIQUES.** L'écran ne montrait que le pouvoir du HÉROS
+>   (son profil de combat) ; la **mécanique de plateau** — relance de dé, double en défense, unité
+>   bonus de renfort… — n'était visible qu'au draft et en partie. Elle est ajoutée SOUS les
+>   caractéristiques chiffrées (c'est une donnée de comparaison, on la lit avec les stats), avec un
+>   en-tête distinct `CHAR_FACTION_POWER_HEADER` « POUVOIR DE FACTION » pour qu'aucune confusion ne
+>   soit possible avec « POUVOIR DE HÉROS » juste au-dessus. **Aucune chaîne créée** : `_faction_power_text()`
+>   lit le `power_key` du `.tres` local, **MÊME source et MÊME repli que le draft**
+>   (`faction_selection._dossier_text`) et que la partie (`main.gd`) — le texte est donc mot pour mot
+>   celui du draft, et il n'y a pas de 3ᵉ chemin à maintenir. ⚠️ `/heroes` ne sert PAS ce champ (il ne
+>   porte que le pouvoir du héros), d'où la lecture locale. Clé vide / `.tres` legacy / clé absente du
+>   CSV → chaîne vide → **section entière omise**, jamais une clé brute à l'écran. Vérifié : les 10
+>   factions résolvent leur pouvoir.
 > - **Hiérarchie typographique de la carte (demande produit).** Nom du personnage **22 px** (blanc
 >   froid, 2 lignes max) contre **11 px** pour la faction, cette dernière passée du gris muet à la
 >   **couleur d'accent de sa faction** — même signal que le liseré gauche et les encoches de la

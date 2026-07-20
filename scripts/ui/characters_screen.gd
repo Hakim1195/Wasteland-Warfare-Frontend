@@ -1054,8 +1054,11 @@ func _populate_tab_info(page: VBoxContainer, hero: Dictionary) -> void:
 		page.add_child(_make_ratio_bar(int(record.get("winrate", 0)), ACCENT))
 
 	# --- POUVOIR DE FACTION (encadré teinté accent, §X.1.3) -------------------------------------
+	# L'onglet INFORMATIONS est le SEUL à recevoir l'explication en clair (3ᵉ argument) : c'est
+	# l'onglet de découverte. STATISTIQUES, déjà dense, garde l'encadré court.
 	page.add_child(_section_header("CHAR_POWER_HEADER"))
-	page.add_child(_make_power_panel(_hero_power_text(fid, hero), _faction_color(fid)))
+	page.add_child(_make_power_panel(_hero_power_text(fid, hero), _faction_color(fid),
+			_hero_power_hint(fid)))
 
 	# --- ÉTAT : rappel textuel COMPLET de l'accès (version détaillée de la chip d'en-tête) ------
 	page.add_child(_section_header("CHAR_SECTION_STATE"))
@@ -1070,11 +1073,40 @@ func _populate_tab_stats(page: VBoxContainer, hero: Dictionary) -> void:
 	# `true` = colonne DELTA (« RESTANT ») activée. Le draft (faction_selection) n'appelle JAMAIS
 	# cette fonction — il passe par HeroStatsView.build_compact_row, intouché : son aspect ne peut
 	# donc pas bouger (critère d'acceptation X « draft VISUELLEMENT INCHANGÉ »).
+	var fid := str(hero.get("faction_id", ""))
 	page.add_child(_make_stats_block(hero, true))
-	# Le POUVOIR reste visible ici aussi (il fait partie des 6 informations demandées).
+	# Le POUVOIR DE HÉROS reste visible ici aussi (il fait partie des 6 informations demandées) —
+	# en version COURTE : l'explication en clair est réservée à l'onglet INFORMATIONS.
 	page.add_child(_section_header("CHAR_POWER_HEADER"))
-	page.add_child(_make_power_panel(_hero_power_text(str(hero.get("faction_id", "")), hero),
-			_faction_color(str(hero.get("faction_id", "")))))
+	page.add_child(_make_power_panel(_hero_power_text(fid, hero), _faction_color(fid)))
+
+	# --- POUVOIR DE FACTION : la mécanique de PLATEAU (dés, cartes, renforts, mouvement) ---------
+	# C'est un pouvoir de nature DIFFÉRENTE de celui du héros : le premier décrit le profil de
+	# combat du champion, celui-ci modifie les RÈGLES de la partie (relance de dé, double en
+	# défense, unité bonus…). Les deux en-têtes le disent explicitement pour qu'on ne les confonde
+	# pas. Sa place est ici plutôt qu'en INFORMATIONS : c'est une donnée de comparaison, on la lit
+	# en même temps que les caractéristiques chiffrées.
+	var faction_power := _faction_power_text(fid)
+	if faction_power != "":
+		page.add_child(_section_header("CHAR_FACTION_POWER_HEADER"))
+		page.add_child(_make_power_panel(faction_power, _faction_color(fid)))
+
+# Pouvoir de FACTION, lu sur le `.tres` local (`power_key`) — MÊME source et MÊME repli que le draft
+# (`faction_selection._dossier_text`) et que la partie (`main.gd`) : aucun 3ᵉ chemin à maintenir, et
+# le texte affiché ici est mot pour mot celui que le joueur verra au draft. `/heroes` ne sert PAS ce
+# champ (il ne porte que le pouvoir du HÉROS) — d'où la lecture locale.
+# Clé vide, `.tres` legacy ou clé absente du CSV → chaîne vide → la section entière est omise.
+func _faction_power_text(fid: String) -> String:
+	if fid == "" or not _factions.has(fid):
+		return ""
+	var f = _factions[fid]
+	if f == null or f.get("power_key") == null:
+		return ""
+	var key := str(f.get("power_key"))
+	if key == "":
+		return ""
+	var txt := tr(key)
+	return "" if txt == key else txt
 
 # =========================================================
 # ONGLET 3 — ÉVOLUTION (§Y) : paliers, XP acquise, Coins gagnés, comparatif des Pass
@@ -1649,7 +1681,11 @@ func _make_ratio_bar(percent: int, color: Color) -> ProgressBar:
 # Encadré « POUVOIR » teinté à l'accent de la faction — même habillage que le bloc partagé du draft
 # (hero_stats_view._make_power_block), redéclaré ici pour ne pas appeler une fonction privée d'un
 # autre fichier.
-func _make_power_panel(power: String, accent: Color) -> PanelContainer:
+# `hint` (optionnel) : l'explication EN CLAIR du pouvoir, destinée au joueur — ce que ça lui apporte
+# en partie, sans nommer une seule statistique. Elle vient EN DESSOUS du libellé technique, en muet :
+# celui qui connaît déjà le jeu lit la première ligne et s'arrête, le nouveau venu lit la seconde.
+# Chaîne vide → aucune ligne ajoutée (c'est ce qui garde l'onglet STATISTIQUES compact).
+func _make_power_panel(power: String, accent: Color, hint: String = "") -> PanelContainer:
 	var panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.set_corner_radius_all(0)
@@ -1662,6 +1698,10 @@ func _make_power_panel(power: String, accent: Color) -> PanelContainer:
 	sb.content_margin_bottom = 8.0
 	panel.add_theme_stylebox_override("panel", sb)
 
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	panel.add_child(box)
+
 	var lbl := Label.new()
 	lbl.text = power
 	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # contenu dynamique, pas une clé
@@ -1669,8 +1709,27 @@ func _make_power_panel(power: String, accent: Color) -> PanelContainer:
 	lbl.add_theme_font_size_override("font_size", 15)
 	lbl.add_theme_color_override("font_color", TEXT)
 	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	panel.add_child(lbl)
+	box.add_child(lbl)
+
+	if hint != "":
+		var hint_lbl := Label.new()
+		hint_lbl.text = hint
+		hint_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		hint_lbl.add_theme_font_override("font", _font)
+		hint_lbl.add_theme_font_size_override("font_size", 13)
+		hint_lbl.add_theme_color_override("font_color", MUTED)
+		hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(hint_lbl)
 	return panel
+
+# Explication joueur du pouvoir, par faction (`HERO_POWER_HINT_<FID>`). Clé absente → chaîne vide,
+# donc ligne simplement omise : une faction sans texte rédigé n'affiche pas sa clé brute à l'écran.
+func _hero_power_hint(fid: String) -> String:
+	if fid == "":
+		return ""
+	var key := "HERO_POWER_HINT_" + fid.to_upper()
+	var txt := tr(key)
+	return "" if txt == key else txt
 
 # Rappel TEXTUEL complet de l'état d'accès (onglet INFORMATIONS). On ne dit QUE ce qu'on sait : la
 # date d'acquisition n'est pas connue du client, donc elle n'est pas inventée.
