@@ -1039,7 +1039,24 @@ Accessible par l'onglet de nav **OPÉRATEUR** et par la jauge d'XP cliquable. É
 > - **Identité enfin affichée.** Les cartes et l'en-tête de fiche portent le **nom du personnage**
 >   (`identity.display_name` de `GET /api/v1/heroes`, chantier V) et non plus le nom de faction —
 >   les deux vues désignaient jusqu'ici la même entité par deux noms différents. En-tête de fiche :
->   `PRÉNOM NOM` (34 px) + indicatif entre guillemets + code `CHAR-NNN` aligné à droite.
+>   `PRÉNOM NOM` (34 px) + indicatif entre guillemets.
+> - **Le code dossier `CHAR-NNN` n'est PAS affiché** (arbitrage produit, après capture) : c'est une
+>   référence de PRODUCTION (registre `factions.py`, `TEMPLATE_PERSONNAGES.md`), pas une information
+>   de jeu — elle encombrait la ligne de titre sans rien apprendre au joueur. `identity.char_code`
+>   reste servi par `/heroes` : rien à changer côté serveur, et la ligne est réaffichable en une fois.
+> - **i18n — `CHAR_ACCESS_OWNED` désambiguïsé** (arbitrage produit) : FR « POSSÉDÉ » → **« ACQUIS »**,
+>   IT « POSSEDUTO » → **« IN POSSESSO »**, EN « OWNED » inchangé (déjà sans ambiguïté).
+>   « POSSÉDÉ » se lisait aussi au sens *démoniaque*, et « POSSEDUTO/POSSEDUTA » imposait un accord
+>   de genre. **« ACQUIS » est le participe du verbe déjà employé par la Boutique** (`SHOP_BUY`
+>   « ❯ ACQUÉRIR », `SHOP_ACQUIRED` « // ACQUIS : %s ») — vocabulaire cohérent, pas un néologisme.
+>   ⚠️ **« DÉBLOQUÉ » a été écarté** : le terme désigne déjà l'accès **temporaire** par Pass
+>   (`CHAR_ACCESS_PASS`, `FS_PASS_UNLOCKED`) — l'employer pour la possession DÉFINITIVE aurait
+>   recréé l'ambiguïté qu'on supprimait. ⚠️ Volontairement NON touchés : `CHAR_ROSTER_COUNT`
+>   (« PERSONNAGES POSSÉDÉS » / « PERSONAGGI POSSEDUTI », pluriel) et `CHAR_SKIN_OWNED`
+>   (« POSSEDUTA », féminin car il qualifie une *skin*).
+> - ⚠️ **Valider une chaîne FR sur cette machine exige de FORCER la locale** (`TranslationServer.
+>   set_locale("fr")` dans le harnais de capture) : le poste rend en **italien** par défaut, on
+>   validerait donc une autre langue que celle qu'on vient d'éditer.
 > - **Hiérarchie typographique de la carte (demande produit).** Nom du personnage **22 px** (blanc
 >   froid, 2 lignes max) contre **11 px** pour la faction, cette dernière passée du gris muet à la
 >   **couleur d'accent de sa faction** — même signal que le liseré gauche et les encoches de la
