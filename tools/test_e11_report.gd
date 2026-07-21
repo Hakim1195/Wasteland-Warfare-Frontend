@@ -155,7 +155,7 @@ func _ready() -> void:
 	assert(Report._breakdown_total(Report.player_points_breakdown(0, 5, 1, 2, 250)) == 57)
 	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, false)) == 205)
 	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, true)) == 256)
-	assert(Report._breakdown_total(Report.hero_xp_breakdown(25, true, 4, 1, 55)) == 350)
+	assert(Report._breakdown_total(Report.hero_xp_breakdown(25, true, 4, 1, 55)) == 308)
 	var report_detail = ReportScene.instantiate()
 	add_child(report_detail)
 	report_detail.populate({

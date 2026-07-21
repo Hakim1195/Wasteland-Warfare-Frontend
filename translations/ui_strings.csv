@@ -547,7 +547,7 @@ REPORT_HXP_UNITS,"Unités tuées (+1/unité)","Units killed (+1/unit)","Unità u
 REPORT_HXP_OBJ,"Objectif rempli (+150)","Objective met (+150)","Obiettivo raggiunto (+150)"
 REPORT_HXP_TERR,"Territoires en fin (+5/terr.)","Final territories (+5/terr.)","Territori finali (+5/terr.)"
 REPORT_HXP_GRAVE,"Coups de grâce (+100)","Finishing blows (+100)","Colpi di grazia (+100)"
-REPORT_HXP_DMG,"Dégâts aux héros (+1/PV)","Hero damage (+1/HP)","Danni agli eroi (+1/PV)"
+REPORT_HXP_DMG,"Dégâts aux héros (+1/4 PV)","Hero damage (+1/4 HP)","Danni agli eroi (+1/4 PV)"
 REPORT_POINTS_HIDDEN,"—","—","—"
 REPORT_POINTS_HIDDEN_TIP,"Points masqués : seuls vos points de match vous sont communiqués","Hidden points: only your own match points are revealed to you","Punti nascosti: ti vengono comunicati solo i tuoi punti partita"
 TITLE_BUTCHER,"BOUCHER","BUTCHER","MACELLAIO"

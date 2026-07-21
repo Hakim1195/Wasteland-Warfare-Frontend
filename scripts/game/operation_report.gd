@@ -1298,7 +1298,7 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 	return items
 
 # XP HÉROS (rewards.compute_hero_match_xp) : +1/unité tuée, +150 objectif, +5/territoire en fin,
-# +100/coup de grâce, +1/PV de dégâts héros.
+# +100/coup de grâce, +1/4 PV de dégâts héros.
 static func hero_xp_breakdown(enemy_units_killed: int, objective_win: bool,
 		territories_end: int, hero_kills: int, hero_damage: int) -> Array:
 	var items: Array = []
@@ -1307,7 +1307,7 @@ static func hero_xp_breakdown(enemy_units_killed: int, objective_win: bool,
 		items.append({"key": "REPORT_HXP_OBJ", "value": 150})
 	items.append({"key": "REPORT_HXP_TERR", "value": 5 * territories_end})
 	items.append({"key": "REPORT_HXP_GRAVE", "value": 100 * hero_kills})
-	items.append({"key": "REPORT_HXP_DMG", "value": hero_damage})
+	items.append({"key": "REPORT_HXP_DMG", "value": hero_damage / 4})
 	return _nonzero(items)
 
 # Somme des postes d'un breakdown (le « total reconstruit »).
@@ -1339,8 +1339,8 @@ static func _self_check() -> void:
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 256)   # floor(1.25×205)
 	assert(_breakdown_total(player_xp_breakdown(2, 3, 10, 5, false)) == 50)   # rang 3+ : ni cont ni win
 	# XP héros — miroir de rewards.compute_hero_match_xp.
-	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55)) == 350)    # 25+150+20+100+55
-	assert(_breakdown_total(hero_xp_breakdown(9, false, 0, 0, 9)) == 18)      # 9+9
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55)) == 308)    # 25+150+20+100+ (55/4=13)
+	assert(_breakdown_total(hero_xp_breakdown(9, false, 0, 0, 9)) == 11)      # 9 + (9/4=2)
 
 # Détail des POINTS DE MATCH + XP DE PROFIL (onglet 1) — depuis les entrées brutes _detail_inputs,
 # réconcilié aux totaux serveur (rewards.match_points / rewards.xp_earned).
