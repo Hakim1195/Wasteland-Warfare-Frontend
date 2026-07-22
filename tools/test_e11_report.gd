@@ -152,7 +152,6 @@ func _ready() -> void:
 	print("[OK] podium provisoire : repli local + remplacement serveur (3 asserts)")
 
 	# 5) Détail du barème (E-visuel) : helpers PURS réconciliés + rendu dans les onglets.
-	assert(Report._breakdown_total(Report.player_points_breakdown(0, 5, 1, 2, 250)) == 57)
 	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, false)) == 205)
 	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, true)) == 256)
 	assert(Report._breakdown_total(Report.hero_xp_breakdown(25, true, 4, 1, 55)) == 308)
@@ -162,7 +161,7 @@ func _ready() -> void:
 		"title": "VICTOIRE", "title_color": Color("e0b249"),
 		"stagnation": 0, "attrition": [], "worst_pseudo": "",
 		"rewards": {
-			"match_points": 37, "xp_earned": 118, "hero_xp_earned": 281,
+			"xp_earned": 118, "hero_xp_earned": 281,
 			"new_level": 3, "current_xp": 40, "levels_gained": 1, "level_up_triggered": true,
 			"coins_earned": 0, "hero_level": 4, "hero_new_level": 5,
 			"hero_xp_in_level": 10, "hero_xp_for_level": 100,
@@ -175,7 +174,7 @@ func _ready() -> void:
 	# Bloc récompenses + détail (partie SYNCHRONE) posés avant la 1re frame d'animation.
 	assert(report_detail._player_rewards_box.get_child_count() >= 2)
 	assert(report_detail._hero_progress_box.get_child_count() >= 2)
-	print("[OK] détail barème : helpers purs + rendu onglets (6 asserts)")
+	print("[OK] détail barème : helpers purs + rendu onglets (5 asserts)")
 
-	print("[OK] TEST E11 REPORT : 35 asserts verts")
+	print("[OK] TEST E11 REPORT : 34 asserts verts")
 	get_tree().quit(0)

@@ -551,21 +551,6 @@ func _make_podium_row(r: Dictionary) -> Control:
 	chip.setup(int(r.get("pid", 0)), false)
 	for t in r.get("titles", []):
 		line1.add_child(_title_badge(tr(str(t)), tr("REPORT_TITLE_TOOLTIP")))
-	# Points de match : +N PTS pour MOI (connu) ; « — » (masqué) pour les autres (redaction serveur
-	# — seuls MES points sont diffusés). On ne masque plus la colonne : on affiche l'inconnu honnête.
-	var pts := int(r.get("points", -1))
-	var pts_lbl := Label.new()
-	pts_lbl.add_theme_font_override("font", RosterHelpers._mono_font())
-	pts_lbl.add_theme_font_size_override("font_size", 14)
-	if pts >= 0:
-		pts_lbl.text = ("+%d" % pts) + tr("REPORT_UNIT_PTS")
-		pts_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
-	else:
-		pts_lbl.text = tr("REPORT_POINTS_HIDDEN")
-		pts_lbl.add_theme_color_override("font_color", TEXT_MUTED)
-		pts_lbl.tooltip_text = tr("REPORT_POINTS_HIDDEN_TIP")
-		pts_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
-	line1.add_child(pts_lbl)
 	card.add_child(line1)
 
 	var line2 := HBoxContainer.new()
@@ -1055,18 +1040,10 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 		anomaly.add_theme_font_size_override("font_size", 13)
 		block.add_child(anomaly)
 
-	# Ligne « Points de Match » (décompte animé depuis 0) — EN CLASSÉE UNIQUEMENT (§8.88). Hors
-	# classée le serveur renvoie match_points = 0 : on affiche une mention muette explicite plutôt
-	# qu'un « +0 » qui laisserait croire à une contre-performance. `points_lbl` reste null dans ce
-	# cas → _run_reward_animation saute le décompte.
-	var points_lbl: Label = null
-	if is_ranked:
-		points_lbl = Label.new()
-		points_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
-		points_lbl.add_theme_font_size_override("font_size", 22)
-		points_lbl.text = tr("REPORT_MATCH_POINTS") % 0
-		block.add_child(points_lbl)
-	else:
+	# §8.88 : en partie NON classée, mention muette explicite (aucun ladder crédité). En classée,
+	# c'est le bloc RP ci-dessous qui porte l'information de classement — les « points de match »
+	# (ladder À VIE) ont été RETIRÉS du jeu.
+	if not is_ranked:
 		var unranked_lbl := Label.new()
 		unranked_lbl.text = tr("REPORT_UNRANKED")
 		unranked_lbl.add_theme_color_override("font_color", TEXT_MUTED)
@@ -1148,7 +1125,7 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	if not rewards.is_empty():
 		_build_player_detail(box, rewards)
 
-	await _run_reward_animation(points_lbl, xp_lbl, bar, rewards)
+	await _run_reward_animation(xp_lbl, bar, rewards)
 
 # Onglet 2 — bloc PROGRESSION DU HÉROS animé (XP héros + niveau + barre log + paliers de stats)
 # SUIVI du détail du barème héros (réconcilié à hero_xp_earned). Coroutine (await l'animation).
@@ -1257,30 +1234,11 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 # ne JAMAIS mentir sur le chiffre. Helpers testés par _self_check (pattern G4).
 # =========================================================
 
-# Points de classement (rewards.compute_match_points) : rank 0 = 1er, 1 = 2e, 2+ = 3e et suivants.
-static func player_points_breakdown(rank: int, territories: int, continents: int,
-		eliminations: int, enemy_kills: int) -> Array:
-	var items: Array = []
-	if rank == 0:
-		items.append({"key": "REPORT_PT_WIN_BASE", "value": 20})
-		items.append({"key": "REPORT_PT_TERR", "value": territories})
-		items.append({"key": "REPORT_PT_CONT", "value": 2 * continents})
-		items.append({"key": "REPORT_PT_ELIM", "value": 5 * eliminations})
-		items.append({"key": "REPORT_PT_KILLBONUS", "value": 10 * (enemy_kills / 100)})
-	elif rank == 1:
-		items.append({"key": "REPORT_PT_SECOND_BASE", "value": 10})
-		items.append({"key": "REPORT_PT_TERR", "value": territories})
-		items.append({"key": "REPORT_PT_CONT", "value": 2 * continents})
-		items.append({"key": "REPORT_PT_ELIM", "value": 5 * eliminations})
-	else:
-		items.append({"key": "REPORT_PT_TERR", "value": territories})
-	return _nonzero(items)
-
 # XP de profil (rewards.compute_match_xp) : +10/conquête, +2/kill, +5/continent et +150 forfait
 # réservés au haut du tableau ; Pass Spécial → ×1.25 (floor) sur le TOTAL, matérialisé par un poste
 # bonus (miroir process_match_results).
 static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
-		continents_conquered: int, pass_applied: bool) -> Array:
+		continents_conquered: int, pass_applied: bool, pass_bonus_override: int = -1) -> Array:
 	var items: Array = []
 	items.append({"key": "REPORT_XP_CONQ", "value": 10 * conquests})
 	items.append({"key": "REPORT_XP_KILL", "value": 2 * enemy_kills})
@@ -1289,12 +1247,18 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 	if rank == 0:
 		items.append({"key": "REPORT_XP_WIN", "value": 150})
 	items = _nonzero(items)
-	if pass_applied:
+	# Bonus Pass : le SERVEUR fait foi (`xp_inputs.xp_pass_bonus`, qui porte le multiplicateur du
+	# PALIER RÉEL — Plus ×1.10, Premium ×1.25, Infinity ×1.50). Repli LOCAL (override < 0, serveur
+	# antérieur) : on ne peut que supposer PREMIUM ×1.25 — c'était la source historique d'un
+	# « Ajustement serveur » systématique pour tout détenteur d'un AUTRE palier.
+	var bonus := 0
+	if pass_bonus_override >= 0:
+		bonus = pass_bonus_override
+	elif pass_applied:
 		var base_total := _breakdown_total(items)
-		var boosted := int(floor(1.25 * float(base_total)))
-		var bonus := boosted - base_total
-		if bonus != 0:
-			items.append({"key": "REPORT_XP_PASS", "value": bonus})
+		bonus = int(floor(1.25 * float(base_total))) - base_total
+	if bonus != 0:
+		items.append({"key": "REPORT_XP_PASS", "value": bonus})
 	return items
 
 # XP HÉROS (rewards.compute_hero_match_xp) : +1/unité tuée, +150 objectif, +5/territoire en fin,
@@ -1330,10 +1294,6 @@ static var _self_checked := false
 
 static func _self_check() -> void:
 	_self_checked = true
-	# Points de match — miroir de rewards.compute_match_points.
-	assert(_breakdown_total(player_points_breakdown(0, 5, 1, 2, 250)) == 57)  # 20+5+2+10+20
-	assert(_breakdown_total(player_points_breakdown(1, 3, 0, 1, 40)) == 18)   # 10+3+0+5
-	assert(_breakdown_total(player_points_breakdown(2, 4, 1, 3, 500)) == 4)   # 1×4 territoires
 	# XP de profil — miroir de rewards.compute_match_xp (+ Pass ×1.25 floor).
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false)) == 205)  # 30+20+5+150
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 256)   # floor(1.25×205)
@@ -1342,29 +1302,46 @@ static func _self_check() -> void:
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55)) == 308)    # 25+150+20+100+ (55/4=13)
 	assert(_breakdown_total(hero_xp_breakdown(9, false, 0, 0, 9)) == 11)      # 9 + (9/4=2)
 
-# Détail des POINTS DE MATCH + XP DE PROFIL (onglet 1) — depuis les entrées brutes _detail_inputs,
-# réconcilié aux totaux serveur (rewards.match_points / rewards.xp_earned).
+# Entrées EXACTES du barème telles que le SERVEUR les a utilisées (bloc ADDITIF `xp_inputs` de
+# `match_rewards`). {} si le serveur est antérieur → chaque appelant retombe sur son estimation
+# locale (comportement historique, l'écart restant absorbé par « Ajustement serveur »).
+func _server_inputs(rewards: Dictionary) -> Dictionary:
+	var srv = rewards.get("xp_inputs", {})
+	return srv if typeof(srv) == TYPE_DICTIONARY else {}
+
+# Détail de l'XP DE PROFIL (onglet 1) — entrées SERVEUR prioritaires, repli sur les entrées
+# locales `_detail_inputs`. Réconcilié au total serveur (xp_earned).
 func _build_player_detail(box: VBoxContainer, rewards: Dictionary) -> void:
 	if _detail_inputs.is_empty():
 		return
 	var d := _detail_inputs
-	var rank := int(d.get("rank", 0))
-	var pts_items := player_points_breakdown(rank, int(d.get("territories_final", 0)),
-		int(d.get("continents_final", 0)), int(d.get("eliminations", 0)), int(d.get("kills", 0)))
-	_render_detail(box, tr("REPORT_PT_EYEBROW"), pts_items,
-		int(rewards.get("match_points", _breakdown_total(pts_items))), "REPORT_UNIT_PTS")
-	var xp_items := player_xp_breakdown(rank, int(d.get("conquests", 0)), int(d.get("kills", 0)),
-		int(d.get("continents_final", 0)), bool(rewards.get("pass_bonus_applied", false)))
+	var srv := _server_inputs(rewards)
+	var rank := int(srv.get("rank", d.get("rank", 0)))
+	var kills := int(srv.get("enemy_kills", d.get("kills", 0)))
+	# XP : continents CONQUIS PENDANT la partie — métrique DIFFÉRENTE de celle des points (un
+	# continent pris puis perdu compte ici). Le client ne la trace pas : sans le bloc serveur, il
+	# retombe sur les continents possédés en fin, d'où l'ancien écart de ±5/continent.
+	var xp_items := player_xp_breakdown(rank,
+		int(srv.get("conquests", d.get("conquests", 0))), kills,
+		int(srv.get("continents_conquered", d.get("continents_final", 0))),
+		bool(rewards.get("pass_bonus_applied", false)),
+		int(srv.get("xp_pass_bonus", -1)))
 	_render_detail(box, tr("REPORT_XP_EYEBROW"), xp_items,
 		int(rewards.get("xp_earned", _breakdown_total(xp_items))), "REPORT_UNIT_XP")
 
-# Détail du barème HÉROS (onglet 2) — réconcilié à rewards.hero_xp_earned.
+# Détail du barème HÉROS (onglet 2) — mêmes entrées SERVEUR prioritaires (ses `statistics` locales
+# peuvent être en retard d'une action sur l'état final). Réconcilié à rewards.hero_xp_earned.
 func _build_hero_detail(box: VBoxContainer, rewards: Dictionary) -> void:
 	if _detail_inputs.is_empty():
 		return
 	var d := _detail_inputs
-	var items := hero_xp_breakdown(int(d.get("kills", 0)), bool(d.get("objective_done", false)),
-		int(d.get("territories_final", 0)), int(d.get("hero_kills", 0)), int(d.get("hero_damage", 0)))
+	var srv := _server_inputs(rewards)
+	var items := hero_xp_breakdown(
+		int(srv.get("enemy_kills", d.get("kills", 0))),
+		bool(srv.get("objective_win", d.get("objective_done", false))),
+		int(srv.get("territories_end", d.get("territories_final", 0))),
+		int(srv.get("hero_kills", d.get("hero_kills", 0))),
+		int(srv.get("hero_damage", d.get("hero_damage", 0))))
 	_render_detail(box, tr("REPORT_HXP_EYEBROW"), items,
 		int(rewards.get("hero_xp_earned", _breakdown_total(items))), "REPORT_UNIT_XP")
 
@@ -1445,22 +1422,11 @@ func _animate_hero(hero_xp_lbl: Label, hero_bar: ProgressBar, rewards: Dictionar
 			0.0, float(coins), 0.6)
 		await tc.finished
 
-# `points_lbl` est NULL en partie non classée (§8.88 : aucun compteur de points à animer) — le
-# décompte est alors sauté, le reste de la séquence est identique.
-func _run_reward_animation(points_lbl: Label, xp_lbl: Label, bar, rewards: Dictionary) -> void:
+func _run_reward_animation(xp_lbl: Label, bar, rewards: Dictionary) -> void:
 	# Laisse le layout se résoudre (tailles des nœuds) avant les Tweens d'échelle/pivot.
 	await get_tree().process_frame
 
-	# 1) Décompte des Points de Match (0 → match_points) — EN CLASSÉE UNIQUEMENT.
-	if points_lbl != null:
-		var pts := int(rewards.get("match_points", 0))
-		var t := create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		t.tween_method(
-			func(v: float): points_lbl.text = tr("REPORT_MATCH_POINTS") % int(round(v)),
-			0.0, float(pts), 0.9)
-		await t.finished
-
-	# 2) Décompte de l'XP JOUEUR (§8.89) — même pattern que les points / l'XP héros. Le montant est
+	# 1) Décompte de l'XP JOUEUR (§8.89) — même pattern que les points / l'XP héros. Le montant est
 	#    DÉJÀ boosté par le serveur si le Pass est actif (le bandeau +25 % l'explique).
 	if xp_lbl != null:
 		var xp := int(rewards.get("xp_earned", 0))

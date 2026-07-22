@@ -29,7 +29,7 @@ func _ready() -> void:
 		"stagnation": 2, "attrition": [], "worst_pseudo": "",
 		"is_ranked": true, "has_played": true,
 		"rewards": {
-			"match_points": 37, "xp_earned": 118, "coins_earned": 100, "hero_coins_earned": 12,
+			"xp_earned": 118, "coins_earned": 100, "hero_coins_earned": 12,
 			"level_up_triggered": true, "levels_gained": 1, "new_level": 10, "current_xp": 40,
 			"xp_to_next_level": 1960, "pass_bonus_applied": true,
 			"rp_delta": 25, "rp_after": 360, "rp_label": "BRONZE II", "rp_promoted": false,

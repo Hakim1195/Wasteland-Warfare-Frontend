@@ -126,7 +126,7 @@ signal mission_claimed(data: Dictionary)
 # Claim refusé (HTTP 400/401) : message d'erreur prêt à afficher.
 signal mission_claim_failed(message: String)
 # Fin de partie (Économie §8.47) : le serveur diffuse `game_over` avec le détail des gains par joueur.
-# `match_rewards` = { "<player_id:str>": { match_points, xp_earned, coins_earned, level_up_triggered,
+# `match_rewards` = { "<player_id:str>": { xp_earned, coins_earned, level_up_triggered,
 # new_level, current_xp, xp_to_next_level, levels_gained } } (toutes valeurs entières — piège JSON §5).
 # `rankings` = liste ordonnée des player_id (1er d'abord, départage 2e place côté serveur).
 signal match_over(winner_id: int, match_type: String, rankings: Array, match_rewards: Dictionary)
