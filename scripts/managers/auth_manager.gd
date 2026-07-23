@@ -24,6 +24,30 @@ var _id_http: HTTPRequest
 # boot (try_restore_session) ; un token expiré/invalide est purgé (clear_session) → retour au login.
 const SESSION_PATH := "user://session.dat"
 
+# =========================================================
+# CONNEXION STEAM (OpenID 2.0, §8.113) — SEUL moyen de connexion
+# =========================================================
+# Le jeu n'est pas (encore) lancé par le client Steam : l'authentification passe par le NAVIGATEUR
+# EXTERNE du joueur. Godot ne peut donc pas recevoir la redirection de retour — il ouvre l'URL puis
+# INTERROGE le backend, qui a mis le JWT de côté dans une « session de login » (Redis).
+const STEAM_POLL_INTERVAL_S := 2.0
+# Au-delà, on considère que le joueur a fermé l'onglet / renoncé. Volontairement généreux : une
+# première connexion Steam avec Steam Guard (code par mail) prend facilement une minute.
+const STEAM_LOGIN_TIMEOUT_MS := 180000
+
+# HTTPRequest DÉDIÉ au flux Steam : http_request sert au profil et _id_http à l'id joueur — un
+# HTTPRequest ne traite qu'UNE requête à la fois, les mutualiser produirait des ERR_BUSY.
+var _steam_http: HTTPRequest
+var _steam_timer: Timer
+var _steam_session_id: String = ""
+# Étape courante : "" (inactif) | "session" (ouverture de session) | "poll" (attente du token).
+# Sert aussi de VERROU : un second clic sur le bouton ne relance pas un flux concurrent.
+var _steam_phase: String = ""
+var _steam_started_at_ms: int = 0
+# Vrai tant qu'un poll est en vol : le tic suivant est SAUTÉ plutôt que de heurter un ERR_BUSY
+# (le serveur peut mettre plusieurs secondes à répondre pendant la vérification serveur→Steam).
+var _steam_poll_in_flight := false
+
 func _ready():
 	# Hôte backend : source unique ApiConfig (repli sur la prod si l'autoload manque). §P1
 	var cfg := get_node_or_null("/root/ApiConfig")
@@ -46,6 +70,19 @@ func _ready():
 	add_child(_id_http)
 	_id_http.set_tls_options(_tls_options())
 	_id_http.request_completed.connect(_on_id_request_completed)
+
+	# Flux Steam (§8.113) : requête dédiée + minuterie de polling créées en code (l'AuthManager est
+	# un autoload sans scène). La minuterie reste ARRÊTÉE tant qu'aucune connexion n'est lancée.
+	_steam_http = HTTPRequest.new()
+	add_child(_steam_http)
+	_steam_http.set_tls_options(_tls_options())
+	_steam_http.request_completed.connect(_on_steam_request_completed)
+
+	_steam_timer = Timer.new()
+	_steam_timer.wait_time = STEAM_POLL_INTERVAL_S
+	_steam_timer.one_shot = false
+	add_child(_steam_timer)
+	_steam_timer.timeout.connect(_on_steam_poll_tick)
 
 # Options TLS (§AC.10) : ApiConfig décide (certificat VÉRIFIÉ en prod, toléré non vérifié en dev
 # local seulement) ; repli SÉCURISÉ si l'autoload manque. Jamais de client_unsafe contre la prod.
@@ -102,48 +139,111 @@ func ensure_user_id() -> int:
 	await user_id_loaded
 	return user_id
 
-func register(p_username, email, password):
-	# Create JSON object for registration
-	var register_data = {
-		"username": p_username,
-		"email": email,
-		"password": password
-	}
-	
-	# Convert to JSON string
-	var json_string = JSON.stringify(register_data)
-	
-	# Set headers
-	var headers = ["Content-Type: application/json"]
-	
-	# Send POST request
-	var err = http_request.request(
-		base_url + "/api/v1/auth/register",
-		headers,
-		HTTPClient.METHOD_POST,
-		json_string
-	)
-	
-	if err != OK:
-		emit_signal("auth_failed", tr("AUTHM_REGISTER_SEND_FAILED"))
+# =========================================================
+# CONNEXION STEAM — API publique (appelée par auth_screen)
+# =========================================================
 
-func login(p_username, password):
-	# Format data as application/x-www-form-urlencoded.
-	# On ENCODE chaque valeur (§P0) : un '&', '=', '+' ou espace dans le pseudo / mot de passe
-	# corromprait sinon le corps de la requête et rendrait la connexion impossible.
-	var post_data = "username=" + str(p_username).uri_encode() + "&password=" + str(password).uri_encode()
-	var headers = ["Content-Type: application/x-www-form-urlencoded"]
-	
-	# Send POST request
-	var err = http_request.request(
-		base_url + "/api/v1/auth/login",
-		headers,
+# Démarre une connexion Steam : ouverture d'une session côté serveur, puis du navigateur du joueur,
+# puis attente du JWT par interrogation régulière. Idempotent tant qu'un flux est en cours.
+func start_steam_login() -> void:
+	if _steam_phase != "":
+		return
+	_steam_session_id = ""
+	_steam_poll_in_flight = false
+	_steam_started_at_ms = Time.get_ticks_msec()
+	_steam_phase = "session"
+	# POST sans corps : l'ouverture de session ne demande AUCUNE donnée (c'est l'étape qui précède
+	# toute identité) — le serveur se contente de tirer un session_id et de le mémoriser.
+	var err = _steam_http.request(
+		base_url + "/api/v1/auth/steam/session",
+		[],
 		HTTPClient.METHOD_POST,
-		post_data
+		""
 	)
-	
 	if err != OK:
-		emit_signal("auth_failed", tr("AUTHM_LOGIN_SEND_FAILED"))
+		_end_steam_login(tr("AUTHM_STEAM_SESSION_FAILED"))
+
+# Interrompt proprement un flux Steam en cours (écran d'auth quitté, nouvelle tentative…).
+# SILENCIEUX : aucun signal émis — l'appelant sait déjà qu'il annule.
+func cancel_steam_login() -> void:
+	_stop_steam_polling()
+	_steam_phase = ""
+	_steam_session_id = ""
+
+# Arrête minuterie et requête en vol, sans toucher à l'état de session (jwt_token…).
+func _stop_steam_polling() -> void:
+	if _steam_timer != null:
+		_steam_timer.stop()
+	if _steam_http != null:
+		_steam_http.cancel_request()
+	_steam_poll_in_flight = false
+
+# Fin d'un flux Steam en ÉCHEC : on remet tout à zéro puis on prévient la Vue (le bouton se
+# réactive sur `auth_failed`, cf. auth_screen).
+func _end_steam_login(error_msg: String) -> void:
+	cancel_steam_login()
+	emit_signal("auth_failed", error_msg)
+
+# Tic d'interrogation (toutes les 2 s) : GET /auth/steam/poll tant que le joueur n'a pas fini.
+func _on_steam_poll_tick() -> void:
+	if _steam_phase != "poll":
+		return
+	if Time.get_ticks_msec() - _steam_started_at_ms > STEAM_LOGIN_TIMEOUT_MS:
+		_end_steam_login(tr("AUTHM_STEAM_TIMEOUT"))
+		return
+	if _steam_poll_in_flight:
+		return
+	_steam_poll_in_flight = true
+	var err = _steam_http.request(
+		base_url + "/api/v1/auth/steam/poll?session_id=" + _steam_session_id.uri_encode(),
+		[],
+		HTTPClient.METHOD_GET
+	)
+	if err != OK:
+		# Échec d'ÉMISSION (pile réseau occupée) : sans conséquence, le tic suivant réessaiera.
+		_steam_poll_in_flight = false
+
+func _on_steam_request_completed(_result, response_code, _headers, body):
+	# Parse via une INSTANCE JSON (cf. _on_request_completed) : aucune erreur rouge au débogueur si
+	# la réponse n'est pas du JSON (502 d'un reverse-proxy, page d'erreur…).
+	var _json := JSON.new()
+	var data = _json.data if _json.parse(body.get_string_from_utf8()) == OK else null
+
+	if _steam_phase == "session":
+		if response_code != 200 or data == null or not data.has("session_id"):
+			_end_steam_login(tr("AUTHM_STEAM_SESSION_FAILED"))
+			return
+		_steam_session_id = str(data["session_id"])
+		# Le joueur s'authentifie dans SON navigateur : Godot n'a aucun moyen d'être rappelé
+		# (ni serveur HTTP local, ni deep-link) — d'où le passage en mode interrogation.
+		OS.shell_open(base_url + "/api/v1/auth/steam/login?session_id=" + _steam_session_id.uri_encode())
+		_steam_phase = "poll"
+		_steam_timer.start()
+		return
+
+	if _steam_phase != "poll":
+		return
+	_steam_poll_in_flight = false
+
+	if response_code == 200 and data != null and data.has("access_token"):
+		# Succès : traitement STRICTEMENT identique à l'ancien login par mot de passe — le token
+		# Steam est un JWT ordinaire (même secret, même claim `sub`), toute la suite est inchangée.
+		jwt_token = str(data["access_token"])
+		_stop_steam_polling()
+		_steam_phase = ""
+		_steam_session_id = ""
+		_save_session()
+		var sub := _username_from_jwt(jwt_token)
+		if sub != "":
+			username = sub
+		emit_signal("auth_success", tr("AUTHM_LOGIN_SUCCESS"))
+		_fetch_user_id()
+	elif response_code == 404:
+		# Session inconnue/expirée côté serveur, ou callback Steam en échec : inutile d'attendre
+		# le rebours complet, le serveur ne délivrera plus rien pour ce session_id.
+		_end_steam_login(tr("AUTHM_STEAM_TIMEOUT"))
+	# Tout autre cas ({"status":"pending"}, incident réseau passager) : on laisse le tic suivant
+	# retenter — c'est le rebours global de 180 s qui tranche.
 
 func get_profile():
 	# Check if we have a token
@@ -188,7 +288,13 @@ func _on_request_completed(_result, response_code, _headers, body):
 				emit_signal("auth_success", tr("AUTHM_LOGIN_SUCCESS"))
 				# Dès qu'on a le token, on récupère l'ID numérique du joueur en arrière-plan.
 				_fetch_user_id()
-			elif data.has("username") and data.has("email"):
+			# Détection de la réponse /auth/me. ⚠️ §8.113 : on teste `id` et NON PLUS `email` —
+			# depuis l'authentification Steam, aucun compte n'a d'email (le champ reste EXPOSÉ mais
+			# vaut `null`, si bien que `has("email")` restait vrai : contrôle devenu trompeur, et
+			# faux dès qu'un serveur cesserait d'émettre la clé). `id` est TOUJOURS présent dans
+			# /auth/me et absent d'une réponse token — la branche `access_token` étant testée
+			# AVANT, aucune ambiguïté n'est possible.
+			elif data.has("username") and data.has("id"):
 				username = str(data["username"])
 				# Le profil (/auth/me) contient l'id numérique : on en profite pour le capter.
 				if data.has("id"):

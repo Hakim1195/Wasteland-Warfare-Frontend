@@ -75,7 +75,7 @@ const RANKED_MAP_ID := "classic_42"
 # (la connexion WS n'a lieu qu'APRÈS avoir rejoint une salle, dans waiting_room).
 # Sans backend modifiable, le seul moyen d'avoir une liste "temps réel" est de repoller
 # périodiquement GET /lobby/rooms tant que cet écran est affiché.
-const AUTO_REFRESH_INTERVAL := 3.0
+const AUTO_REFRESH_INTERVAL := 5.0   # 5 s (option §8.2 : réduit le volume vu par l'edge ; radar un peu moins réactif)
 var _auto_refresh_timer: Timer
 
 func _ready():

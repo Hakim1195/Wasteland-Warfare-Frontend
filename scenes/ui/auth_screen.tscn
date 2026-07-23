@@ -68,54 +68,6 @@ shadow_size = 16
 font_names = PackedStringArray("Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial")
 font_weight = 700
 
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_tab_panel"]
-content_margin_left = 0.0
-content_margin_top = 18.0
-content_margin_right = 0.0
-content_margin_bottom = 4.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_tab_unselected"]
-content_margin_left = 16.0
-content_margin_top = 8.0
-content_margin_right = 16.0
-content_margin_bottom = 8.0
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tab_hover"]
-content_margin_left = 16.0
-content_margin_top = 8.0
-content_margin_right = 16.0
-content_margin_bottom = 8.0
-bg_color = Color(1, 1, 1, 0.05)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tab_selected"]
-content_margin_left = 16.0
-content_margin_top = 8.0
-content_margin_right = 16.0
-content_margin_bottom = 8.0
-bg_color = Color(0.211765, 0.772549, 0.85098, 0.16)
-border_width_bottom = 2
-border_color = Color(0.211765, 0.772549, 0.85098, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_field"]
-content_margin_left = 14.0
-content_margin_top = 12.0
-content_margin_right = 14.0
-content_margin_bottom = 12.0
-bg_color = Color(0.101961, 0.12549, 0.156863, 0.6)
-border_width_bottom = 2
-border_color = Color(0.541176, 0.592157, 0.647059, 0.45)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_field_focus"]
-content_margin_left = 14.0
-content_margin_top = 12.0
-content_margin_right = 14.0
-content_margin_bottom = 12.0
-bg_color = Color(0.101961, 0.12549, 0.156863, 0.85)
-border_width_bottom = 2
-border_color = Color(0.211765, 0.772549, 0.85098, 1)
-shadow_color = Color(0.211765, 0.772549, 0.85098, 0.35)
-shadow_size = 6
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_btn_primary"]
 content_margin_left = 16.0
 content_margin_top = 14.0
@@ -178,7 +130,7 @@ border_width_right = 1
 border_width_bottom = 1
 border_color = Color(0.839216, 0.270588, 0.247059, 0.8)
 
-[node name="AuthScreen" type="Control" unique_id=1768253517 node_paths=PackedStringArray("status_label", "login_email_input", "login_password_input", "login_button", "reg_username_input", "reg_email_input", "reg_password_input", "register_button", "background", "hero_graphic", "ash_particles", "quit_button")]
+[node name="AuthScreen" type="Control" unique_id=1768253517 node_paths=PackedStringArray("status_label", "steam_login_button", "background", "hero_graphic", "ash_particles", "quit_button")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -187,13 +139,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_ouk20")
 status_label = NodePath("LeftColumn/LoginPanel/Content/StatusLabel")
-login_email_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Connexion/EmailInput")
-login_password_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Connexion/PasswordInput")
-login_button = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Connexion/LoginButton")
-reg_username_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/UsernameInput")
-reg_email_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/EmailInput")
-reg_password_input = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/PasswordInput")
-register_button = NodePath("LeftColumn/LoginPanel/Content/TabContainer/Inscription/RegisterButton")
+steam_login_button = NodePath("LeftColumn/LoginPanel/Content/SteamLoginButton")
 background = NodePath("Background")
 hero_graphic = NodePath("HeroGraphic")
 ash_particles = NodePath("AshParticles")
@@ -275,114 +221,21 @@ theme_override_fonts/font = SubResource("SystemFont_title")
 theme_override_font_sizes/font_size = 30
 text = "AUTH_TITLE"
 
-[node name="TabContainer" type="TabContainer" parent="LeftColumn/LoginPanel/Content" unique_id=889991818]
-custom_minimum_size = Vector2(360, 0)
-layout_mode = 2
-theme_override_colors/font_selected_color = Color(1, 1, 1, 1)
-theme_override_colors/font_hovered_color = Color(0.95, 0.95, 0.95, 1)
-theme_override_colors/font_unselected_color = Color(0.541176, 0.592157, 0.647059, 1)
-theme_override_font_sizes/font_size = 18
-theme_override_styles/panel = SubResource("StyleBoxEmpty_tab_panel")
-theme_override_styles/tab_unselected = SubResource("StyleBoxEmpty_tab_unselected")
-theme_override_styles/tab_hovered = SubResource("StyleBoxFlat_tab_hover")
-theme_override_styles/tab_selected = SubResource("StyleBoxFlat_tab_selected")
-current_tab = 0
-
-[node name="Connexion" type="VBoxContainer" parent="LeftColumn/LoginPanel/Content/TabContainer" unique_id=82100386]
-layout_mode = 2
-theme_override_constants/separation = 16
-metadata/_tab_index = 0
-
-[node name="EmailInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Connexion" unique_id=366395479]
-custom_minimum_size = Vector2(350, 52)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
-theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
-theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 18
-theme_override_styles/normal = SubResource("StyleBoxFlat_field")
-theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
-placeholder_text = "AUTH_ID_PLACEHOLDER"
-
-[node name="PasswordInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Connexion" unique_id=2005488099]
-custom_minimum_size = Vector2(350, 52)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
-theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
-theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 18
-theme_override_styles/normal = SubResource("StyleBoxFlat_field")
-theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
-placeholder_text = "AUTH_PASSWORD_PLACEHOLDER"
-secret = true
-
-[node name="LoginButton" type="Button" parent="LeftColumn/LoginPanel/Content/TabContainer/Connexion" unique_id=550742926]
-custom_minimum_size = Vector2(350, 52)
+[node name="SteamLoginButton" type="Button" parent="LeftColumn/LoginPanel/Content" unique_id=1503992077]
+custom_minimum_size = Vector2(360, 56)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
 theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
 theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_font_sizes/font_size = 20
 theme_override_styles/normal = SubResource("StyleBoxFlat_btn_primary")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_primary_pressed")
 theme_override_styles/hover = SubResource("StyleBoxFlat_btn_primary_hover")
 theme_override_styles/focus = SubResource("StyleBoxFlat_btn_primary")
-text = "AUTH_LOGIN"
-
-[node name="Inscription" type="VBoxContainer" parent="LeftColumn/LoginPanel/Content/TabContainer" unique_id=1415575303]
-visible = false
-layout_mode = 2
-theme_override_constants/separation = 16
-metadata/_tab_index = 1
-
-[node name="UsernameInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=2046158744]
-custom_minimum_size = Vector2(350, 52)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
-theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
-theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 18
-theme_override_styles/normal = SubResource("StyleBoxFlat_field")
-theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
-placeholder_text = "AUTH_USERNAME_PLACEHOLDER"
-
-[node name="EmailInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=93019955]
-custom_minimum_size = Vector2(350, 52)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
-theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
-theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 18
-theme_override_styles/normal = SubResource("StyleBoxFlat_field")
-theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
-placeholder_text = "AUTH_EMAIL_PLACEHOLDER"
-
-[node name="PasswordInput" type="LineEdit" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=922314186]
-custom_minimum_size = Vector2(350, 52)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.92, 0.92, 0.95, 1)
-theme_override_colors/font_placeholder_color = Color(0.6, 0.6, 0.66, 1)
-theme_override_colors/caret_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 18
-theme_override_styles/normal = SubResource("StyleBoxFlat_field")
-theme_override_styles/focus = SubResource("StyleBoxFlat_field_focus")
-placeholder_text = "AUTH_PASSWORD_PLACEHOLDER"
-secret = true
-
-[node name="RegisterButton" type="Button" parent="LeftColumn/LoginPanel/Content/TabContainer/Inscription" unique_id=1001289739]
-custom_minimum_size = Vector2(350, 52)
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
-theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
-theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
-theme_override_font_sizes/font_size = 20
-theme_override_styles/normal = SubResource("StyleBoxFlat_btn_primary")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_btn_primary_pressed")
-theme_override_styles/hover = SubResource("StyleBoxFlat_btn_primary_hover")
-theme_override_styles/focus = SubResource("StyleBoxFlat_btn_primary")
-text = "AUTH_REGISTER"
+theme_override_styles/disabled = SubResource("StyleBoxFlat_btn_primary")
+text = "AUTH_STEAM_LOGIN"
 
 [node name="StatusLabel" type="Label" parent="LeftColumn/LoginPanel/Content" unique_id=643284081]
 custom_minimum_size = Vector2(0, 22)

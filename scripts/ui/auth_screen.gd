@@ -2,16 +2,9 @@ extends Control
 
 @export var status_label: Label
 
-# Champs de Connexion
-@export var login_email_input: LineEdit
-@export var login_password_input: LineEdit
-@export var login_button: Button
-
-# Champs d'Inscription
-@export var reg_username_input: LineEdit
-@export var reg_email_input: LineEdit
-@export var reg_password_input: LineEdit
-@export var register_button: Button
+# Unique commande de connexion (§8.113) : Steam est le SEUL moyen d'accès — les onglets
+# Connexion/Inscription et leurs champs ont disparu de la scène avec les routes qui les servaient.
+@export var steam_login_button: Button
 
 # --- Couche Vue 2.5D (parallaxe / VFX "Modern Warfare") ---
 # Calques de profondeur pilotés par la souris + bouton de sortie.
@@ -44,12 +37,11 @@ const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 
 func _ready():
 	# Connexion des signaux UI
-	if login_button: login_button.pressed.connect(_on_login_pressed)
-	if register_button: register_button.pressed.connect(_on_register_pressed)
+	if steam_login_button: steam_login_button.pressed.connect(_on_steam_login_pressed)
 	if quit_button: quit_button.pressed.connect(_on_quit_pressed)
 
 	# SFX d'interface (survol/clic — R6) + nappe d'ambiance des menus (idempotente, R6).
-	WarzoneUI.wire_buttons_sfx([login_button, register_button, quit_button])
+	WarzoneUI.wire_buttons_sfx([steam_login_button, quit_button])
 	AudioManager.start_menu_ambient()
 
 	# Connexion des signaux du serveur
@@ -131,19 +123,16 @@ func _on_quit_pressed():
 # LOGIQUE RÉSEAU — couche API conservée intégralement (cf. AuthManager).
 # Ne pas modifier : seuls la Vue et les signaux associés ont été refondus.
 # ===========================================================================
-func _on_login_pressed():
-	if login_email_input.text.is_empty() or login_password_input.text.is_empty():
-		status_label.text = tr("AUTH_FILL_FIELDS")
-		return
-	status_label.text = tr("AUTH_LOGGING_IN")
-	AuthManager.login(login_email_input.text, login_password_input.text)
 
-func _on_register_pressed():
-	if reg_username_input.text.is_empty() or reg_email_input.text.is_empty() or reg_password_input.text.is_empty():
-		status_label.text = tr("AUTH_FILL_FIELDS")
-		return
-	status_label.text = tr("AUTH_REGISTERING")
-	AuthManager.register(reg_username_input.text, reg_email_input.text, reg_password_input.text)
+# Connexion Steam (§8.113) : la Vue ne fait qu'annoncer l'intention (Règle d'Or §6.1) — c'est
+# AuthManager qui ouvre la session, lance le navigateur et interroge le serveur.
+func _on_steam_login_pressed():
+	# Le navigateur peut mettre plusieurs secondes à s'ouvrir : sans ce verrou, un joueur impatient
+	# empilerait les sessions de connexion (et les onglets).
+	if steam_login_button:
+		steam_login_button.disabled = true
+	status_label.text = tr("AUTH_STEAM_BROWSER_OPENED")
+	AuthManager.start_steam_login()
 
 func _on_auth_success(message: String):
 	# Message renvoyé par le serveur (déjà localisé côté API) : affiché tel quel.
@@ -159,4 +148,13 @@ func _on_auth_failed(message: String):
 		AuthManager.clear_session()
 		status_label.text = ""
 		return
+	# Échec d'une tentative Steam : on rend la main au joueur (le flux est déjà réinitialisé côté
+	# AuthManager) pour qu'il puisse réessayer sans relancer le jeu.
+	if steam_login_button:
+		steam_login_button.disabled = false
 	status_label.text = tr("AUTH_ERROR_PREFIX") % message
+
+# L'écran est quitté (entrée au menu, ou retour au splash) : on coupe toute interrogation Steam
+# encore en cours. Silencieux et idempotent — après un login réussi, le flux s'est déjà arrêté seul.
+func _exit_tree():
+	AuthManager.cancel_steam_login()
