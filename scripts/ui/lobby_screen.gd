@@ -99,6 +99,10 @@ func _ready():
 	# Connexion aux signaux du NetworkManager
 	NetworkManager.rooms_loaded.connect(_on_rooms_loaded)
 	NetworkManager.lobby_error.connect(_on_lobby_error)
+	# AC.7 — échec d'un FETCH de salles : coupe le polling auto (distinct des erreurs de join/create).
+	NetworkManager.rooms_fetch_failed.connect(_on_rooms_fetch_failed)
+	# AC.5 — expiration de session (le lobby n'a pas de top_nav) : retour à l'auth.
+	NetworkManager.session_expired.connect(_on_session_expired)
 	NetworkManager.lobby_action_success.connect(_on_lobby_success)
 
 	# Identité du joueur dans le Centre de Commandement (pseudo posé au login, cf. AuthManager).
@@ -317,6 +321,10 @@ func _on_back_pressed():
 
 # --- RÉPONSES DU SERVEUR ---
 func _on_rooms_loaded(rooms: Array):
+	# AC.7 — un fetch RÉUSSI alors que le polling était coupé (⇒ rafraîchissement MANUEL, l'auto étant
+	# à l'arrêt) : on RELANCE le polling (retour en ligne).
+	if _auto_refresh_timer and _auto_refresh_timer.is_stopped():
+		_auto_refresh_timer.start()
 	# On ne compte QUE les salles publiques affichées (les privées sont masquées de la liste).
 	var shown := 0
 
@@ -501,5 +509,22 @@ func _on_lobby_success(action: String, data: Dictionary):
 	# 2. On téléporte le joueur dans la salle d'attente
 	TransitionManager.change_scene("res://scenes/ui/waiting_room.tscn")
 
+# AC.7 — le FETCH de salles a échoué : on COUPE le polling auto (pas de rafale toutes les 3 s vers un
+# serveur injoignable) et on affiche le statut hors-ligne. Reprise SEULEMENT au prochain
+# rafraîchissement MANUEL réussi (_on_rooms_loaded relance alors le timer).
+func _on_rooms_fetch_failed(_msg: String) -> void:
+	if _auto_refresh_timer:
+		_auto_refresh_timer.stop()
+	status_label.text = tr("LOBBY_OFFLINE")
+
+# AC.5 — session expirée : purge le token, laisse un message et renvoie à l'auth (aucun retry).
+func _on_session_expired() -> void:
+	AuthManager.session_notice = tr("AUTH_SESSION_EXPIRED")
+	AuthManager.clear_session()
+	TransitionManager.change_scene("res://scenes/ui/auth_screen.tscn")
+
 func _on_lobby_error(msg: String):
 	status_label.text = tr("LOBBY_ERROR_PREFIX") % msg
+	# AC.9 — échec BÉNIN (join d'une salle pleine/disparue, création…) : UN seul rafraîchissement de
+	# la liste pour refléter l'état réel, JAMAIS de nouvelle tentative automatique de l'action.
+	NetworkManager.fetch_rooms()

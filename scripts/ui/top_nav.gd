@@ -130,6 +130,9 @@ func _ready() -> void:
 	# double fetch qu'aurait produit « chacun son appel ».
 	NetworkManager.missions_loaded.connect(_on_missions_loaded)
 	NetworkManager.profile_history_loaded.connect(_on_history_loaded)
+	# Session expirée (§AC.5) : top_nav est l'en-tête COMMUN de tous les écrans hub → un seul point de
+	# redirection vers l'auth, quel que soit l'écran affiché quand le token expire.
+	NetworkManager.session_expired.connect(_on_session_expired)
 	LocaleManager.locale_changed.connect(_on_locale_changed)
 
 	AuthManager.get_profile()
@@ -429,6 +432,14 @@ func _update_missions_badge() -> void:
 			_missions_tab_btn.add_theme_color_override("font_color", TEXT)
 		else:
 			_missions_tab_btn.remove_theme_color_override("font_color")
+
+# Session expirée (§AC.5) : purge le token mort, laisse un message et renvoie à l'écran d'auth.
+# AUCUN retry — l'utilisateur se reconnecte. NetworkManager n'émet le signal qu'UNE fois.
+func _on_session_expired() -> void:
+	AuthManager.session_notice = tr("AUTH_SESSION_EXPIRED")
+	AuthManager.clear_session()
+	TransitionManager.change_scene("res://scenes/ui/auth_screen.tscn")
+
 
 func _on_locale_changed(_code: String) -> void:
 	_update_missions_badge()

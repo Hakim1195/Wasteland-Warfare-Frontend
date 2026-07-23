@@ -26,6 +26,10 @@ const OVERRIDE_FILE := "user://server_host.txt"
 var http_host: String = PROD_HTTP
 # Hôte WebSocket de base (sans suffixe). NetworkManager y ajoute "/ws/".
 var ws_host: String = PROD_WS
+# Environnement DEV LOCAL (§AC.10) : true quand on parle à un backend loopback / plaintext (--local,
+# 127.0.0.1, localhost). En PRODUCTION (domaine réel, certificat Let's Encrypt via Traefik) il reste
+# FALSE → le certificat est VÉRIFIÉ (anti-MITM). Recalculé à chaque résolution d'hôte.
+var local_dev: bool = false
 
 
 func _ready() -> void:
@@ -45,6 +49,7 @@ func _ready() -> void:
 	if argv.has("--local"):
 		http_host = LOCAL_HTTP
 		ws_host = LOCAL_WS
+		local_dev = true
 		print("ApiConfig: mode LOCAL (--local) = ", http_host)
 		return
 
@@ -57,3 +62,12 @@ func _apply_http_host(host: String) -> void:
 	host = host.rstrip("/")
 	http_host = host
 	ws_host = host.replace("https://", "wss://").replace("http://", "ws://")
+	# Dev local si loopback ou plaintext (http/ws) → TLS non vérifié toléré ; sinon prod → vérifié.
+	local_dev = host.begins_with("http://") or host.contains("127.0.0.1") or host.contains("localhost")
+
+
+# Options TLS selon l'environnement (§AC.10) : PRODUCTION → certificat VÉRIFIÉ (client sécurisé,
+# anti-MITM) ; dev LOCAL uniquement → certificat toléré non vérifié (backend Docker auto-signé /
+# plaintext). client_unsafe() n'est ainsi JAMAIS actif contre le serveur de production.
+func tls_options() -> TLSOptions:
+	return TLSOptions.client_unsafe() if local_dev else TLSOptions.client()

@@ -99,8 +99,8 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
 { "type": "draft_state", "locked": { "11": "culte_isotope", "-1": "barons_ferraille" }, // PRIVÉ (réponse à get_draft) — { "<player_id:str>": faction_id }
   "draft_deadline_at": 1752505600.0 }   // photographie COMPLÈTE des verrouillages (bots compris) ; rattrape les faction_locked manqués (G2 durci)
 { "type": "game_over", "winner_id": 11, "match_type": "objective", "rankings": [11, 12, 13], // rankings: Array<int> (1er d'abord ; départage 2e place serveur, §8.47)
-  "is_ranked": false,   // bool — PUBLIC (§8.88, piège n° 9). Non classée ⇒ match_points = 0 partout, AUCUN ladder.
-  "match_rewards": { "11": { "match_points": 74, "xp_earned": 372, "coins_earned": 100,        // { "<player_id:str>": MatchRewards } — détail des gains (§8.47)
+  "is_ranked": false,   // bool — PUBLIC (§8.88, piège n° 9). Non classée ⇒ AUCUN ladder crédité (RP saisonnier).
+  "match_rewards": { "11": { "xp_earned": 372, "coins_earned": 100,        // { "<player_id:str>": MatchRewards } — gains (§8.47 ; « points de match » RETIRÉS, §8.112)
     "level_up_triggered": true, "new_level": 12, "current_xp": 300, "xp_to_next_level": 100, "levels_gained": 2 } } } // ⚠️ toutes valeurs ENTIÈRES (piège float §5)
 { "type": "spy_result", "target_player_id": 12, "description": "Conquérir l'Asie" } // PRIVÉ (espion seul)
 { "type": "chat_message", "tab": "general", "sender_id": 11, "sender_name": "Hakim",
@@ -984,3 +984,12 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
 > - **Validation.** `backend/test_heroes_roster.py` **483 ✅ / 0 ❌** (forme des 4 blocs, fourchettes
 >   exactes par tier, niveau 50 → zéros, absence propre des blocs optionnels, pureté JSON : aucun
 >   float hors `pb`/`regen`).
+
+---
+
+> **§8.112 — Nettoyage « points de match » + lobby idempotent + observabilité 4xx (chantiers AA/AB/AC, `PROMPT_NETTOYAGE_SECURITE.md`).** ⚠️ **Backend → push + redéploiement VPS requis.**
+> - **« Points de match » RETIRÉS (AA).** Le schéma `MatchRewards` de `game_over.match_rewards` n'a **plus** la clé `match_points` (économie de fin de partie = XP joueur, XP héros, Coins, **RP saisonnier** — seul ladder). La colonne `User.points_classement` est **DORMANTE** (plus jamais créditée, triée ni sérialisée). Le classement mondial (`GET /leaderboard`, §9.2) ne renvoie plus `points_classement` dans `LeaderboardEntry` ; le **départage lifetime** est désormais `stats_parties_jouees` (victoires > niveau > parties > id). Le champ `is_ranked` reste PUBLIC : une partie non classée ne crédite simplement aucun ladder.
+> - **REJOUER = MÊME MODALITÉ (AB, §8.70).** Le re-queue reproduit EXACTEMENT la partie terminée : même carte (`map_id`), même effectif (`max_players`), même statut classé (`is_ranked`) — capturés sur l'état joué (repli `MatchConfig`). Le scan ne rejoint qu'une salle compatible ; sinon une salle est CRÉÉE à l'identique (payload `create_room` étendu `map_id`/`is_ranked`).
+> - **Lobby IDEMPOTENT (AC — zéro 4xx en jeu normal).** `POST /lobby/rooms/{id}/join` ne renvoie plus de 4xx sur les courses bénignes : `200 {"joined": true}` (succès), `200 {"joined": true, "already": true}` (déjà membre, double-clic non fautif), `200 {"joined": false, "reason": "unavailable"}` (salle absente/plus `waiting`), `200 {"joined": false, "reason": "full"}` (pleine). `DELETE /lobby/rooms/{id}/leave` devient idempotent : `200 {"left": true}` (succès + suppression de la salle vide inchangée) / `200 {"left": false}` (plus dans la salle — plus AUCUN 404). Le `message` texte historique reste en clé ADDITIVE. **Lecture client DÉFENSIVE** : un `200` sans clé `joined` = succès legacy.
+> - **Observabilité 4xx/5xx.** Un middleware (`backend/main.py` → `core/http_observability.py`, testable hors app) journalise en `WARN` structuré toute réponse `status ≥ 400` (méthode, chemin, statut, User-Agent, user si le Bearer se décode) — best-effort, JAMAIS bloquant. But : après AC, un 4xx en jeu NORMAL est une ANOMALIE tracée (`docker logs backend` / Loki).
+> - **Tests.** `test_lobby_idempotent.py` **17 ✅** (contrat join/leave + middleware, FakeSession) ; `test_game_over_redaction.py` **30 ✅** (fixtures `match_points`→`xp_earned`). `grep -ri match_points backend/ frontend/scripts/` = **0**. *(Edge/CrowdSec — chantier AD — documenté dans `infra/README.md` §10 + `infra/crowdsec/RUNBOOK_BANS.md`.)*

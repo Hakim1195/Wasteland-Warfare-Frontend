@@ -516,7 +516,7 @@ func populate_podium(rows: Array, provisional: bool = false) -> void:
 
 # Une ligne du podium (§8.100 — restylée sans emojis) : panneau à liseré gauche (OR pour le
 # vainqueur, cyan discret sinon), indicatif de rang mono « 01 », brique PlayerChip, badges de
-# titres, points ; 2e ligne = objectif révélé (✓/✕) + compteurs K·C·E en mono.
+# titres ; 2e ligne = objectif révélé (✓/✕) + compteurs K·C·E en mono.
 func _make_podium_row(r: Dictionary) -> Control:
 	var is_first := str(r.get("medal", "")) == "01"
 	var wrap := PanelContainer.new()
@@ -939,15 +939,15 @@ func populate(data: Dictionary) -> void:
 		populate_rewards(rewards, bool(data.get("is_ranked", true)), has_played)
 
 # =========================================================
-# Bloc « Récompenses » (§8.47) — décompte des points + barre d'XP qui se remplit + lueur Coins
+# Bloc « Récompenses » (§8.47) — barre d'XP qui se remplit + lueur Coins (points de match RETIRÉS, AA)
 # =========================================================
 # Appelable séparément par main.gd quand le message game_over (porteur de match_rewards) arrive APRÈS
 # la construction du rapport (course réseau : l'état winner_id et le game_over sont 2 messages). La
 # garde _rewards_built évite tout doublon. `rewards` = match_rewards[player_id_local].
-# `is_ranked` (§8.88) : en partie NON classée, le compteur « POINTS DE MATCH » cède la place à une
-# mention « PARTIE NON CLASSÉE » (le serveur renvoie match_points = 0 : afficher « +0 » serait
-# trompeur). Défaut `true` = comportement LEGACY — un serveur antérieur ne diffuse pas le champ
-# mais crédite encore le ladder sur toutes les parties.
+# `is_ranked` (§8.88) : en partie NON classée, une mention muette « PARTIE NON CLASSÉE » est
+# affichée (aucun ladder crédité) ; en classée, c'est le bloc RP qui porte le classement. Les
+# « points de match » (ladder À VIE) ont été RETIRÉS du jeu (AA). Défaut `true` = comportement
+# LEGACY (un serveur antérieur ne diffuse pas le champ).
 # `has_played` (§8.99, ADDITIF, défaut `false` = comportement historique) distingue les DEUX cas
 # qu'un simple `rewards.is_empty()` confondait :
 #   - SPECTATEUR (n'a pas joué) → on n'affiche rien : « XP : +0 » pour une partie non disputée
@@ -1011,8 +1011,8 @@ func _build_rp_block(block: VBoxContainer, rewards: Dictionary) -> void:
 		prot.add_theme_font_size_override("font_size", 12)
 		block.add_child(prot)
 
-# Onglet 1 — bloc RÉCOMPENSES animé (points de match + jauge XP/Coins + Pass + montées de niveau)
-# SUIVI du détail du barème (points & XP réconciliés aux totaux serveur). Coroutine (await l'anim).
+# Onglet 1 — bloc RÉCOMPENSES animé (jauge XP/Coins + Pass + montées de niveau) SUIVI du détail
+# du barème d'XP réconcilié aux totaux serveur. Coroutine (await l'anim). (Points de match RETIRÉS, AA.)
 func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	var box: VBoxContainer = _player_rewards_box if _player_rewards_box != null else _attrition_ref
 	# §8.100 — boîte VIDÉE avant construction : efface le placeholder « en attente » posé par
@@ -1115,8 +1115,8 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 		block.add_child(coins_sub)
 
 	box.add_child(block)
-	# NOUVEAU — détail ligne-à-ligne du barème (points de match + XP de profil), réconcilié aux
-	# totaux OFFICIELS serveur (match_points / xp_earned) pour ne jamais mentir sur le chiffre.
+	# Détail ligne-à-ligne du barème d'XP de profil, réconcilié au total OFFICIEL serveur
+	# (`xp_earned`) pour ne jamais mentir sur le chiffre (points de match RETIRÉS du jeu, AA).
 	# §8.99 — SAUF en cas d'anomalie (`rewards` vide) : le détail se réconcilie aux totaux serveur
 	# avec REPLI sur le total reconstruit côté client (cf. _render_detail), il afficherait donc un
 	# « TOTAL : +N » non nul JUSTE SOUS la bannière « AUCUNE RÉCOMPENSE REÇUE DU SERVEUR » — un

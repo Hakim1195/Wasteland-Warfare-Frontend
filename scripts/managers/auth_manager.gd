@@ -13,6 +13,9 @@ var user_id: int = -1
 # Pseudo du joueur connecté. Renseigné dès le login (claim "sub" du JWT décodé) puis confirmé
 # par /auth/me. Affiché dans le HUD de l'arène (identité + couleur de faction, CONTEXTE.md §8.23).
 var username: String = ""
+# Notice à afficher sur l'écran d'auth après une redirection (§AC.5, ex. « Session expirée — … »).
+# Posée par le hub AVANT de rediriger, LUE et effacée par auth_screen à son _ready. "" = rien.
+var session_notice: String = ""
 var http_request: HTTPRequest
 var _id_http: HTTPRequest
 
@@ -31,8 +34,8 @@ func _ready():
 	http_request = HTTPRequest.new()
 	add_child(http_request)
 
-	# Disable SSL certificate validation for development server
-	http_request.set_tls_options(TLSOptions.client_unsafe())
+	# Validation TLS selon l'environnement (§AC.10) : vérifiée en prod, tolérée en dev local seul.
+	http_request.set_tls_options(_tls_options())
 
 	# Connect the request completed signal
 	http_request.request_completed.connect(_on_request_completed)
@@ -41,8 +44,16 @@ func _ready():
 	# qui sert au login/profil et pourrait être utilisé en parallèle par l'UI).
 	_id_http = HTTPRequest.new()
 	add_child(_id_http)
-	_id_http.set_tls_options(TLSOptions.client_unsafe())
+	_id_http.set_tls_options(_tls_options())
 	_id_http.request_completed.connect(_on_id_request_completed)
+
+# Options TLS (§AC.10) : ApiConfig décide (certificat VÉRIFIÉ en prod, toléré non vérifié en dev
+# local seulement) ; repli SÉCURISÉ si l'autoload manque. Jamais de client_unsafe contre la prod.
+func _tls_options() -> TLSOptions:
+	var cfg := get_node_or_null("/root/ApiConfig")
+	if cfg != null and cfg.has_method("tls_options"):
+		return cfg.tls_options()
+	return TLSOptions.client()
 
 # Récupère l'ID numérique du joueur via /auth/me et le stocke dans user_id.
 func _fetch_user_id():

@@ -2026,7 +2026,6 @@ func _podium_rows(rankings: Array) -> Array:
 	for p in rankings:
 		pids.append(int(p))
 	var titles: Dictionary = OperationReportScript.honor_titles(GameState.statistics, pids)
-	var my_rewards := _local_rewards()
 	var rows: Array = []
 	for i in range(pids.size()):
 		var pid := int(pids[i])
@@ -2046,11 +2045,6 @@ func _podium_rows(rankings: Array) -> Array:
 			"kills": WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", pid),
 			"conquests": WarRoom.stat_of(GameState.statistics, "conquests_by_player", pid),
 			"eliminations": WarRoom.stat_of(GameState.statistics, "eliminations_by_player", pid),
-			# -1 = « aucun point à afficher » (convention du podium) : les points des AUTRES sont
-			# inconnus (redaction serveur) et, en partie NON classée (§8.88), les miens non plus
-			# n'ont pas à s'afficher — le serveur renvoie 0, aucun ladder n'est crédité.
-			"points": int(my_rewards.get("match_points", -1)) \
-				if (pid == _my_id() and _match_is_ranked()) else -1,
 		})
 	return rows
 

@@ -4,6 +4,12 @@ signal server_connected
 signal rooms_loaded(rooms: Array)
 signal lobby_action_success(action: String, data: Dictionary)
 signal lobby_error(message: String)
+# Échec d'un FETCH de salles (§AC.7) : DISTINCT de lobby_error (join/create) → lobby_screen ARRÊTE
+# son polling auto au lieu de re-tenter en rafale. Repris seulement après un rafraîchissement manuel.
+signal rooms_fetch_failed(message: String)
+# Session expirée (§AC.5) : émis UNE SEULE FOIS quand une réponse REST authentifiée revient en
+# 401/403. Les écrans hub s'y abonnent pour rediriger vers l'auth — aucun retry, aucune tempête.
+signal session_expired
 
 # --- Signaux temps réel (arène) ---
 # Émis après chaque mise à jour de l'état de jeu reçue du serveur. L'UI (HUD, plateau)
@@ -150,6 +156,9 @@ var base_url = "https://api.wasteland-warfare.com/api/v1"
 var current_room_id: String = ""
 # Id de salle en cours de jointure (mémorisé pour le renvoyer au signal de succès).
 var _pending_join_id: int = -1
+# Session encore valide (§AC.5) : passe à false au 1er 401/403 → coupe les requêtes authentifiées et
+# bloque la tempête. Ré-armée à true sur une (re)connexion réussie (AuthManager.auth_success).
+var _session_valid := true
 
 func _ready() -> void:
 	# Hôtes backend : source unique ApiConfig (repli sur la prod si l'autoload manque). §P1
@@ -157,6 +166,8 @@ func _ready() -> void:
 	if cfg != null:
 		base_url = cfg.http_host + "/api/v1"
 		websocket_url = cfg.ws_host + "/ws/"
+	# Une (re)connexion réussie RÉ-ARME la session (retour de l'écran d'auth après expiration).
+	AuthManager.auth_success.connect(func(_m): _session_valid = true)
 
 # =========================================================
 # PARTIE 1 : MULTIJOUEUR TEMPS RÉEL (WEBSOCKET)
@@ -187,7 +198,7 @@ func connect_to_server(room_id: String):
 	if AuthManager.jwt_token != "":
 		final_url += "&token=" + str(AuthManager.jwt_token).uri_encode()
 
-	var tls_options = TLSOptions.client_unsafe()
+	var tls_options = _tls_options()
 
 	if AuthManager.jwt_token != "":
 		var headers = ["Authorization: Bearer " + AuthManager.jwt_token]
@@ -421,32 +432,65 @@ func send_chat_message(tab: String, text: String, target_id: int = -1) -> void:
 # PARTIE 2 : NAVIGATEUR DE SALLES (HTTP REST)
 # =========================================================
 
-# Fonction utilitaire pour créer des requêtes sécurisées avec le Token
-func _send_api_request(endpoint: String, method: int, data: Dictionary = {}, callback: Callable = Callable()):
+# Détection CENTRALISÉE d'expiration de session (§AC.5). Appelée pour CHAQUE réponse REST (via le
+# wrapper de _send_api_request) : sur 401/403, émet `session_expired` UNE SEULE FOIS, invalide la
+# session et coupe les requêtes authentifiées suivantes. Renvoie true si la session est encore valide.
+# AUCUN retry automatique — l'écran hub redirige vers l'auth (AUTH_SESSION_EXPIRED).
+func _check_session(response_code: int) -> bool:
+	if response_code == 401 or response_code == 403:
+		if _session_valid:
+			_session_valid = false
+			session_expired.emit()
+		return false
+	return true
+
+# Options TLS (§AC.10) : déléguées à ApiConfig (certificat VÉRIFIÉ en prod, toléré non vérifié en dev
+# local seulement). Repli SÉCURISÉ (client vérifié) si l'autoload manque — jamais de client_unsafe
+# implicite en production.
+func _tls_options() -> TLSOptions:
+	var cfg := get_node_or_null("/root/ApiConfig")
+	if cfg != null and cfg.has_method("tls_options"):
+		return cfg.tls_options()
+	return TLSOptions.client()
+
+# Requête REST utilitaire. `authenticated` (défaut true) : un endpoint authentifié appelé SANS token
+# (session pas restaurée) ou après expiration n'est PAS émis (§AC.6) — un « Bearer » vide = 401
+# garanti → tempête. Les endpoints PUBLICS (leaderboard, liste des salles) passent authenticated=false.
+func _send_api_request(endpoint: String, method: int, data: Dictionary = {},
+		callback: Callable = Callable(), authenticated: bool = true):
+	var token: String = AuthManager.jwt_token
+	if authenticated and (token == "" or not _session_valid):
+		# Requête authentifiée impossible : on n'émet RIEN (l'appelant diffère au signal de session,
+		# ou a déjà été redirigé vers l'auth). Le callback n'est pas appelé.
+		return
 	var http = HTTPRequest.new()
 	add_child(http)
-	http.set_tls_options(TLSOptions.client_unsafe())
-	
+	http.set_tls_options(_tls_options())
+
 	if callback.is_valid():
-		http.request_completed.connect(callback.bind(http))
-		
-	var headers = [
-		"Authorization: Bearer " + AuthManager.jwt_token,
-		"Content-Type: application/json",
-		# Empêche Godot/les proxys de servir une réponse en cache (liste des salles toujours fraîche).
-		"Cache-Control: no-cache"
-	]
-	
+		# Intercepteur CENTRAL (§AC.5) : chaque réponse passe d'abord par _check_session (expiration
+		# détectée UNE fois), puis le callback d'origine est appelé avec sa signature habituelle
+		# (…, http_node[, rid]) — bind(http) reproduit exactement le comportement précédent.
+		http.request_completed.connect(func(_r, _rc, _h, _b):
+			_check_session(_rc)
+			callback.bind(http).call(_r, _rc, _h, _b))
+
+	# AC.6 — en-tête Authorization ajouté SEULEMENT si un token existe (jamais de « Bearer » vide).
+	var headers := ["Content-Type: application/json", "Cache-Control: no-cache"]
+	if token != "":
+		headers.append("Authorization: Bearer " + token)
+
 	var json_string = JSON.stringify(data) if not data.is_empty() else ""
 	var err = http.request(base_url + endpoint, headers, method, json_string)
-	
+
 	if err != OK:
 		lobby_error.emit(tr("NET_SERVER_UNREACHABLE"))
 		http.queue_free()
 
 # 1. Récupérer les salles
 func fetch_rooms():
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_rooms_fetched)
+	# GET /lobby/rooms est PUBLIC (aucune auth serveur) → authenticated=false (part même sans token).
+	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_rooms_fetched, false)
 
 func _on_rooms_fetched(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
@@ -455,7 +499,9 @@ func _on_rooms_fetched(_result, response_code, _headers, body, http_node):
 		if typeof(data) == TYPE_ARRAY:
 			rooms_loaded.emit(data)
 	else:
-		lobby_error.emit(tr("NET_ROOMS_FETCH_FAILED"))
+		# AC.7 — échec du FETCH (≠ join) : signal DÉDIÉ → lobby_screen coupe son polling auto (pas de
+		# re-tentative toutes les 3 s) et n'y revient qu'après un rafraîchissement manuel réussi.
+		rooms_fetch_failed.emit(tr("NET_ROOMS_FETCH_FAILED"))
 
 # 2. Créer une salle
 # max_players par défaut = 6 (capacité maximale autorisée, cf. §4 : 3 à 6 joueurs).
@@ -492,12 +538,23 @@ func join_room(room_id: int):
 	_pending_join_id = room_id
 	_send_api_request("/lobby/rooms/" + str(room_id) + "/join", HTTPClient.METHOD_POST, {}, _on_room_joined)
 
-func _on_room_joined(_result, response_code, _headers, _body, http_node):
+func _on_room_joined(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
-	if response_code == 200:
+	# AC.S2 — contrat idempotent : 200 {"joined": true} (ou legacy 200 sans clé) → succès ;
+	# 200 {"joined": false, "reason": …} (salle pleine / disparue) → échec BÉNIN → le radar affiche
+	# un statut et rafraîchit UNE fois (AC.9), sans retry auto.
+	if response_code == 200 and _join_ok(body):
 		lobby_action_success.emit("join", {"id": _pending_join_id})
 	else:
 		lobby_error.emit(tr("NET_ROOM_JOIN_FAILED"))
+
+# Vrai si un POST /join signale un succès. Lecture DÉFENSIVE (§AC.S2) : un corps sans clé `joined`
+# (serveur legacy renvoyant {"message": …}) sur un 200 = succès ; `joined: false` = échec bénin.
+func _join_ok(body) -> bool:
+	var data = JSON.parse_string(body.get_string_from_utf8()) if body != null else null
+	if typeof(data) != TYPE_DICTIONARY:
+		return true
+	return bool(data.get("joined", true))
 
 # 4. Classement mondial (R3 — §9.2) : GET /leaderboard?limit=&offset= (public ; enrichi du bloc `me`
 # si le token est joint). Le serveur trie par victoires décroissantes et renvoie une enveloppe
@@ -520,7 +577,8 @@ func fetch_leaderboard(limit: int = 20, offset: int = 0, scope: String = "season
 		url += "&division=%s" % division
 		if tier != "":
 			url += "&tier=%s" % tier
-	_send_api_request(url, HTTPClient.METHOD_GET, {}, _on_leaderboard_fetched)
+	# GET /leaderboard est PUBLIC (bloc me enrichi si un token est joint) → authenticated=false.
+	_send_api_request(url, HTTPClient.METHOD_GET, {}, _on_leaderboard_fetched, false)
 
 func _on_leaderboard_fetched(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
@@ -749,6 +807,33 @@ var _requeue_attempts := 0             # jointures tentées CE cycle (borne dure
 var _requeue_cycle := 0                # jeton de cycle (le chien de garde n'abat que le sien)
 const REQUEUE_MAX_ATTEMPTS := 4
 const REQUEUE_WATCHDOG_SECONDS := 12.0
+# Modalité de la partie TERMINÉE à REPRODUIRE (AB §8.70 v2) : carte jouée, effectif réel, statut
+# classé. Capturée EN TÊTE de requeue() et mémorisée pour toute la séquence (scan + création +
+# éventuel 2ᵉ requeue). Source de vérité = l'état joué ; replis = l'intention du menu.
+var _requeue_mode: Dictionary = {}
+
+# Modalité de la partie TERMINÉE (source de vérité : l'état joué ; replis : intention du menu).
+# ⚠️ `is_ranked` : GameState n'expose PAS l'état brut du serveur — le flag de classement de la
+# partie qui vient de finir vit dans `last_match_is_ranked` (bloc PUBLIC du game_over, §8.88).
+# C'est LUI la vérité de la modalité ; `MatchConfig.selected_*` ne sert que de repli (accès direct
+# au requeue sans partie jouée).
+func _requeue_required() -> Dictionary:
+	var mid := str(GameState.map_id) if str(GameState.map_id) != "" else "classic_42"
+	var count := GameState.players.size()           # effectif RÉEL joué (bots inclus)
+	if count < 3 or count > 6:
+		count = clampi(int(MatchConfig.selected_player_count), 3, 6)  # repli intention menu
+	var ranked := bool(last_match_is_ranked)         # flag diffusé par le game_over (§8.88)
+	return {"map_id": mid, "max_players": count, "is_ranked": ranked}
+
+# Id de mode dérivé de la modalité capturée (libellés lobby / waiting_room via MatchConfig).
+func _requeue_mode_id() -> String:
+	if bool(_requeue_mode.get("is_ranked", false)):
+		return "ranked"
+	match int(_requeue_mode.get("max_players", 6)):
+		3: return "trio"
+		4: return "quad"
+		5: return "five"
+		_: return "exa"
 
 func requeue() -> void:
 	if _requeue_active:
@@ -758,6 +843,12 @@ func requeue() -> void:
 	_requeue_tried.clear()
 	_requeue_attempts = 0
 	_requeue_cycle += 1
+	# AB §8.70 v2 — capture la modalité de la partie TERMINÉE (carte / effectif / classé) et re-pose
+	# l'intention : la salle d'attente, le lobby et un éventuel 2ᵉ requeue reproduisent la bonne
+	# modalité (le scan / la création ci-dessous s'y conforment).
+	_requeue_mode = _requeue_required()
+	MatchConfig.set_mode(_requeue_mode_id(), int(_requeue_mode.get("max_players", 6)),
+		bool(_requeue_mode.get("is_ranked", false)))
 	# Chien de garde : même si un callback ne revient JAMAIS (err d'envoi, réponse perdue), ce cycle
 	# ne peut plus geler le bouton pour toute la session. Le jeton rend inoffensif un timer périmé
 	# (cycle déjà clôturé par _requeue_enter/_requeue_fail, ou un NOUVEAU cycle ré-armé depuis).
@@ -770,8 +861,8 @@ func requeue() -> void:
 		socket.close()
 	connected = false
 	set_process(false)
-	# 2) Libérer la place côté base (DELETE leave — échec TOLÉRÉ : la salle a pu être détruite
-	#    par la déconnexion, ou la partie n'était plus `waiting`).
+	# 2) Libérer la place côté base (DELETE leave — désormais IDEMPOTENT 200 {"left":…}, §AC.S1 :
+	#    plus de 404 « toléré », que la salle existe encore ou non).
 	if current_room_id != "":
 		_send_api_request("/lobby/rooms/" + current_room_id + "/leave",
 			HTTPClient.METHOD_DELETE, {}, _on_requeue_left)
@@ -784,7 +875,8 @@ func _on_requeue_left(_result, _response_code, _headers, _body, http_node):
 
 func _requeue_scan() -> void:
 	current_room_id = ""
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_requeue_rooms)
+	# GET /lobby/rooms PUBLIC → authenticated=false (cohérent avec fetch_rooms).
+	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_requeue_rooms, false)
 
 func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
@@ -801,9 +893,14 @@ func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
 			continue
 		if bool(room.get("is_private", false)):
 			continue
-		# On ne re-queue JAMAIS dans une file CLASSÉE sans accord explicite : un « rejouer » après une
-		# partie normale ne doit pas déposer le joueur dans une classée à 5.
-		if bool(room.get("is_ranked", false)):
+		# AB §8.70 v2 — MÊME MODALITÉ que la partie terminée : on ne rejoint QUE des salles dont le
+		# statut classé, la carte ET l'effectif correspondent à `_requeue_mode`. Un « rejouer » après
+		# une Classée à 5 reste en Classée à 5 ; après un Exa 6 reste en Exa 6 (jamais de mélange).
+		# Lecture DÉFENSIVE (piège JSON §5, champs du chantier C) : un serveur antérieur sans
+		# `is_ranked` / `map_id` retombe sur (false / "classic_42"), cohérent.
+		if bool(room.get("is_ranked", false)) != bool(_requeue_mode.get("is_ranked", false)):
+			continue
+		if str(room.get("map_id", "classic_42")) != str(_requeue_mode.get("map_id", "classic_42")):
 			continue
 		var rid := int(room.get("id", -1))
 		# Salle déjà tentée CE cycle (join échoué / bouclé dessus) → on ne la re-propose pas.
@@ -811,28 +908,44 @@ func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
 			continue
 		var maxp := int(room.get("max_players", 0))
 		var cur := int(room.get("current_players", 0))
+		if maxp != int(_requeue_mode.get("max_players", maxp)):
+			continue
 		if str(room.get("status", "waiting")) == "waiting" and cur < maxp and maxp > 0:
 			# Avant CHAQUE tentative de join : marque la salle et borne le nombre d'essais du cycle.
 			_requeue_tried[rid] = true
 			_requeue_attempts += 1
 			if _requeue_attempts > REQUEUE_MAX_ATTEMPTS:
-				_requeue_fail(tr("NET_REQUEUE_RADAR_UNREACHABLE"))
+				# AB.4 — plus de re-scan infini : après quelques échecs de join (courses), on CRÉE
+				# directement une salle à la bonne modalité (on retrouve à coup sûr SA partie).
+				_requeue_create()
 				return
 			_send_api_request("/lobby/rooms/" + str(rid) + "/join",
 				HTTPClient.METHOD_POST, {}, _on_requeue_joined.bind(rid))
 			return
-	# Aucune salle disponible → on en CRÉE une (défauts §8.70 : publique, 6 places).
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST,
-		{"max_players": 6, "is_private": false, "secret_code": ""}, _on_requeue_created)
+	# Aucune salle compatible → on en CRÉE une à la MÊME modalité (carte / effectif / classé).
+	_requeue_create()
 
 # NB signature : _send_api_request bind http_node APRÈS le rid déjà lié → (…, http_node, rid).
-func _on_requeue_joined(_result, response_code, _headers, _body, http_node, rid: int):
+func _on_requeue_joined(_result, response_code, _headers, body, http_node, rid: int):
 	http_node.queue_free()
-	if response_code == 200:
+	# AC.S2 — 200 {"joined": true} (ou legacy) = entrée ; 200 {"joined": false, "reason": …} (salle
+	# pleine / disparue entre le scan et le join) = échec BÉNIN → on relance un cycle (borné par
+	# _requeue_attempts → création à la modalité voulue). Plus aucun 4xx sur ce chemin.
+	if response_code == 200 and _join_ok(body):
 		_requeue_enter(rid)
 	else:
-		# La salle s'est remplie entre le scan et le join : on retente un cycle complet.
 		_requeue_scan()
+
+# Crée une salle publique reproduisant EXACTEMENT la modalité capturée (AB.3) : même carte, même
+# effectif, même statut classé. Mêmes clés de payload que create_room (contrat serveur).
+func _requeue_create() -> void:
+	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST, {
+		"max_players": int(_requeue_mode.get("max_players", 6)),
+		"is_private": false,
+		"secret_code": "",
+		"map_id": str(_requeue_mode.get("map_id", "classic_42")),
+		"is_ranked": bool(_requeue_mode.get("is_ranked", false)),
+	}, _on_requeue_created)
 
 func _on_requeue_created(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()

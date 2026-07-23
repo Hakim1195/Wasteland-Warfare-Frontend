@@ -75,6 +75,12 @@ func _ready():
 	if AuthManager.has_saved_token():
 		_try_auto_login()
 
+	# Session expirée AILLEURS (§AC.5) : message laissé par le hub avant redirection. Affiché ici (le
+	# token a déjà été purgé → pas d'auto-login concurrent), puis effacé pour ne pas le re-montrer.
+	if AuthManager.session_notice != "":
+		status_label.text = AuthManager.session_notice
+		AuthManager.session_notice = ""
+
 # Lance la validation silencieuse de la session sauvegardée.
 func _try_auto_login() -> void:
 	_auto_login = true
