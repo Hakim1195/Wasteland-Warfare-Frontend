@@ -4,6 +4,10 @@ signal auth_success(message: String)
 signal auth_failed(error_msg: String)
 signal profile_loaded(profile_data: Dictionary)
 signal user_id_loaded(user_id: int)
+# Avatar Steam prêt à l'affichage (§8.114). Émis une fois la texture décodée, et RE-émis (en différé)
+# à chaque `ensure_avatar()` d'une Vue qui arrive après coup — `top_nav` est reconstruit à chaque
+# changement d'écran, il doit pouvoir récupérer l'avatar sans re-télécharger.
+signal avatar_loaded(texture: Texture2D)
 
 var base_url = "https://api.wasteland-warfare.com"
 var jwt_token: String = ""
@@ -18,6 +22,18 @@ var username: String = ""
 var session_notice: String = ""
 var http_request: HTTPRequest
 var _id_http: HTTPRequest
+
+# --- Avatar Steam (§8.114) : SIGNAL DE RECONNAISSANCE du compte -------------------------------
+# L'URL est fournie par `/auth/me` (`steam_avatar_url`), DÉJÀ validée côté serveur comme pointant
+# sur un CDN Steam — le client n'a donc pas à la re-contrôler. "" = aucun avatar connu.
+var avatar_url: String = ""
+# Texture décodée, mise en cache EN MÉMOIRE pour toute la session de jeu : `top_nav` est reconstruit
+# à chaque écran, un cache disque n'économiserait qu'un seul téléchargement par lancement pour le
+# prix d'une invalidation à gérer. Volontairement pas de persistance.
+var avatar_texture: Texture2D = null
+var _avatar_http: HTTPRequest
+# URL du téléchargement EN COURS ("" = aucun) — évite d'empiler deux requêtes sur le même avatar.
+var _avatar_pending_url: String = ""
 
 # Persistance de session (§P1) : le JWT est sauvegardé ici à la connexion réussie pour éviter de
 # re-saisir ses identifiants à CHAQUE lancement. L'écran d'auth tente une reconnexion silencieuse au
@@ -84,6 +100,14 @@ func _ready():
 	add_child(_steam_timer)
 	_steam_timer.timeout.connect(_on_steam_poll_tick)
 
+	# Avatar Steam (§8.114). ⚠️ TLS VÉRIFIÉ EN DUR ici, et NON `_tls_options()` : cette requête ne
+	# part pas vers NOTRE backend mais vers un CDN Steam public, toujours en https. La tolérance
+	# `client_unsafe()` du mode dev local (§8.112) n'a aucune raison de s'appliquer à un tiers.
+	_avatar_http = HTTPRequest.new()
+	add_child(_avatar_http)
+	_avatar_http.set_tls_options(TLSOptions.client())
+	_avatar_http.request_completed.connect(_on_avatar_request_completed)
+
 # Options TLS (§AC.10) : ApiConfig décide (certificat VÉRIFIÉ en prod, toléré non vérifié en dev
 # local seulement) ; repli SÉCURISÉ si l'autoload manque. Jamais de client_unsafe contre la prod.
 func _tls_options() -> TLSOptions:
@@ -110,8 +134,66 @@ func _on_id_request_completed(_result, response_code, _headers, body):
 			# /auth/me renvoie aussi le pseudo (UserResponse.username) : source faisant foi.
 			if data.has("username"):
 				username = str(data["username"])
+			# …et l'avatar Steam (§8.114) : c'est ICI qu'il arrive le plus tôt après un login,
+			# `_fetch_user_id` étant lancé dès l'obtention du token.
+			_capture_avatar_url(data)
 			emit_signal("user_id_loaded", user_id)
 			print("AuthManager : player_id récupéré = ", user_id)
+
+# =========================================================
+# AVATAR STEAM (§8.114) — reconnaissance visuelle du compte
+# =========================================================
+
+# Mémorise l'URL d'avatar livrée par /auth/me et déclenche le téléchargement si elle a CHANGÉ.
+# Appelée depuis les deux points d'entrée du profil (http_request et _id_http).
+func _capture_avatar_url(data) -> void:
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	var url := str(data.get("steam_avatar_url", ""))
+	if url == avatar_url:
+		return
+	# L'avatar a changé côté Steam (ou vient d'arriver) : la texture en cache est périmée.
+	avatar_url = url
+	avatar_texture = null
+	if url != "":
+		_download_avatar()
+
+# Point d'entrée des Vues : « donne-moi l'avatar dès que possible ». À appeler APRÈS s'être connecté
+# au signal. Ne re-télécharge jamais un avatar déjà en cache.
+func ensure_avatar() -> void:
+	if avatar_texture != null:
+		# Émission DIFFÉRÉE : l'appelant est typiquement en plein `_ready()`, un signal synchrone
+		# arriverait avant que sa hiérarchie de nœuds ne soit prête à l'afficher.
+		emit_signal.call_deferred("avatar_loaded", avatar_texture)
+		return
+	if avatar_url != "":
+		_download_avatar()
+
+func _download_avatar() -> void:
+	if _avatar_http == null or avatar_url == "":
+		return
+	if _avatar_pending_url == avatar_url:
+		return  # déjà en vol : un HTTPRequest ne traite qu'une requête à la fois.
+	_avatar_pending_url = avatar_url
+	var err = _avatar_http.request(avatar_url, [], HTTPClient.METHOD_GET)
+	if err != OK:
+		_avatar_pending_url = ""
+
+func _on_avatar_request_completed(result, response_code, _headers, body):
+	_avatar_pending_url = ""
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200 or body.is_empty():
+		return
+	# Steam sert du JPEG, mais le format ne fait l'objet d'aucun contrat : on tente le PNG en repli
+	# plutôt que de dépendre d'une extension d'URL. Un échec est SILENCIEUX — l'avatar est un
+	# confort, jamais une raison de perturber le joueur avec une erreur.
+	var img := Image.new()
+	var err := img.load_jpg_from_buffer(body)
+	if err != OK:
+		err = img.load_png_from_buffer(body)
+	if err != OK:
+		return
+	avatar_texture = ImageTexture.create_from_image(img)
+	emit_signal("avatar_loaded", avatar_texture)
 
 # Décode le claim "sub" (= username) d'un JWT sans vérifier la signature. Le payload est encodé
 # en base64url (URL-safe, sans padding) : on le convertit en base64 standard avant décodage.
@@ -300,6 +382,7 @@ func _on_request_completed(_result, response_code, _headers, body):
 				if data.has("id"):
 					user_id = int(data["id"])
 					emit_signal("user_id_loaded", user_id)
+				_capture_avatar_url(data)
 				emit_signal("profile_loaded", data)
 			elif data.has("message"):
 				emit_signal("auth_success", tr("AUTHM_SUCCESS_DETAIL") % str(data["message"]))
@@ -353,6 +436,10 @@ func clear_session() -> void:
 	jwt_token = ""
 	user_id = -1
 	username = ""
+	# L'avatar fait partie de l'identité : le laisser en cache afficherait le visage du joueur
+	# précédent sur l'écran de connexion du suivant (poste partagé).
+	avatar_url = ""
+	avatar_texture = null
 	if FileAccess.file_exists(SESSION_PATH):
 		DirAccess.remove_absolute(SESSION_PATH)
 

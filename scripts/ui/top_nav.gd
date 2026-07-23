@@ -34,6 +34,9 @@ const LOGO_TEX = preload("res://assets/images/logo_mark.svg")  # marque hex-nœu
 # Les écrans hôtes décalent leur contenu de NAV_H pour ne jamais passer dessous.
 const NAV_H := 100.0
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
+# Côté de l'avatar Steam (§8.114) : calé sur la hauteur du bloc eyebrow + pseudo pour que le cadre
+# identité garde exactement sa hauteur actuelle — l'ajout ne doit pas décaler la barre de navigation.
+const AVATAR_SIZE := 44.0
 const GOLD := Color(0.878431, 0.698039, 0.286275, 1)
 const TEXT := Color(0.933333, 0.952941, 0.968627, 1)
 const MUTED := Color(0.541176, 0.592157, 0.647059, 1)
@@ -89,6 +92,10 @@ var active_tab: String = "lobby"
 var _font: Font
 var _xp_bar: PanelContainer = null
 var _operator_name: Label = null
+# Avatar Steam (§8.114) : le cadre porte la bordure de charte et la VISIBILITÉ, la texture vit dans
+# le TextureRect. Séparer les deux évite d'afficher un carré cyan vide avant l'arrivée de l'image.
+var _avatar_frame: PanelContainer = null
+var _avatar_rect: TextureRect = null
 
 # --- Pastille DÉFIS (§8.94, ex-main_menu §8.65) : « DÉFIS ●N » quand N missions sont réclamables ---
 # Vit désormais DANS la nav → la pastille est visible sur TOUS les écrans hub, plus seulement au menu.
@@ -124,6 +131,11 @@ func _ready() -> void:
 	_build()
 
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
+	# Avatar Steam (§8.114) : on s'abonne PUIS on réclame. La nav étant reconstruite à chaque
+	# changement d'écran, `ensure_avatar` répond depuis le cache mémoire de l'AuthManager (émission
+	# différée) — un seul téléchargement pour toute la session, quel que soit le nombre d'écrans.
+	AuthManager.avatar_loaded.connect(_on_avatar_loaded)
+	AuthManager.ensure_avatar()
 	# La nav est le SEUL déclencheur de ces deux fetchs sur les écrans hub (§8.94) : elle est montée
 	# partout, donc un écran hôte n'a qu'à ÉCOUTER le signal global s'il en a besoin (le menu écoute
 	# missions_loaded pour sa carte Défis et profile_history_loaded pour son héros) — évite le
@@ -312,6 +324,30 @@ func _build_identity_frame() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 14)
 	frame.add_child(row)
+
+	# Avatar Steam (§8.114) — placé AVANT le pseudo : c'est le premier repère que l'œil accroche au
+	# retour du navigateur, là où un joueur se demande « suis-je bien connecté sur MON compte ? ».
+	# Masqué tant qu'aucune texture n'est disponible (compte sans avatar, API Steam muette, hors
+	# ligne) : la mise en page se referme proprement, sans gabarit vide ni trou.
+	_avatar_frame = PanelContainer.new()
+	_avatar_frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_avatar_frame.visible = false
+	var av_st := StyleBoxFlat.new()
+	av_st.bg_color = Color(ACCENT, 0.08)
+	av_st.set_corner_radius_all(0)          # ADN angulaire de la charte §2.
+	av_st.set_border_width_all(1)
+	av_st.border_color = Color(ACCENT, 0.55)
+	av_st.set_content_margin_all(2)
+	_avatar_frame.add_theme_stylebox_override("panel", av_st)
+	row.add_child(_avatar_frame)
+
+	_avatar_rect = TextureRect.new()
+	_avatar_rect.custom_minimum_size = Vector2(AVATAR_SIZE, AVATAR_SIZE)
+	_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	# L'avatar Steam est carré (184×184) : KEEP_ASPECT_COVERED est une simple assurance contre une
+	# source non carrée — mieux vaut rogner que déformer un visage.
+	_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_avatar_frame.add_child(_avatar_rect)
 
 	var idbox := VBoxContainer.new()
 	idbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -755,6 +791,14 @@ func _style_danger_button(btn: Button) -> void:
 # =========================================================
 # DONNÉES (AuthManager / NetworkManager)
 # =========================================================
+# Avatar Steam prêt (§8.114) — le cadre n'apparaît qu'à cet instant, jamais vide.
+func _on_avatar_loaded(tex: Texture2D) -> void:
+	if not is_inside_tree() or _avatar_rect == null:
+		return
+	_avatar_rect.texture = tex
+	if _avatar_frame:
+		_avatar_frame.visible = tex != null
+
 func _on_profile_loaded(data: Dictionary) -> void:
 	if not is_inside_tree():
 		return
