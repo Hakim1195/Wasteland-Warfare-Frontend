@@ -70,10 +70,16 @@ func _ready() -> void:
 	title.add_theme_color_override("font_color", GOLD)
 	title_box.add_child(title)
 
-	var requeue := _make_button(tr("SPECT_REQUEUE"), GOLD)
+	# §8.116 : après une partie PRIVÉE, pas de re-file (salons éphémères) → le bouton devient un
+	# retour au QG (émet quit_pressed, que main.gd route vers le QG). Sinon, re-file publique.
+	var _is_private := bool(GameState.is_private)
+	var requeue := _make_button(tr("MM_BACK_TO_HQ") if _is_private else tr("SPECT_REQUEUE"), GOLD)
 	requeue.pressed.connect(func():
 		requeue.disabled = true  # anti double-clic pendant la re-queue réseau.
-		requeue_pressed.emit())
+		if _is_private:
+			quit_pressed.emit()
+		else:
+			requeue_pressed.emit())
 	h.add_child(requeue)
 
 	var quit := _make_button(tr("SPECT_QUIT"), DANGER)

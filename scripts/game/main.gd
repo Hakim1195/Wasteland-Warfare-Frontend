@@ -687,9 +687,11 @@ func _on_abandon_pressed():
 	# la connexion et on quitte l'arène vers le menu principal (directive UX — abandon = on sort).
 	NetworkManager.send_action("abandon", {})
 	NetworkManager.socket.poll()
-	NetworkManager.connected = false
-	NetworkManager.set_process(false)
-	NetworkManager.socket.close()
+	# Fermeture PROPRE via le manager (revue §8.116) : leave_room() recrée le WebSocketPeer (fix
+	# STATE_CLOSING) — l'ancienne coupure à la main laissait un peer inutilisable et la recherche
+	# suivante échouait en silence. (Si le message d'abandon n'était pas parti, le serveur traite de
+	# toute façon la déconnexion dure comme un abandon, §8.31.)
+	NetworkManager.leave_room()
 	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 # Vrai si le joueur LOCAL a abandonné (Fallen Empire) : lu dans l'état serveur diffusé.
@@ -1803,18 +1805,20 @@ func _maybe_show_spectator() -> void:
 	# Échec de re-queue → retour au lobby (le socket est déjà fermé par requeue()).
 	if not NetworkManager.requeue_failed.is_connected(_on_requeue_failed):
 		NetworkManager.requeue_failed.connect(_on_requeue_failed)
+	# Partie PRIVÉE (§8.116) : requeue() refuse la re-file (salons éphémères) → retour au QG.
+	if not NetworkManager.requeue_unavailable.is_connected(_on_requeue_unavailable):
+		NetworkManager.requeue_unavailable.connect(_on_requeue_unavailable)
 	hud.add_log(tr("GAME_KIA_SPECTATOR"))
 
 func _on_spectator_requeue() -> void:
-	# Le helper réseau enchaîne quitter → radar → rejoindre/créer → waiting_room (G3 §8.70).
+	# Le helper réseau ferme le WS, re-file la même modalité et rejoint l'écran de recherche (§8.116).
+	# Après une partie PRIVÉE, il émet requeue_unavailable → retour au QG (cf. _on_requeue_unavailable).
 	NetworkManager.requeue()
 
 func _on_spectator_quit() -> void:
-	# Sortie propre du spectateur : même chemin que l'abandon (le serveur nous sait déjà éliminé —
-	# aucune action à envoyer), socket coupé puis retour menu.
-	NetworkManager.connected = false
-	NetworkManager.set_process(false)
-	NetworkManager.socket.close()
+	# Sortie propre du spectateur (le serveur nous sait déjà éliminé — aucune action à envoyer) :
+	# leave_room() (revue §8.116) recrée le WebSocketPeer (fix STATE_CLOSING), puis retour menu.
+	NetworkManager.leave_room()
 	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 func _on_requeue_failed(_message: String) -> void:
@@ -1823,8 +1827,15 @@ func _on_requeue_failed(_message: String) -> void:
 	# n'est réactivé que si le rapport reste vivant (sinon reset_requeue_button est un no-op interne).
 	if _report_node != null and is_instance_valid(_report_node) and _report_node.has_method("reset_requeue_button"):
 		_report_node.reset_requeue_button()
-	# Repli : retour au lobby (l'écran lobby réaffiche le radar ; le message est déjà explicite).
-	TransitionManager.change_scene("res://scenes/ui/lobby_screen.tscn")
+	# Repli : retour au QG (le message est déjà explicite ; plus de lobby, §8.116).
+	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
+
+# Partie PRIVÉE (§8.116) : la re-file est impossible (salons éphémères) → retour au QG. On réactive
+# d'abord le bouton du rapport s'il est encore affiché (défensif via has_method).
+func _on_requeue_unavailable() -> void:
+	if _report_node != null and is_instance_valid(_report_node) and _report_node.has_method("reset_requeue_button"):
+		_report_node.reset_requeue_button()
+	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 func _show_victory():
 	if _victory_shown:
@@ -2224,15 +2235,11 @@ func _has_played() -> bool:
 			return true
 	return GameState.players.has(str(_my_id()))
 
-# CTA « RETOURNER AU LOBBY » : nettoyage de session puis retour au lobby (≠ ancien retour au
-# main_menu). lobby_screen re-fetch les salles en REST (le JWT reste valide).
+# CTA de fin de partie : fermeture PROPRE du WS (leave_room recrée le socket — fix STATE_CLOSING)
+# puis retour au QG (§8.116 : plus de lobby ; le JWT reste valide pour l'écran de recherche).
 func _on_back_to_lobby():
-	if NetworkManager.socket:
-		NetworkManager.socket.close()
-	NetworkManager.connected = false
-	NetworkManager.set_process(false)
-	NetworkManager.current_room_id = ""
-	TransitionManager.change_scene("res://scenes/ui/lobby_screen.tscn")
+	NetworkManager.leave_room()
+	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
 
 func _update_instruction():
 	if GameState.winner_id != null:
@@ -2387,7 +2394,8 @@ func _on_debug_init():
 	if not NetworkManager.connected:
 		NetworkManager.connect_to_server(test_room_id)
 		await NetworkManager.server_connected
-	button.text = tr("GAME_DEBUG_INITIALIZING")
-	NetworkManager.send_init_game()
+	# §8.116 : l'init de partie en solo (backdoor WS init_game) est SUPPRIMÉE — une partie ne démarre
+	# plus que via le matchmaker ou un salon privé (launch_room, sous verrou). Ce bouton de debug ne
+	# peut donc plus initialiser une partie ; il se limite à la connexion WS ci-dessus.
 	button.disabled = false
 	button.hide()

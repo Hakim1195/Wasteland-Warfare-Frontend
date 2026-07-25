@@ -403,12 +403,10 @@ func _set_status(text: String) -> void:
 # l'identité (mémoire ET disque, §P1) via AuthManager.clear_session(), puis renvoie l'opérateur vers
 # l'écran d'authentification — toujours via le fondu gunmetal du TransitionManager.
 func _on_logout_pressed() -> void:
-	# 1. Coupure du WebSocket (défensif : hors d'une partie aucun tunnel n'est ouvert, l'écran
-	#    Paramètres n'étant accessible que depuis le menu principal).
-	if NetworkManager.socket.get_ready_state() != WebSocketPeer.STATE_CLOSED:
-		NetworkManager.socket.close()
-	NetworkManager.connected = false
-	NetworkManager.current_room_id = ""
+	# 1. Coupure du WebSocket (défensif : hors d'une partie aucun tunnel n'est ouvert). leave_room()
+	#    (revue §8.116) ferme ET recrée le peer (fix STATE_CLOSING) + purge current_room_id — plus
+	#    aucune Vue ne manipule NetworkManager.socket directement (Règle d'Or §6.1).
+	NetworkManager.leave_room()
 	# 2. Purge complète de la session (sinon la reconnexion auto §P1 relogguerait l'opérateur au
 	#    prochain lancement malgré sa déconnexion volontaire).
 	AuthManager.clear_session()

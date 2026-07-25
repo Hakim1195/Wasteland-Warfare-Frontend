@@ -194,7 +194,10 @@ func _build_requeue_button() -> void:
 	var parent := anchor.get_parent()
 	var btn := Button.new()
 	btn.name = "RequeueButton"
-	btn.text = tr("REPORT_REQUEUE")
+	# §8.116 : après une partie PRIVÉE, pas de re-file (salons éphémères) → le bouton devient un
+	# retour au QG. Sinon, il relance une recherche publique de la même modalité (requeue()).
+	var _is_private := bool(GameState.is_private)
+	btn.text = tr("MM_BACK_TO_HQ") if _is_private else tr("REPORT_REQUEUE")
 	btn.custom_minimum_size = anchor.custom_minimum_size
 	btn.focus_mode = Control.FOCUS_NONE
 	var sb := StyleBoxFlat.new()
@@ -212,13 +215,20 @@ func _build_requeue_button() -> void:
 	btn.add_theme_color_override("font_color", ACCENT_GOLD)
 	btn.add_theme_color_override("font_hover_color", Color("eef3f7"))
 	btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
-	btn.pressed.connect(func() -> void:
-		AudioManager.play_sfx("confirm")
-		btn.disabled = true
-		# État RECHERCHE : le joueur voit que la relance tourne (registre militaire, aucun emoji).
-		btn.text = tr("REPORT_REQUEUE_SEARCHING")
-		_start_requeue_pulse()
-		requeue_requested.emit())
+	if _is_private:
+		# Retour direct au QG (aucune recherche) — main.gd relie back_to_lobby → main_menu.
+		btn.pressed.connect(func() -> void:
+			AudioManager.play_sfx("confirm")
+			btn.disabled = true
+			back_to_lobby.emit())
+	else:
+		btn.pressed.connect(func() -> void:
+			AudioManager.play_sfx("confirm")
+			btn.disabled = true
+			# État RECHERCHE : le joueur voit que la relance tourne (registre militaire, aucun emoji).
+			btn.text = tr("REPORT_REQUEUE_SEARCHING")
+			_start_requeue_pulse()
+			requeue_requested.emit())
 	_requeue_btn = btn
 	parent.add_child(btn)
 	parent.move_child(btn, anchor.get_index())

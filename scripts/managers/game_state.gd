@@ -19,6 +19,10 @@ var winner_id = null  # null tant que la partie n'est pas gagnée
 # Posée à chaque update_from_json ; défaut classic (rétro-compat serveur antérieur).
 var map_id: String = "classic_42"
 
+# Partie issue d'un SALON PRIVÉ (§8.116) — champ PUBLIC de l'état (et de game_over). Sert au client
+# à masquer « REJOUER » après une privée (salons éphémères → retour au QG). Défaut false (rétro-compat).
+var is_private: bool = false
+
 # Version du client (auto-updater, CONTEXTE.md §9). Renseignée par le bootloader au démarrage
 # à partir de user://client_version.txt (défaut "1.0.0"). Envoyée au serveur dans l'URL du
 # WebSocket (network_manager) pour la validation de version stricte côté backend.
@@ -65,6 +69,8 @@ func update_from_json(state_data: Dictionary):
 	# Carte jouée (registre multi-cartes G5 §8.71) — diffusée dans l'état ; défaut classic
 	# (serveur antérieur / état legacy). Consommée par board.gd (masquage) et MapData (adjacence).
 	map_id = str(state_data.get("map_id", "classic_42"))
+	# Partie issue d'un SALON PRIVÉ (§8.116) — champ PUBLIC ; défaut false (serveur/état antérieur).
+	is_private = bool(state_data.get("is_private", false))
 	# NB : `is_bot` (G2 §8.72) est un champ PUBLIC de chaque PlayerState (dans `players`) — lu
 	# directement via GameState.players[pid].is_bot par main.gd/hud.gd (pas de miroir dédié ici).
 	# Le serveur sérialise la zone radioactive ; défaut {} si absente (état pré-game/placement).

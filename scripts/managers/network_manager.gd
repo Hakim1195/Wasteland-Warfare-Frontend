@@ -1,12 +1,8 @@
 extends Node
 
 signal server_connected
-signal rooms_loaded(rooms: Array)
 signal lobby_action_success(action: String, data: Dictionary)
 signal lobby_error(message: String)
-# Échec d'un FETCH de salles (§AC.7) : DISTINCT de lobby_error (join/create) → lobby_screen ARRÊTE
-# son polling auto au lieu de re-tenter en rafale. Repris seulement après un rafraîchissement manuel.
-signal rooms_fetch_failed(message: String)
 # Session expirée (§AC.5) : émis UNE SEULE FOIS quand une réponse REST authentifiée revient en
 # 401/403. Les écrans hub s'y abonnent pour rediriger vers l'auth — aucun retry, aucune tempête.
 signal session_expired
@@ -24,16 +20,26 @@ signal game_event(event: Dictionary)
 signal game_error(message: String)
 # Émis quand un joueur quitte la partie.
 signal player_left(player_id)
-# Émis quand la composition de la salle d'attente change (joueurs connectés + prêts + pseudos).
-# `usernames` = { "player_id": "pseudo" } (clés string, piège JSON §5) pour afficher les VRAIS noms.
-signal lobby_state_updated(players: Array, ready: Array, usernames: Dictionary)
-# Échéance UNIX (s) du remplissage IA (G2 §8.72), lue par waiting_room.gd ; -1 = aucun fill armé.
-# Propriété (et non 4ᵉ arg du signal) pour ne pas casser les écouteurs existants de lobby_state.
-var last_bot_fill_at: float = -1.0
-# Effectif CIBLE de la salle (§8.87) = GameRoom.max_players, lu par waiting_room.gd pour
-# « X / Y joueurs ». -1 = champ absent (serveur antérieur) → repli sur l'affichage historique.
-# Propriété (et non arg de signal) : même pattern que last_bot_fill_at.
-var last_max_players: int = -1
+# --- MATCHMAKING 100 % serveur (§8.116) : files publique/classée + salons privés à code ---
+# Réponses REST : on propage TOUJOURS le dict COMPLET (reason, remaining_attempts,
+# banned_until_epoch…) — c'est l'ÉCRAN qui choisit le message (plus jamais de `reason` jeté, leçon
+# de l'ancien _join_ok). `ok` = HTTP 200 sans expiration de session.
+signal mm_queue_result(ok: bool, data: Dictionary)
+# Heartbeat de file (poll 2 s piloté par l'écran) : state ∈ idle|searching|extending|starting|ready|
+# in_game ; room_id = -1 si null (piège JSON §5 : int()).
+signal mm_status_updated(state: String, since_s: int, room_id: int)
+# Désistement : {left, reason}. reason ∈ assigned|not_queued (ou "").
+signal mm_left(left: bool, reason: String)
+signal private_created(ok: bool, data: Dictionary)
+signal private_join_result(ok: bool, data: Dictionary)
+signal private_left(data: Dictionary)
+signal private_start_result(data: Dictionary)
+# Salon privé (WS) : occupation INDIVIDUALISÉE (aucune liste de joueurs / pseudo / id, décision n° 2).
+signal salon_state_updated(count: int, max_players: int, is_creator: bool)
+# Salon fermé par l'hôte (WS) : l'écran ramène à la recherche avec un message amical.
+signal salon_closed(reason: String)
+# REJOUER après une partie PRIVÉE : impossible (salons éphémères) → l'écran ramène au QG.
+signal requeue_unavailable
 # Révélation des objectifs de fin de partie (E11 §8.83) — bloc PUBLIC du game_over :
 # [{ player_id, username, description, completed }] ordonné par rankings. [] avant la fin
 # (ou serveur antérieur) ; consommé par le Rapport Post-Op (podium).
@@ -152,10 +158,11 @@ var connected = false
 # Valeurs de PRODUCTION par défaut, surchargées au boot par ApiConfig (§P1, source unique d'URL).
 var websocket_url = "wss://api.wasteland-warfare.com/ws/"
 var base_url = "https://api.wasteland-warfare.com/api/v1"
-# Salle actuellement rejointe (renseignée par le lobby, lue par la salle d'attente / l'arène).
+# Salle actuellement rejointe (renseignée par search_screen/salon_screen/requeue, lue par l'arène).
 var current_room_id: String = ""
-# Id de salle en cours de jointure (mémorisé pour le renvoyer au signal de succès).
-var _pending_join_id: int = -1
+# Code du SALON PRIVÉ courant (§8.116) : posé par search_screen AVANT d'entrer dans salon_screen
+# (création OU jointure), lu par salon_screen pour l'afficher en héros. "" hors salon.
+var current_salon_code: String = ""
 # Session encore valide (§AC.5) : passe à false au 1er 401/403 → coupe les requêtes authentifiées et
 # bloque la tempête. Ré-armée à true sur une (re)connexion réussie (AuthManager.auth_success).
 var _session_valid := true
@@ -176,6 +183,11 @@ func _ready() -> void:
 func connect_to_server(room_id: String):
 	if socket.get_ready_state() == WebSocketPeer.STATE_OPEN or socket.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
 		return
+	# Ceinture-bretelles (revue §8.116) : un WebSocketPeer déjà utilisé (STATE_CLOSING/CLOSED après
+	# un close()) ne se reconnecte PAS proprement — on repart TOUJOURS d'un peer NEUF ici. (Un peer
+	# neuf naît en STATE_CLOSED : la recréation est inconditionnelle et sans coût.) Couvre tout
+	# chemin qui aurait fermé le socket sans passer par leave_room().
+	socket = WebSocketPeer.new()
 
 	# Le serveur écoute sur /ws/{room_id}/{player_id}. On a besoin de notre ID numérique.
 	if AuthManager.user_id < 0:
@@ -268,16 +280,16 @@ func _handle_server_message(msg: Dictionary) -> void:
 			game_error.emit(err_msg)
 		"player_disconnected":
 			player_left.emit(msg.get("player_id"))
-		"lobby_state":
-			# Remplissage IA (G2 §8.72) : échéance UNIX (s) du fill, ou null. Stockée en propriété
-			# (le signal garde sa signature à 3 args) — waiting_room.gd la lit pour son compte à rebours.
-			var bfa = msg.get("bot_fill_at", null)
-			last_bot_fill_at = float(bfa) if (typeof(bfa) == TYPE_FLOAT or typeof(bfa) == TYPE_INT) else -1.0
-			# Effectif de la salle (§8.87) : champ ADDITIF — absent d'un serveur antérieur → -1
-			# (waiting_room.gd retombe alors sur son affichage historique).
-			var mp = msg.get("max_players", null)
-			last_max_players = int(mp) if (typeof(mp) == TYPE_FLOAT or typeof(mp) == TYPE_INT) else -1
-			lobby_state_updated.emit(msg.get("players", []), msg.get("ready", []), msg.get("usernames", {}))
+		"salon_state":
+			# Salon privé (§8.116) : occupation INDIVIDUALISÉE (count/max) + is_creator propre au
+			# destinataire. AUCUNE liste de joueurs / pseudo / id (décision n° 2). Piège JSON §5 : int().
+			salon_state_updated.emit(
+				int(msg.get("count", 0)),
+				int(msg.get("max_players", 0)),
+				bool(msg.get("is_creator", false)))
+		"salon_closed":
+			# L'hôte a fermé le salon : l'écran ramène à la recherche avec un message amical.
+			salon_closed.emit(str(msg.get("reason", "")))
 		"game_over":
 			# La victoire est déjà gérée via winner_id dans l'état ; ici on relaie le RÉSULTAT
 			# ÉCONOMIQUE (points/XP/Coins, §8.47) pour le Rapport Post-Op animé. Piège JSON §5 :
@@ -391,17 +403,11 @@ func send_action(action_type: String, payload: Dictionary = {}) -> void:
 	var message = {"action": action_type, "payload": pl}
 	socket.send_text(JSON.stringify(message))
 
-# Demande au serveur de générer/initialiser la partie.
-func send_init_game() -> void:
-	send_action("init_game", {})
-
-# Signale au serveur que le joueur est prêt (ou plus prêt) dans la salle d'attente.
-func send_ready(is_ready: bool) -> void:
-	send_action("ready" if is_ready else "unready", {})
-
-# Demande au serveur l'état courant de la salle d'attente.
-func request_lobby_state() -> void:
-	send_action("get_lobby", {})
+# Salon privé (§8.116) : demande l'occupation courante du salon (WS). Le serveur répond par un
+# message "salon_state" INDIVIDUALISÉ (relayé via salon_state_updated). Remplace l'ancien
+# get_lobby (le lobby « ready / liste de salles » a disparu avec le matchmaking serveur).
+func request_salon_state() -> void:
+	send_action("get_salon", {})
 
 # Verrouille le choix de faction du joueur pendant le Draft (CONTEXTE.md §3/§4.3).
 # Le serveur est censé enregistrer le choix puis rediffuser un message {"type":"faction_locked",
@@ -487,74 +493,115 @@ func _send_api_request(endpoint: String, method: int, data: Dictionary = {},
 		lobby_error.emit(tr("NET_SERVER_UNREACHABLE"))
 		http.queue_free()
 
-# 1. Récupérer les salles
-func fetch_rooms():
-	# GET /lobby/rooms est PUBLIC (aucune auth serveur) → authenticated=false (part même sans token).
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_rooms_fetched, false)
+# =========================================================================================
+# MATCHMAKING 100 % serveur (§8.116) — files publique/classée + salons privés à code
+# =========================================================================================
+# Toutes via _send_api_request(..., authenticated=true) → protégées par _check_session (401/403 →
+# session_expired, plus aucune requête authentifiée ensuite). On propage TOUJOURS le dict COMPLET
+# aux signaux (reason, remaining_attempts, banned_until_epoch…) : c'est l'ÉCRAN qui choisit le
+# message (plus jamais de `reason` jeté, leçon de l'ancien _join_ok).
 
-func _on_rooms_fetched(_result, response_code, _headers, body, http_node):
-	http_node.queue_free()
-	if response_code == 200:
-		var data = JSON.parse_string(body.get_string_from_utf8())
-		if typeof(data) == TYPE_ARRAY:
-			rooms_loaded.emit(data)
-	else:
-		# AC.7 — échec du FETCH (≠ join) : signal DÉDIÉ → lobby_screen coupe son polling auto (pas de
-		# re-tentative toutes les 3 s) et n'y revient qu'après un rafraîchissement manuel réussi.
-		rooms_fetch_failed.emit(tr("NET_ROOMS_FETCH_FAILED"))
+# --- Files d'attente (publique / classée) ---
+func mm_queue_join(queue_type: String, map_id: String = "", mode_players: int = 0) -> void:
+	var payload := {"queue": queue_type}
+	if queue_type == "casual":
+		payload["map_id"] = map_id
+		payload["mode_players"] = mode_players
+	_send_api_request("/matchmaking/queue", HTTPClient.METHOD_POST, payload, _on_mm_queue)
 
-# 2. Créer une salle
-# max_players par défaut = 6 (capacité maximale autorisée, cf. §4 : 3 à 6 joueurs).
-# Auparavant figé à 3, ce qui bloquait toutes les salles à 3 places.
-func create_room(is_private: bool, secret_code: String = "", max_players: int = 6,
-		map_id: String = "classic_42", is_ranked: bool = false):
-	var payload = {
-		"max_players": max_players,
-		"is_private": is_private,
-		"secret_code": secret_code if is_private else "", # <-- Correction ici ("" au lieu de null)
-		# Carte jouée (G5 §8.71) — validée serveur (400 si inconnue), max_players clampé par carte.
-		"map_id": map_id,
-		# Mode CLASSÉE (§8.88) : seule une partie classée crédite le ladder. Le SERVEUR fait
-		# autorité — il force l'effectif à 5 quel que soit max_players ci-dessus, et refuse (400)
-		# une carte qui ne supporte pas 5 joueurs. Défaut false (paramètre en QUEUE de signature →
-		# les appelants historiques restent valides).
-		"is_ranked": is_ranked,
-	}
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST, payload, _on_room_created)
-
-func _on_room_created(_result, response_code, _headers, body, http_node):
+func _on_mm_queue(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
 	var data = JSON.parse_string(body.get_string_from_utf8())
-	if response_code == 200 or response_code == 201:
-		lobby_action_success.emit("create", data)
-	else:
-		lobby_error.emit(tr("NET_ROOM_CREATE_FAILED"))
-
-# 3. Rejoindre une salle
-func join_room(room_id: int):
-	# Sécurité : on garantit un entier (un float issu du JSON donnerait une URL "/rooms/11.0/join").
-	room_id = int(room_id)
-	# On mémorise l'id ciblé (évite le piège d'ordre des bind chaînés) pour le renvoyer au succès.
-	_pending_join_id = room_id
-	_send_api_request("/lobby/rooms/" + str(room_id) + "/join", HTTPClient.METHOD_POST, {}, _on_room_joined)
-
-func _on_room_joined(_result, response_code, _headers, body, http_node):
-	http_node.queue_free()
-	# AC.S2 — contrat idempotent : 200 {"joined": true} (ou legacy 200 sans clé) → succès ;
-	# 200 {"joined": false, "reason": …} (salle pleine / disparue) → échec BÉNIN → le radar affiche
-	# un statut et rafraîchit UNE fois (AC.9), sans retry auto.
-	if response_code == 200 and _join_ok(body):
-		lobby_action_success.emit("join", {"id": _pending_join_id})
-	else:
-		lobby_error.emit(tr("NET_ROOM_JOIN_FAILED"))
-
-# Vrai si un POST /join signale un succès. Lecture DÉFENSIVE (§AC.S2) : un corps sans clé `joined`
-# (serveur legacy renvoyant {"message": …}) sur un 200 = succès ; `joined: false` = échec bénin.
-func _join_ok(body) -> bool:
-	var data = JSON.parse_string(body.get_string_from_utf8()) if body != null else null
 	if typeof(data) != TYPE_DICTIONARY:
-		return true
-	return bool(data.get("joined", true))
+		data = {}
+	mm_queue_result.emit(response_code == 200, data)
+
+# Heartbeat de file : l'ÉCRAN pilote un Timer 2 s qui appelle mm_queue_status(). _send_api_request
+# crée un HTTPRequest DÉDIÉ par appel (jamais de collision de poll — un nœud ne traite qu'une requête).
+func mm_queue_status() -> void:
+	_send_api_request("/matchmaking/status", HTTPClient.METHOD_GET, {}, _on_mm_status)
+
+func _on_mm_status(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200:
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	var rid = data.get("room_id", null)
+	# Piège JSON float §5 : room_id arrive en float → int() ; -1 si null/absent.
+	mm_status_updated.emit(
+		str(data.get("state", "idle")),
+		int(data.get("since_s", 0)),
+		int(rid) if (typeof(rid) == TYPE_FLOAT or typeof(rid) == TYPE_INT) else -1)
+
+func mm_queue_leave() -> void:
+	_send_api_request("/matchmaking/queue", HTTPClient.METHOD_DELETE, {}, _on_mm_leave)
+
+func _on_mm_leave(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	mm_left.emit(bool(data.get("left", false)) if response_code == 200 else false,
+		str(data.get("reason", "")))
+
+# --- Salons privés ---
+func private_create(map_id: String, mode_players: int) -> void:
+	_send_api_request("/private/rooms", HTTPClient.METHOD_POST,
+		{"map_id": map_id, "mode_players": mode_players}, _on_private_created)
+
+func _on_private_created(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	private_created.emit(response_code == 200, data)
+
+func private_join(code: String) -> void:
+	# Le serveur NORMALISE (strip+upper) avant tout contrôle ; on nettoie aussi côté client (affichage).
+	_send_api_request("/private/join", HTTPClient.METHOD_POST,
+		{"code": code.strip_edges().to_upper()}, _on_private_join)
+
+func _on_private_join(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	private_join_result.emit(response_code == 200, data)
+
+func private_leave() -> void:
+	_send_api_request("/private/rooms/leave", HTTPClient.METHOD_DELETE, {}, _on_private_leave)
+
+func _on_private_leave(_result, _response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	private_left.emit(data)
+
+func private_start_bots() -> void:
+	_send_api_request("/private/rooms/start", HTTPClient.METHOD_POST, {}, _on_private_start)
+
+func _on_private_start(_result, _response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	private_start_result.emit(data)
+
+# --- Fermeture PROPRE du WebSocket (corrige le bug STATE_CLOSING du QUITTER, §6.1) ---
+# Calqué sur _requeue_enter : on ferme le socket ACTUEL puis on en recrée un NEUF — un WebSocketPeer
+# ne se reconnecte PAS proprement après close() (il reste bloqué en STATE_CLOSING → la jointure
+# suivante échoue silencieusement). Plus AUCUNE Vue ne manipule directement NetworkManager.socket.
+func leave_room() -> void:
+	if socket.get_ready_state() == WebSocketPeer.STATE_OPEN \
+			or socket.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
+		socket.close()
+	socket = WebSocketPeer.new()
+	connected = false
+	current_room_id = ""
+	set_process(false)
 
 # 4. Classement mondial (R3 — §9.2) : GET /leaderboard?limit=&offset= (public ; enrichi du bloc `me`
 # si le token est joint). Le serveur trie par victoires décroissantes et renvoie une enveloppe
@@ -792,24 +839,17 @@ func _on_purchase_completed(_result, response_code, _headers, body, http_node):
 		shop_purchase_failed.emit(msg)
 
 # =========================================================
-# RE-QUEUE EN 1 CLIC (G3 §8.70) — helper partagé (overlay observateur + rapport post-op)
+# RE-QUEUE EN 1 CLIC (§8.116) — REJOUER depuis le rapport post-op / l'overlay observateur
 # =========================================================
-# Quitte la salle courante (WS fermé + DELETE leave), scanne le radar, REJOINT la première salle
-# `waiting` non pleine, sinon CRÉE une salle (publique, 6 places par défaut), puis navigue vers
-# waiting_room. Toute erreur → requeue_failed(message) (l'appelant retombe sur le lobby).
+# Matchmaking serveur : plus AUCUN scan/join/create côté client. On capture la modalité de la partie
+# terminée, on ferme PROPREMENT le WS, on RE-FILE la même modalité et on rejoint l'écran de recherche
+# (qui reprend son cours : poll /status → ready → connexion). Après une partie PRIVÉE : pas de
+# re-file (salons éphémères) → requeue_unavailable (l'appelant ramène au QG).
 var _requeue_active := false
-# Anti-boucle & anti-blocage (correctif bouton REJOUER) : on BORNE les jointures d'un cycle et on
-# EXCLUT les salles déjà tentées ; un chien de garde libère le bouton si un callback ne revient
-# jamais. `_requeue_cycle` = jeton de cycle → un chien de garde périmé (cycle déjà terminé, ou un
-# nouveau cycle ré-armé depuis) devient inoffensif au lieu d'abattre un cycle neuf.
-var _requeue_tried: Dictionary = {}    # ids des salles déjà tentées CE cycle
-var _requeue_attempts := 0             # jointures tentées CE cycle (borne dure)
-var _requeue_cycle := 0                # jeton de cycle (le chien de garde n'abat que le sien)
-const REQUEUE_MAX_ATTEMPTS := 4
+# Jeton de cycle : le chien de garde n'abat que SON cycle (inoffensif si périmé / déjà clôturé).
+var _requeue_cycle := 0
 const REQUEUE_WATCHDOG_SECONDS := 12.0
-# Modalité de la partie TERMINÉE à REPRODUIRE (AB §8.70 v2) : carte jouée, effectif réel, statut
-# classé. Capturée EN TÊTE de requeue() et mémorisée pour toute la séquence (scan + création +
-# éventuel 2ᵉ requeue). Source de vérité = l'état joué ; replis = l'intention du menu.
+# Modalité de la partie TERMINÉE à REPRODUIRE : carte jouée, effectif réel, statut classé.
 var _requeue_mode: Dictionary = {}
 
 # Modalité de la partie TERMINÉE (source de vérité : l'état joué ; replis : intention du menu).
@@ -839,134 +879,35 @@ func requeue() -> void:
 	if _requeue_active:
 		return
 	_requeue_active = true
-	# Réinitialise l'état du cycle (salles exclues + borne d'essais) et incrémente le jeton.
-	_requeue_tried.clear()
-	_requeue_attempts = 0
 	_requeue_cycle += 1
-	# AB §8.70 v2 — capture la modalité de la partie TERMINÉE (carte / effectif / classé) et re-pose
-	# l'intention : la salle d'attente, le lobby et un éventuel 2ᵉ requeue reproduisent la bonne
-	# modalité (le scan / la création ci-dessous s'y conforment).
+	# Capture la modalité de la partie TERMINÉE (carte / effectif / classé) — replis : intention menu.
 	_requeue_mode = _requeue_required()
+	# Après une partie PRIVÉE : les salons sont éphémères → pas de re-file, retour au QG.
+	if bool(GameState.is_private):
+		leave_room()
+		_requeue_active = false
+		requeue_unavailable.emit()
+		return
+	# Re-pose l'intention pour l'écran de recherche (eyebrow du mode + carte choisie).
 	MatchConfig.set_mode(_requeue_mode_id(), int(_requeue_mode.get("max_players", 6)),
 		bool(_requeue_mode.get("is_ranked", false)))
-	# Chien de garde : même si un callback ne revient JAMAIS (err d'envoi, réponse perdue), ce cycle
-	# ne peut plus geler le bouton pour toute la session. Le jeton rend inoffensif un timer périmé
-	# (cycle déjà clôturé par _requeue_enter/_requeue_fail, ou un NOUVEAU cycle ré-armé depuis).
+	MatchConfig.set_map(str(_requeue_mode.get("map_id", "classic_42")))
+	# Chien de garde : libère le bouton si un enchaînement se bloquait (jeton → inoffensif si périmé).
 	get_tree().create_timer(REQUEUE_WATCHDOG_SECONDS).timeout.connect(
 		_on_requeue_watchdog.bind(_requeue_cycle))
-	# 1) Fermer proprement le WebSocket de la salle courante (le serveur traite la déconnexion :
-	#    un éliminé ne déclenche NI abandon NI minuterie — garanti côté backend §8.70).
-	if socket.get_ready_state() == WebSocketPeer.STATE_OPEN \
-			or socket.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
-		socket.close()
-	connected = false
-	set_process(false)
-	# 2) Libérer la place côté base (DELETE leave — désormais IDEMPOTENT 200 {"left":…}, §AC.S1 :
-	#    plus de 404 « toléré », que la salle existe encore ou non).
-	if current_room_id != "":
-		_send_api_request("/lobby/rooms/" + current_room_id + "/leave",
-			HTTPClient.METHOD_DELETE, {}, _on_requeue_left)
+	# 1) Fermeture PROPRE du WS de la partie terminée (socket neuf — fix STATE_CLOSING). Le serveur
+	#    traite la déconnexion d'un éliminé sans abandon ni minuterie (§8.70).
+	leave_room()
+	# 2) Re-file publique de la MÊME modalité (classée → "ranked" ; sinon "casual" + carte/effectif),
+	#    puis on rejoint l'écran de recherche (il reprend le cours normal : poll /status).
+	if bool(_requeue_mode.get("is_ranked", false)):
+		mm_queue_join("ranked")
 	else:
-		_requeue_scan()
-
-func _on_requeue_left(_result, _response_code, _headers, _body, http_node):
-	http_node.queue_free()
-	_requeue_scan()
-
-func _requeue_scan() -> void:
-	current_room_id = ""
-	# GET /lobby/rooms PUBLIC → authenticated=false (cohérent avec fetch_rooms).
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_GET, {}, _on_requeue_rooms, false)
-
-func _on_requeue_rooms(_result, response_code, _headers, body, http_node):
-	http_node.queue_free()
-	if response_code != 200:
-		_requeue_fail(tr("NET_REQUEUE_RADAR_UNREACHABLE"))
-		return
-	var data = JSON.parse_string(body.get_string_from_utf8())
-	if typeof(data) != TYPE_ARRAY:
-		_requeue_fail(tr("NET_REQUEUE_RADAR_UNREADABLE"))
-		return
-	# Première salle `waiting` PUBLIQUE non pleine (piège JSON §5 : int() sur tous les nombres).
-	for room in data:
-		if typeof(room) != TYPE_DICTIONARY:
-			continue
-		if bool(room.get("is_private", false)):
-			continue
-		# AB §8.70 v2 — MÊME MODALITÉ que la partie terminée : on ne rejoint QUE des salles dont le
-		# statut classé, la carte ET l'effectif correspondent à `_requeue_mode`. Un « rejouer » après
-		# une Classée à 5 reste en Classée à 5 ; après un Exa 6 reste en Exa 6 (jamais de mélange).
-		# Lecture DÉFENSIVE (piège JSON §5, champs du chantier C) : un serveur antérieur sans
-		# `is_ranked` / `map_id` retombe sur (false / "classic_42"), cohérent.
-		if bool(room.get("is_ranked", false)) != bool(_requeue_mode.get("is_ranked", false)):
-			continue
-		if str(room.get("map_id", "classic_42")) != str(_requeue_mode.get("map_id", "classic_42")):
-			continue
-		var rid := int(room.get("id", -1))
-		# Salle déjà tentée CE cycle (join échoué / bouclé dessus) → on ne la re-propose pas.
-		if rid <= 0 or _requeue_tried.has(rid):
-			continue
-		var maxp := int(room.get("max_players", 0))
-		var cur := int(room.get("current_players", 0))
-		if maxp != int(_requeue_mode.get("max_players", maxp)):
-			continue
-		if str(room.get("status", "waiting")) == "waiting" and cur < maxp and maxp > 0:
-			# Avant CHAQUE tentative de join : marque la salle et borne le nombre d'essais du cycle.
-			_requeue_tried[rid] = true
-			_requeue_attempts += 1
-			if _requeue_attempts > REQUEUE_MAX_ATTEMPTS:
-				# AB.4 — plus de re-scan infini : après quelques échecs de join (courses), on CRÉE
-				# directement une salle à la bonne modalité (on retrouve à coup sûr SA partie).
-				_requeue_create()
-				return
-			_send_api_request("/lobby/rooms/" + str(rid) + "/join",
-				HTTPClient.METHOD_POST, {}, _on_requeue_joined.bind(rid))
-			return
-	# Aucune salle compatible → on en CRÉE une à la MÊME modalité (carte / effectif / classé).
-	_requeue_create()
-
-# NB signature : _send_api_request bind http_node APRÈS le rid déjà lié → (…, http_node, rid).
-func _on_requeue_joined(_result, response_code, _headers, body, http_node, rid: int):
-	http_node.queue_free()
-	# AC.S2 — 200 {"joined": true} (ou legacy) = entrée ; 200 {"joined": false, "reason": …} (salle
-	# pleine / disparue entre le scan et le join) = échec BÉNIN → on relance un cycle (borné par
-	# _requeue_attempts → création à la modalité voulue). Plus aucun 4xx sur ce chemin.
-	if response_code == 200 and _join_ok(body):
-		_requeue_enter(rid)
-	else:
-		_requeue_scan()
-
-# Crée une salle publique reproduisant EXACTEMENT la modalité capturée (AB.3) : même carte, même
-# effectif, même statut classé. Mêmes clés de payload que create_room (contrat serveur).
-func _requeue_create() -> void:
-	_send_api_request("/lobby/rooms", HTTPClient.METHOD_POST, {
-		"max_players": int(_requeue_mode.get("max_players", 6)),
-		"is_private": false,
-		"secret_code": "",
-		"map_id": str(_requeue_mode.get("map_id", "classic_42")),
-		"is_ranked": bool(_requeue_mode.get("is_ranked", false)),
-	}, _on_requeue_created)
-
-func _on_requeue_created(_result, response_code, _headers, body, http_node):
-	http_node.queue_free()
-	if response_code != 200 and response_code != 201:
-		_requeue_fail(tr("NET_REQUEUE_CREATE_FAILED"))
-		return
-	var data = JSON.parse_string(body.get_string_from_utf8())
-	var rid := int(data.get("id", -1)) if typeof(data) == TYPE_DICTIONARY else -1
-	if rid <= 0:
-		_requeue_fail(tr("NET_REQUEUE_ROOM_UNREADABLE"))
-		return
-	_requeue_enter(rid)
-
-func _requeue_enter(room_id: int) -> void:
+		mm_queue_join("casual", str(_requeue_mode.get("map_id", "classic_42")),
+			int(_requeue_mode.get("max_players", 6)))
 	_requeue_active = false
-	current_room_id = str(int(room_id))
-	# Socket NEUF : WebSocketPeer ne se reconnecte pas proprement après un close().
-	socket = WebSocketPeer.new()
-	connected = false
-	connect_to_server(current_room_id)
-	TransitionManager.change_scene("res://scenes/ui/waiting_room.tscn")
+	TransitionManager.change_scene("res://scenes/ui/search_screen.tscn")
+
 
 func _requeue_fail(message: String) -> void:
 	_requeue_active = false

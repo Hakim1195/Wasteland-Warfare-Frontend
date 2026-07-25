@@ -22,6 +22,9 @@ var selected_player_count: int = 0
 var selected_ranked: bool = false
 # Id canonique du mode choisi (pour libellés / télémétrie d'UI). "" si non défini.
 var selected_mode_id: String = ""
+# Carte choisie pour une partie PUBLIQUE (§8.116) : posée par search_screen (sélecteur CLASSIQUE /
+# RAPIDE) ou par requeue. En CLASSÉE, ignorée (le serveur force classic_42). Défaut classic_42.
+var selected_map_id: String = "classic_42"
 
 
 # Pose le mode choisi (appelé par main_menu.gd au clic « START »).
@@ -31,8 +34,14 @@ func set_mode(mode_id: String, player_count: int, ranked: bool) -> void:
 	selected_ranked = ranked
 
 
-# Réinitialise l'intention (legacy / après consommation par le lobby).
+# Pose la carte choisie (search_screen / requeue). Sans effet sur la classée (serveur = autorité).
+func set_map(map_id: String) -> void:
+	selected_map_id = map_id
+
+
+# Réinitialise l'intention (appelée au retour au QG — main_menu._ready, §8.116).
 func clear() -> void:
 	selected_mode_id = ""
 	selected_player_count = 0
 	selected_ranked = false
+	selected_map_id = "classic_42"

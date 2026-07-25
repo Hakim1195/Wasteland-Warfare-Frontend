@@ -118,6 +118,12 @@ var _status_args: Array = []
 
 
 func _ready() -> void:
+	# §8.116 : au retour au QG, on repart d'une intention de match NEUVE (mode + carte). Sans ça, un
+	# ancien choix (ou la modalité posée par requeue) traînerait pour la partie suivante. MatchConfig
+	# n'était nettoyé nulle part auparavant — on corrige ici (autoload, accès défensif).
+	var _mc := get_node_or_null("/root/MatchConfig")
+	if _mc != null:
+		_mc.clear()
 	_font = SystemFont.new()
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
 	_font.font_weight = 700
@@ -714,12 +720,13 @@ func _go(path: String) -> void:
 	TransitionManager.change_scene(path)
 
 func _on_play_pressed() -> void:
-	# Transporte le mode sélectionné jusqu'au lobby (effectif + intention classée) via MatchConfig.
+	# Transporte le mode sélectionné jusqu'à l'écran de RECHERCHE (effectif + intention classée) via
+	# MatchConfig — §8.116 : plus de lobby « liste de salles », matchmaking 100 % serveur.
 	var m = _mode_def(_selected_mode)
 	var mc := get_node_or_null("/root/MatchConfig")
 	if mc != null and m != null:
 		mc.set_mode(m["id"], int(m["count"]), bool(m["ranked"]))
-	_go("res://scenes/ui/lobby_screen.tscn")
+	_go("res://scenes/ui/search_screen.tscn")
 
 # Cible du pied de la carte Défis (« VOIR TOUT ❯ ») — même écran que l'onglet Défis de la nav.
 func _on_missions_pressed() -> void:
