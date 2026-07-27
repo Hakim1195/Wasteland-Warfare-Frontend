@@ -44,6 +44,10 @@ const DANGER := Color(0.839216, 0.270588, 0.247059, 1)  # rouge (erreur : fonds 
 const TAB_DEFS := [
 	{"id": "characters", "category": "faction", "key": "SHOP_TAB_CHARACTERS"},
 	{"id": "skins", "category": "skin", "key": "SHOP_TAB_SKINS"},
+	# REFONTE UI ARÈNE (lot G) : variantes de la CINÉMATIQUE DE MISE À MORT. Miroir exact de
+	# l'onglet SKINS (carte → achat Coins → EN DÉPÔT → ÉQUIPER), à ceci près qu'un finisher
+	# appartient au JOUEUR (aucun `hero_key`, un seul équipé à la fois).
+	{"id": "finishers", "category": "finisher", "key": "SHOP_FINISHERS_TITLE"},
 	{"id": "pass", "category": "pass", "key": "SHOP_TAB_PASS"},
 	{"id": "coins", "category": "currency", "key": "SHOP_TAB_COINS"},
 ]
@@ -302,6 +306,10 @@ func _card_accent(item: Dictionary) -> Color:
 			return _faction_color(str(item.get("id", "")))
 		"skin":
 			return _faction_color(str(item.get("hero_key", "")))
+		"finisher":
+			# Palette PROPRE au finisher (registre data-driven partagé avec la cinématique) :
+			# la carte de boutique a exactement la couleur de l'animation qu'elle vend.
+			return Finishers.params_for(str(item.get("id", ""))).get("accent", GOLD)
 		"pass", "currency":
 			return GOLD
 	return ACCENT
@@ -387,8 +395,16 @@ func _hero_owned_for_skin(item: Dictionary) -> bool:
 		return true          # faction gratuite → accessible en permanence.
 	return _owned.has(hero_key)
 
-# Vrai si CE skin est celui actuellement équipé pour sa faction.
+# Slot RÉSERVÉ du bloc `equipped` accueillant le FINISHER du joueur (lot G) — miroir EXACT de
+# shop.FINISHER_SLOT côté backend (un finisher n'est lié à aucune faction).
+const FINISHER_SLOT := "__finisher__"
+# Registre data-driven des finishers (partagé avec la cinématique de l'arène — source unique).
+const Finishers := preload("res://scripts/game/finishers.gd")
+
+# Vrai si CET article (skin OU finisher) est celui actuellement équipé.
 func _is_skin_equipped(item: Dictionary) -> bool:
+	if str(item.get("category", "")) == "finisher":
+		return str(_equipped.get(FINISHER_SLOT, "")) == str(item.get("id", ""))
 	var hero_key := str(item.get("hero_key", ""))
 	return hero_key != "" and str(_equipped.get(hero_key, "")) == str(item.get("id", ""))
 
@@ -424,6 +440,47 @@ func _make_equip_button(item: Dictionary) -> Button:
 		var skin_id := str(item.get("id", ""))
 		btn.pressed.connect(func(): NetworkManager.equip_skin(skin_id))
 	return btn
+
+# Vignette de PRÉVERSION d'un finisher (lot G) : bandeau sombre où défilent en boucle les traits
+# diagonaux de la cinématique, aux couleurs EXACTES du finisher (registre partagé `finishers.gd`
+# → aucune valeur dupliquée). 100 % procédural, aucun asset. Respecte `reduced_motion` (E10) :
+# le motif reste affiché, seul le défilement s'arrête.
+func _finisher_preview(finisher_id: String) -> Control:
+	var p := Finishers.params_for(finisher_id)
+	var accent: Color = p.get("accent", GOLD)
+	var secondary: Color = p.get("secondary", ACCENT)
+	var frame := PanelContainer.new()
+	frame.custom_minimum_size = Vector2(0, 52)
+	frame.clip_contents = true
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.03, 0.04, 0.05, 1.0)
+	sb.set_corner_radius_all(0)
+	sb.border_color = Color(accent, 0.5)
+	sb.set_border_width_all(1)
+	frame.add_theme_stylebox_override("panel", sb)
+	var layer := Control.new()
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.add_child(layer)
+	var still: bool = bool(SettingsManager.get_comfort("reduced_motion"))
+	var n: int = clampi(int(p.get("streaks", 4)), 1, 10)
+	for i in range(n):
+		var bar := ColorRect.new()
+		bar.color = (accent if i % 2 == 0 else secondary)
+		bar.color.a = 0.55
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bar.size = Vector2(320, 3.0 + float(i % 3))
+		bar.position = Vector2(-160.0 + 30.0 * float(i), 4.0 + 46.0 * float(i) / float(n))
+		bar.rotation = deg_to_rad(-12.0)
+		layer.add_child(bar)
+		if still:
+			continue
+		var tw := bar.create_tween().set_loops()
+		tw.tween_property(bar, "position:x", bar.position.x + 120.0, 1.6 + 0.2 * float(i)) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(bar, "position:x", bar.position.x, 1.6 + 0.2 * float(i)) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	return frame
 
 func _on_skin_equipped(data: Dictionary) -> void:
 	# La réponse est un inventaire COMPLET (bloc `equipped` à jour) → même traitement.
@@ -593,6 +650,12 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		popular.add_theme_color_override("font_color", GOLD)
 		v.add_child(popular)
 
+	# Finisher (lot G) : PRÉVERSION animée — vignette qui rejoue en boucle les traits diagonaux et
+	# la palette de la cinématique réelle (mêmes paramètres, registre `finishers.gd`). Le joueur
+	# voit ce qu'il achète sans lancer de partie.
+	if category == "finisher":
+		v.add_child(_finisher_preview(id))
+
 	# Skin : on rappelle le héros lié (nom de faction résolu), à sa couleur signature.
 	if category == "skin" and str(item.get("hero_key", "")) != "":
 		var hero := _eyebrow(tr("SHOP_SKIN_HERO") % _faction_name(str(item.get("hero_key", ""))).to_upper())
@@ -673,7 +736,8 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		in_depot.add_theme_color_override("font_color", GOLD)
 		v.add_child(in_depot)
 		# Skin possédé (M5 §8.69) : bouton ÉQUIPER / ÉQUIPÉ ✓ (un skin équipé par faction).
-		if category == "skin":
+		# Finisher possédé (lot G) : MÊME bouton (un seul finisher équipé, tous factions confondues).
+		if category == "skin" or category == "finisher":
 			v.add_child(_make_equip_button(item))
 	elif category == "skin" and not _hero_owned_for_skin(item):
 		# GATE DES SKINS (§2.5) : on n'achète le skin QUE d'un personnage possédé DÉFINITIVEMENT.

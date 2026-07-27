@@ -24,9 +24,22 @@ const TAU := 6.2831853
 # Override par assets réels : dossiers + extensions tentées (par ordre de préférence).
 const AUDIO_DIR := "res://assets/audio"
 const AUDIO_EXTS := [".ogg", ".wav", ".mp3"]
-const SFX_NAMES := ["hover", "click", "confirm", "back", "sting", "die_lock", "impact"]
+const SFX_NAMES := ["hover", "click", "confirm", "back", "sting", "die_lock", "impact",
+	"explosion", "chat_ping", "finisher_steel", "finisher_orbital", "finisher_ash"]
 const MUSIC_NAME := "menu_ambient"          # nappe des menus
 const BATTLE_NAME := "battle_ambient"       # musique tendue de l'arène (§8.66)
+
+# --- Musique : niveau cible et fondu d'entrée (REFONTE UI ARÈNE, lot F) ---
+# MESURE (diagnostic du 2026-07-27, poste de dev) : la chaîne réelle empile TROIS atténuations —
+# bus Master 0,7 (≈ −3,1 dB) × bus Music 0,46 (≈ −6,7 dB) × lecteur (−6,0 dB à l'époque), soit
+# ≈ −16 dB au total : la piste JOUAIT bien (et bouclait), mais était quasi inaudible. On remonte
+# donc le niveau du LECTEUR à −4 dB (« discret mais audible ») au lieu du −10 dB suggéré par le
+# cahier des charges, qui aurait AGGRAVÉ le symptôme sur cette chaîne. Les volumes utilisateur
+# (SettingsManager / bus) restent souverains au-dessus de cette constante.
+const MUSIC_TARGET_DB := -4.0
+# Niveau de départ du fondu d'entrée (inaudible) et durée du fondu.
+const MUSIC_FADE_FROM_DB := -40.0
+const MUSIC_FADE_TIME := 2.0
 
 var _sfx: Dictionary = {}          # nom -> AudioStream (vrai fichier OU WAV synthétisé)
 var _sfx_players: Array = []       # pool de AudioStreamPlayer (évite de couper un son en cours)
@@ -50,7 +63,7 @@ func _ready() -> void:
 
 	_music_player = AudioStreamPlayer.new()
 	_music_player.bus = _bus_or_master("Music")
-	_music_player.volume_db = -6.0
+	_music_player.volume_db = MUSIC_TARGET_DB
 	add_child(_music_player)
 
 	# Banque de SFX : vrai fichier prioritaire, sinon placeholder procédural.
@@ -84,6 +97,19 @@ func _ready() -> void:
 	_register_sfx("under_attack", func(): return _make_blip(220.0, 0.18, 0.22))    # alerte défensive grave
 	_register_sfx("card_draw", func(): return _make_blip(1180.0, 0.06, 0.13))      # bruissement de pioche
 	_register_sfx("timer_tick", func(): return _make_blip(880.0, 0.035, 0.10))     # tic discret d'AFK
+
+	# --- REFONTE UI ARÈNE (lot F) : nouveaux sons. Même mécanique d'override — déposer
+	#     assets/audio/sfx/<nom>.{ogg,wav,mp3} remplace le repli synthétisé, ZÉRO code à toucher. ---
+	# `explosion` : impact de la FLÈCHE DE GUERRE (lot D). Remplace `impact`/`hit_troops` DANS CE
+	# CONTEXTE uniquement — les autres usages de ces sons restent inchangés.
+	_register_sfx("explosion", func(): return _make_explosion())
+	# `chat_ping` : notification de message reçu (lot B) — aigu, court, discret.
+	_register_sfx("chat_ping", func(): return _make_blip(1760.0, 0.07, 0.09))
+	# Stings des FINISHERS (lot D/G) : un par variante achetable ; le basique gratuit réutilise
+	# `hero_down`. Repli COMMUN si l'un manque : la cinématique reste sonore quoi qu'il arrive.
+	_register_sfx("finisher_steel", func(): return _make_finisher_sting(180.0, 70.0, 0.55, 1.1))
+	_register_sfx("finisher_orbital", func(): return _make_finisher_sting(90.0, 900.0, 0.22, 1.3))
+	_register_sfx("finisher_ash", func(): return _make_finisher_sting(140.0, 48.0, 0.75, 1.4))
 
 # Enregistre un SFX par nom : vrai fichier prioritaire (assets/audio/sfx/<nom>), sinon repli
 # synthétisé (Callable() -> AudioStreamWAV). Factorise le pattern _load_override / _make_*.
@@ -137,8 +163,25 @@ func _play_music(base_name: String) -> void:
 	if _music_player.stream != stream:
 		_music_player.stream = stream
 		_music_player.play()
+		_fade_music_in()
 	elif not _music_player.playing:
 		_music_player.play()
+		_fade_music_in()
+
+
+# Fondu d'entrée (lot F) : la piste monte de MUSIC_FADE_FROM_DB à MUSIC_TARGET_DB en
+# MUSIC_FADE_TIME. Évite l'attaque brutale au changement de scène (menu → arène) et donne une
+# entrée « cinéma » à l'ambiance de guerre.
+var _music_fade: Tween = null
+
+func _fade_music_in() -> void:
+	if _music_player == null:
+		return
+	if _music_fade != null and _music_fade.is_valid():
+		_music_fade.kill()
+	_music_player.volume_db = MUSIC_FADE_FROM_DB
+	_music_fade = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_music_fade.tween_property(_music_player, "volume_db", MUSIC_TARGET_DB, MUSIC_FADE_TIME)
 
 
 # Libère proprement les ressources audio à l'extinction (évite des fuites de AudioStreamWAV /
@@ -305,6 +348,61 @@ func _make_impact() -> AudioStreamWAV:
 	return _finalize(s)
 
 
+# Explosion (lot F) : impact de la flèche de guerre. Sub très court + burst de bruit filtré qui
+# se referme + traînée de débris. Plus « sale » et plus grave que `impact` (pertes de troupes),
+# pour que les deux ne se confondent pas à l'oreille.
+func _make_explosion() -> AudioStreamWAV:
+	var dur := 0.7
+	var n := int(MIX_RATE * dur)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8102
+	var lp := 0.0        # passe-bas 1 pôle dont le coefficient se referme avec le temps
+	for i in n:
+		var t := float(i) / MIX_RATE
+		# Sub : descente rapide 90 → 32 Hz, décroissance nette.
+		var f := lerpf(90.0, 32.0, clampf(t / 0.14, 0.0, 1.0))
+		var sub := sin(TAU * f * t) * exp(-t * 9.0) * 0.62
+		# Burst : bruit blanc de plus en plus filtré (le souffle « s'éloigne »).
+		var cut := clampf(0.55 * exp(-t * 4.5), 0.03, 0.55)
+		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), cut)
+		var burst := lp * exp(-t * 5.5) * 0.5
+		# Débris : crépitement aléatoire épars sur la queue.
+		var debris := 0.0
+		if t > 0.12 and rng.randf() < 0.012:
+			debris = rng.randf_range(-1.0, 1.0) * 0.18
+		s[i] = sub + burst + debris * exp(-t * 2.0)
+	return _finalize(s)
+
+
+# Sting de FINISHER (lot D/G) : balayage de fréquence (montant ou descendant selon f0/f1) +
+# couche de bruit dosable + queue de réverbération synthétique. Un seul générateur paramétré →
+# les 3 variantes payantes sonnent DIFFÉREMMENT sans tripler le code (Règle d'Or §6.3).
+func _make_finisher_sting(f0: float, f1: float, noise_mix: float, dur: float) -> AudioStreamWAV:
+	var n := int(MIX_RATE * dur)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(f0) * 31 + int(f1)
+	var phase := 0.0
+	var air := 0.0
+	for i in n:
+		var t := float(i) / MIX_RATE
+		var u := t / dur
+		# Balayage exponentiel f0 → f1 (montée « orbitale » ou chute « cendres »).
+		var f := lerpf(f0, f1, pow(u, 0.55))
+		phase += TAU * f / MIX_RATE
+		var body := (sin(phase) + 0.35 * sin(phase * 2.0)) * exp(-t * 2.2) * 0.34
+		# Impact d'ouverture (les 60 premières ms).
+		var hit := sin(TAU * 55.0 * t) * exp(-t * 16.0) * 0.4
+		# Souffle filtré, dosé par noise_mix.
+		air = lerpf(air, rng.randf_range(-1.0, 1.0), 0.25)
+		var noise := air * exp(-t * 3.0) * noise_mix * 0.3
+		s[i] = body + hit + noise
+	return _finalize(s)
+
+
 # Nappe d'ambiance bouclable : accord grave désaccordé + harmoniques + LFO de filtre lent + souffle.
 func _make_ambient_pad() -> AudioStreamWAV:
 	var dur := 6.0   # boucle plus longue → respiration moins répétitive
@@ -337,25 +435,46 @@ func _make_ambient_pad() -> AudioStreamWAV:
 
 # Repli synthétisé de la MUSIQUE DE COMBAT (si battle_ambient.wav absent / headless) : drone grave de
 # dread + pouls de tom martelé. Volontairement plus sombre et martial que la nappe de menu.
+# Lot F — AMBIANCE DE GUERRE enrichie : boucle allongée à 9,6 s (le motif se répète deux fois moins
+# souvent, donc s'entend beaucoup moins), drone à deux couches battantes, et PERCUSSIONS LOINTAINES
+# aléatoires mais DÉTERMINISTES (RNG à graine fixe → la boucle reste rigoureusement bouclable, sans
+# discontinuité au raccord).
 func _make_battle_pad() -> AudioStreamWAV:
-	var dur := 4.8                 # 8 temps à 100 BPM (boucle de pouls)
+	var dur := 9.6                 # 16 temps à 100 BPM (boucle de pouls, 2× plus longue)
 	var n := int(MIX_RATE * dur)
 	var s := PackedFloat32Array()
 	s.resize(n)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 51
 	var air := 0.0
-	var beat := dur / 8.0          # 8 frappes de tom sur la boucle
+	var beat := dur / 16.0         # 16 frappes de tom sur la boucle
+	# Impacts LOINTAINS pré-tirés (position + gain) : « la guerre gronde au loin ».
+	var far_hits: Array = []
+	var far_rng := RandomNumberGenerator.new()
+	far_rng.seed = 907
+	for k in 7:
+		# Jamais dans les 0,4 dernières secondes : la queue doit tenir dans la boucle.
+		far_hits.append({"t": far_rng.randf_range(0.2, dur - 1.2),
+			"gain": far_rng.randf_range(0.06, 0.16),
+			"f": far_rng.randf_range(48.0, 96.0)})
 	for i in n:
 		var t := float(i) / MIX_RATE
-		# Drone grave dissonant (racine D + seconde mineure désaccordée = tension).
-		var drone := sin(TAU * 36.7 * t) + 0.45 * sin(TAU * 55.0 * t) + 0.20 * sin(TAU * 58.3 * t)
+		# Drone grave dissonant (racine D + seconde mineure désaccordée = tension) + battement lent.
+		var beatmod := 0.88 + 0.12 * sin(TAU * 0.07 * t)
+		var drone := (sin(TAU * 36.7 * t) + 0.45 * sin(TAU * 55.0 * t)
+			+ 0.20 * sin(TAU * 58.3 * t) + 0.14 * sin(TAU * 73.4 * t)) * beatmod
 		# Tom martelé : impulsion grave à pitch descendant, une par temps.
 		var bt := fposmod(t, beat)
 		var tom := sin(TAU * lerpf(140.0, 70.0, clampf(bt / 0.05, 0.0, 1.0)) * bt) * exp(-bt * 9.0) * 0.5
+		# Percussions LOINTAINES (détonations sourdes) : sub court + souffle très filtré.
+		var far := 0.0
+		for h in far_hits:
+			var dt: float = t - float(h["t"])
+			if dt >= 0.0 and dt < 1.0:
+				far += sin(TAU * float(h["f"]) * dt) * exp(-dt * 5.0) * float(h["gain"])
 		# Couche d'« air » (bruit très filtré, très bas).
 		air = lerpf(air, rng.randf_range(-1.0, 1.0), 0.02)
-		s[i] = (drone * 0.13 + air * 0.04 + tom * 0.30)
+		s[i] = (drone * 0.13 + air * 0.04 + tom * 0.30 + far)
 	# Fondu de raccord de boucle.
 	var fade := int(MIX_RATE * 0.04)
 	for i in fade:

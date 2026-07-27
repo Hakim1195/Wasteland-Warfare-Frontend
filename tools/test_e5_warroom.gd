@@ -56,17 +56,25 @@ func _ready() -> void:
 	assert(cr[1]["owner"] != null and int(cr[1]["owner"]) == 7 and int(cr[1]["held"]) == 3)
 	print("[OK] continent_rows : contesté vs contrôlé (3 asserts)")
 
-	# 3) Smoke HUD : 3ᵉ tiroir construit, peuplé et togglable dans l'arène réelle.
+	# 3) Smoke HUD — REFONTE UI ARÈNE (lot A) : le 3ᵉ tiroir « INTEL : GUERRE » est SUPPRIMÉ de
+	# l'arène (ses compteurs restent servis par le module PUR WarRoom, testé ci-dessus, et sont
+	# consommés par le Rapport Post-Op). On valide désormais la FICHE JOUEUR qui l'a remplacé :
+	# alimentation + navigation ◀ ▶ (l'ordre pousse un pid, la fiche le mémorise).
 	var arena = load("res://scenes/game/main.tscn").instantiate()
 	add_child(arena)
 	var hud = arena.get_node("HUD")
-	assert(hud._war_intel_btn != null and hud._war_intel_panel != null)
-	hud.set_war_intel(rows, cr)
-	assert(hud._war_intel_players.get_child_count() == 2)
-	assert(hud._war_intel_continents.get_child_count() == 2)
-	hud._toggle_war_intel()
-	assert(hud._war_intel_panel.visible)
-	print("[OK] HUD : tiroir INTEL GUERRE construit + peuplé (4 asserts)")
+	hud.set_sheet_players([7, 11])
+	hud.set_player_sheet({"pid": 7, "pseudo": "VULTURE", "color": Color.RED,
+		"faction_name": "Ironline", "hero": {}, "territories": 3, "troops": 6, "cards": 0,
+		"territory": {"name": "ALASKA", "garrison": 3}})
+	assert(hud.current_sheet_pid() == 7)
+	assert(hud.get_node("%SheetBody").get_child_count() > 0)
+	# La flèche ▶ RE-ÉMET roster_player_clicked avec le joueur suivant de l'ordre (11).
+	var stepped := [0]
+	hud.roster_player_clicked.connect(func(pid: int) -> void: stepped[0] = pid)
+	hud._on_sheet_step(1)
+	assert(stepped[0] == 11)
+	print("[OK] HUD : fiche joueur alimentée + navigation ◀ ▶ (3 asserts)")
 
 	# --- §8.92 : lignes du DÉBRIEFING (onglet BILAN du Rapport Post-Op) ---
 	# rankings = [11, 7] → 11 en tête MALGRÉ ses 2 territoires (7 en a 3) : le débriefing trie par

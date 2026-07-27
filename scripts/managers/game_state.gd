@@ -47,7 +47,8 @@ var server_time: float = 0.0
 #   - zone_kills_by_player : { "<player_id>": <kills> } — clés STR en JSON (§5), valeurs en float.
 #   - zone_stagnation_turns : int — rounds globaux consécutifs sans déplacement de la zone.
 # Défaut {} pour que la propriété existe TOUJOURS (même avant le 1er message, ou état Redis antérieur
-# sans le champ). Consommée par main.gd -> hud.set_intel (tiroir Intel), jamais par le HUD en direct
+# sans le champ). Consommée par main.gd (fiche joueur, Journal, Rapport Post-Op — l'ancien tiroir
+# « INTEL : ZONE » a disparu à la refonte UI de l'arène), jamais par le HUD en direct
 # (Règle d'Or §6.1 : le HUD est une View, le contrôleur résout pseudos + couleurs).
 var statistics: Dictionary = {}
 

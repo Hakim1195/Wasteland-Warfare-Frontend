@@ -13,6 +13,7 @@ hero_name = "Sable Renko"
 hero_callsign = "Ghost"
 hero_rank = "captain"
 modifiers = {
+"first_strike_bonus_die": 1,
 "peek_objective": 1
 }
 hero_path = "res://assets/images/heroes/chasseurs_ombres.png"

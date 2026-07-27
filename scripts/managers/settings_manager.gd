@@ -26,7 +26,7 @@ const _CONFIG_PATH := "user://settings.cfg"
 # Défauts des réglages de confort (persistés dans la section [comfort]). Le TYPE du défaut fixe
 # la coercition à la relecture (bool/float/String).
 const COMFORT_DEFAULTS := {
-	"combat_display": "cinematique",   # E8 : cinematique / rapide / bandeau
+	"combat_display": "standard",      # lot D : standard / rapide / minimal (ex E8, cf. _load)
 	"reduced_motion": false,           # E10 : coupe VFX/pulses/particules
 	"colorblind_mode": false,          # E10 : palette Okabe-Ito + motifs
 	"ui_scale": 1.0,                   # E10 : 0.9 / 1.0 / 1.15 / 1.3
@@ -215,8 +215,21 @@ func _load() -> void:
 	# Confort (E8/E10) : relecture typée par le défaut de chaque clé.
 	for key in COMFORT_DEFAULTS:
 		_comfort[key] = cfg.get_value("comfort", key, COMFORT_DEFAULTS[key])
+	# Lot D (REFONTE UI ARÈNE) : re-mapping RÉTRO-COMPATIBLE des valeurs historiques de
+	# `combat_display`. La CLÉ est conservée (jamais supprimée, §8.82) ; seules ses valeurs
+	# changent de nom parce que la sémantique change (« bandeau » est devenu la flèche de guerre).
+	_comfort["combat_display"] = remap_combat_display(str(_comfort.get("combat_display", "")))
 	# Gameplay (§8.93) : id de faction choisi (str() défensif — un ConfigFile relit en Variant).
 	_selected_faction = str(cfg.get_value("gameplay", "selected_faction", _selected_faction))
+
+# Re-mapping PUR (testable) des valeurs legacy de `combat_display` : cinematique → standard,
+# bandeau → minimal. Toute valeur inconnue retombe sur le défaut.
+static func remap_combat_display(value: String) -> String:
+	match value:
+		"standard", "rapide", "minimal": return value
+		"cinematique": return "standard"
+		"bandeau": return "minimal"
+		_: return str(COMFORT_DEFAULTS["combat_display"])
 
 func _save() -> void:
 	var cfg := ConfigFile.new()

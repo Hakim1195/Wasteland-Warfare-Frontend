@@ -40,6 +40,12 @@ const MODE_NAME_KEYS := {
 # --- Cartes proposées en casual (miroir lobby_screen.gd::_MAP_CHOICES, clés NEUVES §8.116) ---
 const _MAP_CHOICES := ["classic_42", "skirmish_atlantic"]
 const _MAP_KEYS := {"classic_42": "MM_MAP_CLASSIC", "skirmish_atlantic": "MM_MAP_FAST"}
+# Sous-titre (visible sur la tuile) + infobulle détaillée : « CLASSIQUE » / « RAPIDE » ne disent pas
+# CE QUI CHANGE. Les chiffres reflètent le registre `MapData.MAP_DEFS` / backend `map_data.MAPS`
+# (classic_42 = 42 territoires sur 6 continents, 3-6 ; skirmish_atlantic = 20 territoires sur 3
+# continents, 3-4) — si une carte est ajoutée/rééquilibrée un jour, mettre CES clés à jour.
+const _MAP_SUB_KEYS := {"classic_42": "MM_MAP_CLASSIC_SUB", "skirmish_atlantic": "MM_MAP_FAST_SUB"}
+const _MAP_HINT_KEYS := {"classic_42": "MM_MAP_CLASSIC_HINT", "skirmish_atlantic": "MM_MAP_FAST_HINT"}
 
 # --- Classée (miroir lobby_screen.gd / backend api/game/ranked.py — RANKED_PLAYER_COUNT) ---
 const RANKED_PLAYER_COUNT := 5
@@ -70,6 +76,11 @@ var _back_button: Button
 
 var _map_tiles: Dictionary = {}   # map_id -> {"panel":PanelContainer,"button":Button,"label":Label}
 var _ranked_reminder_label: Label
+# Ligne « explication des points » (classée : barème RP / casual : aucun RP). Une SEULE des deux
+# branches est construite par écran -> une seule référence suffit. Mémorisée pour re-résoudre son
+# infobulle au changement de langue (le libellé, lui, s'auto-traduit via sa clé brute).
+var _points_hint_label: Label
+var _points_hint_key: String = ""
 var _search_cta_button: Button
 var _code_input: LineEdit
 var _config_status_label: Label
@@ -277,6 +288,10 @@ func _build_ranked_branch(parent: VBoxContainer) -> void:
 	parent.add_child(_ranked_reminder_label)
 	_refresh_ranked_reminder()
 
+	# Barème RP en INFOBULLE (même principe que les lignes du Classement) : la classée fait GAGNER
+	# ou PERDRE des points — le joueur doit pouvoir le savoir AVANT de lancer la recherche.
+	_points_hint_label = _make_hint_line(parent, "MM_RANKED_POINTS_LABEL", "MM_RANKED_POINTS_HINT", ACCENT)
+
 
 # Branche CASUAL : sélecteur de carte (tuiles) + CTA + bloc SALON PRIVÉ (créer / rejoindre par code).
 func _build_casual_branch(parent: VBoxContainer) -> void:
@@ -288,6 +303,10 @@ func _build_casual_branch(parent: VBoxContainer) -> void:
 		tiles_row.add_child(_build_map_tile(map_id))
 	_restrict_map_selector_to_mode()
 	_refresh_map_tiles_style()
+
+	# Pendant du barème RP de la branche classée : ici on explique l'INVERSE (aucun RP en jeu), pour
+	# que la différence entre les deux modes soit explicite des DEUX côtés.
+	_points_hint_label = _make_hint_line(parent, "MM_CASUAL_NO_RP", "MM_CASUAL_NO_RP_HINT", MUTED)
 
 	_search_cta_button = Button.new()
 	_style_cta(_search_cta_button)
@@ -367,6 +386,16 @@ func _build_map_tile(map_id: String) -> PanelContainer:
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(lbl)
 
+	# Sous-titre MUET (rythme eyebrow -> valeur inversé : la valeur est le nom, le détail dessous).
+	# Dit d'un coup d'œil CE QUI DIFFÈRE entre les deux cartes, sans obliger à survoler.
+	var sub := Label.new()
+	sub.text = _MAP_SUB_KEYS[map_id]  # clé brute -> auto-traduction
+	sub.add_theme_font_override("font", _font)
+	sub.add_theme_font_size_override("font_size", 12)
+	sub.add_theme_color_override("font_color", MUTED)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(sub)
+
 	var btn := Button.new()
 	btn.flat = true
 	btn.focus_mode = Control.FOCUS_NONE
@@ -382,6 +411,26 @@ func _build_map_tile(map_id: String) -> PanelContainer:
 	WarzoneUI.add_corner_notches(panel, 12.0)
 	_map_tiles[map_id] = {"panel": panel, "button": btn, "label": lbl}
 	return panel
+
+
+# Ligne d'aide discrète « libellé + infobulle » (pattern du Classement, cf. leaderboard.gd :
+# `row.tooltip_text = tr(...)`). Le LIBELLÉ porte la clé brute -> auto-traduction ; l'INFOBULLE est
+# résolue à la main (re-résolue dans _on_locale_changed). ⚠️ Un Label naît en MOUSE_FILTER_IGNORE :
+# sans MOUSE_FILTER_STOP il ne recevrait jamais le survol et l'infobulle ne s'afficherait JAMAIS.
+func _make_hint_line(parent: Node, label_key: String, hint_key: String, color: Color) -> Label:
+	var lbl := Label.new()
+	lbl.text = label_key  # clé brute -> auto-traduction FR/EN/IT
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_color", color)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	lbl.mouse_default_cursor_shape = Control.CURSOR_HELP
+	lbl.tooltip_text = tr(hint_key)
+	_points_hint_key = hint_key
+	parent.add_child(lbl)
+	return lbl
 
 
 func _refresh_map_tiles_style() -> void:
@@ -421,7 +470,17 @@ func _restrict_map_selector_to_mode() -> void:
 		var panel: PanelContainer = entry["panel"]
 		btn.disabled = not allowed
 		panel.modulate = Color(1, 1, 1, 1) if allowed else Color(1, 1, 1, 0.35)
-		btn.tooltip_text = (tr("LOBBY_MAP_MAX_PLAYERS") % max_p) if (not allowed and _required_players > max_p) else ""
+		# Infobulle = DESCRIPTION de la carte, toujours présente (elle explique ce qui change), à
+		# laquelle s'AJOUTE le motif d'indisponibilité quand l'effectif du mode dépasse ses bornes.
+		# ⚠️ Un Button `disabled` n'affiche PAS d'infobulle dans Godot : on la pose donc AUSSI sur le
+		# panneau (qui, lui, reste survolable) — sinon le joueur perdrait l'explication précisément
+		# dans le cas où il en a le plus besoin (« pourquoi cette tuile est-elle grisée ? »).
+		var hint := tr(_MAP_HINT_KEYS[map_id])
+		if not allowed and _required_players > max_p:
+			hint += "\n" + (tr("LOBBY_MAP_MAX_PLAYERS") % max_p)
+		btn.tooltip_text = hint
+		panel.tooltip_text = hint
+		panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var kept: Dictionary = MapData.MAP_DEFS.get(_selected_map_id, {})
 	if _required_players > int(kept.get("max_players", 6)) \
 			or _required_players < int(kept.get("min_players", 3)):
@@ -814,6 +873,13 @@ func _refresh_ranked_reminder() -> void:
 func _on_locale_changed(_code: String) -> void:
 	_refresh_eyebrow()
 	_refresh_ranked_reminder()
+	# Infobulles résolues À LA MAIN (les libellés, eux, portent des clés brutes auto-traduites) :
+	# celle des tuiles de carte est recomposée par _restrict_map_selector_to_mode (idempotent —
+	# mêmes bornes, mêmes conditions), celle de la ligne « points » est ré-appliquée ici.
+	if not _map_tiles.is_empty():
+		_restrict_map_selector_to_mode()
+	if _points_hint_label != null and _points_hint_key != "":
+		_points_hint_label.tooltip_text = tr(_points_hint_key)
 	if _search_cta_button:
 		_search_cta_button.text = "❯ " + tr("MM_SEARCH_CTA")
 	if _resume_button:

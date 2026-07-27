@@ -303,10 +303,15 @@ func _build_comfort_section() -> void:
 	eyebrow.add_theme_color_override("font_color", ACCENT)
 	root.add_child(eyebrow)
 
-	# combat_display : 3 segments (E8) — libellés TRADUITS (i18n 2026-07-18, ex-dur FR).
+	# combat_display : 3 segments — valeurs REFONDUES au lot D (REFONTE UI ARÈNE) :
+	#   standard = VS plein écran pour MES combats, flèche de guerre + explosion pour les autres ;
+	#   rapide   = idem mais VS pré-accéléré ×2,5 et flèche condensée ;
+	#   minimal  = flèche partout (aucun plein écran) SAUF la cinématique de mise à mort.
+	# Les anciennes valeurs (cinematique/bandeau) sont re-mappées au chargement par SettingsManager
+	# — aucune clé de réglage n'est supprimée (§8.82 accessibilité).
 	var combat_row := _comfort_segments("SETTINGS_COMBAT_DISPLAY", "combat_display",
-		[["cinematique", tr("SETTINGS_COMBAT_CINEMATIC")], ["rapide", tr("SETTINGS_COMBAT_FAST")],
-		["bandeau", tr("SETTINGS_COMBAT_BANNER")]])
+		[["standard", tr("SETTINGS_COMBAT_STANDARD")], ["rapide", tr("SETTINGS_COMBAT_FAST")],
+		["minimal", tr("SETTINGS_COMBAT_MINIMAL")]])
 	root.add_child(combat_row)
 	# ui_scale : 4 segments numériques (libellés % neutres — pas de traduction).
 	var scale_row := _comfort_segments("SETTINGS_UI_SCALE", "ui_scale",

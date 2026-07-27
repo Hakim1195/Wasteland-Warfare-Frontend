@@ -11,6 +11,11 @@ extends Node
 
 # Scène de résolution visuelle des combats (Split-Screen VS, instanciée en surcouche).
 const SplitScreenVSScene := preload("res://scenes/game/split_screen_vs.tscn")
+# Flèche de guerre + explosion (lot D) : combats où je ne suis NI attaquant NI défenseur — animée
+# DANS le plateau (SubViewport), aucun plein écran.
+const AttackArrowScene := preload("res://scenes/game/attack_arrow.tscn")
+# Cinématique de mise à mort (lot D) : permadeath §8.61, jouée pour TOUS, finisher du TUEUR.
+const HeroDownCinematicScene := preload("res://scenes/game/hero_down_cinematic.tscn")
 # Écran de Rapport Post-Opération (§4 Warzone Command), instancié en surcouche à la fin de partie.
 const OperationReportScene := preload("res://scenes/game/operation_report.tscn")
 # Script du rapport (E11 §8.83) : helpers statiques (titres honorifiques, médailles) appelés par
@@ -26,6 +31,9 @@ const WarRoom := preload("res://scripts/ui/war_room.gd")
 const ObjectiveTracker := preload("res://scripts/ui/objective_tracker.gd")
 # Helpers de charte partagés (identité du meneur de faction — refonte 2026-07-18).
 const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
+# Helpers purs du Roster de Guerre (E1 §8.73) : sorted_pids reste la SOURCE UNIQUE de l'ordre
+# d'affichage des belligérants — réutilisé par la navigation ◀ ▶ de la fiche joueur (lot A).
+const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
 
 @onready var button = $Button
 # Depuis la refonte HUD RTS (§8.29), le SubViewport du plateau est le 1ᵉʳ enfant de Main (plateau
@@ -67,6 +75,32 @@ var _refresh_pending: bool = false
 # multi-attaques). Plafonnée : au-delà, on abrège (l'état diffusé reste correct, seule la narration résumée).
 var _combat_queue: Array = []
 const COMBAT_QUEUE_CAP := 6
+
+# --- RYTHME DES TOURS ADVERSES (lot C) : file d'événements NON-combat d'un adversaire (bot ou
+# humain), jouée SÉQUENTIELLEMENT à cadence lisible au lieu d'être absorbée d'un coup par le
+# refresh d'état. Elle partage le MÊME verrou d'animation que les combats (_combat_animating) →
+# les deux files s'enchaînent sans jamais se chevaucher, et le plateau ne se repeint qu'à la fin
+# (pattern _refresh_pending existant). Aucune pause pendant MON tour : mes actions restent
+# instantanées. ---
+# event_type → clé i18n du toast d'action.
+const PACE_EVENT_KEYS := {
+	"units_deployed": "PACE_DEPLOY_FMT",
+	"initial_units_placed": "PACE_DEPLOY_FMT",
+	"units_moved": "PACE_MOVE_FMT",
+	"card_played": "PACE_CARD_FMT",
+	"card_kept": "PACE_CARD_FMT",
+	"conquer_move_resolved": "PACE_CONQUER_MOVE_FMT",
+}
+# Cadence NOMINALE d'une action adverse (s) et cadence CONDENSÉE quand la file s'allonge
+# (garde-fou anti-ennui : au-delà de PACE_QUEUE_RUSH entrées en attente, on accélère).
+const PACE_STEP_TIME := 0.9
+const PACE_STEP_TIME_FAST := 0.4
+const PACE_QUEUE_RUSH := 8
+# Plafond dur de la file (une salle de 5 bots peut produire beaucoup d'actions par tour) : au-delà,
+# les plus anciennes sont abandonnées — l'état diffusé reste correct, seule la narration est
+# résumée (même compromis que COMBAT_QUEUE_CAP).
+const PACE_QUEUE_CAP := 24
+var _pace_queue: Array = []
 # tid -> owner_id tel qu'AFFICHÉ sur le plateau (snapshot du dernier _refresh). Indispensable
 # pour retrouver le propriétaire PRÉ-combat du territoire défenseur : l'état reçu avec
 # attack_result est déjà post-combat (en cas de conquête, l'owner a déjà basculé).
@@ -119,18 +153,19 @@ var _blind_submitted: bool = false
 var _blind_ready: int = 0
 var _blind_expected: int = 0
 
-# Cache des infos de faction (id -> {name, description}) lues des resources/factions/*.tres, pour le
-# tooltip « Pouvoir de Faction » du HUD (chargé une fois par faction — elle ne change pas en partie).
 const FACTIONS_DIR := "res://resources/factions/"
-var _faction_info_cache: Dictionary = {}
-# Cache enrichi (nom + description + pouvoir passif) pour le tiroir « INTEL : FACTIONS » (§2).
+# Cache des infos de faction (id -> {name, description, power, hero_path, leader}) lues des
+# resources/factions/*.tres — SOURCE UNIQUE consommée par la zone OPÉRATEUR, la fiche joueur et le
+# Rapport Post-Op (chargée une fois par faction : elle ne change pas en cours de partie).
 var _faction_full_cache: Dictionary = {}
 # Cache des MODIFICATEURS de faction (id -> Dictionary), miroir du registre backend §4.3 lu des
 # .tres — consommé par la Prévision de combat (G4 §8.63 : flags de dés passés à CombatOdds).
 var _faction_mods_cache: Dictionary = {}
-# Héros adverse actuellement inspecté (clic territoire) ; -1 = aucun. Sert au rafraîchissement temps
-# réel de l'inspecteur (les PV/PP de la cible changent après un combat). Voir _refresh_enemy_inspector.
-var _inspected_enemy_id: int = -1
+# FICHE JOUEUR (lot A) : joueur actuellement affiché dans le panneau gauche (-9999 = aucun) et
+# territoire cliqué à détailler en bas de fiche ("" = aucun — navigation par flèches). Servent au
+# rafraîchissement TEMPS RÉEL de la fiche (les PV/territoires changent après un combat).
+var _sheet_pid: int = -9999
+var _sheet_territory: String = ""
 
 # Bandeaux de tour/phase (E3 §8.75) : instance + mémoire de détection des changements.
 var _phase_banner = null
@@ -171,16 +206,15 @@ func _ready():
 	# Prévision de combat (G4 §8.63) : survol d'une cible en Phase 3 → probabilités affichées.
 	board.territory_hovered.connect(_on_territory_hovered)
 	board.territory_unhovered.connect(_on_territory_unhovered)
-	# Inspecteur Tactique (§1) : un clic GAUCHE dans le vide referme le panneau (board_cleared).
-	board.board_cleared.connect(hud.hide_territory_inspector)
-	# Inspecteur Héros adverse (sprint RPG) : même geste de fermeture (clic dans le vide).
-	board.board_cleared.connect(_on_board_cleared_inspector)
 	hud.pass_pressed.connect(_on_pass_pressed)
 	hud.card_played.connect(_on_card_played)
 	hud.abandon_pressed.connect(_on_abandon_pressed)
 	hud.deploy_confirmed.connect(_on_deploy_confirmed)
-	# Roster de Guerre (E1 §8.73) : clic d'une ligne → inspecteur héros + focus caméra.
+	# Fiche joueur (lot A) : flèches ◀ ▶ (et tout autre appelant historique du roster) → ouverture
+	# de la fiche du joueur demandé + focus caméra sur son territoire le plus garni.
 	hud.roster_player_clicked.connect(_on_roster_player_clicked)
+	# Carte POUVOIR (lot E) : boutons contextuels (rouvrir Éclipse / Espionnage).
+	hud.power_action_requested.connect(_on_power_action_requested)
 	# Chrono SERVEUR (E3 §8.75) : messages légers timer_update → HUD (échéance + Time Bank).
 	NetworkManager.timer_updated.connect(_on_timer_update)
 	# Journal de Guerre 2.0 (E4 §8.76) : clic d'une entrée [url=<tid>] → focus caméra + flash.
@@ -274,9 +308,9 @@ func _input_blocked() -> bool:
 # =========================================================
 
 func _on_territory_clicked(tid: String):
-	# Inspecteur Tactique (§1) : informatif — s'affiche au clic de TOUT territoire (la logique de
-	# jeu suit en dessous, inchangée). Refermé par board_cleared (clic vide) ou le bouton ✕.
-	_push_inspector(tid)
+	# Fiche joueur (lot A) : informative — s'ouvre au clic de TOUT territoire possédé (la logique
+	# de jeu suit en dessous, inchangée). Rétractable par son bouton-tiroir.
+	_open_player_sheet_for_territory(tid)
 	if GameState.winner_id != null:
 		return
 	# Jeu figé tant qu'une fenêtre modale (conquête §8.23, Éclipse/espionnage §8.3) est ouverte.
@@ -437,9 +471,15 @@ func _do_move_click(tid: String):
 		if _owner(tid) != _my_id():
 			hud.add_log(tr("GAME_INVALID_DESTINATION"))
 			return
-		# Adjacence (UX) : la destination doit être frontalière de la source. Le serveur re-valide.
-		if not MapData.are_adjacent(_source, tid, GameState.map_id):
-			hud.add_log(tr("GAME_DEST_NOT_ADJACENT"))
+		# Destination LÉGALE (UX ; le serveur reste juge, §4.2) : adjacente pour tout le monde —
+		# ou, pour l'Éveil de la Ruche (`long_range_movement`), n'importe quel territoire allié
+		# atteignable par une CHAÎNE alliée (miroir client de engine._has_friendly_path).
+		# ⚠️ Correctif lot E : ce garde-fou refusait TOUTE destination non adjacente AVANT l'envoi,
+		# ce qui rendait le pouvoir de la Ruche littéralement injouable alors que le serveur
+		# l'acceptait déjà.
+		if not _move_destination_legal(_source, tid):
+			hud.add_log(tr("GAME_DEST_NO_CHAIN") if _has_long_range_movement()
+				else tr("GAME_DEST_NOT_ADJACENT"))
 			return
 		NetworkManager.send_action("move_units", {
 			"source_territory_id": _source,
@@ -452,9 +492,16 @@ func _select_source(tid: String):
 	_source = tid
 	board.set_selected_source(tid)
 	# Surlignage des cibles valides (E7 §8.79) : en Phase 3, on éclaire les cibles légales
-	# (adjacentes ennemies) d'un liseré cramoisi + on désature le reste. Aucun effet hors Phase 3.
-	if GameState.stage == "playing" and int(GameState.current_phase) == 3:
+	# (adjacentes ennemies) d'un liseré cramoisi + on désature le reste.
+	# Lot E : MÊME surlignage en Phase 4 (mouvement) — indispensable pour la Ruche, dont les
+	# destinations légales ne sont PAS visuellement évidentes (toute la chaîne alliée).
+	if GameState.stage != "playing":
+		return
+	var phase := int(GameState.current_phase)
+	if phase == 3:
 		board.set_attack_context(tid, _valid_attack_targets(tid))
+	elif phase == 4:
+		board.set_attack_context(tid, _valid_move_targets(tid))
 
 func _clear_source():
 	_source = ""
@@ -473,6 +520,50 @@ func _valid_attack_targets(source_tid: String) -> Array:
 		if o != null and int(o) != _my_id():
 			out.append(str(tid))
 	return out
+
+# =========================================================
+# Mouvement stratégique (lot E) — chaîne alliée de l'Éveil de la Ruche
+# =========================================================
+
+# Ma faction possède-t-elle le mouvement longue distance (`long_range_movement`, §4.3) ?
+func _has_long_range_movement() -> bool:
+	var mods := _faction_modifiers(str(_my_state().get("faction", "")))
+	return bool(mods.get("long_range_movement", false))
+
+# Destinations LÉGALES d'un mouvement depuis `source_tid` : territoires À MOI, adjacents — ou
+# TOUTE la chaîne alliée atteignable pour la Ruche. Miroir CLIENT de engine._has_friendly_path
+# (BFS sur MapData.neighbors_of + owner_id) ; le serveur re-valide (§4.2), ceci n'est que de l'UX.
+func _valid_move_targets(source_tid: String) -> Array:
+	var out: Array = []
+	if _has_long_range_movement():
+		# BFS : on ne traverse QUE des territoires alliés (la source comprise), on collecte tous
+		# ceux atteints sauf la source elle-même.
+		var seen := {source_tid: true}
+		var queue: Array = [source_tid]
+		while not queue.is_empty():
+			var cur: String = queue.pop_front()
+			for n in MapData.neighbors_of(cur, GameState.map_id):
+				var nid := str(n)
+				if seen.has(nid):
+					continue
+				var o = _terr(nid).get("owner_id")
+				if o == null or int(o) != _my_id():
+					continue
+				seen[nid] = true
+				queue.append(nid)
+				out.append(nid)
+		return out
+	for tid in MapData.neighbors_of(source_tid, GameState.map_id):
+		var o2 = _terr(str(tid)).get("owner_id")
+		if o2 != null and int(o2) == _my_id():
+			out.append(str(tid))
+	return out
+
+# La destination est-elle légale pour un mouvement depuis `source_tid` ?
+func _move_destination_legal(source_tid: String, target_tid: String) -> bool:
+	if not _has_long_range_movement():
+		return MapData.are_adjacent(source_tid, target_tid, GameState.map_id)
+	return _valid_move_targets(source_tid).has(target_tid)
 
 # =========================================================
 # Prévision de combat (G4 §8.63) — survol d'une cible en Phase 3
@@ -773,6 +864,9 @@ func _on_game_event(event):
 		if time_bonus > 0:
 			hud.add_time_to_timer(time_bonus)
 		await _play_combat_resolution(event)
+	# Rythme des tours adverses (lot C) : les actions NON-combat d'un adversaire sont mises en file
+	# et racontées une par une (toast + flash du territoire) au lieu d'apparaître d'un bloc.
+	_maybe_pace_event(event)
 	_maybe_focus_combat(event)
 	# Après l'animation de combat et le recadrage, on propose éventuellement la répartition
 	# des troupes sur le territoire conquis (uniquement pour l'attaquant local, §8.23).
@@ -920,7 +1014,9 @@ func _on_spy_result(target_player_id: int, description: String, objective: Dicti
 	var txt := _objective_text(objective, description)
 	var line := tr("GAME_SPY_RESULT_FMT") % [
 		_bb_pseudo(target_player_id), txt.replace("[", "[lb]")]
-	hud.add_chat_message("prive", line)
+	# Lot B : le renseignement est un message SYSTÈME local (aucun envoi réseau) — il s'affiche
+	# dans le canal général du chat, marqué « SYSTÈME », et dans le Journal de Guerre.
+	hud.add_chat_message("general", line)
 	hud.add_log(line)
 
 # Libellé d'un objectif RÉVÉLÉ (espionnage / fin de partie) dans la langue courante : composé
@@ -952,31 +1048,42 @@ func _on_chat_send(channel: String, text: String, target_id: int) -> void:
 
 # Réception : message ESTAMPILLÉ par le serveur (sender_id/sender_name réels, §8.33). On colore le
 # pseudo à la couleur de faction de l'expéditeur et on ÉCHAPPE le texte ET le pseudo (anti-injection
-# BBCode — le message d'un autre joueur ne doit jamais interpréter de balises). En privé, l'écho de
-# NOS propres messages revient avec sender_id == nous : on affiche alors le DESTINATAIRE.
+# BBCode — le message d'un autre joueur ne doit jamais interpréter de balises).
+# Lot B — ROUTAGE PAR CONVERSATION : un privé va TOUJOURS dans le fil du CORRESPONDANT (l'autre
+# joueur), que je sois l'expéditeur (écho de mon envoi : sender_id == moi → le correspondant est
+# target_id) ou le destinataire (le correspondant est sender_id). L'expéditeur est TOUJOURS
+# affiché, y compris pour mes propres messages (« MOI » traduit).
 func _on_chat_message(tab: String, sender_id: int, sender_name: String, text: String, target_id: int) -> void:
-	var channel := "prive" if tab == "private" else "general"
 	var esc_text := text.replace("[", "[lb]")
-	var line := ""
-	if channel == "prive" and sender_id == _my_id():
-		var to_color: Color = board.get_player_color(target_id)
-		var to_name := _display_name(target_id).replace("[", "[lb]")
-		line = "❯ [color=#%s]→ %s[/color] : %s" % [to_color.to_html(false), to_name, esc_text]
-	else:
-		var who: String = hud.color_pseudo(sender_name.replace("[", "[lb]"), board.get_player_color(sender_id))
-		var prefix := "❯ " if channel == "prive" else ""
-		line = "%s%s : %s" % [prefix, who, esc_text]
-	hud.add_chat_message(channel, line)
+	var mine: bool = sender_id == _my_id()
+	var who: String = hud.color_pseudo(tr("CHAT_ME"), board.get_player_color(_my_id())) if mine \
+		else hud.color_pseudo(sender_name.replace("[", "[lb]"), board.get_player_color(sender_id))
+	var conv_key := "general"
+	if tab == "private":
+		conv_key = str(target_id if mine else sender_id)
+	# Un message que J'ENVOIE ne doit jamais me notifier moi-même (badge/toast/son).
+	hud.push_chat_message(conv_key, who, esc_text, not mine)
 
-# Liste des destinataires du chat PRIVÉ (§8.33) : tous les AUTRES joueurs de la partie, résolus en
-# pseudo (le HUD reste une View pure). Poussée à chaque refresh (la compo de salle est stable).
+# Destinataires du chat (§8.33 — lot B) : uniquement les AUTRES joueurs HUMAINS (les bots ne
+# parlent pas), résolus en pseudo + couleur plateau (le HUD reste une View pure §6.1). L'item
+# « Tous » est ajouté par le HUD. Poussée à chaque refresh (la compo de salle est stable).
 func _push_chat_targets() -> void:
 	var entries := []
-	for key in GameState.players:
-		var pid := int(key)
+	var ids: Array = []
+	for key in GameState.players.keys():
+		ids.append(int(key))
+	ids.sort()
+	for pid in ids:
 		if pid == _my_id():
 			continue
-		entries.append({"id": pid, "name": _display_name(pid)})
+		var p: Dictionary = GameState.players.get(str(pid), {})
+		if pid < 0 or bool(p.get("is_bot", false)):
+			continue
+		entries.append({
+			"id": pid,
+			"name": _display_name(pid),
+			"color": board.get_player_color(pid),
+		})
 	hud.set_chat_targets(entries)
 
 func _territory_name(tid: String) -> String:
@@ -1016,53 +1123,10 @@ func _bb_pseudo(pid) -> String:
 	var pseudo := _display_name(int(pid)).replace("[", "[lb]")
 	return hud.color_pseudo(pseudo, board.get_player_color(int(pid)))
 
-# Infos de faction du joueur LOCAL (nom + description du pouvoir) lues de son .tres, pour le tooltip
-# du HUD. Scanne resources/factions/*.tres avec la même robustesse que board._load_faction_accents
-# (gère le suffixe .remap des exports) et mémorise par id (la faction ne change pas en cours de
-# partie). Renvoie {"name":"", "description":""} si la faction est inconnue / sans ressource.
-func _local_faction_info() -> Dictionary:
-	var fid := str(_my_state().get("faction", ""))
-	if fid == "":
-		return {"name": "", "description": ""}
-	if _faction_info_cache.has(fid):
-		return _faction_info_cache[fid]
-	var info := {"name": "", "description": ""}
-	var dir := DirAccess.open(FACTIONS_DIR)
-	if dir != null:
-		dir.list_dir_begin()
-		var file_name := dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir():
-				var fn := file_name
-				if fn.ends_with(".remap"):
-					fn = fn.trim_suffix(".remap")
-				if fn.ends_with(".tres"):
-					var full := FACTIONS_DIR + fn
-					if ResourceLoader.exists(full):
-						var res = load(full)
-						if res != null and str(res.get("id")) == fid:
-							# i18n (2026-07-18) : lore + pouvoir TRADUITS depuis les clés du .tres
-							# (repli sur l'ancien champ description pour un .tres legacy).
-							info = {
-								"name": str(res.get("name")),
-								"description": _faction_desc_text(res),
-							}
-							break
-			file_name = dir.get_next()
-		dir.list_dir_end()
-	_faction_info_cache[fid] = info
-	return info
-
-# Texte lore + pouvoir d'une FactionData pour un affichage SANS BBCode (tooltip HUD) : lore
-# traduit (desc_key) puis ligne « Pouvoir : … » traduite (power_key). Duck-typé, replis legacy.
-func _faction_desc_text(res) -> String:
-	var dk = res.get("desc_key")
-	var pk = res.get("power_key")
-	var lore := tr(str(dk)) if (dk != null and str(dk) != "") else str(res.get("description"))
-	var power := tr(str(pk)) if (pk != null and str(pk) != "") else ""
-	if power != "":
-		return "%s\n\n%s %s" % [lore, tr("FACTION_POWER_LABEL"), power]
-	return lore
+# NB (lot A) : l'ancien tooltip « Pouvoir de Faction » de la TopBar (et son cache dédié
+# _local_faction_info / _faction_desc_text) est SUPPRIMÉ — le pouvoir de MA faction s'affiche
+# désormais en clair dans la zone OPÉRATEUR de la barre basse, et celui de chaque adversaire dans
+# la fiche joueur. Tout passe par _faction_info(fid), source unique déjà en cache.
 
 # Infos de faction par id (nom + description + résumé du pouvoir passif), lues du .tres et mises en
 # cache. Sert au tiroir « INTEL : FACTIONS » (§2). Scan robuste export-safe (.remap), duck-typing.
@@ -1119,59 +1183,78 @@ func _extract_power(desc: String) -> String:
 		return tail.strip_edges()
 	return clean.strip_edges()
 
-# Inspecteur Tactique de Territoire (§1) : résout les données publiques du territoire cliqué et les
-# pousse au HUD (View pure). Propriétaire neutre -> « NEUTRE » gris acier.
-func _push_inspector(tid: String) -> void:
+# FICHE JOUEUR (lot A) — un clic sur N'IMPORTE QUEL territoire ouvre la fiche de son PROPRIÉTAIRE,
+# avec en bas le bloc TERRITOIRE cliqué. Territoire NEUTRE (owner_id null) : aucun joueur à
+# afficher → on garde la fiche courante et on n'ouvre rien (le badge du plateau porte déjà l'info).
+# Remplace les 3 anciens panneaux (Inspecteur de Territoire, inspecteur héros adverse, panneau
+# héros local) — une seule fiche, un seul endroit où lire « qui possède quoi ».
+func _open_player_sheet_for_territory(tid: String) -> void:
 	# Propriétaire RÉEL du territoire : seul null = NEUTRE. owner_id peut être NÉGATIF (bot
 	# G2 §8.72) — l'ancien test `>= 0` classait à tort les territoires de bots comme neutres.
 	var raw_owner = _terr(tid).get("owner_id")
-	var has_owner: bool = raw_owner != null
-	var owner_id: int = int(raw_owner) if has_owner else -1
-	var owner_name := tr("HUD_NEUTRAL")
-	var owner_color := Color("8a97a5")
-	if has_owner:
-		owner_name = _display_name(owner_id)
-		owner_color = board.get_player_color(owner_id)
-	hud.set_territory_inspector({
-		"name": _territory_name(tid),
-		"owner_name": owner_name,
-		"owner_color": owner_color,
-		# E1 §8.73 : l'Inspecteur présente le propriétaire en player_chip (couleur plateau +
-		# pseudo + faction) ; null = neutre → le HUD garde son label nu.
-		"owner_id": owner_id if has_owner else null,
-		"troops": _garrison(tid),
-		"contaminated": board.is_contaminated(tid),
-	})
-	# Inspection adverse (sprint RPG, Objectif 5b) : si le territoire appartient à un AUTRE joueur
-	# doté d'un héros, on pousse ses stats de héros (PUBLIQUES, aucune redaction). Sinon on masque
-	# l'inspecteur adverse (territoire neutre, vide, ou à soi).
-	if has_owner and owner_id != _my_id() and GameState.has_hero(owner_id):
-		_inspected_enemy_id = owner_id  # mémorisé pour le rafraîchissement temps réel (_refresh)
-		hud.set_player_inspector({
-			"pseudo": owner_name,
-			"color": owner_color,
-			"hero": GameState.hero_of(owner_id),
-		})
-	else:
-		_inspected_enemy_id = -1
-		hud.hide_player_inspector()
+	if raw_owner == null:
+		return
+	_sheet_territory = tid
+	_push_player_sheet(int(raw_owner))
 
-# Fermeture de l'inspecteur héros adverse (clic dans le vide) : masque + oublie la cible suivie.
-func _on_board_cleared_inspector() -> void:
-	_inspected_enemy_id = -1
-	hud.hide_player_inspector()
+# Compose et pousse la fiche d'un joueur (View pure §6.1 : TOUT est résolu ici). `pid` = joueur
+# affiché ; `_sheet_territory` = territoire cliqué à détailler en bas de fiche ("" = aucun).
+func _push_player_sheet(pid: int) -> void:
+	if not GameState.players.has(str(pid)):
+		return
+	_sheet_pid = pid
+	var p: Dictionary = GameState.players.get(str(pid), {})
+	var fid := str(p.get("faction", ""))
+	var finfo := _faction_info(fid)
+	var fname := str(finfo.get("name", ""))
+	if fname == "":
+		fname = fid.capitalize() if fid != "" else tr("GAME_FACTION_UNKNOWN")
+	# Statut public : éliminé > abandon (Fallen Empire §8.20) > vivant.
+	var status_key := "HUD_SHEET_STATUS_ALIVE"
+	if str(p.get("status", "alive")) == "eliminated" or bool(p.get("is_dead", false)):
+		status_key = "HUD_SHEET_STATUS_DEAD"
+	elif not bool(p.get("is_active", true)):
+		status_key = "HUD_SHEET_STATUS_ABANDONED"
+	# Troupes totales + territoires possédés (comptage direct de l'état public).
+	var terr_count := 0
+	var troops := 0
+	for t_id in GameState.territories:
+		var t: Dictionary = GameState.territories.get(t_id, {})
+		var o = t.get("owner_id")
+		if o != null and int(o) == pid:
+			terr_count += 1
+			troops += int(t.get("garrison", 0))
+	var cards_n := 0
+	var hand = p.get("cards_in_hand", [])
+	if typeof(hand) == TYPE_ARRAY:
+		cards_n = (hand as Array).size()
+	var data := {
+		"pid": pid,
+		"pseudo": _display_name(pid),
+		"color": board.get_player_color(pid),
+		"faction_name": fname,
+		"leader": str(finfo.get("leader", "")),
+		"power_text": str(finfo.get("power", "")),
+		"status_key": status_key,
+		"hero": GameState.hero_of(pid),
+		"territories": terr_count,
+		"troops": troops,
+		"cards": cards_n,
+	}
+	if _sheet_territory != "" and GameState.territories.has(_sheet_territory):
+		data["territory"] = {
+			"name": _territory_name(_sheet_territory),
+			"garrison": _garrison(_sheet_territory),
+			"contaminated": board.is_contaminated(_sheet_territory),
+		}
+	hud.set_player_sheet(data)
 
-# Clic d'une ligne du Roster de Guerre (E1 §8.73) : ouvre l'inspecteur héros du joueur (existant,
-# réutilisé tel quel — suivi temps réel via _inspected_enemy_id) et focalise la caméra tactique
-# sur son territoire le plus garni (même cinétique + retour que le focus de combat).
+# Clic d'une flèche ◀ ▶ de la fiche (ou de tout appelant historique du roster E1 §8.73) : la fiche
+# bascule sur ce joueur (SANS bloc territoire — on change de belligérant, pas de zone) et la caméra
+# se focalise sur son territoire le plus garni.
 func _on_roster_player_clicked(pid: int) -> void:
-	if pid != _my_id() and GameState.has_hero(pid):
-		_inspected_enemy_id = pid
-		hud.set_player_inspector({
-			"pseudo": _display_name(pid),
-			"color": board.get_player_color(pid),
-			"hero": GameState.hero_of(pid),
-		})
+	_sheet_territory = ""
+	_push_player_sheet(pid)
 	# Territoire le plus garni du joueur — aucun territoire (éliminé rasé) → pas de focus.
 	var best_tid := ""
 	var best_garrison := -1
@@ -1189,74 +1272,171 @@ func _on_roster_player_clicked(pid: int) -> void:
 	camera.focus_on_combat(pos, pos)
 	get_tree().create_timer(2.5).timeout.connect(camera.reset_view)
 
-# Rafraîchit en TEMPS RÉEL l'inspecteur héros adverse ouvert (PV/PP changent après un combat) : re-pousse
-# les stats publiques de la cible suivie à chaque mise à jour d'état. Appelé depuis _refresh.
-func _refresh_enemy_inspector() -> void:
-	if _inspected_enemy_id < 0:
+# Rafraîchit en TEMPS RÉEL la fiche joueur ouverte (PV/PP/territoires changent après un combat) :
+# re-pousse les données publiques du joueur affiché à chaque mise à jour d'état (appelé par _refresh).
+func _refresh_player_sheet() -> void:
+	if _sheet_pid == -9999:
 		return
-	if not GameState.has_hero(_inspected_enemy_id):
-		_inspected_enemy_id = -1
-		hud.hide_player_inspector()
+	if not GameState.players.has(str(_sheet_pid)):
+		_sheet_pid = -9999
 		return
-	hud.set_player_inspector({
-		"pseudo": _display_name(_inspected_enemy_id),
-		"color": board.get_player_color(_inspected_enemy_id),
-		"hero": GameState.hero_of(_inspected_enemy_id),
+	_push_player_sheet(_sheet_pid)
+
+# Ordre de navigation de la fiche (flèches ◀ ▶) : rotation d'Initiative (turn_order), VIVANTS
+# d'abord puis éliminés — même tri stable que l'ancien Roster de Guerre (helper partagé).
+func _push_sheet_players() -> void:
+	var order: Array = RosterHelpers.sorted_pids(GameState.players, GameState.turn_order)
+	var alive: Array = []
+	var down: Array = []
+	for pid in order:
+		var p: Dictionary = GameState.players.get(str(int(pid)), {})
+		if str(p.get("status", "alive")) == "eliminated" or bool(p.get("is_dead", false)):
+			down.append(int(pid))
+		else:
+			alive.append(int(pid))
+	hud.set_sheet_players(alive + down)
+
+# Zone OPÉRATEUR de la barre basse (lot A) : MOI — identité, pouvoir de faction (libellé + ligne
+# d'état vivante résolue au lot E) et 4 barres PV/PA/PB/PP. View pure §6.1.
+func _push_operator_panel() -> void:
+	var fid := str(_my_state().get("faction", ""))
+	var finfo := _faction_info(fid)
+	var fname := str(finfo.get("name", ""))
+	if fname == "":
+		fname = fid.capitalize() if fid != "" else tr("GAME_FACTION_UNKNOWN")
+	hud.set_operator_panel({
+		"pid": _my_id(),
+		"pseudo": _display_name(_my_id()),
+		"color": board.get_player_color(_my_id()),
+		"faction_name": fname,
+		"leader": str(finfo.get("leader", "")),
+		"power_label": str(finfo.get("power", "")),
+		"power_state": _power_state_line(),
+		"hero": GameState.hero_of(_my_id()),
 	})
 
-# Tiroir « INTEL : FACTIONS » (§2) : liste les joueurs avec faction + pouvoir passif, résolus (pseudo,
-# couleur de faction, pouvoir lu du .tres) et triés par id (View pure, Règle d'Or §6.1).
-func _push_factions_intel() -> void:
-	var entries: Array = []
-	var ids: Array = []
+# =========================================================
+# Carte POUVOIR vivante (lot E) — zone OPÉRATEUR + onglet ACTIONS
+# =========================================================
+# POURQUOI : les 10 pouvoirs sont appliqués côté serveur depuis longtemps, mais RIEN ne les rendait
+# perceptibles en jeu (aucun compteur, aucun état, aucune relance de fenêtre). Ici, chaque faction
+# expose une ligne d'ÉTAT lue de son propre état serveur — jamais une valeur en dur.
+
+# Ligne d'état COURTE du pouvoir de MA faction (zone OPÉRATEUR).
+func _power_state_line() -> String:
+	var mods := _faction_modifiers(str(_my_state().get("faction", "")))
+	var me := _my_state()
+	if mods.get("bonus_strategic_moves", 0):
+		# Pillards : `strategic_moves_left` est DÉJÀ diffusé dans l'état — il n'était juste
+		# affiché nulle part. Le total = 1 mouvement de base + le bonus de faction.
+		var total := 1 + int(mods.get("bonus_strategic_moves", 0))
+		return tr("POWER_STATE_MOVES_FMT") % [int(me.get("strategic_moves_left", total)), total]
+	if mods.get("long_range_movement", false):
+		return tr("POWER_STATE_CHAIN")
+	if mods.get("free_contamination_immunity", 0):
+		return tr("POWER_STATE_ZONE_IMMUNE")
+	if mods.get("event_draw_pick_count", 0):
+		var pending: Array = me.get("pending_eclipse_choice", [])
+		return tr("POWER_STATE_ECLIPSE_PENDING") if pending.size() >= 2 else tr("POWER_STATE_ECLIPSE")
+	if mods.get("peek_objective", 0):
+		return tr("POWER_STATE_SPY_PENDING") if bool(me.get("pending_spy_choice", false)) \
+			else tr("POWER_STATE_SPY_DONE")
+	if mods.get("bonus_reinforcement_flat", 0):
+		return tr("POWER_STATE_NEXT_REINFORCE_FMT") % int(mods.get("bonus_reinforcement_flat", 0))
+	if mods.get("continent_bonus_plus", 0):
+		return tr("POWER_STATE_NEXT_REINFORCE_FMT") % (
+			int(mods.get("continent_bonus_plus", 0)) * _continents_owned(_my_id()))
+	return tr("POWER_STATE_PASSIVE")
+
+# Carte POUVOIR de l'onglet ACTIONS : lignes d'état + boutons contextuels (rouvrir une fenêtre de
+# choix EN ATTENTE). Poussée à chaque refresh (View pure §6.1).
+func _push_power_card() -> void:
+	var lines: Array = []
+	var buttons: Array = []
+	var mods := _faction_modifiers(str(_my_state().get("faction", "")))
+	var me := _my_state()
+	# Compteur de mouvements (phase 4) : affiché pour TOUT LE MONDE (1 mouvement de base), la
+	# mention « Razzia » ne s'ajoutant que pour les Pillards — le pouvoir devient perceptible.
+	if _is_playing_my_turn() and int(GameState.current_phase) == 4:
+		var total := 1 + int(mods.get("bonus_strategic_moves", 0))
+		lines.append(tr("POWER_MOVES_LEFT_FMT") % [int(me.get("strategic_moves_left", total)), total])
+		if mods.get("bonus_strategic_moves", 0):
+			lines.append(tr("POWER_RAZZIA_HINT_FMT") % total)
+		if mods.get("long_range_movement", false):
+			lines.append(tr("POWER_CHAIN_HINT"))
+	# Fenêtres de choix EN ATTENTE : le joueur peut les rouvrir s'il les a fermées.
+	var pending_eclipse: Array = me.get("pending_eclipse_choice", [])
+	if pending_eclipse.size() >= 2:
+		lines.append(tr("POWER_STATE_ECLIPSE_PENDING"))
+		buttons.append({"label": tr("POWER_BTN_ECLIPSE"), "action": "eclipse"})
+	if bool(me.get("pending_spy_choice", false)):
+		lines.append(tr("POWER_STATE_SPY_PENDING"))
+		buttons.append({"label": tr("POWER_BTN_SPY"), "action": "spy"})
+	hud.set_power_card(lines, buttons)
+
+# Marqueurs des pouvoirs déclenchés pendant CE combat (flags posés par engine._handle_attack) :
+# étiquettes flottantes de la flèche de guerre + toasts d'activation. Table unique → aucun risque
+# d'oublier un flag comme cela s'était produit pour razzia_reroll / first_strike.
+# Chaque entrée : [flag serveur, clé du TOAST (phrase complète), clé du MARQUEUR court].
+# Le marqueur court est celui du Journal (FEED_MARK_*) : c'est lui qui flotte au-dessus du
+# territoire pendant la flèche — la phrase entière y serait illisible et ferait doublon avec le
+# toast (constaté en capture).
+const COMBAT_POWER_FLAGS := [
+	["phalanges_reroll", "POWER_TOAST_PHALANX", "FEED_MARK_PHALANX"],
+	["aegis_kill", "POWER_TOAST_AEGIS", "FEED_MARK_AEGIS"],
+	["terror_kill", "POWER_TOAST_TERROR", "FEED_MARK_TERROR"],
+	["razzia_reroll", "POWER_TOAST_RAZZIA", "FEED_MARK_RAZZIA"],
+	["first_strike", "POWER_TOAST_AMBUSH", "FEED_MARK_AMBUSH"],
+]
+
+func _combat_power_marks(event: Dictionary) -> Array:
+	var out: Array = []
+	for f in COMBAT_POWER_FLAGS:
+		if event.get(str(f[0])):
+			out.append(tr(str(f[2])))
+	return out
+
+# Toasts d'ACTIVATION des pouvoirs de combat, joués APRÈS l'animation (sinon ils précéderaient le
+# combat qu'ils commentent). Le liseré prend la couleur du camp CONCERNÉ : attaquant pour les
+# pouvoirs offensifs (Phalanges/Razzia/Embuscade/Terreur), défenseur pour Aegis.
+func _push_combat_power_toasts(event: Dictionary, atk_owner, def_owner) -> void:
+	for f in COMBAT_POWER_FLAGS:
+		if not event.get(str(f[0])):
+			continue
+		var owner: int = int(def_owner) if str(f[0]) == "aegis_kill" else int(atk_owner)
+		hud.show_power_toast(tr(str(f[1])), board.get_player_color(owner))
+
+# Bouton contextuel de la carte POUVOIR (onglet ACTIONS) : rouvre la fenêtre correspondante quand
+# un choix de faction est EN ATTENTE côté serveur (l'état fait foi, jamais le client).
+func _on_power_action_requested(action: String) -> void:
+	match action:
+		"eclipse":
+			if _my_state().get("pending_eclipse_choice", []).size() >= 2:
+				_awaiting_eclipse = false   # force la ré-ouverture par _maybe_prompt_eclipse
+				_maybe_prompt_eclipse()
+		"spy":
+			if bool(_my_state().get("pending_spy_choice", false)):
+				_awaiting_spy = false
+				_maybe_prompt_spy()
+
+# Résout les NOMS de faction affichables par joueur (le bandeau de tour et la fiche n'affichent
+# jamais l'id snake_case brut). Remplace l'ancien tiroir « INTEL : FACTIONS » (supprimé lot A —
+# l'information vit désormais dans la fiche joueur, complète et par joueur).
+func _push_faction_names() -> void:
 	for k in GameState.players.keys():
-		ids.append(int(k))
-	ids.sort()
-	for pid in ids:
-		var p = GameState.players.get(str(pid), {})
+		var p = GameState.players.get(k, {})
 		if typeof(p) != TYPE_DICTIONARY:
 			continue
 		var fid := str(p.get("faction", ""))
-		var finfo := _faction_info(fid)
-		var fname := str(finfo.get("name", ""))
+		var fname := str(_faction_info(fid).get("name", ""))
 		if fname == "":
 			fname = fid.capitalize() if fid != "" else tr("GAME_FACTION_UNKNOWN")
-		entries.append({
-			"pseudo": _display_name(pid),
-			"faction_name": fname,
-			"color": board.get_player_color(pid),
-			"power": str(finfo.get("power", "")),
-		})
-		# Barre d'info du tour (i18n 2026-07-18) : le HUD affiche le nom EN invariant, plus l'id brut.
-		hud.faction_name_by_pid[str(pid)] = fname
-	hud.set_factions_intel(entries)
+		hud.faction_name_by_pid[str(int(k))] = fname
 
-# « Mémoire Tactique » (§8.35/§8.36) : extrait les statistiques GLOBALES PUBLIQUES de l'état réseau
-# (GameState.statistics) et pousse une liste prête à afficher au tiroir Intel du HUD. Suit le contrat
-# serveur tel quel : statistics.zone_stagnation_turns (int) + statistics.zone_kills_by_player
-# ({"<pid>": kills}). Pièges JSON (§5) : clés player_id en STR, valeurs en float -> int(). Résout
-# pseudo (_display_name) + couleur de faction (board.get_player_color) AVANT de pousser, pour que le
-# HUD reste une View pure (Règle d'Or §6.1).
-func _push_intel() -> void:
-	var stats: Dictionary = GameState.statistics
-	var stagnation := int(stats.get("zone_stagnation_turns", 0))
-	var kills_by_player: Dictionary = stats.get("zone_kills_by_player", {})
-	var entries: Array = []
-	# Tri par id croissant (ordre stable, cohérent avec player_number et la palette du plateau).
-	var keys: Array = kills_by_player.keys()
-	keys.sort_custom(func(a, b): return int(a) < int(b))
-	for k in keys:
-		var kills := int(kills_by_player[k])
-		if kills <= 0:
-			continue
-		var pid := int(k)
-		entries.append({
-			"pseudo": _display_name(pid),
-			"color": board.get_player_color(pid),
-			"kills": kills,
-		})
-	hud.set_intel(stagnation, entries)
-
+# Télégraphe de la zone (G1 §8.62) — devenu un CHIP discret sous le bandeau haut (lot A : les 3
+# tiroirs INTEL sont supprimés, leurs infos vivent dans la fiche joueur et le Journal). Résout les
+# NOMS lisibles des territoires annoncés et les pousse au HUD (View pure §6.1).
+func _push_zone_forecast() -> void:
 	# Télégraphe de la zone (G1 §8.62) : résout les NOMS lisibles des territoires annoncés
 	# (contamination_zone.next_territories, pré-tirés serveur) et pousse la ligne permanente au HUD.
 	# Clé absente (serveur antérieur / état legacy) → liste vide, mention neutre côté HUD.
@@ -1277,20 +1457,9 @@ func _push_intel() -> void:
 		AudioManager.play_sfx("zone_alarm")
 	_last_zone_alarm_sig = sig
 
-# War Room (E5 §8.77) : agrège les 8 compteurs publics de GameState.statistics + territoires
-# (module pur WarRoom) et la synthèse des continents DE LA CARTE COURANTE (G5 :
-# MapData.get_map(map_id).continent_territories), puis pousse au HUD (View pure §6.1).
-func _push_war_intel() -> void:
-	var rows: Array = WarRoom.player_rows(
-		GameState.players, GameState.territories, GameState.statistics)
-	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
-	var continents: Dictionary = {}
-	for cid in cont_terrs.keys():
-		continents[cid] = {
-			"name": MapData.c_name(cid),
-			"tids": cont_terrs[cid],
-		}
-	hud.set_war_intel(rows, WarRoom.continent_rows(GameState.territories, continents))
+# NB (lot A) : l'ancien tiroir « INTEL : GUERRE » (E5 §8.77) est SUPPRIMÉ de l'arène — le module
+# PUR `WarRoom` reste la source unique des compteurs, désormais consommée par le Rapport Post-Op
+# (podium + BILAN) et par la fiche joueur ; aucune donnée n'est perdue.
 
 # Tracker d'objectif vivant (E6 §8.78) : résout le CONTEXTE public (mes territoires, mes
 # continents entièrement possédés, statut de la cible d'élimination) et pousse la progression
@@ -1336,7 +1505,9 @@ func _push_objective_tracker() -> void:
 		_display_name(target_id) if target_id != -9999 else "")
 	if obj_txt == "":
 		obj_txt = str(obj.get("description", ""))
-	var tooltip := obj_txt + "\n" + tr("OBJ_LAST_SURVIVOR_HINT")
+	# Lot A : le rappel « dernier survivant » est désormais rendu EN CLAIR sous la jauge (zone
+	# OBJECTIFS) — le tooltip ne porte plus que la description complète de l'objectif.
+	var tooltip := obj_txt
 	hud.set_objective_progress(data, tooltip)
 
 # =========================================================
@@ -1390,22 +1561,28 @@ func _do_play_combat(event: Dictionary) -> void:
 	var def_owner := _event_pid(event, "defender_player_id",
 		int(_displayed_owners.get(def_tid, _owner(def_tid))))
 
-	# Rythme des combats (E8 §8.80). Mode par implication (réglage combat_display) :
-	#   cinematique = plein écran pour TOUS ; rapide = plein écran pré-accéléré ×2,5 ;
-	#   bandeau = pour les combats où JE ne suis NI attaquant NI défenseur → bandeau compact
-	#             (pas de plein écran) ; mes propres combats restent plein écran.
+	# ROUTAGE DES ANIMATIONS (lot D — REFONTE UI ARÈNE) :
+	#   je suis attaquant OU défenseur  → Split-Screen VS plein écran (vitrine skins M5, Time Bank,
+	#                                     duel de héros) — inchangé ;
+	#   combat entre les AUTRES         → flèche de guerre + explosion IN-BOARD (aucun plein écran) ;
+	#   héros abattu (n'importe qui)    → animation normale PUIS cinématique de mise à mort plein
+	#                                     écran pour TOUS, quel que soit le réglage.
+	# Réglage `combat_display` : standard (tableau ci-dessus) / rapide (VS ×2,5 + flèche condensée) /
+	# minimal (flèche PARTOUT sauf la cinématique). Valeurs legacy re-mappées par SettingsManager.
 	var am_participant: bool = int(atk_owner) == _my_id() or int(def_owner) == _my_id()
 	var mode := str(SettingsManager.get_comfort("combat_display"))
 	# Chaîne de ré-assaut (E7) : 2ᵉ+ assaut consécutif sur la MÊME paire → version condensée.
 	var pair := "%s>%s" % [atk_tid, def_tid]
 	var condensed := pair == _last_combat_pair
 	_last_combat_pair = pair
+	var duel = event.get("hero_duel")
+	var hero_died: bool = typeof(duel) == TYPE_DICTIONARY and bool(duel.get("hero_died", false))
 
-	if mode == "bandeau" and not am_participant:
-		# Bandeau compact (E8) : passe dans la MÊME file _combat_animating (durée plus courte) —
-		# AUCUN état ne se peint pendant une résolution (piège n° 4). HUD non masqué.
-		await _play_combat_banner(event, atk_owner, def_owner)
-		_combat_finished()
+	if not am_participant or mode == "minimal":
+		# Flèche de guerre : passe dans la MÊME file _combat_animating — AUCUN état ne se peint
+		# pendant une résolution (piège n° 4). Le HUD n'est PAS masqué (pas de plein écran).
+		await _play_attack_arrow(event, atk_owner, def_owner, condensed or mode != "standard")
+		_after_combat_animation(event, atk_owner, def_owner, duel, hero_died)
 		return
 
 	# Le Split-Screen VS sacralise l'affrontement des héros : on efface le HUD flottant pendant
@@ -1463,19 +1640,196 @@ func _do_play_combat(event: Dictionary) -> void:
 
 	# Combat lu : on rétablit le HUD flottant (fondu inverse 0,5 s, §8.29).
 	hud.fade_ui_for_combat(false)
+	_after_combat_animation(event, atk_owner, def_owner, duel, hero_died)
+
+# Épilogue COMMUN aux deux animations (VS plein écran ET flèche in-board) :
+#   1. flash de conquête + fanfare — joués APRÈS la narration du combat (avant le lot D, le flash
+#      partait à la réception de l'évènement, donc AVANT l'animation : la conquête était « spoilée ») ;
+#   2. cinématique de mise à mort si un héros est tombé — pour TOUS les joueurs ;
+#   3. drainage de la file (combats en attente, puis actions adverses du lot C).
+func _after_combat_animation(event: Dictionary, atk_owner, def_owner, duel, hero_died: bool) -> void:
+	# Lot E : toasts d'ACTIVATION des pouvoirs déclenchés par ce combat (Phalanges, Aegis, Terreur,
+	# Razzia, Embuscade) — jusqu'ici, deux d'entre eux n'apparaissaient nulle part.
+	_push_combat_power_toasts(event, atk_owner, def_owner)
+	if bool(event.get("conquered", false)):
+		AudioManager.play_sfx("conquest")
+		if _vfx_enabled():
+			board.conquest_flash(str(event.get("defender_territory_id", "")),
+				board.get_player_color(int(atk_owner)))
+	if hero_died:
+		await _play_hero_down(duel, atk_owner, def_owner)
 	_combat_finished()
+
+# =========================================================
+# Flèche de guerre + explosion (lot D) — combats qui ne me concernent pas
+# =========================================================
+# Instanciée DANS le plateau (enfant de Board → coordonnées monde). Repli SILENCIEUX sur le bandeau
+# compact (E8 §8.80) si une position de territoire est introuvable (carte réduite G5, état partiel)
+# — jamais de crash, jamais de combat muet.
+func _play_attack_arrow(event: Dictionary, atk_owner, def_owner, condensed: bool) -> void:
+	var atk_tid := str(event.get("attacker_territory_id", ""))
+	var def_tid := str(event.get("defender_territory_id", ""))
+	var from: Vector2 = board.get_territory_position(atk_tid)
+	var to: Vector2 = board.get_territory_position(def_tid)
+	if from == Vector2.INF or to == Vector2.INF:
+		await _play_combat_banner(event, atk_owner, def_owner)
+		return
+	var arrow = AttackArrowScene.instantiate()
+	board.add_child(arrow)
+	var dmg := 0
+	var duel = event.get("hero_duel")
+	if typeof(duel) == TYPE_DICTIONARY:
+		dmg = int(duel.get("damage", 0))
+	arrow.play(from, to, board.get_player_color(int(atk_owner)), {
+		"atk_losses": int(event.get("attacker_losses", 0)),
+		"def_losses": int(event.get("defender_losses", 0)),
+		"hero_damage": dmg,
+		"conquered": bool(event.get("conquered", false)),
+		"marks": _combat_power_marks(event),
+	}, condensed)
+	await arrow.finished
+
+# =========================================================
+# Cinématique de mise à mort (lot D) — permadeath §8.61, visible par TOUS
+# =========================================================
+# Le finisher joué est celui du TUEUR (champ PUBLIC `equipped_finisher`, lot G) ; id vide/inconnu
+# → basique gratuit (repli silencieux du registre finishers.gd). Garde IDEMPOTENTE par victime :
+# une reconnexion qui rejouerait l'évènement ne rejoue pas la cinématique.
+var _hero_down_played: Dictionary = {}
+
+func _play_hero_down(duel, atk_owner, def_owner) -> void:
+	var victim := int(duel.get("defender_id", def_owner)) if typeof(duel) == TYPE_DICTIONARY else int(def_owner)
+	if _hero_down_played.has(victim):
+		return
+	_hero_down_played[victim] = true
+	var killer := int(duel.get("attacker_id", atk_owner)) if typeof(duel) == TYPE_DICTIONARY else int(atk_owner)
+	var cine = HeroDownCinematicScene.instantiate()
+	add_child(cine)   # dernier enfant de Main → dessiné AU-DESSUS du HUD
+	cine.play({
+		"killer_name": _display_name(killer),
+		"killer_color": board.get_player_color(killer),
+		"killer_portrait": _hero_portrait_of(killer),
+		"victim_name": _display_name(victim),
+		"victim_color": board.get_player_color(victim),
+		"finisher_id": _equipped_finisher_of(killer),
+	})
+	await cine.finished
+
+# Portrait du héros d'un joueur (hero_path du .tres de sa faction, déjà mis en cache) — null si
+# la ressource manque : la cinématique s'affiche alors sans portrait (repli silencieux).
+func _hero_portrait_of(pid: int) -> Texture2D:
+	var fid := _faction_of_player(pid)
+	var hp := str(_faction_info(fid).get("hero_path", ""))
+	if hp == "" or not ResourceLoader.exists(hp):
+		return null
+	var res = load(hp)
+	return res if res is Texture2D else null
+
+# Finisher équipé d'un joueur (lot G) — champ PUBLIC de son PlayerState ("" = basique gratuit).
+# Absent d'un serveur non redéployé → "" → basique : le client fonctionne SANS le champ (§9.2).
+func _equipped_finisher_of(pid) -> String:
+	if pid == null:
+		return ""
+	var p = GameState.players.get(str(int(pid)), {})
+	if typeof(p) == TYPE_DICTIONARY:
+		return str(p.get("equipped_finisher", ""))
+	return ""
 
 # Fin d'UN combat : draine la FILE (chaque duel s'anime) AVANT tout rafraîchissement. _combat_animating
 # reste vrai pendant tout le drainage → aucun état ne se peint, input figé, ordre des combats préservé.
+# Lot C : la file des actions adverses NON-combat s'enchaîne ensuite sur le MÊME verrou (aucun
+# chevauchement possible entre une flèche/un VS et un toast d'action).
 func _combat_finished() -> void:
 	if not _combat_queue.is_empty():
 		var next_event: Dictionary = _combat_queue.pop_front()
 		call_deferred("_do_play_combat", next_event)
 		return
+	if not _pace_queue.is_empty():
+		call_deferred("_play_pace_queue")
+		return
 	_combat_animating = false
 	if _refresh_pending:
 		_refresh_pending = false
 		_refresh()
+
+# =========================================================
+# Rythme des tours adverses (lot C) — file d'actions NON-combat
+# =========================================================
+
+# Doit-on mettre cet évènement en file ? Uniquement en partie EN COURS, pour un acteur qui n'est
+# PAS moi (mes propres actions restent instantanées) et pour un type d'action « racontable ».
+func _maybe_pace_event(event) -> void:
+	if typeof(event) != TYPE_DICTIONARY:
+		return
+	var etype := str(event.get("event_type", ""))
+	if not PACE_EVENT_KEYS.has(etype) or GameState.stage != "playing":
+		return
+	# Acteur : champ explicite du payload quand il existe (card_played/card_kept), sinon le joueur
+	# courant — pour ces actions le tour ne change pas, l'acteur EST le joueur courant.
+	var actor := int(event.get("player_id", GameState.current_player_id))
+	if actor == _my_id():
+		return
+	_pace_queue.append(event.duplicate(true))
+	while _pace_queue.size() > PACE_QUEUE_CAP:
+		_pace_queue.pop_front()
+	# Si une animation (combat ou action) est déjà en cours, _combat_finished prendra le relais.
+	if not _combat_animating:
+		_combat_animating = true
+		_play_pace_queue()
+
+# Draine la file : un toast + un flash de territoire par action, puis rend la main à
+# _combat_finished (qui enchaîne sur un combat en attente, ou libère le verrou et rejoue le
+# rafraîchissement différé).
+func _play_pace_queue() -> void:
+	while not _pace_queue.is_empty():
+		var e: Dictionary = _pace_queue.pop_front()
+		var step := PACE_STEP_TIME_FAST if _pace_queue.size() > PACE_QUEUE_RUSH else PACE_STEP_TIME
+		var actor := int(e.get("player_id", GameState.current_player_id))
+		var line := _pace_line(e, actor)
+		if line != "":
+			hud.show_action_toast(line, board.get_player_color(actor), step)
+		var tid := _pace_territory(e)
+		if tid != "" and _vfx_enabled():
+			board.flash_territory(tid)
+		await get_tree().create_timer(step).timeout
+	_combat_finished()
+
+# Libellé TRADUIT d'une action adverse (« [IA] RAIDER-2 ❯ déploie 4 unités sur Oural »).
+func _pace_line(e: Dictionary, actor: int) -> String:
+	var who := _bb_pseudo(actor)
+	match str(e.get("event_type", "")):
+		"units_deployed", "initial_units_placed":
+			var n := _deployments_count(e)
+			var amount := int(e.get("amount", 0))
+			if n > 1:
+				return tr("PACE_DEPLOY_MULTI_FMT") % [who, amount, n]
+			var tid := _pace_territory(e)
+			return tr("PACE_DEPLOY_FMT") % [who, amount, _territory_name(tid)]
+		"units_moved":
+			return tr("PACE_MOVE_FMT") % [who, int(e.get("amount", 0)),
+				_territory_name(str(e.get("source_territory_id", ""))),
+				_territory_name(str(e.get("target_territory_id", "")))]
+		"card_played", "card_kept":
+			return tr("PACE_CARD_FMT") % [who, int(e.get("card_value", 0))]
+		"conquer_move_resolved":
+			return tr("PACE_CONQUER_MOVE_FMT") % [who, int(e.get("troops", 0)),
+				_territory_name(str(e.get("to_tid", "")))]
+	return ""
+
+# Territoire à faire FLASHER pour une action adverse ("" si l'action n'en cible pas un seul).
+func _pace_territory(e: Dictionary) -> String:
+	match str(e.get("event_type", "")):
+		"units_deployed", "initial_units_placed":
+			if e.has("territory_id"):
+				return str(e.get("territory_id"))
+			var d = e.get("deployments", {})
+			if typeof(d) == TYPE_DICTIONARY and not (d as Dictionary).is_empty():
+				return str((d as Dictionary).keys()[0])
+		"units_moved":
+			return str(e.get("target_territory_id", ""))
+		"conquer_move_resolved":
+			return str(e.get("to_tid", ""))
+	return ""
 
 # Bandeau compact d'un combat où JE ne suis pas impliqué (E8 §8.80, mode "bandeau") : ~2,2 s
 # haut-centre — chips E1 des deux camps, dés figés, pertes, -PV héros. Le kill feed E4 complète.
@@ -1568,26 +1922,23 @@ func _refresh():
 	# Carte réduite (G5 §8.71) : recadre la vue « plein plateau » sur les territoires ACTIFS
 	# (rect vide sur la carte complète → cadrage historique conservé, non-régression classic).
 	camera.set_board_rect(board.get_active_map_rect())
-	# Identité locale (pseudo + couleur de faction) poussée au HUD — couleur cohérente avec le
-	# plateau (board.get_player_color), pour colorer le pseudo dans la TopBar (§8.23).
-	hud.set_local_identity(_display_name(_my_id()), board.get_player_color(_my_id()))
-	# Tooltip « Pouvoir de Faction » (§3) : nom + description lus du .tres de la faction locale.
-	var finfo := _local_faction_info()
-	hud.set_faction_info(str(finfo.get("name", "")), str(finfo.get("description", "")))
+	# Bandeau haut MINIMAL (lot A) : identité du joueur DONT C'EST LE TOUR (pseudo + couleur
+	# plateau) — plus d'identité locale redondante ni de barre d'infos.
+	var cur_pid := int(GameState.current_player_id)
+	hud.set_turn_identity(_display_name(cur_pid), board.get_player_color(cur_pid))
+	# Noms de faction affichables (le HUD n'affiche jamais l'id snake_case brut).
+	_push_faction_names()
 	hud.update_display()
-	# Panneau Héros du joueur local (sprint RPG, Objectif 5a) : PV/PA/PB/PP/Niveau résolus depuis
-	# l'état (GameState.hero_of). Le HUD se masque seul si le héros n'est pas initialisé (pré-RPG).
-	hud.set_hero_panel(GameState.hero_of(_my_id()))
-	# Inspecteur héros adverse (sprint RPG) : si un est ouvert, on rafraîchit ses PV/PP en temps réel
-	# (la cible vient peut-être de subir un duel) au lieu de garder un instantané figé au clic.
-	_refresh_enemy_inspector()
-	# Tiroir « INTEL : ZONE » (§8.36) : pousse la Mémoire Tactique (stats globales §8.35) résolue en
-	# pseudo + couleur de faction (le HUD reste une View pure, Règle d'Or §6.1).
-	_push_intel()
-	# Tiroir « INTEL : FACTIONS » (§2) : pouvoirs passifs des factions en jeu (résolus, View pure).
-	_push_factions_intel()
-	# Tiroir « INTEL : GUERRE » (E5 §8.77) : rapports de force complets (War Room).
-	_push_war_intel()
+	# Zone OPÉRATEUR de la barre basse (lot A) : moi — identité, pouvoir, PV/PA/PB/PP en barres.
+	_push_operator_panel()
+	# Carte POUVOIR de l'onglet ACTIONS (lot E) : compteur de mouvements + fenêtres en attente.
+	_push_power_card()
+	# Fiche joueur (lot A) : ordre de navigation ◀ ▶ + rafraîchissement TEMPS RÉEL de la fiche
+	# ouverte (la cible vient peut-être de subir un duel / de perdre un territoire).
+	_push_sheet_players()
+	_refresh_player_sheet()
+	# Télégraphe de zone (G1 §8.62) : chip discret sous le bandeau haut.
+	_push_zone_forecast()
 	# Tracker d'objectif vivant (E6 §8.78) : jauge de progression sous l'objectif secret.
 	_push_objective_tracker()
 	# Destinataires du chat privé (§8.33) : autres joueurs résolus en pseudo.
@@ -1632,7 +1983,6 @@ func _play_event_feedback(event) -> void:
 		return
 	match str(event.get("event_type", "")):
 		"attack_result":
-			var atk_tid := str(event.get("attacker_territory_id", ""))
 			var def_tid := str(event.get("defender_territory_id", ""))
 			# Douleur du héros (VFX) : NOTRE héros défenseur encaisse des dégâts. Identités = champs
 			# serveur en priorité (§8.85) — le snapshot est périmé sur une chaîne d'attaques de bot.
@@ -1642,17 +1992,22 @@ func _play_event_feedback(event) -> void:
 						int(_displayed_owners.get(def_tid, -9999))) == _my_id():
 				if _vfx_enabled():
 					hud.pulse_hero_pain()
-			# Conquête : fanfare + flash radial à l'accent du conquérant.
-			if bool(event.get("conquered", false)):
-				AudioManager.play_sfx("conquest")
-				if _vfx_enabled():
-					var conqueror := _event_pid(event, "attacker_player_id",
-						int(_displayed_owners.get(atk_tid, _owner(atk_tid))))
-					board.conquest_flash(def_tid, board.get_player_color(conqueror))
+			# NB (lot D) : la fanfare + le flash radial de CONQUÊTE ont migré dans
+			# `_after_combat_animation` — joués APRÈS la narration du combat. Déclenchés ici (à la
+			# réception de l'évènement), ils « spoilaient » l'issue avant même l'animation.
 		"card_played", "card_kept":
 			AudioManager.play_sfx("card_draw")
+	# Lot E : le Culte de l'Isotope protège ses territoires de la zone — l'évènement système
+	# `zone_protected` produit désormais AUSSI un toast de pouvoir (en plus de sa ligne verte au
+	# Journal, conservée). Le pouvoir devient perceptible sans lire le journal.
+	var sys_events = event.get("system_events", [])
+	if typeof(sys_events) == TYPE_ARRAY:
+		for sev in sys_events:
+			if typeof(sev) == TYPE_DICTIONARY and str(sev.get("code", "")) == "zone_protected":
+				hud.show_power_toast(tr("POWER_TOAST_ISOTOPE"), Color("7fff00"))
+				break
 	# Tics de zone (VFX) : flotteur -1 vert sur CHAQUE territoire touché (mêmes ticks dérivés
-	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_intel).
+	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_zone_forecast).
 	if _vfx_enabled():
 		for t in _derive_zone_ticks(event):
 			if typeof(t) == TYPE_DICTIONARY:
@@ -2277,7 +2632,11 @@ func _update_instruction():
 				hud.set_instruction(tr("GAME_INSTR_BLIND_DEPLOY") % _deploy_quota())
 		"playing":
 			if not _is_playing_my_turn():
-				hud.set_instruction(tr("GAME_INSTR_WAIT_TURN") % _display_name(int(GameState.current_player_id)))
+				# Lot A : pendant le tour d'un adversaire, l'onglet ACTIONS affiche un état
+				# SPECTATEUR explicite (« TOUR DE X — observez le champ de bataille ») au lieu
+				# d'une simple attente devant des contrôles grisés.
+				hud.set_instruction(tr("HUD_SPECTATE_TURN_FMT")
+					% _display_name(int(GameState.current_player_id)).to_upper())
 			else:
 				match GameState.current_phase:
 					1: hud.set_instruction(tr("GAME_INSTR_REINFORCEMENTS"))
@@ -2297,6 +2656,10 @@ func _no_action_possible() -> bool:
 	var phase := int(GameState.current_phase)
 	if phase != 3 and phase != 4:
 		return false
+	# Lot E — Ruche (`long_range_movement`) : le test de la phase 4 reste VALABLE tel quel. Une
+	# chaîne alliée commence forcément par un VOISIN allié : « au moins un voisin à moi » est donc
+	# exactement la condition d'existence d'un mouvement, chaîne comprise. Aucun cas où la Ruche
+	# aurait un mouvement possible sans voisin allié → pas de faux « aucune action possible ».
 	for tid in GameState.territories:
 		if _owner(str(tid)) != _my_id() or _garrison(str(tid)) < 2:
 			continue
@@ -2329,6 +2692,11 @@ func _format_event(e) -> String:
 				s += " " + tr("EVT_MARK_AEGIS")
 			if e.get("terror_kill"):
 				s += " " + tr("EVT_MARK_TERROR")
+			# Lot E : marqueurs manquants — Razzia (Pillards) et Embuscade (Chasseurs d'Ombres).
+			if e.get("razzia_reroll"):
+				s += " " + tr("EVT_MARK_RAZZIA")
+			if e.get("first_strike"):
+				s += " " + tr("EVT_MARK_AMBUSH")
 			if e.get("conquered"):
 				s += " " + tr("EVT_CONQUERED_SUFFIX")
 			return s

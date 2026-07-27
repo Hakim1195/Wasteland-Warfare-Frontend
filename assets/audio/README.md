@@ -17,11 +17,24 @@ assets/audio/
 │   ├── back.ogg       ← retour / annulation
 │   ├── sting.ogg      ← « reveal » du logo (Splash d'ouverture)
 │   ├── die_lock.ogg   ← claque d'arrêt d'un dé (Split-Screen VS de combat, §8.66)
-│   └── impact.ogg     ← coup encaissé / pertes révélées au combat (§8.66)
+│   ├── impact.ogg     ← coup encaissé / pertes révélées au combat (§8.66)
+│   ├── explosion.ogg  ← impact de la FLÈCHE DE GUERRE (refonte UI arène, lot D)
+│   ├── chat_ping.ogg  ← message de chat reçu dans une conversation non affichée (lot B)
+│   ├── finisher_steel.ogg    ← sting du finisher « Barrage d'acier »   (lot D/G)
+│   ├── finisher_orbital.ogg  ← sting du finisher « Frappe orbitale »   (lot D/G)
+│   └── finisher_ash.ogg      ← sting du finisher « Nuage de cendres »  (lot D/G)
 └── music/
     ├── menu_ambient.ogg     ← MUSIQUE des menus (BOUCLÉE automatiquement)
     └── battle_ambient.ogg   ← MUSIQUE de l'arène / combat (BOUCLÉE, §8.66)
 ```
+
+> ⚔️ **Ambiance de guerre (refonte UI arène, lot F).** Déposer `music/battle_ambient.{ogg,wav,mp3}`
+> **remplace TOUT** — aucune ligne de code à toucher (mécanique `_load_override`). À défaut, le repli
+> synthétisé `_make_battle_pad()` fournit désormais une boucle de **9,6 s** (drone grave à battement
+> lent, tom martelé, **percussions lointaines** à graine fixe → boucle sans discontinuité).
+> La piste entre en **fondu de 2 s** (`MUSIC_FADE_TIME`) et se cale sur `MUSIC_TARGET_DB` (−4 dB) :
+> discrète mais **audible**, les volumes de l'écran Paramètres restant souverains au-dessus.
+> ⚠️ **Aucun asset externe sous licence douteuse** : uniquement des overrides locaux et de la synthèse.
 
 > 🎵 **`menu_ambient` actuel (§8.67)** = brano **dark melodic trap** ORIGINAL (808 glissés saturés,
 > hi-hats roulés, clap demi-temps, cloche menaçante, pad sombre, ré mineur, 27,4 s, stéréo,

@@ -67,7 +67,7 @@ static func parse(event, ctx: Dictionary) -> Array:
 	var sys_events = event.get("system_events", [])
 	if typeof(sys_events) == TYPE_ARRAY and not sys_events.is_empty():
 		for sev in sys_events:
-			var entry := _system_event_entry(sev, tname, ctx.get("fname", Callable()))
+			var entry := _system_event_entry(sev, tname, ctx.get("fname", Callable()), bb)
 			if not entry.is_empty():
 				out.append(entry)
 		return out
@@ -83,13 +83,26 @@ static func parse(event, ctx: Dictionary) -> Array:
 
 # Une entrée de journal TRADUITE pour un évènement système structuré {code, ...params} (i18n
 # 2026-07-18). Codes connus : zone_forecast {territory_ids}, zone_protected {faction_id,
-# territory_id}. Code inconnu (évolution serveur) → entrée system brute (aucune perte d'info).
+# territory_id}, reinforcements_granted {player_id, base, continent_bonus, faction_bonus, total}
+# (REFONTE UI ARÈNE lot E). Code inconnu (évolution serveur) → entrée system brute (aucune perte).
 # TranslationServer.translate (et non tr()) : module RefCounted statique, hors arbre de scène.
-static func _system_event_entry(sev, tname: Callable, fname: Callable) -> Dictionary:
+static func _system_event_entry(sev, tname: Callable, fname: Callable,
+		bb: Callable = Callable()) -> Dictionary:
 	if typeof(sev) != TYPE_DICTIONARY:
 		return {}
 	var code := str(sev.get("code", ""))
 	match code:
+		"reinforcements_granted":
+			# « RENFORTS : 7 (base 4 + continents 2 + pouvoir 1) » — la part POUVOIR passe en OR
+			# quand elle est non nulle : c'est TOUT l'intérêt de l'évènement (rendre visible le
+			# +1 des Barons et le +N des Gardiens d'Éden, invisibles dans le total historique).
+			var fac := int(sev.get("faction_bonus", 0))
+			var detail := TranslationServer.translate("FEED_REINFORCE_DETAIL_FMT") % [
+				int(sev.get("base", 0)), int(sev.get("continent_bonus", 0)),
+				("[color=#e0b249]%d[/color]" % fac) if fac > 0 else str(fac)]
+			return _mk(CAT_SYSTEM, "❖", TranslationServer.translate("FEED_REINFORCE_FMT") % [
+				_bb_of(bb, int(sev.get("player_id", -9999))),
+				int(sev.get("total", 0)), detail])
 		"zone_forecast":
 			var names := PackedStringArray()
 			for tid in sev.get("territory_ids", []):
@@ -128,6 +141,13 @@ static func _parse_attack(event: Dictionary, ctx: Dictionary,
 		line += " " + TranslationServer.translate("FEED_MARK_AEGIS")
 	if event.get("terror_kill"):
 		line += " " + TranslationServer.translate("FEED_MARK_TERROR")
+	# REFONTE UI ARÈNE (lot E) : les 2 marqueurs MANQUANTS — Razzia (Pillards, relance de TOUS les
+	# dés ≤ 2) et Embuscade (Chasseurs d'Ombres, dé d'attaque bonus). Le serveur posait déjà ces
+	# flags ; ils n'étaient rendus NULLE PART, donc ces pouvoirs semblaient ne pas exister.
+	if event.get("razzia_reroll"):
+		line += " " + TranslationServer.translate("FEED_MARK_RAZZIA")
+	if event.get("first_strike"):
+		line += " " + TranslationServer.translate("FEED_MARK_AMBUSH")
 	out.append(_mk(CAT_COMBAT, "⚔", line, def_tid))
 
 	# Conquête → entrée MAJEURE compacte (kill feed E4 : « ⚔ Hakim ➜ Ontario (−3) »).

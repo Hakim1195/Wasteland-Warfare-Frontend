@@ -77,7 +77,7 @@ func _ready() -> void:
 
 # Rafraîchit tout le roster depuis l'état public courant. Appelé par hud.update_display()
 # (déjà invoqué par main._refresh() à chaque état reçu) — reconstruction complète, même
-# pattern que _refresh_cards / set_factions_intel (queue_free + rebuild).
+# pattern que hud._refresh_cards (queue_free + rebuild).
 func refresh() -> void:
 	if _rows_box == null:
 		return

@@ -13,6 +13,7 @@ hero_name = "Malik Sarran"
 hero_callsign = "Duststorm"
 hero_rank = "captain"
 modifiers = {
+"attack_reroll_all_low_dice": 1,
 "bonus_strategic_moves": 1
 }
 hero_path = "res://assets/images/heroes/nomades.png"
