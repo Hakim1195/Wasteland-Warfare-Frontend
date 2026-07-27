@@ -30,7 +30,7 @@ font_weight = 700
 
 [sub_resource type="Theme" id="Theme_mil"]
 default_font = SubResource("SystemFont_mil")
-default_font_size = 15
+default_font_size = 17
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_glass"]
 content_margin_left = 14.0
@@ -51,11 +51,11 @@ shadow_color = Color(0, 0, 0, 0.35)
 shadow_size = 4
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_topbar"]
-content_margin_left = 20.0
-content_margin_top = 5.0
-content_margin_right = 20.0
-content_margin_bottom = 6.0
-bg_color = Color(0.058824, 0.07451, 0.094118, 0.8)
+content_margin_left = 28.0
+content_margin_top = 9.0
+content_margin_right = 28.0
+content_margin_bottom = 11.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.86)
 border_width_bottom = 2
 border_color = Color(0.211765, 0.772549, 0.85098, 0.7)
 corner_radius_top_left = 0
@@ -66,11 +66,11 @@ shadow_color = Color(0, 0, 0, 0.3)
 shadow_size = 3
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bottombar"]
-content_margin_left = 16.0
-content_margin_top = 8.0
-content_margin_right = 16.0
-content_margin_bottom = 8.0
-bg_color = Color(0.058824, 0.07451, 0.094118, 0.88)
+content_margin_left = 26.0
+content_margin_top = 14.0
+content_margin_right = 26.0
+content_margin_bottom = 14.0
+bg_color = Color(0.058824, 0.07451, 0.094118, 0.9)
 border_width_top = 2
 border_color = Color(0.211765, 0.772549, 0.85098, 0.7)
 corner_radius_top_left = 0
@@ -295,14 +295,16 @@ theme_override_constants/separation = 4
 
 [node name="TopRow" type="HBoxContainer" parent="HUD/TopCenterWidget/TopVBox" unique_id=2030505454]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 20
 alignment = 1
 
 [node name="TurnLabel" type="Label" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=403506161]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
-theme_override_font_sizes/font_size = 20
+theme_override_constants/outline_size = 5
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_font_sizes/font_size = 27
 text = "—"
 
 [node name="VSeparator1" type="VSeparator" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=485128774]
@@ -312,7 +314,9 @@ layout_mode = 2
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 22
+theme_override_constants/outline_size = 5
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_font_sizes/font_size = 27
 text = "HUD_PHASE_PLACEHOLDER"
 
 [node name="VSeparator2" type="VSeparator" parent="HUD/TopCenterWidget/TopVBox/TopRow" unique_id=341088871]
@@ -322,7 +326,9 @@ layout_mode = 2
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
-theme_override_font_sizes/font_size = 22
+theme_override_constants/outline_size = 5
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_font_sizes/font_size = 29
 text = "00:00"
 
 [node name="TopRightWidget" type="PanelContainer" parent="HUD" unique_id=735032696]
@@ -349,10 +355,10 @@ text = "HUD_ABANDON"
 layout_mode = 1
 anchors_preset = 9
 anchor_bottom = 1.0
-offset_left = 8.0
-offset_top = 64.0
-offset_right = 308.0
-offset_bottom = -232.0
+offset_left = 10.0
+offset_top = 76.0
+offset_right = 372.0
+offset_bottom = -300.0
 grow_vertical = 2
 mouse_filter = 2
 
@@ -378,21 +384,21 @@ theme_override_constants/separation = 6
 [node name="SheetTitle" type="Label" parent="HUD/PlayerSheetWidget/GlassBody/SheetScroll/SheetVBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 16
+theme_override_constants/line_spacing = 2
 text = "HUD_PLAYER_SHEET_TITLE"
-horizontal_alignment = 1
 
 [node name="SheetNavRow" type="HBoxContainer" parent="HUD/PlayerSheetWidget/GlassBody/SheetScroll/SheetVBox"]
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 8
 
 [node name="SheetPrevButton" type="Button" parent="HUD/PlayerSheetWidget/GlassBody/SheetScroll/SheetVBox/SheetNavRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(30, 28)
+custom_minimum_size = Vector2(38, 38)
 layout_mode = 2
 tooltip_text = "HUD_SHEET_PREV_TOOLTIP"
 mouse_default_cursor_shape = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 18
 theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
@@ -403,18 +409,18 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
-theme_override_font_sizes/font_size = 17
+theme_override_font_sizes/font_size = 23
 text = "—"
 horizontal_alignment = 1
 text_overrun_behavior = 3
 
 [node name="SheetNextButton" type="Button" parent="HUD/PlayerSheetWidget/GlassBody/SheetScroll/SheetVBox/SheetNavRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(30, 28)
+custom_minimum_size = Vector2(38, 38)
 layout_mode = 2
 tooltip_text = "HUD_SHEET_NEXT_TOOLTIP"
 mouse_default_cursor_shape = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 18
 theme_override_styles/normal = SubResource("StyleBoxFlat_ghost")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ghost_hover")
 theme_override_styles/hover = SubResource("StyleBoxFlat_ghost_hover")
@@ -435,8 +441,8 @@ anchor_top = 0.5
 anchor_right = 1.0
 anchor_bottom = 0.5
 offset_right = 26.0
-offset_top = -42.0
-offset_bottom = 42.0
+offset_top = -54.0
+offset_bottom = 54.0
 grow_horizontal = 2
 grow_vertical = 2
 tooltip_text = "HUD_TOGGLE_SHEET_TOOLTIP"
@@ -452,9 +458,9 @@ anchors_preset = 11
 anchor_left = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -320.0
-offset_top = 64.0
-offset_bottom = -232.0
+offset_left = -382.0
+offset_top = 76.0
+offset_bottom = -300.0
 grow_horizontal = 0
 grow_vertical = 2
 mouse_filter = 2
@@ -475,16 +481,16 @@ theme_override_constants/separation = 6
 [node name="SideTitle" type="Label" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=1215136252]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 16
 text = "HUD_COMMS_TITLE"
-horizontal_alignment = 1
 
 [node name="ChatTargetOption" type="OptionButton" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=150589755]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 tooltip_text = "HUD_CHAT_TARGET_TOOLTIP"
 mouse_default_cursor_shape = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 17
 
 [node name="ChatPanel" type="PanelContainer" parent="HUD/SidePanelWidget/GlassBody/SideVBox" unique_id=842572557]
 layout_mode = 2
@@ -494,7 +500,8 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 [node name="ChatLog" type="RichTextLabel" parent="HUD/SidePanelWidget/GlassBody/SideVBox/ChatPanel" unique_id=1096405538]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/normal_font_size = 15
+theme_override_font_sizes/normal_font_size = 17
+theme_override_constants/line_separation = 4
 bbcode_enabled = true
 scroll_following = true
 
@@ -505,8 +512,8 @@ anchors_preset = 4
 anchor_top = 0.5
 anchor_bottom = 0.5
 offset_left = -26.0
-offset_top = -42.0
-offset_bottom = 42.0
+offset_top = -54.0
+offset_bottom = 54.0
 grow_horizontal = 0
 grow_vertical = 2
 tooltip_text = "HUD_TOGGLE_SIDE_TOOLTIP"
@@ -529,97 +536,106 @@ theme_override_constants/separation = 0
 
 [node name="ToggleBottomPanelButton" type="Button" parent="HUD/BottomCenterWidget" unique_id=880011002]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 22)
+custom_minimum_size = Vector2(170, 26)
 layout_mode = 2
 size_flags_horizontal = 4
 tooltip_text = "HUD_TOGGLE_BOTTOM_TOOLTIP"
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 16
 theme_override_styles/normal = SubResource("StyleBoxFlat_glass")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_glass")
 theme_override_styles/hover = SubResource("StyleBoxFlat_btn_hover")
 text = "▼"
 
 [node name="GlassBody" type="PanelContainer" parent="HUD/BottomCenterWidget" unique_id=880011003]
-custom_minimum_size = Vector2(0, 206)
+custom_minimum_size = Vector2(0, 272)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_bottombar")
 
 [node name="BottomRow" type="HBoxContainer" parent="HUD/BottomCenterWidget/GlassBody" unique_id=157362644]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 22
 
 [node name="ObjectivesZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.28
-theme_override_constants/separation = 4
+theme_override_constants/separation = 6
 
 [node name="ObjectivesTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/ObjectivesZone"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 16
 text = "HUD_OBJECTIVES_TITLE"
 
 [node name="ObjectiveLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/ObjectivesZone" unique_id=431373405]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
-theme_override_font_sizes/font_size = 12
+theme_override_font_sizes/font_size = 15
 text = "HUD_OBJECTIVE_PLACEHOLDER"
 autowrap_mode = 3
+
+[node name="ObjectivesSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
+layout_mode = 2
 
 [node name="OperatorZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.27
-theme_override_constants/separation = 4
+theme_override_constants/separation = 6
 
 [node name="OperatorTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/OperatorZone"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 16
 text = "HUD_OPERATOR_TITLE"
+
+[node name="OperatorSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
+layout_mode = 2
 
 [node name="CommandsTabs" type="TabContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow" unique_id=842572558]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.45
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 17
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 current_tab = 0
 
 [node name="HUD_TAB_ACTIONS" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs"]
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 10
 metadata/_tab_index = 0
 
 [node name="InstructionLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs/HUD_TAB_ACTIONS" unique_id=1602561541]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
-theme_override_font_sizes/font_size = 15
+theme_override_font_sizes/font_size = 19
 autowrap_mode = 3
 
 [node name="PowerBox" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs/HUD_TAB_ACTIONS"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 4
 
 [node name="ActionRow" type="HBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs/HUD_TAB_ACTIONS" unique_id=1547559084]
 layout_mode = 2
 size_flags_vertical = 8
-theme_override_constants/separation = 8
+theme_override_constants/separation = 10
 
 [node name="AmountLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs/HUD_TAB_ACTIONS/ActionRow" unique_id=784556440]
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
+theme_override_font_sizes/font_size = 14
 text = "HUD_AMOUNT_LABEL"
 
 [node name="AmountSpin" type="SpinBox" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs/HUD_TAB_ACTIONS/ActionRow" unique_id=1885257618]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(78, 42)
 layout_mode = 2
+theme_override_font_sizes/font_size = 20
 min_value = 1.0
 max_value = 99.0
 value = 3.0
@@ -662,7 +678,8 @@ metadata/_tab_index = 2
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/normal_font_size = 17
+theme_override_constants/line_separation = 4
 bbcode_enabled = true
 scroll_following = true
 

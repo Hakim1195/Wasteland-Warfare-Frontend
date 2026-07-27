@@ -57,6 +57,28 @@ const ObjectiveTrackerModule := preload("res://scripts/ui/objective_tracker.gd")
 const CARD_TINT := Color("2f7d8c")  # cyan-acier sombre (renforts) — charte Warzone Command
 const ACCENT_CYAN := Color("36c5d9")
 const ACCENT_GOLD := Color("e0b249")
+# Ornements de charte partagés (encoches de coin biseautées, filets cyan) — §2.
+const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
+
+# =========================================================
+# ÉCHELLE TYPOGRAPHIQUE DU HUD (source UNIQUE — passe lisibilité 2026-07-27)
+# =========================================================
+# Constat Hakim : après la refonte du layout, l'écran gagne énormément de place mais TOUT le texte
+# était resté calibré pour l'ancien HUD compact (10-13 px) → illisible à distance de jeu.
+# La charte « Warzone Command » repose sur le rythme **eyebrow muet en petit → VALEUR en grand** :
+# c'est l'ÉCART entre les deux niveaux qui structure la lecture, pas la taille absolue. On fixe donc
+# une échelle explicite (rapport ≈ 1,25 entre deux crans) et on l'applique partout — plus une seule
+# taille écrite en dur dans le corps du fichier.
+const FS_EYEBROW := 13    # étiquettes muettes en MAJUSCULES (PV, SITUATION, MOUVEMENTS…)
+const FS_SMALL := 14      # mentions secondaires (rappels, indices)
+const FS_BODY := 16       # texte courant : lignes de fiche, état de pouvoir, objectifs
+const FS_VALUE := 17      # valeurs chiffrées (police mono)
+const FS_SECTION := 17    # titres de bloc (cyan, MAJUSCULES)
+const FS_TITLE := 21      # nom de territoire, libellés forts
+const FS_DISPLAY := 26    # bandeau haut, cartes, bandeaux de combat
+# Taille des encoches de coin biseautées (charte §2) — un cran au-dessus du défaut des menus :
+# les panneaux de l'arène sont plus grands, une encoche de 18 px s'y perdait.
+const NOTCH_SIZE := 24.0
 
 # --- Couleurs des barres de stats (SOURCE UNIQUE partagée fiche joueur / opérateur / VS, lot A) :
 #     PV = dégradé santé (RosterHelpers.pv_color, vert→or→rouge) · PA = or · PB = cyan ·
@@ -240,8 +262,30 @@ func _ready() -> void:
 	_build_reassault_button()
 	_build_amount_shortcuts()
 	_ensure_zone_chip()
+	_apply_charter_ornaments()
 	# Fiche joueur repliée au départ : l'écran s'ouvre sur le plateau, pas sur un panneau.
 	_collapse_player_sheet_initially()
+
+# Ornements de la charte « Warzone Command » (§2) posés sur les 3 panneaux vitrés de l'arène :
+# encoches de coin biseautées cyan (ADN angulaire) + filet fin sous chaque titre de bloc. Ils
+# étaient déjà la signature des écrans hub, mais l'arène ne les portait pas — c'est ce qui la
+# faisait paraître « générique » à côté du reste du jeu.
+func _apply_charter_ornaments() -> void:
+	for panel in [%ChatLog.get_parent().get_parent().get_parent(),   # SidePanelWidget/GlassBody
+			%SheetVBox.get_parent().get_parent(),                     # PlayerSheetWidget/GlassBody
+			%ToggleBottomPanelButton.get_parent().get_node("GlassBody")]:
+		if panel is Control:
+			WarzoneUI.add_corner_notches(panel, NOTCH_SIZE)
+	# Filet cyan sous CHAQUE titre de bloc (OBJECTIFS, OPÉRATEUR, COMMS, FICHE JOUEUR) : le titre
+	# ne flotte plus au-dessus du contenu, il le COIFFE (structure lisible d'un coup d'œil).
+	for title in [%ObjectiveLabel.get_parent().get_child(0),
+			%OperatorZone.get_child(0),
+			%ChatLog.get_parent().get_parent().get_child(0),
+			%SheetVBox.get_child(0)]:
+		if title is Control:
+			var holder: Node = (title as Control).get_parent()
+			var filet := WarzoneUI.add_filet(holder, 2)
+			holder.move_child(filet, (title as Control).get_index() + 1)
 	# Clic d'une entrée [url=<tid>] du journal (E4 §8.76) → remonte au contrôleur (caméra).
 	%LogText.meta_clicked.connect(func(meta) -> void: log_territory_clicked.emit(str(meta)))
 	# Chat de salle CÂBLÉ au réseau (§8.33) : main.gd relaie chat_send_requested -> NetworkManager
@@ -414,7 +458,7 @@ func _ensure_odds_label() -> void:
 		return
 	_odds_label = Label.new()
 	_odds_label.name = "CombatOddsLabel"
-	_odds_label.add_theme_font_size_override("font_size", 14)
+	_odds_label.add_theme_font_size_override("font_size", FS_BODY)
 	_odds_label.visible = false
 	var anchor: Control = %InstructionLabel
 	var parent := anchor.get_parent()
@@ -449,7 +493,7 @@ func set_pass_enabled(enabled: bool) -> void:
 func _build_reassault_button() -> void:
 	_reassault_btn = Button.new()
 	_reassault_btn.visible = false
-	_reassault_btn.add_theme_font_size_override("font_size", 16)
+	_reassault_btn.add_theme_font_size_override("font_size", FS_BODY)
 	_reassault_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("d6453f").darkened(0.35)
@@ -487,10 +531,10 @@ func _build_amount_shortcuts() -> void:
 	for d in defs:
 		var b := Button.new()
 		b.text = str(d[0])
-		b.custom_minimum_size = Vector2(38, 0)
+		b.custom_minimum_size = Vector2(50, 42)
 		b.focus_mode = Control.FOCUS_NONE
 		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		b.add_theme_font_size_override("font_size", 12)
+		b.add_theme_font_size_override("font_size", FS_SMALL)
 		var delta := int(d[1])
 		b.pressed.connect(func() -> void:
 			AudioManager.play_sfx("click")
@@ -524,29 +568,47 @@ func _stat_bar(label_key: String, value_text: String, ratio: float, col: Color,
 		row.mouse_filter = Control.MOUSE_FILTER_PASS
 	var eyebrow := Label.new()
 	eyebrow.text = tr(label_key)
-	eyebrow.custom_minimum_size = Vector2(26, 0)
-	eyebrow.add_theme_font_size_override("font_size", 10)
+	eyebrow.custom_minimum_size = Vector2(34, 0)
+	eyebrow.add_theme_font_size_override("font_size", FS_EYEBROW)
 	eyebrow.add_theme_color_override("font_color", HERO_MUTED)
 	eyebrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(eyebrow)
 	var bar := ProgressBar.new()
 	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(52, 9)
+	bar.custom_minimum_size = Vector2(64, 14)
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	bar.max_value = 1.0
 	bar.value = clampf(ratio, 0.0, 1.0)
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	RosterHelpers._tint_progress(bar, col)
+	_style_bar(bar, col)
 	row.add_child(bar)
 	var val := Label.new()
 	val.text = value_text
-	val.add_theme_font_size_override("font_size", 11)
+	val.custom_minimum_size = Vector2(74, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val.add_theme_font_size_override("font_size", FS_VALUE)
 	val.add_theme_color_override("font_color", Color("eef3f7"))
 	val.add_theme_font_override("font", RosterHelpers._mono_font())
 	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(val)
 	return row
+
+# Style COMPLET d'une jauge de la charte : remplissage à la couleur donnée ET **piste sombre**
+# derrière. `RosterHelpers._tint_progress` ne pose que le remplissage : sans piste, la portion vide
+# se confondait avec le fond du panneau et on ne lisait pas « 48 sur 60 », seulement « une barre ».
+# Liseré cyan très discret pour raccrocher la jauge à l'ADN angulaire (coins droits, §2).
+func _style_bar(bar: ProgressBar, col: Color) -> void:
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(1, 1, 1, 0.07)
+	track.border_color = Color(ACCENT_CYAN, 0.22)
+	track.set_border_width_all(1)
+	track.set_corner_radius_all(0)
+	bar.add_theme_stylebox_override("background", track)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = col
+	fill.set_corner_radius_all(0)
+	bar.add_theme_stylebox_override("fill", fill)
 
 # Les 4 barres d'un héros (PV/PA/PB/PP) empilées dans `box` (vidé au préalable). `hero` = dict
 # normalisé GameState.hero_of(pid). Héros non initialisé (pv_max <= 0) → mention discrète.
@@ -558,7 +620,7 @@ func _fill_hero_stats(box: VBoxContainer, hero: Dictionary) -> void:
 	if hero.is_empty() or pv_max <= 0:
 		var none := Label.new()
 		none.text = tr("HUD_NO_HERO")
-		none.add_theme_font_size_override("font_size", 11)
+		none.add_theme_font_size_override("font_size", FS_BODY)
 		none.add_theme_color_override("font_color", HERO_MUTED)
 		box.add_child(none)
 		return
@@ -604,20 +666,20 @@ func _build_operator_zone() -> void:
 	_op_chip.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	head.add_child(_op_chip)
 	_op_identity = Label.new()
-	_op_identity.add_theme_font_size_override("font_size", 12)
+	_op_identity.add_theme_font_size_override("font_size", FS_BODY)
 	_op_identity.add_theme_color_override("font_color", HERO_MUTED)
 	_op_identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_op_identity.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	head.add_child(_op_identity)
 
 	_op_power_title = Label.new()
-	_op_power_title.add_theme_font_size_override("font_size", 12)
+	_op_power_title.add_theme_font_size_override("font_size", FS_BODY)
 	_op_power_title.add_theme_color_override("font_color", ACCENT_GOLD)
 	_op_power_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	zone.add_child(_op_power_title)
 
 	_op_power_state = Label.new()
-	_op_power_state.add_theme_font_size_override("font_size", 11)
+	_op_power_state.add_theme_font_size_override("font_size", FS_SMALL)
 	_op_power_state.add_theme_color_override("font_color", ACCENT_CYAN)
 	_op_power_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	zone.add_child(_op_power_state)
@@ -703,7 +765,7 @@ func set_player_sheet(data: Dictionary) -> void:
 	var leader := str(data.get("leader", ""))
 	var faction := str(data.get("faction_name", ""))
 	ident.text = ("%s · %s" % [leader, faction]) if leader != "" else faction
-	ident.add_theme_font_size_override("font_size", 12)
+	ident.add_theme_font_size_override("font_size", FS_BODY)
 	ident.add_theme_color_override("font_color", col.lerp(Color.WHITE, 0.3))
 	ident.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(ident)
@@ -711,7 +773,7 @@ func set_player_sheet(data: Dictionary) -> void:
 	if power != "":
 		var pw := Label.new()
 		pw.text = power
-		pw.add_theme_font_size_override("font_size", 11)
+		pw.add_theme_font_size_override("font_size", FS_SMALL)
 		pw.add_theme_color_override("font_color", Color("c8cdd6"))
 		pw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		body.add_child(pw)
@@ -740,7 +802,7 @@ func set_player_sheet(data: Dictionary) -> void:
 		body.add_child(_sheet_eyebrow("HUD_SHEET_TERRITORY"))
 		var tname := Label.new()
 		tname.text = str(terr.get("name", "—")).to_upper()
-		tname.add_theme_font_size_override("font_size", 15)
+		tname.add_theme_font_size_override("font_size", FS_TITLE)
 		tname.add_theme_color_override("font_color", ACCENT_CYAN)
 		body.add_child(tname)
 		body.add_child(_sheet_line(tr("HUD_SHEET_GARRISON_FMT") % int(terr.get("garrison", 0))))
@@ -753,14 +815,14 @@ func set_player_sheet(data: Dictionary) -> void:
 func _sheet_eyebrow(key: String) -> Label:
 	var l := Label.new()
 	l.text = tr(key)
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", FS_EYEBROW)
 	l.add_theme_color_override("font_color", HERO_MUTED)
 	return l
 
 func _sheet_line(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_font_size_override("font_size", FS_BODY)
 	l.add_theme_color_override("font_color", Color("eef3f7"))
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	return l
@@ -788,14 +850,20 @@ func _ensure_zone_chip() -> void:
 	_zone_chip.focus_mode = Control.FOCUS_NONE
 	_zone_chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_zone_chip.tooltip_text = tr("HUD_ZONE_CHIP_TOOLTIP")
-	_zone_chip.add_theme_font_size_override("font_size", 12)
+	_zone_chip.add_theme_font_size_override("font_size", FS_SMALL)
 	_zone_chip.add_theme_color_override("font_color", ACCENT_GOLD)
 	_zone_chip.add_theme_color_override("font_hover_color", Color("eef3f7"))
 	# Ancré en HAUT-DROITE, à gauche du bouton ABANDONNER : au centre, il passait SOUS le bandeau
 	# de tour/phase (E3 §8.75) à chaque changement de phase — les deux se chevauchaient (capture).
+	# Fenêtre de largeur FIXE + `clip_text` : avec 4 territoires annoncés, un chip à largeur libre
+	# grandissait vers la gauche jusqu'à toucher le bandeau (constaté en capture après la passe
+	# typographique). Ici il reste borné, quoi qu'annonce le serveur.
+	_zone_chip.clip_text = true
+	_zone_chip.alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_zone_chip.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_zone_chip.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_zone_chip.offset_right = -186.0
+	_zone_chip.offset_left = -566.0
+	_zone_chip.offset_right = -206.0
 	_zone_chip.offset_top = 16.0
 	_zone_chip.pressed.connect(func() -> void:
 		AudioManager.play_sfx("click")
@@ -846,28 +914,28 @@ func set_objective_progress(data: Dictionary, tooltip: String = "") -> void:
 		if multi and i > 0:
 			var sep := Label.new()
 			sep.text = tr("OBJ_OR")
-			sep.add_theme_font_size_override("font_size", 10)
+			sep.add_theme_font_size_override("font_size", FS_EYEBROW)
 			sep.add_theme_color_override("font_color", HERO_MUTED)
 			_objective_tracker.add_child(sep)
 		# Volet = libellé COMPLET sur sa ligne + barre de progression dessous (lisible sans tooltip).
 		var lbl := Label.new()
 		lbl.text = ("◆ " if not done else "✔ ") + str(l.get("label", ""))
-		lbl.add_theme_font_size_override("font_size", 12)
+		lbl.add_theme_font_size_override("font_size", FS_BODY)
 		lbl.add_theme_color_override("font_color", ACCENT_GOLD if done else Color("c8cdd6"))
 		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_objective_tracker.add_child(lbl)
 		var bar := ProgressBar.new()
 		bar.show_percentage = false
-		bar.custom_minimum_size = Vector2(0, 8)
+		bar.custom_minimum_size = Vector2(0, 12)
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bar.max_value = 1.0
 		bar.value = float(l.get("ratio", 0.0))
-		RosterHelpers._tint_progress(bar, ACCENT_GOLD if done else ACCENT_CYAN)
+		_style_bar(bar, ACCENT_GOLD if done else ACCENT_CYAN)
 		_objective_tracker.add_child(bar)
 	# Rappel « dernier survivant » (toujours vrai, quel que soit l'objectif secret).
 	var hint := Label.new()
 	hint.text = tr("OBJ_LAST_SURVIVOR_HINT")
-	hint.add_theme_font_size_override("font_size", 10)
+	hint.add_theme_font_size_override("font_size", FS_EYEBROW)
 	hint.add_theme_color_override("font_color", HERO_MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_objective_tracker.add_child(hint)
@@ -884,7 +952,7 @@ func _build_confirm_button() -> void:
 	_confirm_btn = Button.new()
 	_confirm_btn.text = tr("HUD_DEPLOY_CONFIRM")
 	_confirm_btn.visible = false
-	_confirm_btn.add_theme_font_size_override("font_size", 16)
+	_confirm_btn.add_theme_font_size_override("font_size", FS_BODY)
 	_confirm_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	# Bouton « Ghost » (charte « Warzone Command » §2/§8.37).
 	var style := StyleBoxFlat.new()
@@ -938,7 +1006,7 @@ func set_power_card(lines: Array, buttons: Array = []) -> void:
 	for l in lines:
 		var lbl := Label.new()
 		lbl.text = str(l)
-		lbl.add_theme_font_size_override("font_size", 12)
+		lbl.add_theme_font_size_override("font_size", FS_BODY)
 		lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(lbl)
@@ -947,7 +1015,7 @@ func set_power_card(lines: Array, buttons: Array = []) -> void:
 			continue
 		var btn := Button.new()
 		btn.text = str(b.get("label", "—"))
-		btn.add_theme_font_size_override("font_size", 12)
+		btn.add_theme_font_size_override("font_size", FS_BODY)
 		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		var action := str(b.get("action", ""))
 		btn.pressed.connect(func() -> void:
@@ -1022,8 +1090,8 @@ func _build_feed_filters() -> void:
 		b.toggle_mode = true
 		b.button_group = group
 		b.button_pressed = str(d[0]) == "all"
-		b.custom_minimum_size = Vector2(38, 24)
-		b.add_theme_font_size_override("font_size", 13)
+		b.custom_minimum_size = Vector2(52, 32)
+		b.add_theme_font_size_override("font_size", FS_BODY)
 		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		b.tooltip_text = tr("FEED_FILTER_TOOLTIP")
 		var key := str(d[0])
@@ -1057,15 +1125,21 @@ func _set_journal_badge(on: bool) -> void:
 	%CommandsTabs.set_tab_title(TAB_JOURNAL,
 		tr("HUD_TAB_JOURNAL") + (" •" if on else ""))
 
-# Kill feed (E4) : instancié coin haut-droit, À GAUCHE du panneau latéral (320 px) — hors panneaux.
+# Kill feed (E4) : instancié coin haut-droit, À GAUCHE du panneau COMMS — hors panneaux.
+# ⚠️ Ces offsets DÉPENDENT de la largeur du panneau COMMS (382 px depuis la passe lisibilité) :
+# calés sur l'ancienne largeur de 320, ils faisaient passer le kill feed SOUS le chat.
+const KILL_FEED_WIDTH := 320.0
+const COMMS_WIDTH := 382.0
+const KILL_FEED_GAP := 18.0
+
 func _build_kill_feed() -> void:
 	_kill_feed = KillFeedScene.instantiate()
 	add_child(_kill_feed)
 	_kill_feed.anchor_left = 1.0
 	_kill_feed.anchor_right = 1.0
-	_kill_feed.offset_left = -652.0
-	_kill_feed.offset_right = -332.0
-	_kill_feed.offset_top = 72.0
+	_kill_feed.offset_right = -(COMMS_WIDTH + KILL_FEED_GAP)
+	_kill_feed.offset_left = _kill_feed.offset_right - KILL_FEED_WIDTH
+	_kill_feed.offset_top = 84.0
 	_kill_feed.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_kill_feed.grow_vertical = Control.GROW_DIRECTION_END
 
@@ -1095,7 +1169,7 @@ func show_defense_toast(rich_text: String) -> void:
 		rtl.scroll_active = false
 		rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 		rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		rtl.add_theme_font_size_override("normal_font_size", 16)
+		rtl.add_theme_font_size_override("normal_font_size", FS_TITLE)
 		_defense_toast.add_child(rtl)
 		add_child(_defense_toast)
 	var text_node: RichTextLabel = _defense_toast.get_node("ToastText")
@@ -1139,7 +1213,7 @@ func show_action_toast(rich_text: String, accent: Color = Color("36c5d9"), durat
 		rtl.scroll_active = false
 		rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 		rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		rtl.add_theme_font_size_override("normal_font_size", 16)
+		rtl.add_theme_font_size_override("normal_font_size", FS_TITLE)
 		_action_toast.add_child(rtl)
 		add_child(_action_toast)
 	# Liseré à la couleur du joueur qui agit (repère instantané « qui fait quoi »).
@@ -1196,7 +1270,7 @@ func _drain_power_toasts() -> void:
 		_power_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var lbl := Label.new()
 		lbl.name = "PowerText"
-		lbl.add_theme_font_size_override("font_size", 17)
+		lbl.add_theme_font_size_override("font_size", FS_TITLE)
 		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_power_toast.add_child(lbl)
 		add_child(_power_toast)
@@ -1428,7 +1502,7 @@ func _show_chat_toast(conv_key: String, who_bb: String) -> void:
 		_chat_toast.flat = false
 		_chat_toast.focus_mode = Control.FOCUS_NONE
 		_chat_toast.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		_chat_toast.add_theme_font_size_override("font_size", 14)
+		_chat_toast.add_theme_font_size_override("font_size", FS_BODY)
 		_chat_toast.add_theme_color_override("font_color", Color("eef3f7"))
 		var st := StyleBoxFlat.new()
 		st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.94)
@@ -1482,7 +1556,7 @@ func _build_chat_input() -> void:
 	_chat_input.placeholder_text = tr("HUD_CHAT_PLACEHOLDER_GENERAL")
 	_chat_input.max_length = CHAT_MAX_LENGTH
 	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_chat_input.add_theme_font_size_override("font_size", 14)
+	_chat_input.add_theme_font_size_override("font_size", FS_VALUE)
 	var in_style := StyleBoxFlat.new()
 	in_style.bg_color = Color(0.058824, 0.07451, 0.094118, 0.85)
 	in_style.border_color = Color(ACCENT_CYAN, 0.45)
@@ -1499,9 +1573,9 @@ func _build_chat_input() -> void:
 	_chat_send_btn = Button.new()
 	_chat_send_btn.text = "➤"
 	_chat_send_btn.tooltip_text = tr("HUD_CHAT_SEND_TOOLTIP")
-	_chat_send_btn.custom_minimum_size = Vector2(36, 0)
+	_chat_send_btn.custom_minimum_size = Vector2(46, 42)
 	_chat_send_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_chat_send_btn.add_theme_font_size_override("font_size", 16)
+	_chat_send_btn.add_theme_font_size_override("font_size", FS_TITLE)
 	var s_style := StyleBoxFlat.new()
 	s_style.bg_color = Color(ACCENT_CYAN, 0.18)
 	s_style.border_color = Color(ACCENT_CYAN, 0.55)
@@ -1590,7 +1664,7 @@ func show_combat_banner(data: Dictionary) -> void:
 	row.add_child(_banner_dice_label(data.get("atk_rolls", []), ACCENT_CYAN))
 	var vs := Label.new()
 	vs.text = "⚔"
-	vs.add_theme_font_size_override("font_size", 16)
+	vs.add_theme_font_size_override("font_size", FS_TITLE)
 	row.add_child(vs)
 	row.add_child(_banner_dice_label(data.get("def_rolls", []), Color("d6453f")))
 	var def_chip := PlayerChipScene.instantiate()
@@ -1606,7 +1680,7 @@ func show_combat_banner(data: Dictionary) -> void:
 	elif bool(data.get("conquered", false)):
 		txt += "  ⚑"
 	summary.text = txt
-	summary.add_theme_font_size_override("font_size", 14)
+	summary.add_theme_font_size_override("font_size", FS_BODY)
 	summary.add_theme_color_override("font_color", Color("c8cdd6"))
 	row.add_child(summary)
 
@@ -1628,7 +1702,7 @@ func _banner_dice_label(rolls: Array, col: Color) -> Label:
 		parts.append(str(int(r)))
 	var lbl := Label.new()
 	lbl.text = "[%s]" % " ".join(PackedStringArray(parts))
-	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_font_size_override("font_size", FS_BODY)
 	lbl.add_theme_color_override("font_color", col)
 	return lbl
 
@@ -1757,13 +1831,13 @@ func _refresh_cards() -> void:
 func _make_card_button(value: int, index: int, playable: bool = true) -> Control:
 	var card := Button.new()
 	card.text = "+%d" % value
-	card.custom_minimum_size = Vector2(74, 56)
+	card.custom_minimum_size = Vector2(96, 76)
 	card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	card.disabled = not playable
 	card.tooltip_text = (tr("HUD_CARD_PLAY_TOOLTIP") % value) if playable \
 		else (tr("HUD_CARD_LOCKED_TOOLTIP") % value)
-	card.add_theme_font_size_override("font_size", 26)
+	card.add_theme_font_size_override("font_size", FS_DISPLAY + 6)
 	card.add_theme_color_override("font_color", Color("f0e6d2"))
 
 	var style := StyleBoxFlat.new()
