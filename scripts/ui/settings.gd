@@ -303,16 +303,10 @@ func _build_comfort_section() -> void:
 	eyebrow.add_theme_color_override("font_color", ACCENT)
 	root.add_child(eyebrow)
 
-	# combat_display : 3 segments — valeurs REFONDUES au lot D (REFONTE UI ARÈNE) :
-	#   standard = VS plein écran pour MES combats, flèche de guerre + explosion pour les autres ;
-	#   rapide   = idem mais VS pré-accéléré ×2,5 et flèche condensée ;
-	#   minimal  = flèche partout (aucun plein écran) SAUF la cinématique de mise à mort.
-	# Les anciennes valeurs (cinematique/bandeau) sont re-mappées au chargement par SettingsManager
-	# — aucune clé de réglage n'est supprimée (§8.82 accessibilité).
-	var combat_row := _comfort_segments("SETTINGS_COMBAT_DISPLAY", "combat_display",
-		[["standard", tr("SETTINGS_COMBAT_STANDARD")], ["rapide", tr("SETTINGS_COMBAT_FAST")],
-		["minimal", tr("SETTINGS_COMBAT_MINIMAL")]])
-	root.add_child(combat_row)
+	# ⚠️ La rangée « AFFICHAGE DES COMBATS » (`combat_display`, E8 §8.80) est SUPPRIMÉE (décision
+	# Hakim 2026-07-27) : le rythme RAPIDE est retenu comme le seul comportement, il n'y a donc plus
+	# rien à choisir. Les clés i18n `SETTINGS_COMBAT_*` restent au CSV (on ne supprime jamais une
+	# clé — elles deviennent simplement orphelines).
 	# ui_scale : 4 segments numériques (libellés % neutres — pas de traduction).
 	var scale_row := _comfort_segments("SETTINGS_UI_SCALE", "ui_scale",
 		[[0.9, "90 %"], [1.0, "100 %"], [1.15, "115 %"], [1.3, "130 %"]])
@@ -325,7 +319,7 @@ func _build_comfort_section() -> void:
 	root.add_child(t2)
 	root.add_child(t3)
 	# Mémorisés pour la reconstruction au changement de langue (_on_locale_changed_rebuild).
-	_comfort_nodes = [sep, eyebrow, combat_row, scale_row, t1, t2, t3]
+	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3]
 
 # Changement de langue À CHAUD : purge et reconstruit la section confort (seul bloc de cet écran
 # dont les libellés sont posés par code), puis re-traduit la ligne de statut.
@@ -338,7 +332,8 @@ func _on_locale_changed_rebuild(_code: String) -> void:
 	_set_status(tr("SETTINGS_STATUS"))
 
 # Rangée « libellé + segments » : un bouton par valeur, le courant actif. `values` =
-# Array[[valeur, libellé]]. La valeur peut être String (combat_display) ou float (ui_scale).
+# Array[[valeur, libellé]]. La valeur peut être String ou float (seul `ui_scale` s'en sert depuis
+# la suppression de `combat_display` — le helper reste générique pour un futur réglage segmenté).
 func _comfort_segments(label_key: String, comfort_key: String, values: Array) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)

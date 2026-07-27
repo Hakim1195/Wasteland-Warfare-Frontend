@@ -177,8 +177,12 @@ var _banner_phase := -1
 var _last_attack: Dictionary = {}
 
 # Rythme des combats (E8 §8.80) : paire (source→cible) du DERNIER combat animé → à partir du 2ᵉ
-# assaut consécutif sur la MÊME paire, le VS passe en version condensée (~1,2 s), même en cinématique.
+# assaut consécutif sur la MÊME paire, le VS passe en version condensée (~1,2 s).
 var _last_combat_pair: String = ""
+# Facteur d'accélération du Split-Screen VS. Ex-valeur du mode « rapide » du réglage
+# `combat_display` (E8 §8.80) : ce mode ayant été retenu comme le SEUL (décision Hakim
+# 2026-07-27), le facteur devient une constante nommée du contrôleur.
+const COMBAT_VS_SPEED := 2.5
 
 # SFX zone_alarm (E9 §8.81) : signature du dernier télégraphe joué (évite le rejeu à chaque refresh).
 var _last_zone_alarm_sig: String = ""
@@ -1561,27 +1565,32 @@ func _do_play_combat(event: Dictionary) -> void:
 	var def_owner := _event_pid(event, "defender_player_id",
 		int(_displayed_owners.get(def_tid, _owner(def_tid))))
 
-	# ROUTAGE DES ANIMATIONS (lot D — REFONTE UI ARÈNE) :
+	# ROUTAGE DES ANIMATIONS (lot D — REFONTE UI ARÈNE, simplifié le 2026-07-27) :
 	#   je suis attaquant OU défenseur  → Split-Screen VS plein écran (vitrine skins M5, Time Bank,
-	#                                     duel de héros) — inchangé ;
-	#   combat entre les AUTRES         → flèche de guerre + explosion IN-BOARD (aucun plein écran) ;
+	#                                     duel de héros) ;
+	#   combat entre les AUTRES         → flèche de guerre + explosion IN-BOARD (aucun plein écran,
+	#                                     aucun recadrage caméra — cf. _maybe_focus_combat) ;
 	#   héros abattu (n'importe qui)    → animation normale PUIS cinématique de mise à mort plein
-	#                                     écran pour TOUS, quel que soit le réglage.
-	# Réglage `combat_display` : standard (tableau ci-dessus) / rapide (VS ×2,5 + flèche condensée) /
-	# minimal (flèche PARTOUT sauf la cinématique). Valeurs legacy re-mappées par SettingsManager.
+	#                                     écran pour TOUS.
+	# ⚠️ Le réglage `combat_display` (ex-E8 §8.80 : cinematique/rapide/bandeau puis standard/rapide/
+	# minimal) est SUPPRIMÉ — décision Hakim : le rythme RAPIDE est le seul retenu, il devient le
+	# comportement unique et non négociable (VS pré-accéléré ×COMBAT_VS_SPEED, flèche condensée).
+	# Plus rien ne lit SettingsManager.get_comfort("combat_display").
 	var am_participant: bool = int(atk_owner) == _my_id() or int(def_owner) == _my_id()
-	var mode := str(SettingsManager.get_comfort("combat_display"))
-	# Chaîne de ré-assaut (E7) : 2ᵉ+ assaut consécutif sur la MÊME paire → version condensée.
+	# Chaîne de ré-assaut (E7) : 2ᵉ+ assaut consécutif sur la MÊME paire → version condensée du VS.
+	# INDÉPENDANT de la vitesse : c'est un raccourci de NARRATION (on ne rejoue pas la mise en place
+	# des héros pour le 3ᵉ assaut d'affilée sur la même cible).
 	var pair := "%s>%s" % [atk_tid, def_tid]
 	var condensed := pair == _last_combat_pair
 	_last_combat_pair = pair
 	var duel = event.get("hero_duel")
 	var hero_died: bool = typeof(duel) == TYPE_DICTIONARY and bool(duel.get("hero_died", false))
 
-	if not am_participant or mode == "minimal":
+	if not am_participant:
 		# Flèche de guerre : passe dans la MÊME file _combat_animating — AUCUN état ne se peint
 		# pendant une résolution (piège n° 4). Le HUD n'est PAS masqué (pas de plein écran).
-		await _play_attack_arrow(event, atk_owner, def_owner, condensed or mode != "standard")
+		# TOUJOURS condensée (~0,7 s) : c'est le rythme rapide, désormais unique.
+		await _play_attack_arrow(event, atk_owner, def_owner, true)
 		_after_combat_animation(event, atk_owner, def_owner, duel, hero_died)
 		return
 
@@ -1632,8 +1641,9 @@ func _do_play_combat(event: Dictionary) -> void:
 			"hero_duel": event.get("hero_duel"),  # null si héros non initialisés (§8.61)
 			"attacker_garrison_before": atk_g_before, "attacker_garrison_after": atk_g_after,
 			"defender_garrison_before": def_g_before, "defender_garrison_after": def_g_after,
-			# Rythme (E8 §8.80) : "rapide" démarre pré-accéléré ; chaîne de ré-assaut = condensé.
-			"speed": 2.5 if mode == "rapide" else 1.0,
+			# Rythme (ex-E8 §8.80) : le Split-Screen VS démarre TOUJOURS pré-accéléré — le mode
+			# « rapide » est devenu le comportement unique (le réglage a été supprimé).
+			"speed": COMBAT_VS_SPEED,
 			"condensed": condensed,
 		})
 	await vs_screen.animation_finished
@@ -1866,13 +1876,29 @@ func _equipped_skin_of(pid) -> String:
 		return str(p.get("equipped_skin", ""))
 	return ""
 
-# Caméra tactique : sur un résultat d'attaque, travelling vers les deux belligérants
-# (zoom 1.5x), puis retour à la vue d'ensemble une fois le combat "lu".
+# Caméra tactique : sur un résultat d'attaque, travelling vers les deux belligérants (zoom 1,5×)
+# puis retour à la vue d'ensemble — UNIQUEMENT pour MES combats (ceux qui ouvrent le Split-Screen
+# VS). Retour Hakim (2026-07-27) : sur les combats des AUTRES, désormais racontés par la flèche de
+# guerre (~0,7 s), le travelling durait à lui seul 0,8 s + 0,8 s de retour — la caméra passait son
+# temps en allers-retours pendant les tours de bots, pour une animation déjà terminée. La flèche se
+# lit très bien en vue d'ensemble : plus AUCUN recadrage pour ces combats-là.
+# (La micro-secousse de l'explosion est conservée : elle joue sur `offset`, ne déplace pas la vue
+# et ne coûte rien — c'est le feedback d'impact, pas un recadrage.)
 func _maybe_focus_combat(event) -> void:
 	if typeof(event) != TYPE_DICTIONARY or str(event.get("event_type", "")) != "attack_result":
 		return
-	var pos_a: Vector2 = board.get_territory_position(str(event.get("attacker_territory_id", "")))
-	var pos_b: Vector2 = board.get_territory_position(str(event.get("defender_territory_id", "")))
+	var atk_tid := str(event.get("attacker_territory_id", ""))
+	var def_tid := str(event.get("defender_territory_id", ""))
+	# Identités = champs serveur en PRIORITÉ (§8.85), repli sur le snapshot pré-combat — mêmes
+	# résolutions que _do_play_combat, pour que les deux prennent EXACTEMENT la même décision.
+	var atk_owner := _event_pid(event, "attacker_player_id",
+		int(_displayed_owners.get(atk_tid, _owner(atk_tid))))
+	var def_owner := _event_pid(event, "defender_player_id",
+		int(_displayed_owners.get(def_tid, _owner(def_tid))))
+	if int(atk_owner) != _my_id() and int(def_owner) != _my_id():
+		return
+	var pos_a: Vector2 = board.get_territory_position(atk_tid)
+	var pos_b: Vector2 = board.get_territory_position(def_tid)
 	if pos_a == Vector2.INF or pos_b == Vector2.INF:
 		return
 	camera.focus_on_combat(pos_a, pos_b)

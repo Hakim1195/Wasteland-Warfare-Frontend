@@ -1,7 +1,9 @@
 extends Node
 
-# TEST E8 §8.80 (style maison) — Rythme des combats : les 3 modes bootent sans erreur ; un SKIP
-# donne les MÊMES résultats finaux que le déroulé complet (dés verrouillés + pertes + PV héros).
+# TEST E8 §8.80 (style maison) — Rythme des combats : le VS boote sans erreur ; un SKIP donne les
+# MÊMES résultats finaux que le déroulé complet (dés verrouillés + pertes + PV héros).
+# ⚠️ MIS À JOUR le 2026-07-27 : le réglage `combat_display` a été SUPPRIMÉ (rythme rapide unique) —
+# le bloc 3 vérifie désormais son ABSENCE au lieu de ses 3 modes.
 #   & <godot_console> --headless --path frontend res://tools/test_e8_combat_rhythm.tscn
 
 const VSScene := preload("res://scenes/game/split_screen_vs.tscn")
@@ -47,14 +49,20 @@ func _ready() -> void:
 	# le fait d'atteindre animation_finished SANS erreur prouve le chemin skip complet.
 	print("[OK] skip : chemin complet jusqu'au tableau final (0 erreur)")
 
-	# 3) Les 3 modes de combat_display sont des valeurs valides du réglage confort.
+	# 3) Le réglage `combat_display` est SUPPRIMÉ (décision Hakim 2026-07-27 — le rythme RAPIDE est
+	# le seul comportement retenu). On vérifie ici qu'il ne subsiste NULLE PART : ni comme clé de
+	# confort persistable, ni comme valeur lisible. `set_comfort` doit rester un no-op silencieux
+	# sur une clé inconnue (garde `COMFORT_DEFAULTS.has(key)`) — sans quoi une valeur fantôme
+	# pourrait réapparaître dans `user://settings.cfg`.
+	assert(not SettingsManager.COMFORT_DEFAULTS.has("combat_display"))
 	SettingsManager.set_comfort("combat_display", "rapide")
-	assert(SettingsManager.get_comfort("combat_display") == "rapide")
-	SettingsManager.set_comfort("combat_display", "bandeau")
-	assert(SettingsManager.get_comfort("combat_display") == "bandeau")
-	SettingsManager.set_comfort("combat_display", "cinematique")
-	assert(str(SettingsManager.get_comfort("combat_display")) == "cinematique")
-	print("[OK] reglage combat_display : 3 modes persistables (3 asserts)")
+	assert(SettingsManager.get_comfort("combat_display") == null)
+	# Les réglages de confort SURVIVANTS (E10 §8.82) restent, eux, persistables.
+	var previous = SettingsManager.get_comfort("reduced_motion")
+	SettingsManager.set_comfort("reduced_motion", true)
+	assert(SettingsManager.get_comfort("reduced_motion") == true)
+	SettingsManager.set_comfort("reduced_motion", previous)
+	print("[OK] combat_display supprimé, confort E10 intact (3 asserts)")
 
 	# 4) Bandeau compact (HUD) : construit et peuplé dans l'arène réelle.
 	var arena = load("res://scenes/game/main.tscn").instantiate()

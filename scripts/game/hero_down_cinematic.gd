@@ -2,7 +2,7 @@ extends Control
 
 # CINÉMATIQUE DE MISE À MORT (REFONTE UI ARÈNE, lot D) — permadeath §8.61.
 #
-# Jouée pour TOUS les joueurs (quel que soit le réglage `combat_display`) quand un héros tombe :
+# Jouée pour TOUS les joueurs, sans exception ni réglage, quand un héros tombe :
 # c'est le moment le plus fort d'une partie, personne ne doit le rater. La variante jouée est le
 # FINISHER DU TUEUR (`equipped_finisher` de son PlayerState public — miroir des skins M5 §8.69) ;
 # le basique gratuit ("" ) est le défaut de tout le monde.

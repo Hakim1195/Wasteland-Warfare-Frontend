@@ -104,8 +104,9 @@ static var _self_checked := false
 # --- Rythme des combats (E8 §8.80) : accélération / skip universels (participant ou non). ---
 # 1er clic/Espace → vitesse ×VS_FAST ; 2ᵉ → saut au tableau final (dés + pertes + PV posés).
 # ⚠️ Engine.time_scale INTERDIT (piège n° 7) : on scale localement les attentes (_wait) et les
-# Tweens suivis (_speed_scale). combat_display "rapide" et la chaîne de ré-assaut (E7) démarrent
-# pré-accélérés / condensés via meta.
+# Tweens suivis (_speed_scale). Le VS démarre TOUJOURS pré-accéléré (`meta.speed`, ex-mode
+# « rapide » du réglage `combat_display` — devenu le comportement unique le 2026-07-27) ; la chaîne
+# de ré-assaut (E7) le démarre en plus condensé (`meta.condensed`).
 const VS_FAST := 2.5
 const SKIP_MIN_DISPLAY := 0.8   # affichage minimal du tableau final après un saut.
 var _speed_scale := 1.0

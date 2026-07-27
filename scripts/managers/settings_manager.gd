@@ -16,7 +16,7 @@ extends Node
 
 signal audio_changed(bus: String, value: float)
 signal display_changed()
-# Réglages de CONFORT (E8 combat_display §8.80 / E10 accessibilité §8.82) : une clé, un défaut,
+# Réglages de CONFORT (mécanique posée en E8 §8.80, étendue E10 accessibilité §8.82) : une clé, un défaut,
 # un signal de changement (même contrat que get_volume/set_volume). Consommés à la volée par le
 # HUD/le plateau (aucun redémarrage requis).
 signal comfort_changed(key: String, value)
@@ -25,8 +25,12 @@ const _CONFIG_PATH := "user://settings.cfg"
 
 # Défauts des réglages de confort (persistés dans la section [comfort]). Le TYPE du défaut fixe
 # la coercition à la relecture (bool/float/String).
+# ⚠️ `combat_display` (E8 §8.80) a été RETIRÉ le 2026-07-27 (décision Hakim) : le rythme RAPIDE
+# est devenu le comportement UNIQUE des combats, il n'y a donc plus de choix à persister. Une
+# valeur résiduelle dans un `user://settings.cfg` existant devient simplement INERTE — `_load`
+# n'itère que sur les clés ci-dessous, `_save` ne la réécrit plus, et plus aucun appelant ne lit
+# `get_comfort("combat_display")`. Aucune migration nécessaire.
 const COMFORT_DEFAULTS := {
-	"combat_display": "standard",      # lot D : standard / rapide / minimal (ex E8, cf. _load)
 	"reduced_motion": false,           # E10 : coupe VFX/pulses/particules
 	"colorblind_mode": false,          # E10 : palette Okabe-Ito + motifs
 	"ui_scale": 1.0,                   # E10 : 0.9 / 1.0 / 1.15 / 1.3
@@ -212,24 +216,11 @@ func _load() -> void:
 		_volumes[bus] = clampf(float(cfg.get_value("audio", bus, _volumes[bus])), 0.0, 1.0)
 	_fullscreen = bool(cfg.get_value("display", "fullscreen", _fullscreen))
 	_resolution_index = clampi(int(cfg.get_value("display", "resolution_index", _resolution_index)), 0, RESOLUTIONS.size() - 1)
-	# Confort (E8/E10) : relecture typée par le défaut de chaque clé.
+	# Confort (E10) : relecture typée par le défaut de chaque clé.
 	for key in COMFORT_DEFAULTS:
 		_comfort[key] = cfg.get_value("comfort", key, COMFORT_DEFAULTS[key])
-	# Lot D (REFONTE UI ARÈNE) : re-mapping RÉTRO-COMPATIBLE des valeurs historiques de
-	# `combat_display`. La CLÉ est conservée (jamais supprimée, §8.82) ; seules ses valeurs
-	# changent de nom parce que la sémantique change (« bandeau » est devenu la flèche de guerre).
-	_comfort["combat_display"] = remap_combat_display(str(_comfort.get("combat_display", "")))
 	# Gameplay (§8.93) : id de faction choisi (str() défensif — un ConfigFile relit en Variant).
 	_selected_faction = str(cfg.get_value("gameplay", "selected_faction", _selected_faction))
-
-# Re-mapping PUR (testable) des valeurs legacy de `combat_display` : cinematique → standard,
-# bandeau → minimal. Toute valeur inconnue retombe sur le défaut.
-static func remap_combat_display(value: String) -> String:
-	match value:
-		"standard", "rapide", "minimal": return value
-		"cinematique": return "standard"
-		"bandeau": return "minimal"
-		_: return str(COMFORT_DEFAULTS["combat_display"])
 
 func _save() -> void:
 	var cfg := ConfigFile.new()
