@@ -14,6 +14,11 @@ extends Node2D
 # TÉLÉGRAPHE (G1 §8.62) : si le territoire est ANNONCÉ pour la prochaine zone
 # (contamination_zone.next_territories), le badge affiche un ⚠ OR sous le chiffre — distinct du
 # ☢ vert de la zone courante. Même contrat : l'état est repassé à chaque rafraîchissement.
+#
+# BOUCLIER (§8.119 — BASTION D'ACIER) : si `shield_turns_left > 0`, un liseré CYAN entoure le badge
+# (par-dessus les anneaux de zone, qui restent visibles) et un petit ÉCUSSON dessiné apparaît
+# au-dessus du chiffre — le territoire est INATTAQUABLE. Même contrat de rafraîchissement : à
+# l'expiration du compteur serveur, le marquage disparaît de lui-même.
 
 const RADIUS := 30.0
 const BORDER_WIDTH := 5.0
@@ -29,6 +34,11 @@ const TEXT_COLOR := Color(0.933333, 0.952941, 0.968627, 1)
 const PENDING_COLOR := Color("e0b249")
 # Or/ambre du TÉLÉGRAPHE de zone (G1 §8.62) — miroir de forecast_color du shader overlay.
 const FORECAST_COLOR := Color(1.0, 0.75, 0.1)
+# Cyan tactique du BOUCLIER (§8.119 — BASTION D'ACIER) : territoire INATTAQUABLE. Cyan = charte
+# « Warzone Command » de la protection/interactif, jamais confondu avec le vert de la zone ni l'or
+# du télégraphe (les trois peuvent cohabiter sur un même badge).
+const SHIELD_COLOR := Color("36c5d9")
+const SHIELD_RING_WIDTH := 3.0
 
 @onready var _label: Label = $Label
 @onready var _rad_label: Label = $RadLabel
@@ -50,6 +60,8 @@ var _forecast_label: Label = null
 # affichée en pastille de coin. "" = mode normal (aucune initiale).
 var _initial: String = ""
 var _initial_label: Label = null
+# Vrai si ce territoire est sous BOUCLIER (§8.119 — `shield_turns_left > 0`) : liseré cyan + écusson.
+var _shielded: bool = false
 
 func _ready() -> void:
 	_apply_text()
@@ -63,11 +75,12 @@ func _ready() -> void:
 # ANNONCE de prochaine zone (`forecast` → ⚠ or, télégraphe G1 §8.62).
 # Défauts → rétro-compatible avec d'anciens appels à 2/3/4 arguments.
 func set_data(troops: int, accent: Color, contaminated: bool = false, pending: int = 0,
-		forecast: bool = false, initial: String = "") -> void:
+		forecast: bool = false, initial: String = "", shielded: bool = false) -> void:
 	_border_color = accent
 	_contaminated = contaminated
 	_forecast = forecast
 	_initial = initial
+	_shielded = shielded
 	_has_pending = pending > 0
 	if _has_pending:
 		_troops_text = "%d+%d" % [troops, pending]
@@ -136,3 +149,27 @@ func _draw() -> void:
 	# territoire annoncé — lisible même quand le shader du plateau est indisponible.
 	elif _forecast:
 		draw_arc(Vector2.ZERO, RADIUS + RAD_RING_WIDTH, 0.0, TAU, 48, FORECAST_COLOR, RAD_RING_WIDTH, true)
+	# BOUCLIER (§8.119) : liseré cyan EXTÉRIEUR aux deux anneaux ci-dessus (il ne les remplace pas —
+	# un territoire peut être à la fois contaminé, annoncé ET protégé) + petit ÉCUSSON dessiné.
+	if _shielded:
+		draw_arc(Vector2.ZERO, RADIUS + RAD_RING_WIDTH * 2.0 + SHIELD_RING_WIDTH, 0.0, TAU, 48,
+			SHIELD_COLOR, SHIELD_RING_WIDTH, true)
+		_draw_shield_crest()
+
+# Écusson DESSINÉ (et non un glyphe texte) : les pictogrammes de bouclier Unicode (⛨ et voisins) ne
+# sont couverts par aucune des polices embarquées → ils s'afficheraient en « tofu » (constaté sur
+# 📢 ✉ 🎯 lors de précédents chantiers). Un Polygon2D de 5 points est garanti à l'écran, sans
+# dépendance de police, et colle mieux à l'ADN angulaire de la charte (§2).
+func _draw_shield_crest() -> void:
+	var w := 11.0
+	var top := -RADIUS - 15.0
+	var bottom := top + 20.0
+	var pts := PackedVector2Array([
+		Vector2(-w, top), Vector2(w, top), Vector2(w, top + 11.0),
+		Vector2(0.0, bottom), Vector2(-w, top + 11.0),
+	])
+	draw_colored_polygon(pts, Color(SHIELD_COLOR, 0.85))
+	# Contour sombre : l'écusson reste lisible par-dessus un territoire clair ou contaminé.
+	var outline := PackedVector2Array(pts)
+	outline.append(pts[0])
+	draw_polyline(outline, Color(0.03, 0.04, 0.05, 0.9), 1.5, true)

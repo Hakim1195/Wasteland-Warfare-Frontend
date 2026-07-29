@@ -90,7 +90,12 @@ static func debrief_rows(players: Dictionary, territories: Dictionary, statistic
 		var pid := int(r["pid"])
 		var raw = players.get(str(pid), players.get(pid, {}))
 		var p: Dictionary = raw if typeof(raw) == TYPE_DICTIONARY else {}
-		r["username"] = str(p.get("username", "JOUEUR %d" % pid))
+		# §8.118 : repli de pseudo jadis en dur en FRANÇAIS (« JOUEUR 3 »). On RÉUTILISE la clé
+		# existante `WR_PLAYER_FALLBACK` (déjà servie par war_feed.gd et player_chip.gd) au lieu
+		# d'en créer une seconde pour la même phrase. ⚠️ `TranslationServer.translate` et NON `tr()` :
+		# ce module est PUR (extends RefCounted, méthodes statiques) — `tr()` est une méthode de
+		# Node, indisponible ici (même piège que les modules statiques du §8.104).
+		r["username"] = str(p.get("username", TranslationServer.translate("WR_PLAYER_FALLBACK") % pid))
 		# Repli pid < 0 : convention G2 (les bots portent des ids NÉGATIFS).
 		r["is_bot"] = bool(p.get("is_bot", pid < 0))
 		r["is_alive"] = str(p.get("status", "alive")) == "alive"

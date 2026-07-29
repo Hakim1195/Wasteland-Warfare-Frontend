@@ -634,6 +634,17 @@ func _on_mm_queue_result(ok: bool, data: Dictionary) -> void:
 		_show_banned_notice(data)
 	elif reason == "in_room":
 		_offer_resume(_int_or(data.get("room_id"), -1))
+	else:
+		# §8.118 — BRANCHE TERMINALE : tout échec NON couvert ci-dessus (HTTP non-200 → `data` vide,
+		# `reason` inconnue d'un backend plus récent, `queued=false` inattendu) ne produisait RIEN :
+		# le joueur cliquait « RECHERCHER », l'écran ne bougeait pas, et le CTA passait pour mort.
+		# On ne laisse plus AUCUN chemin muet — un message générique vaut mieux qu'un bouton inerte.
+		# Message SERVEUR prioritaire s'il en fournit un (même lecture défensive que _on_lobby_error).
+		var server_msg := str(data.get("message", ""))
+		# Retour à un panneau CONFIGURATION utilisable : le CTA y est de nouveau visible et cliquable
+		# (il n'est jamais `disabled`), et le poll éventuel est coupé — le joueur réessaie aussitôt.
+		_show_config(false)
+		_set_config_status(server_msg if server_msg != "" else tr("MM_QUEUE_FAILED"), DANGER)
 
 
 func _on_mm_status_updated(state: String, since_s: int, room_id: int) -> void:

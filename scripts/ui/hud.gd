@@ -640,12 +640,16 @@ func _fill_hero_stats(box: VBoxContainer, hero: Dictionary) -> void:
 	box.add_child(_stat_bar("HUD_STAT_PB", tr("HUD_STAT_PB_VALUE_FMT") % int(round(pb * 100.0)),
 		pb / PB_DISPLAY_MAX, STAT_PB_COLOR, "ROSTER_PB_TOOLTIP"))
 	# PP : momentum de combat, borné [pp_min, pp_max] par le serveur.
+	# §8.119 — TOOLTIP UNIFIÉ `PP_TOOLTIP` (et non plus `CHAR_STAT_PP_DESC`, qui décrivait des PP
+	# purement passifs) : les PP sont désormais aussi une MONNAIE (RATIONNER + pouvoir de héros).
+	# `_fill_hero_stats` étant la source UNIQUE des barres de stats, cette seule ligne met le
+	# tooltip à jour sur TOUS les écrans qui l'utilisent (fiche joueur ET zone opérateur).
 	var pp := int(hero.get("pp_current", 0))
 	var pp_min := int(hero.get("pp_min", 0))
 	var pp_max := int(hero.get("pp_max", 0))
 	var span := maxi(pp_max - pp_min, 1)
 	box.add_child(_stat_bar("HUD_STAT_PP", tr("HUD_STAT_PP_VALUE_FMT") % [pp, pp_max],
-		clampf(float(pp - pp_min) / float(span), 0.0, 1.0), STAT_PP_COLOR, "CHAR_STAT_PP_DESC"))
+		clampf(float(pp - pp_min) / float(span), 0.0, 1.0), STAT_PP_COLOR, "PP_TOOLTIP"))
 
 # Plafonds d'AFFICHAGE des barres PA/PB (aucune valeur de jeu : purement visuel — la valeur
 # chiffrée à droite de chaque barre reste la vérité). PA 30 = ordre de grandeur d'un héros de
@@ -709,6 +713,77 @@ func set_operator_panel(data: Dictionary) -> void:
 	_op_power_state.visible = state != ""
 	var hero = data.get("hero", {})
 	_fill_hero_stats(_op_stats_box, hero if typeof(hero) == TYPE_DICTIONARY else {})
+	# §8.119 — FLUCTUATION VISIBLE DES PP hors Split-Screen VS. Les PP bougeaient à chaque assaut
+	# sans que rien ne le signale en dehors du VS (donc jamais pour les combats des AUTRES, ni après
+	# un rationnement) : le joueur voyait une jauge sauter sans cause. On compare la valeur reçue à
+	# la précédente et on fait flotter une flèche ▲/▼ furtive sur la zone opérateur.
+	if typeof(hero) == TYPE_DICTIONARY and int(hero.get("pv_max", 0)) > 0:
+		_track_pp_fluctuation(int(hero.get("pp_current", 0)))
+
+# PP mémorisés au dernier rafraîchissement (§8.119). `INF` = jamais reçu → aucune flèche au premier
+# état (sinon toute prise de contrôle afficherait un faux « gain » depuis 0).
+var _last_pp: float = INF
+
+func _track_pp_fluctuation(pp: int) -> void:
+	var previous := _last_pp
+	_last_pp = float(pp)
+	if previous == INF or int(previous) == pp:
+		return
+	var delta := pp - int(previous)
+	_spawn_pp_arrow(delta)
+
+# Flèche ▲/▼ + delta chiffré, flottant 0,9 s au-dessus de la zone opérateur. Glyphes ▲/▼ : mêmes
+# blocs Unicode que les ☢/⚠ déjà rendus par le jeu (aucun emoji — cf. tofu constaté en capture).
+func _spawn_pp_arrow(delta: int) -> void:
+	if not _op_built:
+		return
+	# reduced_motion (E10 §8.82) : pas d'animation, mais l'information reste lisible — on n'a pas
+	# le droit de la SUPPRIMER (ce serait cacher une donnée de jeu), seulement de la figer.
+	var still: bool = bool(SettingsManager.get_comfort("reduced_motion"))
+	var zone: Control = %OperatorZone
+	var lbl := Label.new()
+	lbl.text = ("▲ +%d PP" % delta) if delta > 0 else ("▼ %d PP" % delta)
+	lbl.add_theme_font_size_override("font_size", FS_VALUE)
+	lbl.add_theme_color_override("font_color", ACCENT_CYAN if delta > 0 else HERO_DANGER)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.z_index = 60
+	zone.add_child(lbl)
+	lbl.position = Vector2(zone.size.x * 0.55, zone.size.y * 0.5)
+	if still:
+		get_tree().create_timer(1.2).timeout.connect(func() -> void:
+			if is_instance_valid(lbl):
+				lbl.queue_free())
+		return
+	var tw := lbl.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(lbl, "position:y", lbl.position.y - 26.0, 0.9)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.9).set_delay(0.25)
+	tw.chain().tween_callback(lbl.queue_free)
+
+# §8.119 — Flotteur VERT « +N PV » sur la zone opérateur quand NOTRE héros se soigne (RATIONNER).
+# Pendant exact de `pulse_hero_pain` : le soin doit être aussi lisible que les dégâts.
+func float_hero_heal(amount: int) -> void:
+	if not _op_built or amount <= 0:
+		return
+	var zone: Control = %OperatorZone
+	var lbl := Label.new()
+	lbl.text = tr("ABILITY_HEAL_FLOAT_FMT") % amount
+	lbl.add_theme_font_size_override("font_size", FS_BODY)
+	lbl.add_theme_color_override("font_color", Color("7fff00"))
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.z_index = 60
+	zone.add_child(lbl)
+	lbl.position = Vector2(zone.size.x * 0.12, zone.size.y * 0.5)
+	if bool(SettingsManager.get_comfort("reduced_motion")):
+		get_tree().create_timer(1.2).timeout.connect(func() -> void:
+			if is_instance_valid(lbl):
+				lbl.queue_free())
+		return
+	var tw := lbl.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(lbl, "position:y", lbl.position.y - 30.0, 1.0)
+	tw.tween_property(lbl, "modulate:a", 0.0, 1.0).set_delay(0.35)
+	tw.chain().tween_callback(lbl.queue_free)
 
 # Douleur du héros (E9 §8.81) : pulse rouge 0,3 s sur la zone OPÉRATEUR quand NOTRE héros encaisse.
 func pulse_hero_pain() -> void:
@@ -997,7 +1072,12 @@ func set_deploy_confirm(active: bool, total: int = 0, quota: int = 0) -> void:
 # Carte POUVOIR contextuelle (onglet ACTIONS — lot E)
 # =========================================================
 # `lines` = Array[String] (état vivant du pouvoir, déjà traduit par main.gd) ;
-# `buttons` = Array[{ "label": String, "action": String }] — le clic ré-émet power_action_requested.
+# `buttons` = Array[{ "label", "action", "subtitle"?, "tooltip"?, "disabled"?, "accent"? }] — le clic
+# ré-émet power_action_requested. Clés OPTIONNELLES ajoutées en §8.119 (rétro-compatibles) :
+#   • `subtitle` : 2ᵉ ligne dynamique sous le libellé (ex. « −5 PP → +30 PV ») — l'affaire proposée
+#     est ainsi VISIBLE avant le clic, y compris quand le plafond de PV rogne la conversion ;
+#   • `tooltip` + `disabled` : **jamais de bouton mort silencieux** — un bouton grisé porte TOUJOURS
+#     la raison du grisage en infobulle (règle §8.119 lot E).
 func set_power_card(lines: Array, buttons: Array = []) -> void:
 	var box: VBoxContainer = %PowerBox
 	for c in box.get_children():
@@ -1014,15 +1094,48 @@ func set_power_card(lines: Array, buttons: Array = []) -> void:
 		if typeof(b) != TYPE_DICTIONARY:
 			continue
 		var btn := Button.new()
-		btn.text = str(b.get("label", "—"))
+		var label := str(b.get("label", "—"))
+		var subtitle := str(b.get("subtitle", ""))
+		btn.text = ("%s\n%s" % [label, subtitle]) if subtitle != "" else label
+		btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		btn.add_theme_font_size_override("font_size", FS_BODY)
 		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		btn.disabled = bool(b.get("disabled", false))
+		# `mouse_filter = STOP` sur un bouton DÉSACTIVÉ : sans ça, Godot ignore le survol et
+		# l'infobulle de raison ne s'afficherait jamais — le bouton redeviendrait « mort muet ».
+		if btn.disabled:
+			btn.mouse_filter = Control.MOUSE_FILTER_STOP
+		var tip := str(b.get("tooltip", ""))
+		if tip != "":
+			btn.tooltip_text = tip
+		if b.has("accent"):
+			btn.add_theme_color_override("font_color", b["accent"])
 		var action := str(b.get("action", ""))
 		btn.pressed.connect(func() -> void:
 			AudioManager.play_sfx("click")
 			power_action_requested.emit(action))
 		box.add_child(btn)
 	box.visible = not box.get_children().is_empty()
+
+# §8.119 — BANDEAU furtif d'état de capacité (« PROCHAINE ATTAQUE : PORTÉE ILLIMITÉE » tant que
+# `airborne_attacks_left > 0`). Chip discret inséré en TÊTE de la zone opérateur, sur le modèle du
+# chip de télégraphe de zone (G1 §8.62) : créé paresseusement, masqué dès que le texte est vide.
+var _ability_banner: Label = null
+
+func set_ability_banner(text: String) -> void:
+	if not _op_built:
+		return
+	if _ability_banner == null:
+		_ability_banner = Label.new()
+		_ability_banner.add_theme_font_size_override("font_size", FS_EYEBROW)
+		_ability_banner.add_theme_color_override("font_color", ACCENT_GOLD)
+		_ability_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_ability_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var zone: VBoxContainer = %OperatorZone
+		zone.add_child(_ability_banner)
+		zone.move_child(_ability_banner, 0)
+	_ability_banner.text = text
+	_ability_banner.visible = text != ""
 
 # =========================================================
 # Journal de Guerre 2.0 (E4 §8.76) — onglet JOURNAL, filtres, kill feed, toasts

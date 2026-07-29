@@ -300,7 +300,11 @@ func _fmt_delta(seconds: int) -> String:
 	var m := (seconds % 3600) / 60
 	var s := seconds % 60
 	if d > 0:
-		return "%dj %02d:%02d:%02d" % [d, h, m, s]
+		# §8.118 : le suffixe de jours était en dur en FRANÇAIS (« 2j 04:12:30 ») — seule chaîne
+		# visible de l'écran à échapper à l'i18n. Le format reste composé ICI (et non porté par une
+		# clé « %dj %02d… ») : une clé à 4 substitutions ordonnées est un piège à traduction, alors
+		# que le seul morceau réellement localisable est l'abréviation.
+		return "%d%s %02d:%02d:%02d" % [d, tr("TIME_DAYS_SHORT"), h, m, s]
 	return "%02d:%02d:%02d" % [h, m, s]
 
 # ISO "2026-07-15T04:00:00Z" (UTC) → epoch. Godot ne gère pas le suffixe Z → retiré avant parse.

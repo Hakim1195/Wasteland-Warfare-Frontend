@@ -23,6 +23,11 @@ var map_id: String = "classic_42"
 # à masquer « REJOUER » après une privée (salons éphémères → retour au QG). Défaut false (rétro-compat).
 var is_private: bool = false
 
+# Partie CLASSÉE (§8.88) — champ PUBLIC de l'état. Lu EN PARTIE par main.gd (§8.119 : les pouvoirs
+# de héros pilotes sont `casual_only`, donc masqués en classée). À ne pas confondre avec
+# `NetworkManager.last_match_is_ranked`, qui ne vaut qu'APRÈS le game_over (bilan économique).
+var is_ranked: bool = false
+
 # Version du client (auto-updater, CONTEXTE.md §9). Renseignée par le bootloader au démarrage
 # à partir de user://client_version.txt (défaut "1.0.0"). Envoyée au serveur dans l'URL du
 # WebSocket (network_manager) pour la validation de version stricte côté backend.
@@ -72,6 +77,12 @@ func update_from_json(state_data: Dictionary):
 	map_id = str(state_data.get("map_id", "classic_42"))
 	# Partie issue d'un SALON PRIVÉ (§8.116) — champ PUBLIC ; défaut false (serveur/état antérieur).
 	is_private = bool(state_data.get("is_private", false))
+	# Partie CLASSÉE (§8.88) — champ PUBLIC de l'état, diffusé depuis toujours mais jamais miroité
+	# ici : `NetworkManager.last_match_is_ranked` ne le connaît qu'à la FIN (bloc game_over), ce qui
+	# ne sert à rien EN PARTIE. §8.119 en a besoin en cours de jeu (les pouvoirs de héros pilotes
+	# sont `casual_only` → boutons masqués en classée). Défaut false = serveur/état antérieur, donc
+	# non classée : le pire cas affiche un bouton que le serveur refusera proprement.
+	is_ranked = bool(state_data.get("is_ranked", false))
 	# NB : `is_bot` (G2 §8.72) est un champ PUBLIC de chaque PlayerState (dans `players`) — lu
 	# directement via GameState.players[pid].is_bot par main.gd/hud.gd (pas de miroir dédié ici).
 	# Le serveur sérialise la zone radioactive ; défaut {} si absente (état pré-game/placement).

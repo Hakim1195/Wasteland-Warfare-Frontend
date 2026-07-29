@@ -280,6 +280,14 @@ func set_attack_context(source_tid: String, valid_targets: Array) -> void:
 		_attack_targets[str(tid)] = true
 	generate_board()
 
+# Contexte de CIBLAGE D'UNE CAPACITÉ (§8.119 — BASTION / ABSOLUTION). Réutilise TEL QUEL le
+# pipeline de surlignage des cibles d'attaque (`_attack_targets` → liseré pulsant de l'overlay) :
+# une seule mécanique de « cibles légales » dans le plateau, donc aucun risque de divergence
+# visuelle entre un ciblage d'attaque et un ciblage de pouvoir. Sans source sélectionnée : on ne
+# veut ni flèche d'intention ni territoire éclairci (le pouvoir ne part d'aucun territoire).
+func set_ability_targets(valid_targets: Array) -> void:
+	set_attack_context("", valid_targets)
+
 func clear_attack_context() -> void:
 	if _attack_targets.is_empty() and _intent_target == "":
 		return
@@ -539,7 +547,12 @@ func generate_board() -> void:
 		var initial := ""
 		if colorblind and territory_owner != null:
 			initial = _owner_initial(int(territory_owner))
-		_update_badge(tid, garrison, accent, is_contaminated, pending, is_forecast, initial)
+		# Bouclier (§8.119 — BASTION D'ACIER) : liseré cyan + écusson sur le badge tant que le
+		# compteur SERVEUR est armé. L'état fait foi, jamais une mémoire locale : à l'expiration
+		# du compteur, le marquage disparaît au rafraîchissement suivant.
+		var is_shielded: bool = int(t.get("shield_turns_left", 0)) > 0
+		_update_badge(tid, garrison, accent, is_contaminated, pending, is_forecast, initial,
+			is_shielded)
 
 		# Libellé/garnison : on n'écrase un texte que si le nœud expose la propriété `text`
 		# (cas fallback BaseButton ; les Area2D dessinés à la main n'ont pas de `text`).
@@ -701,7 +714,8 @@ func _owner_initial(pid: int) -> String:
 	return str(pid) if pid >= 0 else "IA"
 
 func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool = false,
-		pending: int = 0, forecast: bool = false, initial: String = "") -> void:
+		pending: int = 0, forecast: bool = false, initial: String = "",
+		shielded: bool = false) -> void:
 	var pos := get_territory_position(tid)
 	if pos == Vector2.INF:
 		return
@@ -717,7 +731,7 @@ func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool =
 	# Ré-affiche un badge masqué par un passage hors-carte (changement de carte, G5 §8.71).
 	badge.visible = true
 	badge.global_position = pos
-	badge.set_data(troops, accent, contaminated, pending, forecast, initial)
+	badge.set_data(troops, accent, contaminated, pending, forecast, initial, shielded)
 
 # Position monde (espace du SubViewport) du centre d'un territoire — utilisée par la
 # caméra tactique pour cadrer les combats. Centre = centroïde du CollisionPolygon2D si

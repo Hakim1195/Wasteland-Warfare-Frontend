@@ -970,6 +970,15 @@ func _build_ranked_locally() -> Array:
 		rank += 1
 	return rows
 
+# §8.118 — Vrai quand les lignes affichées sont les pseudos FICTIFS de `_mock_board`. Prédicat
+# MIROIR de la sélection de source de `_build_ranked_locally` ci-dessus (`_server_board` vide ET
+# échec réseau avéré) : on ne se contente pas de `_offline_fallback`, qui n'est jamais remis à
+# false — un fetch réussi APRÈS un échec (clic sur une division) rendrait de VRAIES données que
+# le seul drapeau ferait passer pour du mock. La navigation par division (`_browse_mode`) lit
+# `_tier_cache`, alimenté exclusivement par le serveur : elle n'est donc jamais fictive.
+func _showing_mock() -> bool:
+	return _offline_fallback and _server_board.is_empty() and not _browse_mode
+
 func _refresh() -> void:
 	_rebuild_rank_card()      # §8.95 — carte « VOTRE RANG » (en tête)
 	_rebuild_divisions_band() # §8.95/§8.98 — bande des 5 divisions (cliquable en navigation)
@@ -1226,8 +1235,17 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	# gestionnaire d'entrée). Le Classement reste le SEUL accès à cet écran (demande produit).
 	# On route par PSEUDO : `LeaderboardEntry` n'expose délibérément aucun id technique (« Données
 	# PUBLIQUES uniquement »), décision maintenue — pas d'identifiant séquentiel énumérable.
-	var uname := str(entry.get("username", ""))
-	if uname != "":
+	#
+	# ⚠️ §8.118 — CAUSE RACINE d'un écran INATTEIGNABLE : on lisait ici `entry["username"]`, une clé
+	# qui n'existe dans AUCUNE des entrées d'affichage. `_map_entry` (mapping serveur → affichage)
+	# renomme `username` en **`name`**, et les données mock/le repli local emploient déjà `name` —
+	# la lecture renvoyait donc TOUJOURS "", le `if` ne passait jamais, et `public_profile.tscn`
+	# (livré §8.107, son SEUL accès étant cette ligne) n'était joignable par aucun chemin.
+	var uname := str(entry.get("name", ""))
+	# Garde MOCK (§8.96) : en repli « HORS LIGNE » la liste affiche des pseudos FICTIFS
+	# (`_mock_board`) — router vers le profil public d'un joueur inexistant ne produirait qu'un
+	# 404. Hors ligne, la ligne reste donc inerte : ni curseur main, ni infobulle, ni handler.
+	if uname != "" and not _showing_mock():
 		row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		row.tooltip_text = tr("LEADERBOARD_VIEW_PROFILE")
 		row.gui_input.connect(func(ev: InputEvent) -> void:

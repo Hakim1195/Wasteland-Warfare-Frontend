@@ -230,6 +230,12 @@ func _ready():
 	_phase_banner = PhaseBannerScene.instantiate()
 	add_child(_phase_banner)
 
+	# Coupure réseau VISIBLE (§8.118) : une fermeture WS non applicative laissait l'arène
+	# silencieusement inerte — le joueur ne découvrait la panne qu'en cliquant. On la montre.
+	NetworkManager.server_connection_lost.connect(_on_server_connection_lost)
+	NetworkManager.server_connected.connect(_on_server_connection_restored)
+	_build_net_overlay()
+
 	# Fenêtre de déplacement post-conquête (déclarée dans main.tscn, masquée par défaut).
 	%ConquerSlider.value_changed.connect(_on_conquer_slider_changed)
 	%ConquerConfirm.pressed.connect(_on_conquer_confirmed)
@@ -258,7 +264,14 @@ func _ready():
 # Annulation au clavier (E7 §8.79) : ESC (action ui_cancel, mappée par défaut) = désélection de
 # la source d'attaque/mouvement — équivalent d'un clic dans le vide (réutilise _clear_source).
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("ui_cancel") and _source != "":
+	if not event.is_action_pressed("ui_cancel"):
+		return
+	# §8.119 — ESC annule d'ABORD un ciblage de capacité en cours (le plus « modal » des deux
+	# états), sinon la désélection d'attaque/mouvement historique.
+	if _ability_target_mode != "":
+		_cancel_ability_targeting(true)
+		get_viewport().set_input_as_handled()
+	elif _source != "":
 		_clear_source()
 		_update_instruction()
 		get_viewport().set_input_as_handled()
@@ -319,6 +332,16 @@ func _on_territory_clicked(tid: String):
 		return
 	# Jeu figé tant qu'une fenêtre modale (conquête §8.23, Éclipse/espionnage §8.3) est ouverte.
 	if _input_blocked():
+		return
+	# §8.119 — CIBLAGE D'UNE CAPACITÉ armé : ce clic appartient au pouvoir, pas au jeu normal.
+	# Une cible illégale annule proprement le ciblage (aucun envoi) au lieu d'être ignorée en
+	# silence — le joueur comprend que son clic a été pris en compte et refusé.
+	if _ability_target_mode != "":
+		if _ability_targets(_ability_target_mode).has(tid):
+			_send_ability(ABILITY_FACTION_POWER, tid)
+		else:
+			hud.add_log(tr("ABILITY_ERR_INVALID_TARGET"))
+			_cancel_ability_targeting(true)
 		return
 	# Phases de déploiement (placement initial OU renforts Phase 2) : le clic gauche ALIMENTE le
 	# tampon local (+1) au lieu d'envoyer au serveur — l'envoi se fait au clic « Confirmer » (§8.26).
@@ -1376,6 +1399,32 @@ func _push_power_card() -> void:
 	if bool(me.get("pending_spy_choice", false)):
 		lines.append(tr("POWER_STATE_SPY_PENDING"))
 		buttons.append({"label": tr("POWER_BTN_SPY"), "action": "spy"})
+	# --- CAPACITÉS DE HÉROS (§8.119) : les PP deviennent dépensables. ---
+	# RATIONNER : proposé aux 10 héros dès que le joueur a un héros initialisé. Toujours AFFICHÉ
+	# pendant son tour (grisé + raison en infobulle si indisponible) — un bouton qui disparaît
+	# n'enseigne rien, un bouton grisé qui explique pourquoi enseigne la règle.
+	if GameState.has_hero(_my_id()) and _is_playing_my_turn():
+		var preview: Array = _ration_preview()
+		var ration_block := _ability_block_reason(ABILITY_RATION)
+		buttons.append({
+			"label": tr("ABILITY_RATION"),
+			"subtitle": tr("ABILITY_RATION_PREVIEW") % [int(preview[0]), int(preview[1])],
+			"action": "ability_ration",
+			"disabled": ration_block != "",
+			"tooltip": tr(ration_block) if ration_block != "" else tr("ABILITY_RATION_DESC"),
+		})
+		# Pouvoir de faction : UNIQUEMENT les 3 pilotes, et JAMAIS en Classée (les 7 autres
+		# factions n'ont pas encore le leur → l'afficher serait un avantage arbitraire).
+		var spec := _my_power()
+		if not spec.is_empty() and not bool(GameState.is_ranked):
+			var power_block := _ability_block_reason(ABILITY_FACTION_POWER)
+			buttons.append({
+				"label": tr(str(spec.get("name_key", ""))),
+				"subtitle": tr("ABILITY_COST_FMT") % int(spec.get("pp_cost", 0)),
+				"action": "ability_power",
+				"disabled": power_block != "",
+				"tooltip": tr(power_block) if power_block != "" else tr(str(spec.get("desc_key", ""))),
+			})
 	hud.set_power_card(lines, buttons)
 
 # Marqueurs des pouvoirs déclenchés pendant CE combat (flags posés par engine._handle_attack) :
@@ -1422,6 +1471,214 @@ func _on_power_action_requested(action: String) -> void:
 			if bool(_my_state().get("pending_spy_choice", false)):
 				_awaiting_spy = false
 				_maybe_prompt_spy()
+		"ability_ration":
+			_send_ability(ABILITY_RATION)
+		"ability_power":
+			_start_power_activation()
+
+# =========================================================
+# CAPACITÉS DE HÉROS (§8.119) — RATIONNER + pouvoir de faction du trio pilote
+# =========================================================
+# ⚠️ VUE PURE (§6.1) : les constantes ci-dessous ne servent QU'À AFFICHER (libellé, coût, phases
+# autorisées, mode de ciblage). Le client n'applique AUCUNE règle — il envoie l'action, le serveur
+# décide, l'état redescend. Le grisage d'un bouton est un CONFORT (ne rien proposer d'impossible),
+# jamais une autorité : un état limite passé au travers est de toute façon refusé par le serveur.
+#
+# ⚠️ MIROIR de `backend/api/game/hero_abilities.py` — même discipline que `map_data.gd` face à
+# `map_data.py`. Si un coût change côté serveur, le mettre à jour ICI aussi (le serveur reste la
+# source de vérité : au pire l'affichage est périmé, jamais la règle).
+
+const ABILITY_RATION := "ration"
+const ABILITY_FACTION_POWER := "faction_power"
+
+# Phases où RATIONNER est proposé (miroir de HERO_ABILITIES["ration"]["phases"]).
+const RATION_PHASES := [2, 3, 4]
+const RATION_PP_MAX := 5
+const RATION_PV_PER_PP := 6
+
+# Modes de ciblage (miroir de hero_abilities.TARGET_*).
+const TARGET_NONE := "none"
+const TARGET_OWN_UNSHIELDED := "own_unshielded"
+const TARGET_CONTAMINATED := "contaminated"
+
+# Pouvoirs des 3 factions PILOTES. Les 7 autres factions n'ont AUCUNE entrée → aucun bouton, et
+# surtout PAS de mention « bientôt » (décision produit).
+const FACTION_POWERS := {
+	"phalanges_acier": {
+		"power_id": "bastion_acier", "name_key": "ABILITY_BASTION",
+		"desc_key": "ABILITY_BASTION_DESC", "pp_cost": 6, "phases": [2, 3, 4],
+		"target": TARGET_OWN_UNSHIELDED, "pick_key": "ABILITY_PICK_TARGET_OWN",
+	},
+	"chasseurs_ombres": {
+		"power_id": "frappe_fantome", "name_key": "ABILITY_FANTOME",
+		"desc_key": "ABILITY_FANTOME_DESC", "pp_cost": 8, "phases": [3],
+		"target": TARGET_NONE, "pick_key": "",
+	},
+	"culte_isotope": {
+		"power_id": "absolution", "name_key": "ABILITY_ABSOLUTION",
+		"desc_key": "ABILITY_ABSOLUTION_DESC", "pp_cost": 5, "phases": [2, 3, 4],
+		"target": TARGET_CONTAMINATED, "pick_key": "ABILITY_PICK_TARGET_ZONE",
+	},
+}
+
+# Traduction des codes de refus serveur (`NetworkManager.last_error_reason`) → clé i18n. Un code
+# inconnu (serveur plus récent que le client) retombe sur le `message` serveur : jamais d'écran vide.
+const ABILITY_ERROR_KEYS := {
+	"already_used": "ABILITY_ERR_ALREADY_USED",
+	"insufficient_pp": "ABILITY_ERR_INSUFFICIENT_PP",
+	"ranked_disabled": "ABILITY_ERR_RANKED",
+	"invalid_target": "ABILITY_ERR_INVALID_TARGET",
+	"wrong_phase": "ABILITY_ERR_WRONG_PHASE",
+	"not_your_turn": "ABILITY_ERR_NOT_YOUR_TURN",
+	"blocked_state": "ABILITY_ERR_BLOCKED_STATE",
+	"no_power": "ABILITY_ERR_NO_POWER",
+}
+
+# Mode de ciblage EN COURS pour une capacité ("" = aucun). Quand il est armé, le prochain clic de
+# territoire est CONSOMMÉ par la capacité au lieu du jeu normal (attaque / mouvement).
+var _ability_target_mode: String = ""
+
+# Spécification du pouvoir de MA faction, ou {} si ma faction n'en a pas (7 factions sur 10).
+func _my_power() -> Dictionary:
+	var spec = FACTION_POWERS.get(str(_my_state().get("faction", "")), {})
+	return spec if typeof(spec) == TYPE_DICTIONARY else {}
+
+# PP disponibles AU-DESSUS du plancher (le serveur refuse tout paiement qui le franchirait).
+func _pp_available() -> int:
+	var hero := GameState.hero_of(_my_id())
+	return int(hero.get("pp_current", 0)) - int(hero.get("pp_min", 0))
+
+# Aperçu EXACT du rationnement : (PP dépensés, PV rendus) — miroir de `hero_abilities.ration_plan`.
+# Affiché en sous-titre du bouton, pour que le joueur voie la vraie affaire AVANT de cliquer (le
+# plafond de PV peut rogner la conversion : « −5 PP → +2 PV » doit se lire, pas se découvrir).
+func _ration_preview() -> Array:
+	var hero := GameState.hero_of(_my_id())
+	var pp_spent: int = clampi(_pp_available(), 0, RATION_PP_MAX)
+	var missing: int = maxi(int(hero.get("pv_max", 0)) - int(hero.get("pv_current", 0)), 0)
+	return [pp_spent, mini(pp_spent * RATION_PV_PER_PP, missing)]
+
+# Raison de GRISAGE d'une capacité (clé i18n), "" si elle est activable. Ordre calqué sur celui de
+# `hero_abilities.can_use` pour que l'infobulle annonce la MÊME raison que le refus serveur.
+func _ability_block_reason(ability: String) -> String:
+	if not _is_playing_my_turn() or _is_eliminated():
+		return "ABILITY_ERR_NOT_YOUR_TURN"
+	if _input_blocked():
+		return "ABILITY_ERR_BLOCKED_STATE"
+	var me := _my_state()
+	var phase := int(GameState.current_phase)
+	if ability == ABILITY_RATION:
+		if not RATION_PHASES.has(phase):
+			return "ABILITY_ERR_WRONG_PHASE"
+		if bool(me.get("ability_ration_used", false)):
+			return "ABILITY_ERR_ALREADY_USED"
+		if _pp_available() <= 0:
+			return "ABILITY_ERR_INSUFFICIENT_PP"
+		if int(_ration_preview()[1]) <= 0:
+			return "ABILITY_ERR_FULL_PV"
+		return ""
+	var spec := _my_power()
+	if spec.is_empty():
+		return "ABILITY_ERR_NO_POWER"
+	if bool(GameState.is_ranked):
+		return "ABILITY_ERR_RANKED"
+	if not (spec.get("phases", []) as Array).has(phase):
+		return "ABILITY_ERR_WRONG_PHASE"
+	if bool(me.get("ability_power_used", false)):
+		return "ABILITY_ERR_ALREADY_USED"
+	if _pp_available() < int(spec.get("pp_cost", 0)):
+		return "ABILITY_ERR_INSUFFICIENT_PP"
+	# Pouvoir SANS cible (Frappe Fantôme) : rien à vérifier ici. On ne teste la disponibilité de
+	# cibles que pour les pouvoirs qui en demandent une — sinon `_ability_targets(TARGET_NONE)`,
+	# qui renvoie [] par contrat, griserait le bouton en permanence.
+	var mode := str(spec.get("target", TARGET_NONE))
+	if mode != TARGET_NONE and _ability_targets(mode).is_empty():
+		return "ABILITY_ERR_INVALID_TARGET"
+	return ""
+
+# Territoires légaux pour un mode de ciblage — MIROIR de `hero_abilities.target_is_valid` (le
+# surlignage affiché est donc exactement ce que le serveur acceptera).
+func _ability_targets(mode: String) -> Array:
+	var out: Array = []
+	if mode == TARGET_NONE:
+		return out
+	for tid in GameState.territories.keys():
+		var t: Dictionary = _terr(str(tid))
+		if mode == TARGET_OWN_UNSHIELDED:
+			if _owner(str(tid)) == _my_id() and int(t.get("shield_turns_left", 0)) <= 0:
+				out.append(str(tid))
+		elif mode == TARGET_CONTAMINATED and _contaminated_tids().has(str(tid)):
+			out.append(str(tid))
+	return out
+
+# Territoires de la zone COURANTE (jamais `next_territories` — le télégraphe n'est pas purgeable).
+func _contaminated_tids() -> Array:
+	var zone: Dictionary = GameState.contamination_zone \
+		if typeof(GameState.contamination_zone) == TYPE_DICTIONARY else {}
+	var tids = zone.get("territories", [])
+	var out: Array = []
+	if typeof(tids) == TYPE_ARRAY:
+		for t in tids:
+			out.append(str(t))
+	return out
+
+# Clic sur le bouton de pouvoir : envoi DIRECT si le pouvoir n'a pas de cible (Frappe Fantôme),
+# sinon armement du mode de ciblage sur le plateau.
+func _start_power_activation() -> void:
+	var spec := _my_power()
+	if spec.is_empty():
+		return
+	var mode := str(spec.get("target", TARGET_NONE))
+	if mode == TARGET_NONE:
+		_send_ability(ABILITY_FACTION_POWER)
+		return
+	# Un ciblage de capacité et une sélection d'attaque ne peuvent pas cohabiter : on repart propre.
+	_clear_source()
+	_ability_target_mode = mode
+	board.set_ability_targets(_ability_targets(mode))
+	hud.set_instruction(tr(str(spec.get("pick_key", "ABILITY_PICK_TARGET_OWN"))))
+
+# Sort du mode ciblage (ESC, clic sur une cible illégale, activation réussie, changement de phase).
+func _cancel_ability_targeting(notify: bool = false) -> void:
+	if _ability_target_mode == "":
+		return
+	_ability_target_mode = ""
+	board.clear_attack_context()
+	if notify:
+		hud.add_log(tr("ABILITY_TARGETING_CANCELLED"))
+	_update_instruction()
+
+# Toast PUBLIC d'activation d'une capacité, composé depuis l'évènement système `ability_used`
+# (un SEUL code paramétré côté serveur → la phrase est choisie ici, dans la langue du joueur).
+# `power_id` inconnu (serveur plus récent que le client) → phrase générique, jamais d'écran muet.
+func _push_ability_toast(sev: Dictionary) -> void:
+	var pid := int(sev.get("player_id", -9999))
+	var who := _display_name(pid)
+	var accent: Color = board.get_player_color(pid)
+	var text := ""
+	if str(sev.get("ability", "")) == ABILITY_RATION:
+		text = tr("SYSEV_ABILITY_RATION") % [who, int(sev.get("pp_spent", 0)),
+			int(sev.get("pv_healed", 0))]
+		# Flotteur vert « +N PV » sur MA jauge de héros (le soin doit se voir autant que les dégâts).
+		if pid == _my_id():
+			hud.float_hero_heal(int(sev.get("pv_healed", 0)))
+	else:
+		var tname := _territory_name(str(sev.get("territory_id", "")))
+		match str(sev.get("power_id", "")):
+			"bastion_acier": text = tr("SYSEV_ABILITY_BASTION") % [who, tname]
+			"frappe_fantome": text = tr("SYSEV_ABILITY_FANTOME") % who
+			"absolution": text = tr("SYSEV_ABILITY_ABSOLUTION") % [who, tname]
+			_: text = tr("SYSEV_ABILITY_GENERIC") % who
+	hud.show_power_toast(text, accent)
+	hud.add_log(text)
+
+func _send_ability(ability: String, target_tid: String = "") -> void:
+	var payload := {"ability": ability}
+	if target_tid != "":
+		payload["target_territory_id"] = target_tid
+	# `send_action` injecte lui-même un `action_id` unique → l'idempotence serveur protège d'un
+	# double-clic ou d'une retransmission WS (jamais de double dépense de PP).
+	NetworkManager.send_action("hero_ability", payload)
+	_cancel_ability_targeting()
 
 # Résout les NOMS de faction affichables par joueur (le bandeau de tour et la fiche n'affichent
 # jamais l'id snake_case brut). Remplace l'ancien tiroir « INTEL : FACTIONS » (supprimé lot A —
@@ -1908,6 +2165,14 @@ func _on_game_error(message: String):
 	# L'action a été refusée par le serveur → on déverrouille pour réessayer.
 	_pass_in_flight = false
 	_attack_in_flight = false  # attaque refusée (doublon, non adjacent…) : on lève le verrou (jamais de soft-lock)
+	# §8.119 — refus CODÉ (`reason`) : on journalise la phrase TRADUITE au lieu du message serveur
+	# non localisé. Lu immédiatement (la propriété est écrasée au refus suivant). Code inconnu →
+	# on retombe sur le `message` serveur ci-dessous, jamais sur du vide.
+	var reason := str(NetworkManager.last_error_reason)
+	if reason != "" and ABILITY_ERROR_KEYS.has(reason):
+		_cancel_ability_targeting()
+		hud.add_log("⚠ " + tr(str(ABILITY_ERROR_KEYS[reason])))
+		return
 	if _deploy_in_flight:
 		_deploy_in_flight = false
 		# Refus du déploiement : on RESTAURE le tampon (et on lève le verrou aveugle de Phase 0) pour
@@ -1957,8 +2222,18 @@ func _refresh():
 	hud.update_display()
 	# Zone OPÉRATEUR de la barre basse (lot A) : moi — identité, pouvoir, PV/PA/PB/PP en barres.
 	_push_operator_panel()
-	# Carte POUVOIR de l'onglet ACTIONS (lot E) : compteur de mouvements + fenêtres en attente.
+	# Carte POUVOIR de l'onglet ACTIONS (lot E) : compteur de mouvements + fenêtres en attente
+	# + capacités de héros (§8.119 : RATIONNER et pouvoir de faction, grisés avec raison).
 	_push_power_card()
+	# §8.119 — bandeau « PROCHAINE ATTAQUE : PORTÉE ILLIMITÉE » tant que la Frappe Fantôme est
+	# armée. Piloté par l'ÉTAT SERVEUR (`airborne_attacks_left`) et non par une mémoire locale :
+	# il disparaît tout seul dès que l'attaque a consommé le crédit ou que le tour se termine.
+	hud.set_ability_banner(tr("ABILITY_AIRBORNE_ARMED") \
+		if int(_my_state().get("airborne_attacks_left", 0)) > 0 else "")
+	# Un ciblage de capacité ne doit JAMAIS survivre à un changement de tour/phase (le serveur
+	# refuserait l'envoi, mais le plateau resterait surligné et le joueur bloqué en mode ciblage).
+	if _ability_target_mode != "" and _ability_block_reason(ABILITY_FACTION_POWER) != "":
+		_cancel_ability_targeting()
 	# Fiche joueur (lot A) : ordre de navigation ◀ ▶ + rafraîchissement TEMPS RÉEL de la fiche
 	# ouverte (la cible vient peut-être de subir un duel / de perdre un territoire).
 	_push_sheet_players()
@@ -2028,10 +2303,19 @@ func _play_event_feedback(event) -> void:
 	# Journal, conservée). Le pouvoir devient perceptible sans lire le journal.
 	var sys_events = event.get("system_events", [])
 	if typeof(sys_events) == TYPE_ARRAY:
+		var isotope_shown := false
 		for sev in sys_events:
-			if typeof(sev) == TYPE_DICTIONARY and str(sev.get("code", "")) == "zone_protected":
+			if typeof(sev) != TYPE_DICTIONARY:
+				continue
+			var code := str(sev.get("code", ""))
+			if code == "zone_protected" and not isotope_shown:
 				hud.show_power_toast(tr("POWER_TOAST_ISOTOPE"), Color("7fff00"))
-				break
+				isotope_shown = true
+			elif code == "ability_used":
+				# §8.119 — toast PUBLIC : TOUT LE MONDE voit qu'une capacité a été activée (sinon
+				# un territoire devenu inattaquable ou une frappe venue de nulle part serait
+				# incompréhensible pour les adversaires).
+				_push_ability_toast(sev)
 	# Tics de zone (VFX) : flotteur -1 vert sur CHAQUE territoire touché (mêmes ticks dérivés
 	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_zone_forecast).
 	if _vfx_enabled():
@@ -2777,6 +3061,227 @@ func _format_event(e) -> String:
 				_bb_pseudo(int(e.get("winner_id", -1))), str(e.get("match_type"))]
 		_:
 			return str(e.get("event_type", e))
+
+# =========================================================
+# COUPURE RÉSEAU VISIBLE EN PARTIE (§8.118)
+# =========================================================
+# Constat : une fermeture WS NON applicative (1006 crash serveur / coupure réseau / VPN, 1001…)
+# ne produisait AUCUN signal — l'arène restait affichée, figée, et le joueur ne comprenait la
+# panne qu'en cliquant (« NET_NOT_CONNECTED »). On rend donc la coupure VISIBLE, avec UNE
+# tentative de reconnexion automatique, puis une sortie honnête si elle échoue.
+#
+# ⚠️ PÉRIMÈTRE : on ne change RIEN à la règle serveur. Une déconnexion en partie reste traitée
+# côté backend comme un abandon (`_maybe_abandon_on_disconnect`) — chantier séparé du backlog
+# (fenêtre de grâce / bot de remplacement). Le dialogue final le DIT au lieu de promettre une
+# reprise qui n'existe pas.
+
+# Délai avant la tentative UNIQUE de reconnexion (laisse passer un micro-hoquet réseau).
+const NET_RETRY_DELAY := 2.0
+# Filet de sécurité : si la tentative n'aboutit ni n'échoue franchement (connect_to_url en erreur,
+# socket bloqué en CONNECTING → aucun STATE_CLOSED, donc aucun 2ᵉ server_connection_lost), on
+# tranche au bout de ce délai plutôt que de laisser le bandeau rouge tourner indéfiniment.
+const NET_GIVEUP_DELAY := 8.0
+# Tenue du bandeau vert « CONNEXION RÉTABLIE » avant effacement.
+const NET_RESTORED_HOLD := 2.0
+# Ordonnée du bandeau — MÊME ligne d'ancrage que le stinger de tour (phase_banner.gd TOP_Y),
+# documentée « sous la TopBar du HUD ». ⚠️ Défaut vu en CAPTURE seulement : collé à y = 0, le
+# bandeau MASQUE la pastille tour/phase/chrono et le bouton ABANDONNER — précisément ce qu'on ne
+# doit pas voler au joueur pendant une panne. La collision avec le stinger de tour est théorique :
+# aucun changement de tour/phase ne peut arriver pendant que le socket est mort.
+const NET_BANNER_TOP := 64.0
+
+# Vert de SANTÉ déjà employé par le Roster de Guerre (war_roster.gd PV_GREEN) : la charte §2 n'a
+# pas de « vert de succès », et son seul vert nommé (#7FFF00) veut dire CONTAMINATION — l'employer
+# ici enverrait exactement le message inverse.
+const NET_GREEN := Color("46b58a")
+
+var _net_layer: CanvasLayer = null
+var _net_banner: PanelContainer = null
+var _net_banner_label: Label = null
+var _net_modal: Control = null
+# "" = lien sain · "lost" = coupé, reconnexion en cours · "final" = abandonné, dialogue affiché.
+var _net_state: String = ""
+# Jeton d'invalidation des minuteries en vol (pattern _requeue_cycle de network_manager) : chaque
+# changement d'état l'incrémente, une minuterie périmée se sait périmée et ne fait rien.
+var _net_cycle: int = 0
+
+func _build_net_overlay() -> void:
+	# Calque 3 : AU-DESSUS du HUD (calque 0) et du bandeau de tour (calque 2) — une panne de lien
+	# prime sur tout le reste de l'affichage.
+	_net_layer = CanvasLayer.new()
+	_net_layer.layer = 3
+	add_child(_net_layer)
+
+	var root := Control.new()
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_net_layer.add_child(root)
+
+	# --- Bandeau plein-largeur haut (non bloquant : le joueur peut continuer à regarder le plateau).
+	_net_banner = PanelContainer.new()
+	_net_banner.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	# Hauteur laissée au minimum du contenu (offsets haut/bas égaux → croissance vers le bas).
+	_net_banner.offset_top = NET_BANNER_TOP
+	_net_banner.offset_bottom = NET_BANNER_TOP
+	_net_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_net_banner.visible = false
+	root.add_child(_net_banner)
+
+	_net_banner_label = Label.new()
+	_net_banner_label.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_net_banner_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_net_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_net_banner_label.add_theme_font_override("font", _net_font())
+	_net_banner_label.add_theme_font_size_override("font_size", 20)
+	_net_banner_label.add_theme_constant_override("outline_size", 5)
+	_net_banner_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_net_banner.add_child(_net_banner_label)
+
+	# --- Dialogue final (modal, MOUSE_FILTER_STOP : plus rien à faire sur le plateau).
+	_net_modal = Control.new()
+	_net_modal.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_net_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_net_modal.visible = false
+	root.add_child(_net_modal)
+
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0.72)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_net_modal.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_net_modal.add_child(center)
+
+	# Panneau angulaire charte §2 : gunmetal, coins droits, liseré rouge danger, encoches cyan.
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560, 0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.058824, 0.07451, 0.094118, 0.96)
+	style.set_corner_radius_all(0)
+	style.set_border_width_all(2)
+	style.border_color = Color("d6453f")
+	style.set_content_margin_all(28)
+	panel.add_theme_stylebox_override("panel", style)
+	center.add_child(panel)
+	WarzoneUI.add_corner_notches(panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 22)
+	panel.add_child(box)
+
+	var msg := Label.new()
+	msg.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	msg.text = tr("NET_CONNECTION_LOST_FINAL")
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg.add_theme_font_override("font", _net_font())
+	msg.add_theme_font_size_override("font_size", 18)
+	msg.add_theme_color_override("font_color", Color("eef3f7"))
+	box.add_child(msg)
+
+	# Clé i18n RÉUTILISÉE (MM_BACK_TO_HQ, §8.116) plutôt qu'une deuxième « RETOUR AU QG ».
+	var quit_btn := Button.new()
+	quit_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	quit_btn.text = "❯ " + tr("MM_BACK_TO_HQ")
+	quit_btn.custom_minimum_size = Vector2(0, 56)
+	quit_btn.add_theme_font_override("font", _net_font())
+	quit_btn.add_theme_font_size_override("font_size", 18)
+	quit_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	WarzoneUI.apply_ghost_button(quit_btn)
+	WarzoneUI.wire_button_sfx(quit_btn)
+	quit_btn.pressed.connect(_on_net_back_to_hq)
+	box.add_child(quit_btn)
+
+# Police de la charte §2 (condensée, graisse 700) — l'arène n'en instancie aucune par ailleurs.
+func _net_font() -> SystemFont:
+	var f := SystemFont.new()
+	f.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
+	f.font_weight = 700
+	return f
+
+# Coupure annoncée par NetworkManager (codes 4000/4001/4003 EXCLUS en amont : ils ont déjà leur
+# message via game_error). 1re émission = on prévient et on tente ; 2ᵉ = la tentative a échoué.
+func _on_server_connection_lost(code: int) -> void:
+	# Partie terminée : le Rapport Post-Op est à l'écran et le lien n'a plus d'objet (le serveur
+	# ferme d'ailleurs souvent la salle). Un bandeau d'alarme par-dessus le débriefing serait du
+	# bruit pur.
+	if _victory_shown or _net_state == "final":
+		return
+	if _net_state == "lost":
+		_net_connection_final()
+		return
+	print("MAIN: connexion perdue (code %d) — tentative de reconnexion unique." % code)
+	_net_state = "lost"
+	_net_cycle += 1
+	var cycle := _net_cycle
+	_show_net_banner(tr("NET_CONNECTION_LOST"), Color("d6453f"))
+	get_tree().create_timer(NET_RETRY_DELAY).timeout.connect(_on_net_retry.bind(cycle))
+	get_tree().create_timer(NET_GIVEUP_DELAY).timeout.connect(_on_net_giveup.bind(cycle))
+
+# Tentative UNIQUE (aucune boucle) : NetworkManager rejoue le chemin de connexion existant avec les
+# identifiants déjà en mémoire. Si elle réussit, le serveur nous renvoie un `game_started` PERSONNEL
+# qui resynchronise GameState tout seul — RIEN à recharger ici.
+func _on_net_retry(cycle: int) -> void:
+	if cycle != _net_cycle or _net_state != "lost":
+		return  # minuterie périmée (lien rétabli entre-temps, ou abandon déjà acté).
+	NetworkManager.retry_connection()
+
+func _on_net_giveup(cycle: int) -> void:
+	if cycle != _net_cycle or _net_state != "lost":
+		return
+	_net_connection_final()
+
+# `server_connected` est aussi émis à la connexion INITIALE : on n'agit que si l'on se savait coupé.
+func _on_server_connection_restored() -> void:
+	if _net_state != "lost":
+		return
+	_net_state = ""
+	_net_cycle += 1  # invalide la tentative et l'abandon encore en vol.
+	var cycle := _net_cycle
+	_show_net_banner(tr("NET_CONNECTION_RESTORED"), NET_GREEN)
+	get_tree().create_timer(NET_RESTORED_HOLD).timeout.connect(func() -> void:
+		# Une NOUVELLE coupure pendant la tenue du bandeau vert a déjà repris la main : on ne lui
+		# efface pas son bandeau rouge sous les pieds.
+		if cycle == _net_cycle:
+			_hide_net_banner())
+
+func _net_connection_final() -> void:
+	_net_state = "final"
+	_net_cycle += 1
+	_hide_net_banner()
+	if _net_modal != null:
+		_net_modal.visible = true
+
+func _on_net_back_to_hq() -> void:
+	# leave_room() recrée le WebSocketPeer (fix STATE_CLOSING, revue §8.116) : sans lui, la
+	# recherche de partie suivante échouerait en silence.
+	NetworkManager.leave_room()
+	TransitionManager.change_scene("res://scenes/ui/main_menu.tscn")
+
+func _show_net_banner(text: String, accent: Color) -> void:
+	if _net_banner == null:
+		return
+	# Même grammaire que les bandeaux existants (hud.gd show_combat_banner / phase_banner.gd) :
+	# gunmetal translucide, coins droits, filet d'accent en bord bas.
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.058824, 0.07451, 0.094118, 0.92)
+	style.set_corner_radius_all(0)
+	style.set_border_width_all(0)
+	style.border_width_bottom = 2
+	style.border_color = accent
+	style.set_content_margin_all(10)
+	_net_banner.add_theme_stylebox_override("panel", style)
+	_net_banner_label.text = text.to_upper()  # charte §2 : bandeaux en MAJUSCULES.
+	_net_banner_label.add_theme_color_override("font_color", accent)
+	_net_banner.visible = true
+
+func _hide_net_banner() -> void:
+	if _net_banner != null:
+		_net_banner.visible = false
+
 
 # =========================================================
 # Mode debug solo (lancement direct de main.tscn)

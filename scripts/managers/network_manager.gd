@@ -6,6 +6,13 @@ signal lobby_error(message: String)
 # Session expirée (§AC.5) : émis UNE SEULE FOIS quand une réponse REST authentifiée revient en
 # 401/403. Les écrans hub s'y abonnent pour rediriger vers l'auth — aucun retry, aucune tempête.
 signal session_expired
+# §8.118 — Fermeture WS NON applicative (les codes 4000/4001/4003 sont EXCLUS : ils ont déjà leur
+# message via game_error/lobby_error). Couvre 1006 (crash serveur / coupure réseau / VPN), 1001,
+# code 0… — c'est-à-dire précisément les cas où le client devenait SILENCIEUSEMENT inerte : plus
+# aucun état ne remontait et le joueur ne découvrait la panne qu'en cliquant (« NET_NOT_CONNECTED »).
+# Émis UNE SEULE FOIS par connexion (garde `_connection_lost_emitted`, ré-armée par connect_to_server)
+# → une nouvelle émission signifie donc « la tentative de reconnexion a elle aussi échoué ».
+signal server_connection_lost(code: int)
 
 # --- Signaux temps réel (arène) ---
 # Émis après chaque mise à jour de l'état de jeu reçue du serveur. L'UI (HUD, plateau)
@@ -18,6 +25,12 @@ signal timer_updated(deadline_epoch: float, budget_seconds: int, reason: String,
 signal game_event(event: Dictionary)
 # Émis quand le serveur refuse une action (ex: "Ce n'est pas votre tour").
 signal game_error(message: String)
+# CODE MACHINE du DERNIER refus reçu (§8.119) — clé `reason` ADDITIVE du message `{"type":"error"}`.
+# Propriété plutôt qu'argument de `game_error` : ce signal est écouté par plusieurs écrans, changer
+# sa signature les casserait tous (même pattern que `last_bot_fill_at` / `last_objectives_reveal`).
+# "" = refus SANS code (tous les refus historiques) → l'écran retombe sur le `message` serveur.
+# À lire IMMÉDIATEMENT dans le handler de `game_error` : la valeur est écrasée au refus suivant.
+var last_error_reason: String = ""
 # Émis quand un joueur quitte la partie.
 signal player_left(player_id)
 # --- MATCHMAKING 100 % serveur (§8.116) : files publique/classée + salons privés à code ---
@@ -166,6 +179,11 @@ var current_salon_code: String = ""
 # Session encore valide (§AC.5) : passe à false au 1er 401/403 → coupe les requêtes authentifiées et
 # bloque la tempête. Ré-armée à true sur une (re)connexion réussie (AuthManager.auth_success).
 var _session_valid := true
+# §8.118 — Garde anti-répétition de `server_connection_lost` : une fermeture non applicative n'est
+# annoncée QU'UNE fois par connexion (sans elle, le socket restant en STATE_CLOSED, le signal
+# repartirait à chaque frame). Ré-armée dans connect_to_server → la tentative de reconnexion peut
+# donc, en échouant, ré-émettre le signal : c'est ce 2ᵉ passage qui vaut « échec définitif ».
+var _connection_lost_emitted := false
 
 func _ready() -> void:
 	# Hôtes backend : source unique ApiConfig (repli sur la prod si l'autoload manque). §P1
@@ -188,6 +206,10 @@ func connect_to_server(room_id: String):
 	# neuf naît en STATE_CLOSED : la recréation est inconditionnelle et sans coût.) Couvre tout
 	# chemin qui aurait fermé le socket sans passer par leave_room().
 	socket = WebSocketPeer.new()
+	# §8.118 : nouvelle tentative de connexion → la garde d'annonce de coupure est ré-armée. Si
+	# CETTE connexion échoue à son tour, `server_connection_lost` repart : l'arène y lit l'échec de
+	# sa tentative de reconnexion unique (cf. retry_connection).
+	_connection_lost_emitted = false
 
 	# Le serveur écoute sur /ws/{room_id}/{player_id}. On a besoin de notre ID numérique.
 	if AuthManager.user_id < 0:
@@ -217,9 +239,21 @@ func connect_to_server(room_id: String):
 		socket.set_handshake_headers(headers)
 	
 	var err = socket.connect_to_url(final_url, tls_options)
-	
+
 	if err == OK:
 		set_process(true)
+
+# §8.118 — Reconnexion à la salle COURANTE après une coupure non applicative. Aucune politique ici :
+# c'est une ACTION, appelée par l'écran qui a reçu `server_connection_lost` (l'arène n'en déclenche
+# qu'UNE, 2 s après la coupure — cf. main.gd). Le chemin de connexion existant est réutilisé tel
+# quel : `connect_to_server` repart d'un WebSocketPeer NEUF et rejoint l'URL avec les identifiants
+# déjà en mémoire (JWT + user_id d'AuthManager). Le serveur accepte le remplacement de socket d'un
+# joueur déjà en salle (§8.6) et lui renvoie un `game_started` PERSONNEL : l'état se resynchronise
+# tout seul, l'appelant n'a rien à recharger.
+func retry_connection() -> void:
+	if current_room_id == "":
+		return  # plus aucune salle de référence (leave_room déjà passé) : rien à reconnecter.
+	connect_to_server(current_room_id)
 
 func _process(_delta):
 	socket.poll()
@@ -258,6 +292,17 @@ func _process(_delta):
 			print("NETWORK: connexion refusée par le serveur (auth %d) : %s" % [code, auth_msg])
 			game_error.emit(auth_msg)
 			lobby_error.emit(auth_msg)
+		elif not _connection_lost_emitted:
+			# §8.118 — Fermeture NON applicative (1006 crash/coupure réseau, 1001, 0 après un
+			# connect_to_url resté sans réponse…). Avant, ce chemin se contentait de couper le
+			# `_process` : AUCUN signal, donc en arène un client silencieusement inerte. On l'annonce
+			# désormais — UNE fois (le socket reste en STATE_CLOSED, on repasserait ici chaque frame).
+			# On ne touche à RIEN d'autre : pas de retry automatique ici (la POLITIQUE de reconnexion
+			# appartient à l'écran, cf. retry_connection), pas de game_error (les écrans traitent déjà
+			# game_error comme un refus d'action, pas comme une panne de lien).
+			_connection_lost_emitted = true
+			print("NETWORK: connexion WebSocket perdue (code %d)." % code)
+			server_connection_lost.emit(code)
 		connected = false
 		set_process(false)
 
@@ -276,6 +321,11 @@ func _handle_server_message(msg: Dictionary) -> void:
 				game_event.emit(msg["event"])
 		"error":
 			var err_msg = str(msg.get("message", tr("NET_UNKNOWN_ERROR")))
+			# §8.119 — CODE MACHINE du refus, mémorisé en propriété plutôt qu'ajouté au signal :
+			# `game_error(message)` est écouté par plusieurs écrans, en changer la signature les
+			# casserait tous. Même patron que `last_bot_fill_at`. "" = refus non codé (tous les
+			# refus historiques) → l'écran affiche le `message` serveur comme avant.
+			last_error_reason = str(msg.get("reason", ""))
 			print("NETWORK: action refusée par le serveur : " + err_msg)
 			game_error.emit(err_msg)
 		"player_disconnected":
