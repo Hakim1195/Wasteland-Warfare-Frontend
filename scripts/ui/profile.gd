@@ -110,6 +110,9 @@ var _games_played: int = 0
 var _wins: int = 0
 var _losses: int = 0
 var _heaviest_toll: int = 0
+# §8.123 — compteur de RÉPUTATION à vie (pactes de non-agression rompus). 0 = aucun, OU serveur
+# non redéployé : la ligne est masquée dans les deux cas.
+var _pacts_broken: int = 0
 var _favorite_faction_id: String = ""
 var _level: int = 1
 var _xp: int = 0
@@ -230,6 +233,10 @@ func _on_profile_loaded(data: Dictionary):
 	_wins = _read_int(data, ["victoires", "wins"], _wins)
 	_losses = _read_int(data, ["defaites", "losses"], _losses)
 	_heaviest_toll = _read_int(data, ["tribut", "plus_lourd_tribut", "heaviest_toll", "units_lost"], _heaviest_toll)
+	# §8.123 — PACTES ROMPUS à vie. Clé ADDITIVE : absente d'un serveur non redéployé → 0, et la
+	# ligne se masque d'elle-même (on n'annonce jamais « 0 pacte rompu » à qui n'a jamais pu en
+	# signer un : ce serait accuser le joueur d'une vertu qu'on ne sait pas mesurer).
+	_pacts_broken = _read_int(data, ["pacts_broken"], _pacts_broken)
 	_credits = _read_int(data, ["credits", "coins"], _credits)
 
 	for key in ["faction_favorite", "favorite_faction", "faction", "main_faction"]:
@@ -743,6 +750,24 @@ func _populate_stats_tab() -> void:
 	chips.add_child(_make_chip(tr("PROFILE_STATS_BY_MAP"), _stats_view == "map",
 		func() -> void: _set_stats_view("map")))
 	_stats_box.add_child(_spacer(4))
+
+	# §8.123 — RÉPUTATION : ligne NEUTRE (« PACTES ROMPUS : N »), sans jugement ni couleur d'alerte.
+	# Les chiffres parlent ; le jeu, lui, ne condamne pas — rompre un pacte est parfaitement légal.
+	# Masquée à 0 (cf. `_pacts_broken`) : ne rien afficher vaut mieux qu'un compteur à zéro dont on
+	# ne saurait pas dire s'il signifie « loyal » ou « serveur pas à jour ».
+	if _pacts_broken > 0:
+		var rep := HBoxContainer.new()
+		rep.add_theme_constant_override("separation", 8)
+		var rep_key := Label.new()
+		rep_key.text = tr("PROFILE_PACTS_BROKEN")
+		rep_key.add_theme_color_override("font_color", MUTED)
+		rep.add_child(rep_key)
+		var rep_val := Label.new()
+		rep_val.text = str(_pacts_broken)
+		rep_val.add_theme_color_override("font_color", TEXT)
+		rep.add_child(rep_val)
+		_stats_box.add_child(rep)
+		_stats_box.add_child(_spacer(4))
 
 	match _stats_view:
 		"mode":

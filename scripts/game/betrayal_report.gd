@@ -44,6 +44,12 @@ const CONFIG := {
 	"min_backstab_kills": 1,
 	# « plus grande variation de territoires d'un joueur sur une fenêtre de 3 snapshots ».
 	"turning_window": 3,
+	# PACTES (§8.123) : une attaque qui ROMPT UN PACTE devient AUTOMATIQUEMENT le coup de poignard,
+	# AU-DESSUS de toute l'heuristique de calme et de kills ci-dessus. POURQUOI cette priorité
+	# absolue : le calme entre deux joueurs n'est qu'une PRÉSOMPTION de confiance — un pacte rompu
+	# en est la PREUVE, publiquement signée puis publiquement brisée. Aucune heuristique ne peut
+	# raconter mieux que le fait lui-même. (Mettre `false` rendrait au calcul son ancien rôle.)
+	"pact_breaks_win": true,
 }
 
 # =========================================================
@@ -67,6 +73,10 @@ static func _entry(raw) -> Dictionary:
 		"kills": int(raw.get("kills", 0)),
 		"conquered": bool(raw.get("conquered", false)),
 		"hero_kill": bool(raw.get("hero_kill", false)),
+		# §8.123 — 8ᵉ clé du journal : cette attaque a-t-elle rompu un pacte de non-agression ?
+		# ABSENTE d'un serveur antérieur au chantier → `false`, et l'heuristique reprend seule la
+		# main (aucune régression du récit sur une partie jouée avant le déploiement).
+		"pact_broken": bool(raw.get("pact_broken", false)),
 	}
 
 # Journal typé et trié CHRONOLOGIQUEMENT. Le serveur appende déjà dans l'ordre, mais le tri est
@@ -164,9 +174,14 @@ static func aggression_matrix(attack_log: Array, pids: Array) -> Dictionary:
 static func find_backstab(attack_log: Array, config: Dictionary = {}) -> Dictionary:
 	var min_calm := int(config.get("min_calm_rounds", CONFIG["min_calm_rounds"]))
 	var min_kills := int(config.get("min_backstab_kills", CONFIG["min_backstab_kills"]))
+	var pacts_win := bool(config.get("pact_breaks_win", CONFIG["pact_breaks_win"]))
 	var last_round := {}
 	var confirmed: Dictionary = {}
 	var first_contact: Dictionary = {}
+	# §8.123 — PACTE ROMPU : le meilleur candidat parmi les seules attaques FLAGGÉES. Tenu à part
+	# de `confirmed` pour que la priorité soit une DÉCISION FINALE explicite (ci-dessous) et non un
+	# effet de bord d'un comparateur — un futur ajout au barème ne pourra pas la faire sauter.
+	var betrayal: Dictionary = {}
 	for e in _duels(attack_log):
 		var key := _pair_key(int(e["attacker"]), int(e["defender"]))
 		var previous := int(last_round.get(key, 0))
@@ -176,8 +191,11 @@ static func find_backstab(attack_log: Array, config: Dictionary = {}) -> Diction
 			"attacker": int(e["attacker"]), "defender": int(e["defender"]),
 			"round": int(e["round"]), "turn": int(e["turn"]), "kills": int(e["kills"]),
 			"calm_rounds": maxi(0, calm), "conquered": bool(e["conquered"]),
-			"hero_kill": bool(e["hero_kill"]),
+			"hero_kill": bool(e["hero_kill"]), "pact_broken": bool(e["pact_broken"]),
 		}
+		if pacts_win and bool(e["pact_broken"]):
+			if betrayal.is_empty() or _better_backstab(cand, betrayal):
+				betrayal = cand
 		if calm >= min_calm and int(e["kills"]) >= min_kills:
 			if confirmed.is_empty() or _better_backstab(cand, confirmed):
 				confirmed = cand
@@ -185,6 +203,12 @@ static func find_backstab(attack_log: Array, config: Dictionary = {}) -> Diction
 			# PREMIER contact de ce couple — matière du repli « plus long voisinage pacifique ».
 			if first_contact.is_empty() or _longer_peace(cand, first_contact):
 				first_contact = cand
+	# PRIORITÉ ABSOLUE au pacte rompu : une trahison DÉCLARÉE prime toute présomption calculée, même
+	# quand une autre attaque a tué davantage. Elle est `confirmed` d'office — il n'y a rien à
+	# confirmer, le joueur avait signé.
+	if not betrayal.is_empty():
+		betrayal["confirmed"] = true
+		return betrayal
 	if not confirmed.is_empty():
 		confirmed["confirmed"] = true
 		return confirmed
@@ -348,6 +372,67 @@ static func elimination_chain(statistics: Dictionary, attack_log: Array) -> Arra
 	return rows
 
 # =========================================================
+# 5) LES PACTES (§8.123)
+# =========================================================
+# Chronologie des pactes de la partie, prête à mettre en page. Le `game_over` lève la redaction :
+# on reçoit ici TOUT l'historique, offres et refus compris.
+#   → [{ "a": int, "b": int,                    # a = le PROPOSANT (le sens compte : qui a tendu la main)
+#        "status": "active"|"broken"|"expired"|"declined",
+#        "key": String,                         # clé i18n de la ligne (la Vue appelle tr())
+#        "round": int,                          # round de la FIN (0 = pacte encore en cours à la fin)
+#        "broken_by": int }]                    # NEUTRAL hors rupture
+#
+# CHOIX DE PRÉSENTATION : les offres restées PENDANTES à la fin de la partie sont ÉCARTÉES (une
+# question sans réponse n'est pas une histoire), mais les REFUS sont GARDÉS — « il a demandé, on
+# lui a dit non » fait partie du récit, et c'est la seule trace publique de ce qui s'est joué au
+# chat. Un pacte encore ACTIF au coup de sifflet final compte comme TENU : il n'a pas été rompu.
+# Tri chronologique par round de fin, puis par id — deux clients affichent le même ordre.
+static func pact_timeline(pacts: Array) -> Array:
+	var rows: Array = []
+	for raw in pacts:
+		if typeof(raw) != TYPE_DICTIONARY:
+			continue
+		var status := str(raw.get("status", ""))
+		var key := ""
+		match status:
+			"active": key = "REPORT_PACT_HELD"        # tenu jusqu'au bout
+			"broken": key = "REPORT_PACT_BROKEN_BY"
+			"expired": key = "REPORT_PACT_EXPIRED"
+			"declined": key = "REPORT_PACT_DECLINED"
+			_: continue                                # "pending" (et tout statut futur) : écarté
+		rows.append({
+			"a": int(raw.get("a_id", NEUTRAL)),
+			"b": int(raw.get("b_id", NEUTRAL)),
+			"status": status,
+			"key": key,
+			"round": int(raw.get("ended_round", 0)),
+			"broken_by": int(raw.get("broken_by", NEUTRAL)) if raw.get("broken_by") != null \
+				else NEUTRAL,
+			"_id": int(raw.get("id", 0)),
+		})
+	rows.sort_custom(func(x, y) -> bool:
+		# Les pactes TENUS (round de fin 0) ferment la marche : ils n'ont pas de date de fin, et les
+		# ranger en tête daterait le récit à l'envers.
+		var rx := int(x["round"]) if int(x["round"]) > 0 else 1 << 30
+		var ry := int(y["round"]) if int(y["round"]) > 0 else 1 << 30
+		if rx != ry:
+			return rx < ry
+		return int(x["_id"]) < int(y["_id"]))
+	for r in rows:
+		r.erase("_id")
+	return rows
+
+# Combien de pactes ce joueur a-t-il rompus dans CETTE partie ? Utilisé par la carte de partage et
+# les lignes de palmarès du Rapport. (Le compteur À VIE, lui, vit sur le profil — `pacts_broken`.)
+static func pacts_broken_by(pacts: Array, pid: int) -> int:
+	var n := 0
+	for raw in pacts:
+		if typeof(raw) == TYPE_DICTIONARY and str(raw.get("status", "")) == "broken" \
+				and raw.get("broken_by") != null and int(raw.get("broken_by")) == int(pid):
+			n += 1
+	return n
+
+# =========================================================
 # Auto-vérification (pattern G4 §8.63) — exécutée en build debug par operation_report._self_check
 # =========================================================
 static var _checked := false
@@ -456,3 +541,61 @@ static func self_check() -> void:
 	assert(int(undated[0]["victim"]) == 5 and int(undated[1]["victim"]) == 9)
 	assert(int(undated[1]["turn"]) == -1 and int(undated[1]["round"]) == 0)
 	assert(elimination_chain({}, log_).is_empty())
+	# --- §8.123 : PRIORITÉ ABSOLUE du pacte rompu sur toute l'heuristique ---
+	# Ici l'attaque de 1 sur 2 tue 9 unités après 3 rounds de calme (elle gagnerait normalement),
+	# mais celle de 3 sur 2 ROMPT UN PACTE avec seulement 1 kill : c'est elle, le coup de poignard.
+	var with_pact := find_backstab(log_ + [
+		{"turn": 11.0, "round": 4.0, "attacker_id": 3.0, "defender_id": 2.0, "kills": 1.0,
+			"conquered": false, "hero_kill": false, "pact_broken": true}])
+	assert(int(with_pact["attacker"]) == 3 and int(with_pact["defender"]) == 2)
+	assert(bool(with_pact["pact_broken"]) and bool(with_pact["confirmed"]))
+	assert(int(with_pact["kills"]) == 1)          # oui : même avec MOINS de kills
+	# Contre-épreuve : sans le drapeau, l'heuristique reprend la main (récit d'avant le chantier).
+	assert(int(find_backstab(log_)["attacker"]) == 1)
+	assert(not bool(find_backstab(log_)["pact_broken"]))
+	# `pact_breaks_win: false` rend au calcul son ancien rôle (levier de playtest, pas de code mort).
+	var no_prio := find_backstab(log_ + [
+		{"turn": 11.0, "round": 4.0, "attacker_id": 3.0, "defender_id": 2.0, "kills": 1.0,
+			"conquered": false, "hero_kill": false, "pact_broken": true}], {"pact_breaks_win": false})
+	assert(int(no_prio["attacker"]) == 1)
+	# Deux ruptures : départage par le barème habituel (kills d'abord).
+	var two_stabs := find_backstab([
+		{"turn": 5.0, "round": 3.0, "attacker_id": 1.0, "defender_id": 2.0, "kills": 2.0,
+			"conquered": false, "hero_kill": false, "pact_broken": true},
+		{"turn": 6.0, "round": 3.0, "attacker_id": 4.0, "defender_id": 5.0, "kills": 7.0,
+			"conquered": true, "hero_kill": false, "pact_broken": true},
+	])
+	assert(int(two_stabs["attacker"]) == 4 and int(two_stabs["kills"]) == 7)
+	# --- §8.123 : chronologie des PACTES ---
+	var pact_rows := pact_timeline([
+		{"id": 1.0, "a_id": 1.0, "b_id": 2.0, "proposed_by": 1.0, "status": "broken",
+			"created_round": 1.0, "expires_at_round": 3.0, "ended_round": 2.0, "broken_by": 1.0},
+		{"id": 2.0, "a_id": 3.0, "b_id": 1.0, "proposed_by": 3.0, "status": "pending",
+			"created_round": 4.0, "expires_at_round": 0.0, "ended_round": 0.0, "broken_by": null},
+		{"id": 3.0, "a_id": 2.0, "b_id": 3.0, "proposed_by": 2.0, "status": "active",
+			"created_round": 5.0, "expires_at_round": 7.0, "ended_round": 0.0, "broken_by": null},
+		{"id": 4.0, "a_id": 1.0, "b_id": 3.0, "proposed_by": 1.0, "status": "declined",
+			"created_round": 1.0, "expires_at_round": 0.0, "ended_round": 1.0, "broken_by": null},
+		"ligne pourrie",
+	])
+	assert(pact_rows.size() == 3)                       # l'offre PENDANTE est écartée, pas les refus
+	assert(str(pact_rows[0]["status"]) == "declined" and int(pact_rows[0]["round"]) == 1)
+	assert(str(pact_rows[1]["status"]) == "broken" and int(pact_rows[1]["broken_by"]) == 1)
+	assert(str(pact_rows[1]["key"]) == "REPORT_PACT_BROKEN_BY")
+	assert(str(pact_rows[2]["status"]) == "active")     # TENU → en fin de liste (aucune date de fin)
+	assert(int(pact_rows[2]["broken_by"]) == NEUTRAL)   # `null` réseau normalisé
+	assert(not pact_rows[0].has("_id"))                 # champ de tri interne nettoyé
+	assert(int(pact_rows[0]["a"]) == 1 and int(pact_rows[0]["b"]) == 3)   # sens de la PROPOSITION
+	assert(pact_timeline([]).is_empty())
+	# Compteur de ruptures PAR JOUEUR (carte de partage / palmarès du Rapport).
+	var pacts_demo := [
+		{"id": 1.0, "a_id": 1.0, "b_id": 2.0, "status": "broken", "ended_round": 2.0,
+			"broken_by": 1.0},
+		{"id": 2.0, "a_id": 1.0, "b_id": 3.0, "status": "broken", "ended_round": 4.0,
+			"broken_by": 1.0},
+		{"id": 3.0, "a_id": 2.0, "b_id": 3.0, "status": "expired", "ended_round": 5.0,
+			"broken_by": null},
+	]
+	assert(pacts_broken_by(pacts_demo, 1) == 2)
+	assert(pacts_broken_by(pacts_demo, 2) == 0)
+	assert(pacts_broken_by([], 1) == 0)

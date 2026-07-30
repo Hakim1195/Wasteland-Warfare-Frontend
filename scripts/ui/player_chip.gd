@@ -27,6 +27,12 @@ const COMPACT_MAX_CHARS := 12
 var _swatch: ColorRect = null
 var _pseudo: Label = null
 var _faction_mark: Label = null
+# PACTES (§8.123) : deux marques posées ICI, dans la brique partagée, plutôt que dans chaque écran
+# — c'est ce qui les fait apparaître d'un coup PARTOUT où un joueur est nommé (ordre de tour, fiche
+# joueur, kill feed, inspecteur). Les deux données sont PUBLIQUES : un pacte actif est diffusé à
+# toute la table (c'est son but), et une rupture est annoncée par un bandeau vu de tous.
+var _pact_mark: Label = null      # 🤝 — ce joueur est lié par au moins un pacte ACTIF
+var _traitor_mark: Label = null   # ⚡ — ce joueur a rompu un pacte CE MATCH (marque définitive)
 
 func _ready() -> void:
 	_ensure_built()
@@ -61,6 +67,33 @@ func _ensure_built() -> void:
 	_faction_mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_faction_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_faction_mark)
+
+	# PACTE ACTIF (§8.123) — la marque doit être lisible DE LOIN : c'est elle qui fait qu'un joueur
+	# réfléchit avant d'attaquer. Cyan tactique (couleur de tout ce qui est « accord » dans la
+	# charte), et non or : l'or est réservé aux récompenses.
+	# ⚠️ GLYPHE : `↔` et NON l'emoji 🤝 du cahier des charges. Les emoji hors BMP (> U+FFFF) rendent
+	# en TOFU avec la police condensée de la charte — constat §8.117 (📢 ✉ 🎯), et 🤝 (U+1F91D) est
+	# du même bloc que 🎯. `↔` vit dans le bloc Arrows (voisin de `→`, déjà employé) et dit
+	# exactement la même chose : un accord à DOUBLE SENS. Le libellé du tooltip l'utilisait déjà.
+	_pact_mark = Label.new()
+	_pact_mark.text = "↔"
+	_pact_mark.add_theme_font_size_override("font_size", 11)
+	_pact_mark.add_theme_color_override("font_color", Color("36c5d9"))
+	_pact_mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_pact_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_pact_mark.visible = false
+	add_child(_pact_mark)
+
+	# TRAÎTRE — reste jusqu'à la fin de la partie. Rouge danger. C'est la SEULE sanction d'une
+	# trahison : aucune pénalité mécanique, juste le fait qu'on s'en souvienne.
+	_traitor_mark = Label.new()
+	_traitor_mark.text = "⚡"
+	_traitor_mark.add_theme_font_size_override("font_size", 11)
+	_traitor_mark.add_theme_color_override("font_color", Color("d6453f"))
+	_traitor_mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_traitor_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_traitor_mark.visible = false
+	add_child(_traitor_mark)
 
 # Alimente la brique pour un joueur. Toutes les données sont PUBLIQUES (GameState.players §8.28,
 # is_bot G2 §8.72) ; pids float/clés string normalisés ici (piège JSON §5 — str(int(pid))).
@@ -100,6 +133,46 @@ func setup(pid: int, compact: bool = false) -> void:
 	if has_accent:
 		_faction_mark.add_theme_color_override("font_color", accent)
 	tooltip_text = display + (("\n" + (tr("CHIP_FACTION_TOOLTIP") % fid.capitalize())) if fid != "" else "")
+	_refresh_pact_marks(int(pid), display)
+
+# PACTES (§8.123) — état PUBLIC relu à chaque `setup()` (donc à chaque rafraîchissement d'état) :
+# la brique n'a rien à mémoriser, elle reflète simplement `GameState.pacts`. Un pacte qui expire ou
+# se rompt fait donc disparaître / apparaître les marques tout seul, sans notification dédiée.
+func _refresh_pact_marks(pid: int, display: String) -> void:
+	if _pact_mark == null or not is_instance_valid(_pact_mark):
+		return
+	var pacts: Array = GameState.pacts
+	var partners := PactState.active_partners(pacts, pid)
+	_pact_mark.visible = not partners.is_empty()
+	if _pact_mark.visible:
+		# Un joueur peut tenir jusqu'à 2 pactes : le tooltip les liste TOUS, avec leur échéance —
+		# « avec qui, et jusqu'à quand » est exactement ce qu'un adversaire a besoin de savoir.
+		var lines: PackedStringArray = []
+		for other in partners:
+			var entry := PactState.find_active_between(pacts, pid, int(other))
+			lines.append(tr("PACT_ACTIVE_TOOLTIP") % [
+				display, _peer_name(int(other)), int(entry.get("expires_at_round", 0))])
+		_pact_mark.tooltip_text = "\n".join(lines)
+		# Le tooltip du 🤝 doit pouvoir s'ouvrir : PASS laisse malgré tout remonter le clic.
+		_pact_mark.mouse_filter = Control.MOUSE_FILTER_PASS
+	_traitor_mark.visible = PactState.is_traitor(pacts, pid)
+	if _traitor_mark.visible:
+		_traitor_mark.tooltip_text = tr("PACT_TRAITOR_MARK")
+		_traitor_mark.mouse_filter = Control.MOUSE_FILTER_PASS
+
+# Pseudo COURT d'un autre joueur, pour les tooltips de pacte. Même résolution que ci-dessus
+# (username serveur, préfixe [IA], repli traduit) — dupliquée en une ligne plutôt qu'exposée : la
+# brique ne doit dépendre d'aucun contrôleur pour se rendre.
+func _peer_name(pid: int) -> String:
+	var p = GameState.players.get(str(int(pid)), {})
+	if typeof(p) != TYPE_DICTIONARY:
+		p = {}
+	var is_bot: bool = int(pid) < 0 or bool(p.get("is_bot", false))
+	var uname := str(p.get("username", ""))
+	if uname == "":
+		uname = (tr("CHIP_BOT_FALLBACK") % absi(int(pid))) if is_bot \
+			else (tr("WR_PLAYER_FALLBACK") % GameState.player_number(pid))
+	return ("[IA] " + uname) if is_bot else uname
 
 # Couleur plateau du joueur — TOUJOURS board.get_player_color (source unique E1) ; gris neutre
 # si le plateau est absent (boot isolé du composant). Engine.get_main_loop() plutôt que

@@ -226,6 +226,13 @@ func _build_content() -> void:
 	grid.add_child(_make_stat_card(tr("PROFILE_FAVORITE_FACTION"),
 		str(fav_info.get("name", fav)).to_upper() if fav != "" else "—",
 		fav_info.get("color", ACCENT) if not fav_info.is_empty() else MUTED))
+	# §8.123 — PACTES ROMPUS : donnée PUBLIQUE par construction, et c'est toute sa raison d'être —
+	# une réputation ne sert à rien si personne ne peut la consulter. Carte NEUTRE (teinte muette,
+	# libellé factuel) : le jeu compte, il ne juge pas. Masquée à 0 : ne rien afficher vaut mieux
+	# qu'un compteur qu'on ne saurait pas distinguer d'un serveur non redéployé.
+	var broken := int(_data.get("pacts_broken", 0))
+	if broken > 0:
+		grid.add_child(_make_stat_card(tr("PROFILE_PACTS_BROKEN"), str(broken), MUTED))
 
 	# --- Bande de forme ---
 	var form = _data.get("form", [])

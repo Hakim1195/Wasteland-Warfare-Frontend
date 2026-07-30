@@ -39,6 +39,16 @@ const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
 # du dossier (le `class_name` existe, mais on n'en dépend pas — prudence cache d'import, CLAUDE.md).
 const WarIntensityCalc := preload("res://scripts/game/war_intensity.gd")
 
+# --- PACTES DE NON-AGRESSION (§8.123) : MIROIR du registre serveur `pacts.PACT_RULES` -------------
+# ⚠️ Ce sont des valeurs d'AFFICHAGE (libellé du bouton, grisages, calcul de trêve restant), jamais
+# une règle : le serveur reste seul juge. Elles sont recopiées ici parce que le client ne reçoit pas
+# le registre — si le serveur les change, le pire cas est un bouton grisé à tort (ou l'inverse),
+# suivi d'un refus PROPRE et traduit. Toute modification du registre serveur doit être répercutée
+# ici, comme `map_data.gd` l'est de `map_data.py`.
+const PACT_DURATION_ROUNDS := 2
+const PACT_MAX_ACTIVE := 2
+const PACT_COOLDOWN_ROUNDS := 2
+
 @onready var button = $Button
 # Depuis la refonte HUD RTS (§8.29), le SubViewport du plateau est le 1ᵉʳ enfant de Main (plateau
 # plein écran) et n'est PLUS sous le HUD : chemins mis à jour en conséquence. Le HUD reste $HUD.
@@ -247,6 +257,12 @@ func _ready():
 	hud.roster_player_clicked.connect(_on_roster_player_clicked)
 	# Carte POUVOIR (lot E) : boutons contextuels (rouvrir Éclipse / Espionnage).
 	hud.power_action_requested.connect(_on_power_action_requested)
+	# PACTES (§8.123) : intentions du joueur (HUD → réseau) et messages PRIVÉS (réseau → HUD).
+	# Les offres et les refus ne sont JAMAIS diffusés : ils n'arrivent que par ces deux signaux.
+	hud.pact_offer_requested.connect(_on_pact_offer_requested)
+	hud.pact_response_requested.connect(_on_pact_response_requested)
+	NetworkManager.pact_offer_received.connect(_on_pact_offer_received)
+	NetworkManager.pact_response_received.connect(_on_pact_response_received)
 	# Chrono SERVEUR (E3 §8.75) : messages légers timer_update → HUD (échéance + Time Bank).
 	NetworkManager.timer_updated.connect(_on_timer_update)
 	# Journal de Guerre 2.0 (E4 §8.76) : clic d'une entrée [url=<tid>] → focus caméra + flash.
@@ -1307,6 +1323,8 @@ func _push_player_sheet(pid: int) -> void:
 		"territories": terr_count,
 		"troops": troops,
 		"cards": cards_n,
+		# PACTES (§8.123) — bloc résolu ICI (View pure §6.1) ; {} sur ma propre fiche.
+		"pact": _pact_sheet_block(pid),
 	}
 	if _sheet_territory != "" and GameState.territories.has(_sheet_territory):
 		data["territory"] = {
@@ -1380,7 +1398,219 @@ func _push_operator_panel() -> void:
 		"power_label": str(finfo.get("power", "")),
 		"power_state": _power_state_line(),
 		"hero": GameState.hero_of(_my_id()),
+		# PACTES (§8.123) : « ↔ NOM (R5) · ↔ NOM (R6) » — "" si je n'ai aucun engagement.
+		"pacts_line": _my_pacts_line(),
 	})
+
+# =========================================================
+# PACTES DE NON-AGRESSION (§8.123) — proposer, répondre, voir, trahir
+# =========================================================
+# Le CLIENT ne décide RIEN : le serveur est seul juge de la légalité d'une offre (§6.1). Tout ce
+# qui suit est de la LISIBILITÉ — griser un bouton en disant pourquoi, marquer les chips, raconter
+# une trahison. Un désaccord entre ce grisage et le serveur ne produit qu'un refus propre.
+
+# Id du pacte dont le toast d'offre est affiché, pour ne pas le rejouer à chaque rediffusion d'état.
+var _pact_toast_shown: int = -1
+# DERNIÈRE famille d'action susceptible d'être refusée avec un CODE ("pact" | "ability" | "").
+# POURQUOI : les deux jeux de codes se CHEVAUCHENT (`not_your_turn`, `invalid_target`,
+# `ranked_disabled`) et le message `{"type":"error"}` ne dit pas quelle action il refuse. On mémorise
+# donc l'émetteur au moment de l'envoi, et `_on_game_error` le CONSOMME (remis à "") — un marqueur
+# périmé est impossible à conserver, le prochain envoi l'écrase de toute façon.
+var _last_coded_action: String = ""
+
+# Codes de refus du serveur → clés i18n (§8.123). Jeu FERMÉ, miroir exact de `pacts.REASON_*` : un
+# code inconnu (client plus ancien que le serveur) retombe sur le message serveur, jamais sur du
+# vide. Même patron que `ABILITY_ERROR_KEYS` (§8.119).
+const PACT_ERROR_KEYS := {
+	"not_your_turn": "PACT_ERR_NOT_YOUR_TURN",
+	"invalid_target": "PACT_ERR_INVALID_TARGET",
+	"pair_busy": "PACT_ERR_PAIR_BUSY",
+	"cap_reached": "PACT_ERR_CAP_REACHED",
+	"cooldown": "PACT_ERR_COOLDOWN",
+	"final_protocol": "PACT_ERR_FINAL_PROTOCOL",
+	"not_pending": "PACT_ERR_NOT_PENDING",
+	"ranked_disabled": "PACT_ERR_RANKED_DISABLED",
+}
+
+# Bloc PACTE de la fiche d'un joueur ({} = rien à afficher : moi-même, ou joueur inconnu).
+func _pact_sheet_block(pid: int) -> Dictionary:
+	if pid == _my_id() or pid == -9999:
+		return {}
+	var pacts: Array = GameState.pacts
+	var me := _my_id()
+	var active := PactState.find_active_between(pacts, me, pid)
+	if not active.is_empty():
+		return {"pid": pid, "state": "active",
+			"expires_at_round": int(active.get("expires_at_round", 0))}
+
+	var d := {"pid": pid, "state": "none", "enabled": false, "reason_key": "", "reason_arg": 0,
+		"duration_rounds": PACT_DURATION_ROUNDS}
+	# Offre déjà en vol entre nous : le bouton devient un accusé de réception (dans un sens) ou
+	# reste grisé (dans l'autre — c'est le toast qui porte alors la décision).
+	var outgoing := PactState.outgoing_offer(pacts, me)
+	if not outgoing.is_empty() and PactState.partner_of(outgoing, me) == pid:
+		d["state"] = "sent"
+		return d
+	if PactState.has_pending_between(pacts, me, pid):
+		d["reason_key"] = "PACT_ERR_PAIR_BUSY"
+		return d
+
+	# --- Raisons de grisage, dans le MÊME ordre que le serveur (`pacts.can_offer`) : le joueur
+	# lit donc toujours la raison que le serveur lui opposerait s'il forçait le clic.
+	var target: Dictionary = GameState.players.get(str(pid), {})
+	if str(target.get("status", "alive")) == "eliminated" or not bool(target.get("is_active", true)):
+		d["reason_key"] = "PACT_ERR_INVALID_TARGET"
+		return d
+	if not _is_playing_my_turn() or int(GameState.current_phase) < 1 \
+			or int(GameState.current_phase) > 4:
+		d["reason_key"] = "PACT_ERR_NOT_YOUR_TURN"
+		return d
+	if GameState.final_protocol_active:
+		d["reason_key"] = "PACT_ERR_FINAL_PROTOCOL"
+		return d
+	if PactState.active_partners(pacts, me).size() >= PACT_MAX_ACTIVE \
+			or PactState.active_partners(pacts, pid).size() >= PACT_MAX_ACTIVE:
+		d["reason_key"] = "PACT_ERR_CAP_REACHED"
+		return d
+	if not outgoing.is_empty():
+		d["reason_key"] = "PACT_ERR_CAP_REACHED"
+		return d
+	var cd := _pact_cooldown_remaining(pid)
+	if cd > 0:
+		d["reason_key"] = "PACT_ERR_COOLDOWN"
+		d["reason_arg"] = cd
+		return d
+	d["enabled"] = true
+	return d
+
+# Rounds de TRÊVE restants avec ce joueur (0 = libre). Miroir de `pacts.cooldown_remaining` : on
+# prend la fin la PLUS RÉCENTE d'un pacte nous liant. Le round courant se dérive comme côté serveur
+# (nombre de snapshots de domination + 1) — MÊME échelle que le Rapport Post-Op.
+func _pact_cooldown_remaining(other: int) -> int:
+	var current_round := _current_global_round()
+	var remaining := 0
+	for e in GameState.pacts:
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		if PactState.partner_of(e, _my_id()) != int(other):
+			continue
+		var ended := int(e.get("ended_round", 0))
+		if ended <= 0:
+			continue
+		remaining = maxi(remaining, ended + PACT_COOLDOWN_ROUNDS - current_round)
+	return maxi(0, remaining)
+
+# Round GLOBAL courant, DÉRIVÉ exactement comme le serveur (`engine.current_global_round`) : le
+# nombre de tours par round DIMINUE avec les éliminations, `current_turn / effectif` dériverait.
+func _current_global_round() -> int:
+	var stats: Dictionary = GameState.statistics if typeof(GameState.statistics) == TYPE_DICTIONARY else {}
+	var history = stats.get("territory_history", [])
+	return (history.size() if typeof(history) == TYPE_ARRAY else 0) + 1
+
+# Ligne compacte de MES pactes pour la zone opérateur ("" = aucun).
+func _my_pacts_line() -> String:
+	var parts: PackedStringArray = []
+	for e in PactState.my_active(GameState.pacts, _my_id()):
+		parts.append(tr("PACT_OPERATOR_ENTRY_FMT") % [
+			_display_name(PactState.partner_of(e, _my_id())).to_upper(),
+			int(e.get("expires_at_round", 0))])
+	return " · ".join(parts)
+
+# --- Intentions du joueur (relayées par le HUD) --------------------------------------------------
+func _on_pact_offer_requested(target_pid: int) -> void:
+	_last_coded_action = "pact"
+	NetworkManager.send_pact_offer(int(target_pid))
+	# Retour IMMÉDIAT : le bouton passe en « OFFRE ENVOYÉE… » sans attendre l'aller-retour. Si le
+	# serveur refuse, `_on_game_error` le dira et le prochain état remettra le bouton en place.
+	_refresh_player_sheet()
+
+func _on_pact_response_requested(pact_id: int, accept: bool) -> void:
+	_last_coded_action = "pact"
+	NetworkManager.send_pact_respond(int(pact_id), accept)
+
+# --- Messages PRIVÉS du serveur ------------------------------------------------------------------
+# Offre reçue : toast persistant si elle M'EST adressée ; simple ligne de journal si c'est la mienne
+# (accusé de réception — la confirmation que le message est bien parti).
+func _on_pact_offer_received(pact_id: int, proposer_id: int, target_id: int, _duration: int) -> void:
+	if int(target_id) != _my_id():
+		hud.add_feed_entries([{"category": "system", "icon": "↔", "major": false,
+			"rich_text": tr("PACT_OFFER_SENT_LOG") % _bb_pseudo(int(target_id))}])
+		return
+	_pact_toast_shown = int(pact_id)
+	hud.show_pact_offer(int(pact_id), _display_name(int(proposer_id)),
+		board.get_player_color(int(proposer_id)))
+	AudioManager.play_sfx("chat_ping")
+	hud.add_feed_entries([{"category": "system", "icon": "↔", "major": true,
+		"rich_text": tr("PACT_OFFER_LOG") % _bb_pseudo(int(proposer_id))}])
+
+# Refus reçu (message PRIVÉ, jamais diffusé) : une ligne de journal sobre pour les deux concernés.
+# Volontairement DISCRET — un refus n'est pas un évènement de partie, et l'ébruiter en ferait une
+# humiliation. Le toast éventuel est retiré ici (cas du refus d'un BOT, immédiat).
+func _on_pact_response_received(pact_id: int, accept: bool, proposer_id: int, target_id: int) -> void:
+	hud.hide_pact_offer(int(pact_id))
+	if _pact_toast_shown == int(pact_id):
+		_pact_toast_shown = -1
+	if accept:
+		return  # une ACCEPTATION est publique : elle arrive par l'évènement `pact_active`.
+	var other := int(target_id) if int(proposer_id) == _my_id() else int(proposer_id)
+	hud.add_feed_entries([{"category": "system", "icon": "↔", "major": false,
+		"rich_text": tr("PACT_DECLINED_LOG") % _bb_pseudo(other)}])
+
+# --- Évènements PUBLICS --------------------------------------------------------------------------
+# Pacte entré en vigueur : tout le monde le voit, c'est le principe. Toast + journal + SFX ; les
+# chips se marquent d'elles-mêmes au prochain rafraîchissement d'état (player_chip lit GameState).
+func _on_pact_active(event: Dictionary) -> void:
+	var a := int(event.get("a_id", -9999))
+	var b := int(event.get("b_id", -9999))
+	var expires := int(event.get("expires_at_round", 0))
+	hud.hide_pact_offer(int(event.get("pact_id", -1)))
+	_pact_toast_shown = -1
+	hud.show_power_toast(tr("PACT_ACTIVE_TOAST") % [
+		_display_name(a).to_upper(), _display_name(b).to_upper()], Color("36c5d9"))
+	AudioManager.play_sfx("pact_sealed")
+	hud.add_feed_entries([{"category": "system", "icon": "↔", "major": true,
+		"rich_text": tr("PACT_ACTIVE_LOG") % [_bb_pseudo(a), _bb_pseudo(b), expires]}])
+
+# LA TRAHISON — le moment que toute la mécanique existe pour produire. Bandeau pleine largeur,
+# sting dissonant, musique baissée, kill feed et Journal. La marque ⚡ sur la chip du traître, elle,
+# est posée par `player_chip` à partir de l'état (elle reste jusqu'à la fin de la partie).
+func _on_pact_broken(betrayer_id: int, victim_id: int) -> void:
+	var line := tr("PACT_BROKEN_BANNER") % [
+		_display_name(betrayer_id).to_upper(), _display_name(victim_id).to_upper()]
+	if _phase_banner != null:
+		_phase_banner.show_banner(line, Color("d6453f"))
+	AudioManager.play_sfx("betrayal")
+	# §8.122 : le sting passe DEVANT la musique. Appel DÉFENSIF — le ducking est arrivé avec le
+	# chantier sensoriel, un AudioManager antérieur n'a pas la méthode.
+	if AudioManager.has_method("duck_music"):
+		AudioManager.duck_music()
+	var feed_line := tr("PACT_BROKEN_LOG") % [_bb_pseudo(betrayer_id), _bb_pseudo(victim_id)]
+	hud.add_feed_entries([{"category": "combat", "icon": "⚡", "major": true,
+		"rich_text": feed_line}])
+	hud.push_kill_feed(feed_line)
+
+# Expiration : DISCRÈTE à dessein (aucun bandeau, aucun son). Un pacte qui s'éteint n'est pas un
+# évènement dramatique — mais il ne doit pas non plus disparaître en silence total, sinon les deux
+# signataires continueraient de se croire couverts.
+func _on_pact_expired(a_id: int, b_id: int) -> void:
+	hud.add_feed_entries([{"category": "system", "icon": "↔", "major": false,
+		"rich_text": tr("PACT_EXPIRED_LOG") % [_bb_pseudo(a_id), _bb_pseudo(b_id)]}])
+
+# Synchronisation du toast d'offre avec l'ÉTAT (appelé à chaque rafraîchissement) : c'est ce qui le
+# fait survivre à une RECONNEXION (l'offre vit dans l'état, pas seulement dans un message fugace) et
+# disparaître quand elle cesse d'exister (proposant éliminé, offre soldée, course perdue).
+func _sync_pact_toast() -> void:
+	var incoming := PactState.incoming_offer(GameState.pacts, _my_id())
+	if incoming.is_empty():
+		hud.hide_pact_offer()
+		_pact_toast_shown = -1
+		return
+	var pact_id := int(incoming.get("id", -1))
+	if pact_id == _pact_toast_shown and hud.current_pact_offer_id() == pact_id:
+		return
+	_pact_toast_shown = pact_id
+	var proposer := int(incoming.get("proposed_by", -9999))
+	hud.show_pact_offer(pact_id, _display_name(proposer), board.get_player_color(proposer))
 
 # =========================================================
 # Carte POUVOIR vivante (lot E) — zone OPÉRATEUR + onglet ACTIONS
@@ -1717,6 +1947,7 @@ func _send_ability(ability: String, target_tid: String = "") -> void:
 		payload["target_territory_id"] = target_tid
 	# `send_action` injecte lui-même un `action_id` unique → l'idempotence serveur protège d'un
 	# double-clic ou d'une retransmission WS (jamais de double dépense de PP).
+	_last_coded_action = "ability"
 	NetworkManager.send_action("hero_ability", payload)
 	_cancel_ability_targeting()
 
@@ -2437,6 +2668,19 @@ func _on_game_error(message: String):
 	# non localisé. Lu immédiatement (la propriété est écrasée au refus suivant). Code inconnu →
 	# on retombe sur le `message` serveur ci-dessous, jamais sur du vide.
 	var reason := str(NetworkManager.last_error_reason)
+	# §8.123 — refus de PACTE : mêmes codes machine, même traitement, mais le seul refus CHIFFRÉ du
+	# jeu (`cooldown`) doit dire COMBIEN de rounds il reste, sinon « trop tôt » n'apprend rien.
+	# Testé AVANT les capacités : les deux jeux de codes partagent des noms (`invalid_target`,
+	# `not_your_turn`) et seul le contexte les distingue — d'où le préfixe `PACT_ERR_*` distinct.
+	var coded_family := _last_coded_action
+	_last_coded_action = ""
+	if reason != "" and PACT_ERROR_KEYS.has(reason) and coded_family == "pact":
+		var key := str(PACT_ERROR_KEYS[reason])
+		var text := (tr(key) % int(NetworkManager.last_error_remaining_rounds)) \
+			if key == "PACT_ERR_COOLDOWN" else tr(key)
+		hud.add_log("⚠ " + text)
+		_refresh_player_sheet()
+		return
 	if reason != "" and ABILITY_ERROR_KEYS.has(reason):
 		_cancel_ability_targeting()
 		hud.add_log("⚠ " + tr(str(ABILITY_ERROR_KEYS[reason])))
@@ -2506,6 +2750,10 @@ func _refresh():
 	# ouverte (la cible vient peut-être de subir un duel / de perdre un territoire).
 	_push_sheet_players()
 	_refresh_player_sheet()
+	# PACTES (§8.123) : le toast d'offre est piloté par l'ÉTAT et non par le message qui l'a
+	# annoncé — il survit donc à une reconnexion (l'offre vit dans l'état, pas dans un message
+	# fugace) et s'efface dès que l'offre cesse d'exister côté serveur.
+	_sync_pact_toast()
 	# Télégraphe de zone (G1 §8.62) : chip discret sous le bandeau haut.
 	_push_zone_forecast()
 	# Rebours GLOBAL de partie + mini-classement de départage (chantier « Tension », LOT F).
@@ -2577,6 +2825,10 @@ func _play_event_feedback(event) -> void:
 			# réception de l'évènement), ils « spoilaient » l'issue avant même l'animation.
 		"card_played", "card_kept":
 			AudioManager.play_sfx("card_draw")
+		"pact_active":
+			# §8.123 — un pacte vient d'entrer en vigueur. Évènement PUBLIC, avec identités : c'est
+			# TOUTE la raison d'être du dispositif (un engagement que la table entière voit).
+			_on_pact_active(event)
 	# Lot E : le Culte de l'Isotope protège ses territoires de la zone — l'évènement système
 	# `zone_protected` produit désormais AUSSI un toast de pouvoir (en plus de sa ligne verte au
 	# Journal, conservée). Le pouvoir devient perceptible sans lire le journal.
@@ -2601,6 +2853,15 @@ func _play_event_feedback(event) -> void:
 				# On y ajoute un FLASH court + une entrée ☢ au Journal — sans quoi l'extension
 				# passerait inaperçue au milieu d'un tour chargé.
 				_on_zone_grew(str(sev.get("territory_id", "")))
+			elif code == "pact_broken":
+				# §8.123 — LA TRAHISON. Portée par les `system_events` de l'`attack_result` qui l'a
+				# provoquée : le bandeau part donc AVEC le combat, pas plusieurs actions plus tard.
+				_on_pact_broken(int(sev.get("betrayer_id", -9999)),
+					int(sev.get("victim_id", -9999)))
+			elif code == "pact_expired":
+				# §8.123 — fin de pacte, DISCRÈTE (journal seul, aucun bandeau ni son) : ce n'est
+				# pas un drame, mais les signataires doivent cesser de se croire couverts.
+				_on_pact_expired(int(sev.get("a_id", -9999)), int(sev.get("b_id", -9999)))
 	# Tics de zone (VFX) : flotteur -1 vert sur CHAQUE territoire touché (mêmes ticks dérivés
 	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_zone_forecast).
 	if _vfx_enabled():
@@ -3159,7 +3420,15 @@ func _timeline_series() -> Array:
 # {} si le serveur n'a pas envoyé de journal (non redéployé) → l'onglet reste masqué (§9.2).
 func _betrayal_data() -> Dictionary:
 	var log_ = NetworkManager.last_attack_log
-	if typeof(log_) != TYPE_ARRAY or (log_ as Array).is_empty():
+	if typeof(log_) != TYPE_ARRAY:
+		log_ = []
+	# §8.123 : l'historique COMPLET des pactes (redaction levée au game_over). L'onglet a désormais
+	# DEUX sources possibles — une partie sans le moindre combat mais avec des pactes proposés a
+	# tout de même une histoire à raconter.
+	var pact_log = NetworkManager.last_match_pacts
+	if typeof(pact_log) != TYPE_ARRAY:
+		pact_log = []
+	if (log_ as Array).is_empty() and (pact_log as Array).is_empty():
 		return {}
 	# Ordre des lignes/colonnes de la matrice = le CLASSEMENT (le vainqueur en haut à gauche) ;
 	# on complète avec les belligérants absents du classement (défensif — un joueur déconnecté
@@ -3191,6 +3460,8 @@ func _betrayal_data() -> Dictionary:
 		"turning_series": window,
 		"matrix": BetrayalReport.aggression_matrix(log_, pids),
 		"chain": BetrayalReport.elimination_chain(GameState.statistics, log_),
+		# §8.123 — chronologie des pactes (tenus, rompus, expirés, refusés).
+		"pacts": BetrayalReport.pact_timeline(pact_log),
 		"names": names,
 		"colors": colors,
 	}
@@ -3252,6 +3523,10 @@ func _share_card_payload() -> Dictionary:
 			_display_name(int(stab.get("attacker", 0))),
 			_display_name(int(stab.get("defender", 0))),
 			int(stab.get("round", 0))]
+		# §8.123 : si ce coup de poignard a rompu un PACTE, la carte le dit. C'est l'information qui
+		# transforme une bonne attaque en histoire — et c'est précisément ce qu'on partage.
+		if bool(stab.get("pact_broken", false)):
+			betrayal_line += " · " + tr("SHARE_PACT_BROKEN")
 
 	var kills := WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", me)
 	var conquests := WarRoom.stat_of(GameState.statistics, "conquests_by_player", me)

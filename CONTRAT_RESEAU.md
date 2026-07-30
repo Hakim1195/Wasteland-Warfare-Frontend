@@ -102,10 +102,19 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
   "is_ranked": false,   // bool — PUBLIC (§8.88, piège n° 9). Non classée ⇒ AUCUN ladder crédité (RP saisonnier).
   "is_private": false,  // bool — NOUVEAU §8.116, PUBLIC explicitement (piège n° 9). Partie issue d'un salon privé ⇒ le client masque REJOUER (salons éphémères)
   "attack_log": [ { "turn": 12, "round": 3, "attacker_id": 11, "defender_id": 12,   // NOUVEAU §8.121 — PUBLIC, cap 300 ; defender_id null = territoire NEUTRE
-                    "kills": 2, "conquered": true, "hero_kill": false } ],          // ⚠️ ABSENT des diffusions d'état (voir §8.121)
+                    "kills": 2, "conquered": true, "hero_kill": false,
+                    "pact_broken": false } ],                                       // 8ᵉ clé §8.123 — ⚠️ ABSENT des diffusions d'état (voir §8.121)
+  "pacts": [ { "id": 3, "a_id": 11, "b_id": 12, "proposed_by": 11, "status": "broken",  // NOUVEAU §8.123 — PUBLIC, cap 50
+               "created_round": 3, "expires_at_round": 5, "ended_round": 4, "broken_by": 11 } ], // redaction LEVÉE en fin de partie
   "match_rewards": { "11": { "xp_earned": 372, "coins_earned": 100,        // { "<player_id:str>": MatchRewards } — gains (§8.47 ; « points de match » RETIRÉS, §8.112)
     "level_up_triggered": true, "new_level": 12, "current_xp": 300, "xp_to_next_level": 100, "levels_gained": 2 } } } // ⚠️ toutes valeurs ENTIÈRES (piège float §5)
 { "type": "spy_result", "target_player_id": 12, "description": "Conquérir l'Asie" } // PRIVÉ (espion seul)
+// PACTES DE NON-AGRESSION (§8.123) — messages PRIVÉS, envoyés aux DEUX joueurs concernés UNIQUEMENT
+// (patron spy_result) : savoir qui négocie avec qui est déjà une information de jeu. Une ACCEPTATION,
+// elle, n'a pas de message privé — elle est PUBLIQUE (évènement `pact_active`, voir §D).
+{ "type": "pact_offer", "pact_id": 3, "proposer_id": 11, "target_id": 12,
+  "created_round": 3, "duration_rounds": 2 }                                     // ints
+{ "type": "pact_response", "pact_id": 3, "accept": false, "proposer_id": 11, "target_id": 12 }
 { "type": "chat_message", "tab": "general", "sender_id": 11, "sender_name": "Hakim",
   "text": "gg", "target_id": 12 }   // tab: "general"|"private" ; target_id: int (privé uniquement)
 ```
@@ -148,6 +157,17 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
     "territories": ["alaska", "kamchatka"], // Array<string> (ids de territoires contaminés)
     "probability": 1.0            // float
   },
+  "pacts": [                      // PACTES DE NON-AGRESSION (§8.123) — ⚠️ REDACTÉ PAR DESTINATAIRE
+    { "id": 3,                    // int — 1-based
+      "a_id": 11,                 // int — le PROPOSANT (sens conservé)
+      "b_id": 12,                 // int — le destinataire
+      "proposed_by": 11,          // int
+      "status": "active",         // string — "pending"|"active"|"broken"|"declined"|"expired"
+      "created_round": 3,         // int — round GLOBAL de l'offre
+      "expires_at_round": 5,      // int — acceptation + 2 (0 tant que pending)
+      "ended_round": 0,           // int — round de la FIN (rupture/refus/expiration ; 0 sinon)
+      "broken_by": null }         // int | null — le TRAÎTRE (status == "broken")
+  ],                              // active/broken/expired = PUBLICS ; pending/declined = les 2 concernés SEULEMENT
   "statistics": {                 // « Mémoire Tactique » (§8.35) — PUBLIC, JAMAIS rédigé
     "zone_kills_by_player": { "11": 15, "12": 3 }, // { "<player_id:str>": int } (⚠️ clés str, valeurs float→int())
     "zone_stagnation_turns": 2,   // int — rounds globaux consécutifs sans déplacement de zone
@@ -172,6 +192,14 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
 { "event_type": "turn_timeout", "player_id": 11 }     // player_id: int
 { "event_type": "units_deployed", "amount": 5, "deployments": { "alaska": 3, "brazil": 2 } } // deployments: { "<tid:str>": int }
 { "event_type": "card_played", "card_value": 7 }      // int
+// PACTES (§8.123). L'offre et le REFUS sont diffusés SANS AUCUNE IDENTITÉ (la part nominative part
+// en message PRIVÉ, voir §B) ; l'ACCEPTATION est publique — c'est tout l'intérêt du dispositif.
+{ "event_type": "pact_offer" }                        // aucun autre champ : « une offre a eu lieu »
+{ "event_type": "pact_response" }                     // idem — jamais « X a refusé Y »
+{ "event_type": "pact_active", "pact_id": 3, "a_id": 11, "b_id": 12,
+  "proposed_by": 11, "expires_at_round": 5 }          // PUBLIC (ints)
+// La RUPTURE et l'EXPIRATION voyagent en `system_events` (codes `pact_broken` / `pact_expired`),
+// respectivement sur `attack_result` (qui gagne aussi `"pact_broken": bool`) et `turn_passed`.
 ```
 
 **E. WebSocket — actions client → serveur** (enveloppe standard `{ "action": string, "payload": object }`)
@@ -189,6 +217,12 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
 { "action": "get_draft", "payload": {} }                          // resync draft → réponse PRIVÉE draft_state (G2 durci)
 { "action": "abandon", "payload": {} }                            // payload vide
 { "action": "pass_turn", "payload": {} }
+// PACTES DE NON-AGRESSION (§8.123) — `pact_offer` = action de MON tour (phases 1-4, pipeline standard) ;
+// `pact_respond` = HORS TOUR, pré-routée AVANT la vérification de tour (voir §8.123). Refus zéro-4xx
+// avec `reason` ∈ {not_your_turn, invalid_target, pair_busy, cap_reached, cooldown, final_protocol,
+// not_pending, ranked_disabled} ; `cooldown` porte EN PLUS `remaining_rounds: int`.
+{ "action": "pact_offer",   "payload": { "target_player_id": 12 } }   // int
+{ "action": "pact_respond", "payload": { "pact_id": 3, "accept": true } } // int + bool
 // IDEMPOTENCE / ANTI-REJEU (correctif « double déduction de PV ») — PUBLIC, OPTIONNEL : le client PEUT
 // joindre à TOUTE action de jeu un champ `action_id` (string UNIQUE par action VOULUE, ex.
 // "<nonce_session>-<seq>"). Ex. { "action": "attack_territory", "payload": { …, "action_id": "1752505600-9931-7" } }.
@@ -583,6 +617,7 @@ Réponse (les 10 clés historiques sont **INCHANGÉES** ; les 4 blocs sont ADDIT
   "heaviest_toll": 1843,                          // = User.units_lost (pertes cumulées)
   "favorite_faction": "barons_ferraille",         // id snake_case (miroir factions.py)
   "credits": 12450,                               // = User.coins (solde Boutique R1)
+  "pacts_broken": 3,                              // ADDITIF §8.123 — = User.pacts_broken (défaut 0)
 
   // --- ADDITIF §8.106 — carte DIVISION de l'en-tête (source : seasons.rank_info + ladder) ---
   "season": { "rp": 1405, "division": "OR", "tier": "II", "label": "OR II",
@@ -642,10 +677,11 @@ Palmarès consultable **uniquement depuis le Classement** (demande produit). **A
 { "username": "RAVAGEUR_PRIME", "level": 58,
   "games_played": 500, "wins": 412, "losses": 88, "heaviest_toll": 12000,
   "favorite_faction": "barons_ferraille",
+  "pacts_broken": 3,                              // ADDITIF §8.123 — PUBLIC par construction (défaut 0)
   "season": { … }, "factions": [ … ], "modes": { … }, "form": [ … ], "maps": [ … ] }
 ```
 - **IDENTIFIANT = LE PSEUDO, pas l'id technique.** `LeaderboardEntry` exclut délibérément l'id (« Données PUBLIQUES uniquement (pas d'email ni d'id technique) ») et **cette décision est maintenue** : router par `username` évite d'exposer un identifiant séquentiel, qui permettrait d'énumérer tous les profils par simple incrément. Le pseudo est déjà affiché par le Classement, est `unique` et indexé → aucune donnée nouvelle n'est divulguée. **Aucun changement au contrat du Classement (§9.2).**
-- ⚠️ **FRONTIÈRE DE CONFIDENTIALITÉ.** La réponse est bornée par `PublicProfileResponse`, une **LISTE BLANCHE explicite** — surtout PAS un héritage de `ProfileStatsResponse`, sinon tout champ ajouté demain au profil privé deviendrait public tout seul. Sont **absents par construction et ne doivent jamais y entrer** : `credits`, tout le bloc FINANCES (solde, transactions, potentiel), tout le bloc PASS (état, gains, coût, objets), `email`, l'`id`, `xp`. `/profile/finance` et `/profile/pass` n'acceptent d'ailleurs **aucun paramètre de cible** : ils ne lisent que `current_user`. Verrou de non-régression : `test_profile_data.py`, suite [H].
+- ⚠️ **FRONTIÈRE DE CONFIDENTIALITÉ.** La réponse est bornée par `PublicProfileResponse`, une **LISTE BLANCHE explicite** — surtout PAS un héritage de `ProfileStatsResponse`, sinon tout champ ajouté demain au profil privé deviendrait public tout seul. Sont **absents par construction et ne doivent jamais y entrer** : `credits`, tout le bloc FINANCES (solde, transactions, potentiel), tout le bloc PASS (état, gains, coût, objets), `email`, l'`id`, `xp`. `/profile/finance` et `/profile/pass` n'acceptent d'ailleurs **aucun paramètre de cible** : ils ne lisent que `current_user`. Verrou de non-régression : `test_profile_data.py`, suite [H]. *(§8.123 : `pacts_broken` a été ajouté à cette liste blanche **délibérément** — un compteur de pactes rompus n'a de sens que s'il est consultable, c'est la seule sanction d'une trahison. Il reste du **palmarès**, au même titre que `wins` ou `heaviest_toll`.)*
 - ⚠️ **LECTURE SEULE.** L'endpoint n'appelle **ni `settle_previous_season` ni `ensure_season`** sur le joueur consulté : ce serait ÉCRIRE dans la ligne d'un tiers au passage d'un visiteur (reset de saison déclenché par un GET, avec course entre visiteurs simultanés). Conséquence assumée : si `season_id` n'est plus la saison courante, le joueur n'a pas joué cette saison → **0 RP et rang inconnu**, sans rien persister. Son reset restera déclenché par sa propre activité.
 
 #### `GET /profile/finance?limit=20&offset=0` — livre de comptes Coins **(NOUVEAU)**
@@ -1483,3 +1519,232 @@ BLOQUANTE si le joueur y est `eliminated` **ou** si la partie a déjà un `winne
 > coup de poignard n'est **pas** calculable (il faudrait un historique de **propriété** par round,
 > alors que `territory_history` ne stocke que des **comptes**) — le client la remplace par la seule
 > durée de **calme** entre les deux joueurs, cf. §8.121 de `FRONTEND_INTERFACES.md`.
+
+---
+
+## §8.123 — PACTES DE NON-AGRESSION : diplomatie éphémère, trahison publique, réputation (volet RÉSEAU/MOTEUR)
+
+> **Périmètre.** Volet backend de `PROMPT_PACTES_DIPLOMATIE.md` (LOTS A→C ; détail frontend :
+> **§8.123 de `FRONTEND_INTERFACES.md`** ; règle de jeu : **§4.11 de `ARCHITECTURE_ET_REGLES.md`**).
+> **Strictement ADDITIF** (règle §1.5) : aucune clé de payload existante n'est renommée ou
+> supprimée. **AUCUN COMMIT — redéploiement VPS requis.** Client et serveur partent **ENSEMBLE**
+> (gate de version WS §9) : le client à jour affiche un bouton que seul le serveur redéployé
+> accepte, et sans serveur redéployé la section « LES PACTES » du Rapport Post-Op se masque
+> proprement (repli §9.2).
+>
+> ⛔ **AUCUN EFFET MÉCANIQUE — c'est LA décision produit de ce chantier.** Un pacte n'accorde aucun
+> bonus, n'inflige aucun malus, ne bloque **aucune** attaque (frapper son partenaire est
+> parfaitement LÉGAL et se résout exactement comme n'importe quelle attaque), et n'influence ni le
+> matchmaking, ni le RP, ni les récompenses. Sa seule force est d'être **PUBLIC** : le rompre
+> déclenche un bandeau « ⚡ TRAHISON », alimente le Rapport de Trahison et s'inscrit à vie sur le
+> profil. *Le drame EST la mécanique ; la réputation est la seule punition.* Aucun canal privé
+> n'est réintroduit (le chat par destinataire reste le seul lieu de négociation, §4 — le pacte ne
+> fait qu'**officialiser**).
+
+### 1. Champ ADDITIF de l'état — `GameState.pacts: List[dict]` (défaut `[]`)
+
+Historique **COMPLET** de la partie (offres comprises), une entrée par pacte :
+
+```jsonc
+{ "id": 3,                   // int — 1-based, croissant
+  "a_id": 11,                // int — le PROPOSANT (le sens de la proposition est conservé)
+  "b_id": 12,                // int — le destinataire
+  "proposed_by": 11,         // int — redit explicitement qui a tendu la main (le client ne déduit rien)
+  "status": "active",        // string — "pending" | "active" | "broken" | "declined" | "expired"
+  "created_round": 3,        // int — round GLOBAL de l'OFFRE
+  "expires_at_round": 5,     // int — round d'acceptation + 2 (0 tant que l'offre est pendante)
+  "ended_round": 0,          // int — round de la FIN (rupture / refus / expiration ; 0 sinon)
+  "broken_by": null }        // int | null — le TRAÎTRE, si status == "broken"
+```
+
+- **`ended_round` n'est pas du confort** : il porte le départ du **cooldown** *et* la ligne
+  « ROMPU PAR X **AU ROUND N** » du Rapport de Trahison. `expires_at_round` ne pouvait pas jouer ce
+  rôle (une rupture survient AVANT l'échéance prévue, et une offre refusée n'en a jamais eu).
+- **Le `round` est celui du journal d'attaques** (§8.121) : `pacts.current_round_of` applique la
+  même dérivation que `engine.current_global_round` (`len(territory_history) + 1`). « Coup de
+  poignard au round N » et « pacte rompu au round N » se lisent donc sur **la même échelle** que la
+  courbe de domination du Rapport Post-Op. Un test de non-divergence garde les deux alignées.
+- **PLAFOND `pacts.PACT_RULES["history_cap"]` = 50 entrées.** Atteint, une nouvelle OFFRE est
+  **refusée** (`cap_reached`) — jamais acceptée puis oubliée silencieusement. Hors de portée d'une
+  partie bornée à 15 min (§8.120) avec 1 offre pendante par joueur.
+- Défaut `[]` → une partie **EN COURS** pendant le redéploiement se redésérialise sans le champ.
+
+### 2. State Redaction — LE point délicat du chantier
+
+`connection_manager._redact_state_for_player` filtre désormais `state.pacts` via
+`pacts.redact_pacts_for` (règle énoncée **une seule fois**, dans le module pur, et testée) :
+
+| Statut | Visibilité |
+|---|---|
+| `active` · `broken` · `expired` | **PUBLICS** — un pacte EST un signal, une trahison un spectacle. |
+| `pending` · `declined` | **Les DEUX joueurs concernés, et eux seuls.** |
+
+Diffuser une négociation donnerait à toute la table la carte des discussions en cours, et ferait
+d'un refus une humiliation publique — deux choses que le dispositif ne veut pas. La **redaction est
+LEVÉE au `game_over`** (bloc public `pacts`, cf. §5) : le secret protégeait une partie en cours.
+
+### 3. Messages client→serveur
+
+```jsonc
+{ "action": "pact_offer",   "payload": { "target_player_id": 12, "action_id": "…" } }
+{ "action": "pact_respond", "payload": { "pact_id": 3, "accept": true } }
+```
+
+- **`pact_offer`** passe par le **pipeline standard** de `process_action` : c'est une action de MON
+  tour (phases **1-4**). Elle hérite donc de la vérification de tour, des gardes d'état bloquant
+  (aucune diplomatie tant qu'une conquête ou un choix d'Éclipse est en suspens) et de l'idempotence
+  `action_id` — un double-clic ne crée jamais deux offres.
+- **`pact_respond` est routée AVANT la vérification de tour** (`process_action`, précédent
+  `place_initial`). **POURQUOI** : répondre est *par construction* ce qu'on fait quand ce n'est PAS
+  son tour — l'offre arrive pendant le tour de quelqu'un d'autre ; la garde « c'est votre tour »
+  refuserait 100 % des réponses légitimes. Ce qu'on **garde** : le verrou de salle (l'action mute
+  l'état) et la rediffusion redactée. Ce qu'on **abandonne sciemment** : la fenêtre `action_id`,
+  inutile ici — un second clic sur ACCEPTER trouve l'offre en `active` et repart en `not_pending`,
+  la garde est structurelle.
+
+**Refus — convention zéro-4xx §8.112.** Réponse `{"type":"error","message":…,"reason":<code>}`,
+jamais un 4xx. Jeu **FERMÉ** de 8 raisons, chacune traduite côté client (`PACT_ERR_*`) :
+
+| `reason` | Quand |
+|---|---|
+| `not_your_turn` | hors tour, partie non démarrée ou gagnée, **phase hors 1-4**, joueur retiré |
+| `invalid_target` | cible inconnue / morte / retirée / soi-même ; ou proposant disparu à la réponse |
+| `pair_busy` | un pacte actif OU une offre pendante existe déjà entre les deux (dans un sens ou l'autre) |
+| `cap_reached` | 2 pactes actifs (chez l'un **ou** l'autre), 1 offre sortante déjà pendante, ou historique plein |
+| `cooldown` | trêve en cours — **porte en plus `remaining_rounds: int`** (voir ci-dessous) |
+| `final_protocol` | PROTOCOLE FINAL (§4.7) : on ne négocie plus dans les 2 dernières minutes |
+| `not_pending` | réponse sur une offre déjà résolue, qui ne vous vise pas, ou à sa propre offre |
+| `ranked_disabled` | **DORMANTE** : jamais émise tant que `PACT_RULES["in_ranked"]` vaut `True` |
+
+- ⚠️ « phase interdite / partie non démarrée / partie gagnée » retombent volontairement sur
+  `not_your_turn` : le jeu de raisons est FERMÉ, et ces trois cas disent au joueur exactement la
+  même chose. En pratique le client ne montre le bouton qu'en phases 1-4 de son tour.
+- **`remaining_rounds`** (clé ADDITIVE, `int`) n'accompagne que le refus `cooldown` — le seul refus
+  chiffré du jeu : sans lui le joueur ne sait pas quand réessayer. Absente partout ailleurs.
+- **ORDRE DES CONTRÔLES FIGÉ** (il décide quelle raison s'affiche quand plusieurs s'appliquent) :
+  légitimité du proposant → validité de la cible → PROTOCOLE FINAL → paire occupée → plafonds →
+  trêve. Du plus fondamental au plus circonstanciel : « vous ne pouvez pas agir », puis « pas avec
+  lui », puis « pas maintenant ».
+
+### 4. Évènements — ce qui est PUBLIC, et ce qui ne l'est pas
+
+Une offre et un refus sont des informations **PRIVÉES** (savoir qui négocie avec qui est déjà une
+information de jeu). Or l'`event` d'une action part en diffusion **identique** à toute la salle —
+seul le `state` est redacté par destinataire. Le moteur isole donc la part nominative dans un bloc
+`pact_private` que **`router._drain_pact_private` RETIRE de l'évènement AVANT toute diffusion**,
+puis route en messages personnels (patron `spy_result` §8.24).
+
+| Action | Évènement DIFFUSÉ (`action_result`) | Message PRIVÉ (aux 2 concernés) |
+|---|---|---|
+| offre | `{"event_type":"pact_offer"}` — **aucune identité** | `{"type":"pact_offer","pact_id","proposer_id","target_id","created_round","duration_rounds"}` |
+| réponse — **refus** | `{"event_type":"pact_response"}` — **aucune identité** | `{"type":"pact_response","pact_id","accept":false,"proposer_id","target_id"}` |
+| réponse — **acceptation** | `{"event_type":"pact_active","pact_id","a_id","b_id","proposed_by","expires_at_round"}` — **PUBLIC, c'est le but** | — |
+
+**Évènements système structurés** (pipeline `system_events` existant, tous **PUBLICS**, doublés
+d'une ligne `system_messages` LEGACY en anglais invariant sauf mention contraire) :
+
+```jsonc
+{ "code": "pact_active",  "pact_id": 3, "a_id": 11, "b_id": 12, "expires_at_round": 5 }
+{ "code": "pact_broken",  "pact_id": 3, "betrayer_id": 11, "victim_id": 12 }
+{ "code": "pact_expired", "pact_id": 3, "a_id": 11, "b_id": 12 }
+```
+
+- `pact_broken` voyage dans les **`system_events` de l'évènement `attack_result`** : `_handle_attack`
+  draine désormais le tampon, sans quoi le bandeau « ⚡ TRAHISON » attendrait le prochain
+  `turn_passed` — plusieurs actions plus tard.
+- **Une offre restée sans réponse ne produit AUCUN évènement** : elle est soldée en `declined`
+  **silencieux** au tour suivant de son auteur. Que personne n'ait répondu n'est pas un fait de
+  jeu, et l'annoncer reviendrait à dire à toute la table « X a été ignoré ». Seule la trêve en
+  découle.
+
+### 5. Autres champs ADDITIFS
+
+- **`attack_result.pact_broken: bool`** — cette attaque a-t-elle rompu un pacte (détail dans
+  `system_events`).
+- **`GameStatistics.attack_log[*].pact_broken: bool`** — **8ᵉ clé** du journal d'attaques (§8.121).
+  C'est elle qui fait d'une attaque **LE COUP DE POIGNARD** du Rapport de Trahison, sans aucune
+  heuristique : une trahison DÉCLARÉE prime toute analyse de voisinage.
+- **`GameStatistics.pacts_broken_by_player: Dict[int,int]`** — compteur de partie, incrémenté au
+  site UNIQUE de la rupture.
+- **`game_over.pacts`** — champ **PUBLIC** (piège n° 9) : l'historique COMPLET, redaction levée.
+- **`GET /profile/stats` et `GET /profile/public/{username}` : `pacts_broken: int`** (défaut 0).
+  Donnée **publique par construction** — un compteur de trahisons que personne ne peut consulter ne
+  sert à rien. Il reste du **palmarès** : la liste blanche de `PublicProfileResponse` (§8.107) est
+  élargie **délibérément**, aucune donnée économique ou de compte n'entre par cette porte.
+
+### 6. Registre (module PUR `api/game/pacts.py`) — aucune valeur en dur dans le moteur
+
+| Clé de `PACT_RULES` | Valeur | Rôle |
+|---|---|---|
+| `duration_rounds` | **2** | `expires_at_round = round d'acceptation + 2`. Court à dessein : une fenêtre de respiration, pas une alliance de fait. |
+| `max_active_per_player` | **2** | Sans plafond, un joueur signerait avec toute la table et neutraliserait le « chacun-pour-soi » sans rien risquer. |
+| `max_pending_outgoing` | **1** | Proposer est un engagement, pas un mailing. |
+| `cooldown_rounds` | **2** | Trêve entre les deux MÊMES joueurs après rupture / refus / expiration / offre ignorée. Empêche le harcèlement et donne du poids au refus. |
+| `in_ranked` | **`True`** | Aucun avantage mécanique ⇒ aucune raison d'exclure. Le passer à `False` ferme la mécanique en classée **sans toucher une ligne de moteur** (refus `ranked_disabled` déjà câblé). |
+| `history_cap` | **50** | Garde-fou mémoire/Redis, même nature que `ATTACK_LOG_CAP`. |
+
+### 7. Cycle de vie et sites d'accrochage
+
+`PENDING` → (`ACTIVE` | `DECLINED`) → (`BROKEN` | `EXPIRED`).
+
+- **Expiration** — `pacts.sweep_expired` à l'entame de **chaque** tour de joueur, **après**
+  l'éventuelle téléportation de zone : le numéro de round vient tout juste d'être arrêté par
+  `_append_territory_snapshot`, dont il dérive. Le faire plus tôt daterait toutes les échéances
+  d'un round (un pacte durerait 3 rounds au lieu de 2). Appelé à chaque tour et non seulement aux
+  transitions : la fonction est idempotente, et cette redondance garantit qu'aucune échéance ne
+  peut être sautée.
+- **Offre ignorée** — `pacts.offer_timeout_sweep` au même endroit, pour le joueur ENTRANT : une
+  offre faite au tour précédent a donc vécu un round complet. Sans ce balayage, une offre ignorée
+  bloquerait à vie l'unique créneau sortant de son auteur.
+- **Rupture** — dans `_handle_attack`, **après** la résolution complète (dés, pertes, conquête,
+  permadeath) et **avant** l'append du journal d'attaques. C'est une pure LECTURE suivie d'un
+  enregistrement : aucune ligne au-dessus ne consulte les pactes.
+  **NE ROMPENT PAS un pacte, à dessein :** les **dégâts de zone** (personne ne les décide) ·
+  **ABSOLUTION** (§8.119 — purger un territoire contaminé du partenaire l'**AIDE**) · **BASTION
+  D'ACIER** (§8.119 — ne cible que SES propres territoires) · une attaque sur un territoire
+  **NEUTRE** ayant appartenu au partenaire (plus de camp à trahir). **Rompent en revanche :** toute
+  attaque RÉSOLUE, y compris **perdue**, y compris la **FRAPPE FANTÔME** non adjacente — c'est
+  l'intention de frapper qui trahit, pas le résultat.
+
+### 8. BOTS — ils répondent, ils honorent, ils ne trahissent JAMAIS
+
+Sans participation des bots, la mécanique serait morte en partie mixte — majoritaire aujourd'hui.
+
+- **Ils ne PROPOSENT jamais** : initier une diplomatie demande une intention de partie qu'une IA de
+  remplissage n'a pas.
+- **Ils RÉPONDENT** via `bot_ai.decide_pact(state, bot_id, proposer_id)` — heuristique PURE et
+  déterministe, volontairement lisible en une phrase pour que le joueur puisse l'apprendre en
+  jouant : *j'accepte si tu n'es pas plus fort que moi (comparaison des territoires) et s'il me
+  reste de la place (`max_active_per_player`)*. Un pacte avec le meneur ne protègerait que lui.
+- **Réponse IMMÉDIATE, dans le traitement de l'offre** (`engine._handle_pact_offer`) : aucune task
+  asyncio nouvelle — une task de plus par offre serait un ordonnancement entier à maintenir pour
+  une décision qui ne demande aucune attente. Le **rythme d'affichage** (« le bot réfléchit ») est
+  purement CLIENT : la réponse passe par la file de narration des actions adverses du HUD.
+- **FILTRE D'HONNEUR** (`bot_ai._action_attack`) : les territoires des partenaires actifs sont
+  exclus des cibles. C'est une restriction de **CIBLAGE**, pas une règle de jeu — le moteur
+  accepterait parfaitement l'attaque. **Un bot ne trahit JAMAIS : la trahison est un privilège
+  humain**, c'est le seul geste du jeu dont le sel vient entièrement de qui l'accomplit.
+  *(`_enemy_neighbors` reste volontairement AVEUGLE aux pactes : elle sert aussi à mesurer la
+  MENACE pour le déploiement — un partenaire peut trahir à tout moment.)*
+
+### 9. Persistance — `users.pacts_broken INTEGER NOT NULL DEFAULT 0`
+
+Auto-migrée au boot (`db_migrations.sync_missing_columns` — `server_default` présent, aucune action
+humaine sur la prod, contrairement à `migration_steam_auth.sql`). Archive de parité :
+`backend/migration_pacts.sql`. Accumulée en fin de partie par `process_match_results` depuis
+`build_match_stats["pacts_broken"]`, **bots exclus** (ids < 0, sortis de la boucle bien avant).
+N'entre dans **aucun** barème — ni XP, ni Coins, ni RP, ni classement.
+
+> **Fichiers.** NOUVEAUX : `api/game/pacts.py`, `migration_pacts.sql`, `test_pacts.py`,
+> `test_pacts_flow.py`. MODIFIÉS : `api/game/engine.py`, `api/game/state_schemas.py`,
+> `api/game/bot_ai.py`, `api/game/state_manager.py`, `api/sockets/router.py`,
+> `api/sockets/connection_manager.py`, `models/models.py`, `models/schemas.py`,
+> `api/v1/endpoints/profile.py`.
+>
+> **Validation.** `test_pacts.py` **113 ✅ / 0 ❌** · `test_pacts_flow.py` **83 ✅ / 0 ❌** · suite
+> backend complète verte, non-régressions mises à jour (`test_attack_log.py` → 8ᵉ clé,
+> `test_profile_data.py` → liste blanche publique élargie DÉLIBÉRÉMENT, `test_rewards.py` /
+> `test_bot_ai.py` / `test_pass_tiers.py` → doublures `User` dotées de `pacts_broken`) — **sauf
+> `test_missions.py` et `test_simulation.py`**, en échec **PRÉ-EXISTANT sur HEAD** (vérifié en
+> rejouant les deux suites contre les sources extraites de `HEAD` : échecs identiques,
+> `IndexError` et `fastapi` absent du poste), hors périmètre.

@@ -31,6 +31,10 @@ signal game_error(message: String)
 # "" = refus SANS code (tous les refus historiques) → l'écran retombe sur le `message` serveur.
 # À lire IMMÉDIATEMENT dans le handler de `game_error` : la valeur est écrasée au refus suivant.
 var last_error_reason: String = ""
+# §8.123 — Nombre de rounds restants du refus `cooldown` (clé ADDITIVE `remaining_rounds`), lu au
+# même moment que `last_error_reason`. Seul refus CHIFFRÉ du jeu : sans lui, « trop tôt » ne dit
+# pas au joueur quand réessayer. 0 = refus non chiffré (tous les autres).
+var last_error_remaining_rounds: int = 0
 # Émis quand un joueur quitte la partie.
 signal player_left(player_id)
 # --- MATCHMAKING 100 % serveur (§8.116) : files publique/classée + salons privés à code ---
@@ -84,6 +88,13 @@ signal spy_result(target_player_id: int, description: String, objective: Diction
 # serveur : l'overlay spectateur l'affiche SANS aucune valeur en dur (règle §6). Un REFUS arrive,
 # lui, par le message `{"type":"error", "reason": <code>}` déjà géré (last_error_reason).
 signal observer_bet_accepted(bet_type: String, value, reward: Dictionary)
+# --- PACTES DE NON-AGRESSION (§8.123) : messages PRIVÉS reçus par les DEUX joueurs concernés ---
+# Une offre et un refus ne sont JAMAIS diffusés (savoir qui négocie avec qui est déjà une
+# information de jeu) : le serveur les envoie en messages personnels, exactement comme `spy_result`.
+# Une ACCEPTATION, elle, n'a pas de message privé — elle arrive par l'évènement PUBLIC
+# `pact_active` du flux `game_event`, et l'état diffusé (redacté) porte le pacte pour tout le monde.
+signal pact_offer_received(pact_id: int, proposer_id: int, target_id: int, duration_rounds: int)
+signal pact_response_received(pact_id: int, accept: bool, proposer_id: int, target_id: int)
 # Chat de salle (§8.33) : message relayé par le serveur, ESTAMPILLÉ (sender_id + sender_name réels,
 # pas d'usurpation). tab ∈ {"general","private"} ; target_id renseigné uniquement en privé (sinon -1).
 signal chat_message_received(tab: String, sender_id: int, sender_name: String, text: String, target_id: int)
@@ -188,6 +199,13 @@ var last_bet_results: Dictionary = {}
 # Propriété (pattern `last_objectives_reveal`) → signature de `match_over` INCHANGÉE (§1.5).
 # [] = serveur non redéployé → l'onglet se masque proprement (§9.2).
 var last_attack_log: Array = []
+# --- §8.123 : PACTES DE NON-AGRESSION (bloc PUBLIC du game_over) ---------------------------------
+# Historique COMPLET de la partie, redaction LEVÉE : [{ id, a_id, b_id, proposed_by, status
+# (pending|active|broken|declined|expired), created_round, expires_at_round, ended_round,
+# broken_by }]. Même raison d'être ici que le journal d'attaques : c'est la seule occasion de
+# recevoir les OFFRES et les REFUS, masqués aux tiers pendant toute la partie.
+# [] = serveur non redéployé → la section « LES PACTES » du Rapport de Trahison se masque (§9.2).
+var last_match_pacts: Array = []
 
 var socket = WebSocketPeer.new()
 var connected = false
@@ -349,6 +367,8 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# casserait tous. Même patron que `last_bot_fill_at`. "" = refus non codé (tous les
 			# refus historiques) → l'écran affiche le `message` serveur comme avant.
 			last_error_reason = str(msg.get("reason", ""))
+			# §8.123 — clé ADDITIVE présente sur le SEUL refus `cooldown` (piège JSON §5 : int()).
+			last_error_remaining_rounds = int(msg.get("remaining_rounds", 0))
 			print("NETWORK: action refusée par le serveur : " + err_msg)
 			game_error.emit(err_msg)
 		"player_disconnected":
@@ -389,6 +409,12 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# TRAHISONS du Rapport Post-Op se masque (§9.2).
 			var alog = msg.get("attack_log", [])
 			last_attack_log = alog if typeof(alog) == TYPE_ARRAY else []
+			# §8.123 — PACTES : historique COMPLET de la partie, redaction LEVÉE (offres et refus
+			# compris). Mémorisé ici pour les mêmes raisons que le journal d'attaques : ce message
+			# est sa seule occasion d'arriver en entier. Absent (serveur antérieur) → [] et la
+			# section « LES PACTES » du Rapport de Trahison se masque (§9.2).
+			var plist = msg.get("pacts", [])
+			last_match_pacts = plist if typeof(plist) == TYPE_ARRAY else []
 			var rewards: Dictionary = msg.get("match_rewards", {})
 			last_match_rewards = rewards
 			game_event.emit({"event_type": "game_over", "winner_id": msg.get("winner_id"),
@@ -451,6 +477,24 @@ func _handle_server_message(msg: Dictionary) -> void:
 				str(msg.get("bet_type", "")),
 				msg.get("value"),
 				ack_reward if typeof(ack_reward) == TYPE_DICTIONARY else {})
+		"pact_offer":
+			# PACTE (§8.123) : offre reçue — message PRIVÉ, envoyé aux DEUX joueurs concernés
+			# UNIQUEMENT. C'est le seul canal par lequel une négociation arrive : l'évènement
+			# diffusé, lui, ne porte AUCUNE identité. Piège JSON §5 : int() partout.
+			pact_offer_received.emit(
+				int(msg.get("pact_id", -1)),
+				int(msg.get("proposer_id", -1)),
+				int(msg.get("target_id", -1)),
+				int(msg.get("duration_rounds", 2)))
+		"pact_response":
+			# PACTE (§8.123) : REFUS — privé lui aussi (rendre un refus public en ferait une
+			# humiliation). Une ACCEPTATION ne passe JAMAIS par ici : elle est publique et arrive
+			# par l'évènement `pact_active` du flux game_event.
+			pact_response_received.emit(
+				int(msg.get("pact_id", -1)),
+				bool(msg.get("accept", false)),
+				int(msg.get("proposer_id", -1)),
+				int(msg.get("target_id", -1)))
 		"chat_message":
 			# Chat de salle (§8.33) : relais serveur estampillé. Ids JSON en float -> int() (piège §5).
 			chat_message_received.emit(
@@ -516,6 +560,22 @@ func send_faction_choice(faction_id: String) -> void:
 # "objective"|"elimination"|"timeout" (end_reason).
 func send_observer_bet(bet_type: String, value) -> void:
 	send_action("observer_bet", {"bet_type": bet_type, "value": value})
+
+# PACTES DE NON-AGRESSION (§8.123) — PROPOSER : action de MON tour (phases 1-4). Le serveur répond
+# soit par l'évènement diffusé `pact_offer` (anonyme) + un message PRIVÉ `pact_offer` aux deux
+# concernés, soit par `{"type":"error","reason": <code>}` que la vue TRADUIT (clés PACT_ERR_*) ;
+# le seul refus chiffré, `cooldown`, porte en plus `remaining_rounds` (last_error_remaining_rounds).
+# ⚠️ Si la cible est un BOT, le serveur répond IMMÉDIATEMENT à sa place : on peut donc recevoir
+# directement `pact_active` (accepté) ou `pact_response` (refusé) — le rythme d'affichage est géré
+# côté vue par la file de narration des actions adverses, jamais par une attente réseau.
+func send_pact_offer(target_player_id: int) -> void:
+	send_action("pact_offer", {"target_player_id": int(target_player_id)})
+
+# PACTES (§8.123) — RÉPONDRE. Acceptée HORS TOUR par construction (le serveur route cette action
+# AVANT sa vérification de tour) : c'est justement ce qui la rend possible pendant le tour d'un
+# autre. Un second clic tombe sur `not_pending` — la garde est structurelle, pas un verrou client.
+func send_pact_respond(pact_id: int, accept: bool) -> void:
+	send_action("pact_respond", {"pact_id": int(pact_id), "accept": bool(accept)})
 
 # Demande la photographie du Draft (G2 durci) : le serveur répond en PRIVÉ par un message
 # "draft_state" (relayé via draft_state_received). Appelé par faction_selection à son _ready

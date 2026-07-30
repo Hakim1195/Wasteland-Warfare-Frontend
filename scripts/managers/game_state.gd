@@ -72,6 +72,16 @@ var final_protocol_active: bool = false
 # (Règle d'Or §6.1 : le HUD est une View, le contrôleur résout pseudos + couleurs).
 var statistics: Dictionary = {}
 
+# --- PACTES DE NON-AGRESSION (§8.123) ---
+# Liste des pactes de la partie TELS QUE LE SERVEUR NOUS LES SERT — c'est-à-dire **REDACTÉE pour
+# nous** : les pactes `active`/`broken`/`expired` sont publics, mais les NÉGOCIATIONS
+# (`pending`/`declined`) n'y figurent que si NOUS sommes l'un des deux joueurs concernés. Le client
+# n'a donc AUCUN filtrage de confidentialité à faire : ce qu'il reçoit, il a le droit de l'afficher.
+# Forme d'une entrée : { id, a_id (le PROPOSANT), b_id, proposed_by, status, created_round,
+# expires_at_round, ended_round, broken_by } — ⚠️ tous les nombres arrivent en float (piège §5).
+# [] = aucun pacte, OU serveur non redéployé → toute l'UI de pacte se masque d'elle-même.
+var pacts: Array = []
+
 func update_from_json(state_data: Dictionary):
 	players = state_data.get("players", {})
 	territories = state_data.get("territories", {})
@@ -105,6 +115,9 @@ func update_from_json(state_data: Dictionary):
 	contamination_zone = state_data.get("contamination_zone", {})
 	# « Mémoire Tactique » (§8.35) : statistiques globales publiques (alimente le tiroir Intel, §8.36).
 	statistics = state_data.get("statistics", {})
+	# PACTES (§8.123) : liste DÉJÀ redactée pour nous par le serveur (cf. la déclaration ci-dessus).
+	var pk = state_data.get("pacts", [])
+	pacts = pk if typeof(pk) == TYPE_ARRAY else []
 	# Chrono SERVEUR (E3 §8.75) : turn_timer peut être null (bot / hors minuterie) → {}.
 	var tt = state_data.get("turn_timer", null)
 	turn_timer = tt if typeof(tt) == TYPE_DICTIONARY else {}

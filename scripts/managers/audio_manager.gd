@@ -197,6 +197,15 @@ func _ready() -> void:
 	# `promotion` (LOT F) : arpège bref de montée de division (hub uniquement).
 	_register_sfx("promotion", func(): return _make_promotion_sting())
 
+	# --- PACTES DE NON-AGRESSION (§8.123) : 2 SFX neufs, même mécanique d'override. ---
+	# `pact_sealed` : quinte JUSTE, montante et courte — la promesse. Volontairement proche du
+	# `your_turn` (do→sol) mais une octave plus bas : c'est un engagement, pas une fanfare.
+	_register_sfx("pact_sealed", func(): return _make_chord(262.0, 392.0, 0.30))
+	# `betrayal` : DISSONANCE brève (triton fa#→do, l'intervalle le plus instable de la gamme),
+	# grave et sans résolution. Il doit trancher net avec `pact_sealed` : l'oreille doit
+	# comprendre AVANT de lire le bandeau que la promesse vient d'être brisée.
+	_register_sfx("betrayal", func(): return _make_chord(370.0, 261.0, 0.55))
+
 # Enregistre un SFX par nom : vrai fichier prioritaire (assets/audio/sfx/<nom>), sinon repli
 # synthétisé (Callable() -> AudioStreamWAV). Factorise le pattern _load_override / _make_*.
 func _register_sfx(sfx_name: String, synth: Callable) -> void:

@@ -1940,3 +1940,164 @@ Mémoires locales : section **`[progress]`** de `settings.cfg` (`get_progress`/`
 > (il exige une vraie montée de division) ; le framerate en partie **6 joueurs** carte vivante ON.
 > Les placeholders audio (Geiger, vent, radio, tonnerre, promotion) n'ont **jamais été écoutés** :
 > ils sont synthétisés et validés par le code, pas par l'oreille.
+
+---
+
+## §8.123 — PACTES DE NON-AGRESSION : proposer, répondre, voir, trahir (volet FRONTEND)
+
+> Contrat réseau : **§8.123 de [`CONTRAT_RESEAU.md`](CONTRAT_RESEAU.md)**. Règle de jeu : **§4.11 de
+> `ARCHITECTURE_ET_REGLES.md`**. **Client et serveur partent ENSEMBLE** (gate de version WS §9) :
+> face à un serveur non redéployé, tout ce qui suit se masque de soi-même (`GameState.pacts` vide).
+>
+> ⛔ **Le client ne DÉCIDE rien** (Règle d'Or §6.1). Il grise des boutons et raconte des évènements ;
+> le serveur reste seul juge. Un désaccord entre le grisage local et le serveur ne produit qu'un
+> refus propre et traduit, jamais un état incohérent.
+
+### 1. `scripts/game/pact_state.gd` — lectures pures (`class_name PactState`)
+
+Miroir client de `api/game/pacts.py`, réduit à ce dont une Vue a besoin : `active_partners`,
+`find_active_between`, `my_active`, `incoming_offer`, `outgoing_offer`, `has_pending_between`,
+`is_traitor`, `find_by_id`, `is_still_pending`.
+
+⚠️ **`GameState.pacts` est DÉJÀ REDACTÉE POUR NOUS** par le serveur : les négociations d'autrui n'y
+figurent tout simplement pas. Il n'y a donc **rien à filtrer** côté client — et surtout aucune
+tentation de « masquer à l'affichage » une donnée qu'on n'aurait pas dû recevoir.
+
+### 2. Les DEUX marques, posées dans `player_chip.gd` (donc PARTOUT d'un coup)
+
+| Marque | Sens | Couleur |
+|---|---|---|
+| **`↔`** | ce joueur est lié par ≥ 1 pacte ACTIF ; tooltip « PACTE X ↔ Y — EXPIRE AU ROUND N » (les deux, s'il en tient deux) | cyan tactique |
+| **`⚡`** | ce joueur a rompu un pacte **ce match** — reste jusqu'à la fin de la partie | rouge danger |
+
+Posées dans la **brique partagée** et non dans chaque écran : elles apparaissent donc du même coup
+dans l'ordre de tour, la fiche joueur, le kill feed et la zone opérateur. Les deux sont relues à
+chaque `setup()` (donc à chaque état) — la brique ne mémorise rien, un pacte qui expire fait
+disparaître sa marque tout seul.
+
+⚠️⚠️ **GLYPHE `↔` ET NON L'EMOJI 🤝 DU CAHIER DES CHARGES.** Les emoji hors BMP (> U+FFFF) rendent
+en **TOFU** avec la police condensée de la charte — constat §8.117 (`📢 ✉ 🎯`), et 🤝 (U+1F91D) est
+du même bloc que 🎯. `↔` vit dans le bloc *Arrows* (voisin de `→`, déjà employé), dit exactement la
+même chose (un accord à **double sens**) et figurait déjà dans le libellé du tooltip spécifié.
+Même règle que les flèches ▲/▼ des PP (§8.119). `⚡` (U+26A1), lui, est déjà utilisé 21 fois dans
+`ui_strings.csv` : conservé tel quel.
+
+### 3. PROPOSER — bloc PACTE de la fiche joueur (`hud.gd`)
+
+Bouton « ↔ PROPOSER UN PACTE (2 ROUNDS) », sous les blocs HÉROS et SITUATION. **Jamais de bouton
+mort et muet** : quand la proposition est impossible, il reste **visible mais grisé** et son
+**tooltip dit POURQUOI** (plafond, trêve **avec le nombre de rounds restants**, offre déjà pendante,
+PROTOCOLE FINAL, cible hors jeu). Les raisons sont évaluées dans le **MÊME ORDRE que le serveur**
+(`pacts.can_offer`) : le joueur lit toujours la raison que le serveur lui opposerait.
+
+- Après le clic : « OFFRE ENVOYÉE… » **immédiatement** (optimiste — le joueur doit voir qu'il s'est
+  passé quelque chose), la vérité serveur reprenant la main à l'état suivant.
+- Pacte déjà actif avec ce joueur → le bloc affiche l'échéance **et rappelle explicitement que le
+  pacte ne bloque rien**. Sans cette phrase, un joueur peut croire que le jeu empêchera son
+  attaque, et se sentir trahi par l'interface plutôt que par l'adversaire.
+- Zone OPÉRATEUR : rappel compact de MES engagements (« ↔ NOM (R5) · ↔ NOM (R6) »), masqué si aucun
+  — c'est l'information qu'il faut avoir sous les yeux au moment de choisir une cible.
+
+### 4. RÉPONDRE — le seul toast PERSISTANT du jeu
+
+`hud.show_pact_offer()` : panneau à deux boutons **ACCEPTER / REFUSER**, `mouse_filter = STOP`
+(contrairement aux autres toasts, il doit capter ses clics). Il ne s'efface **pas** tout seul : il
+porte une **décision**, pas une information.
+
+**Piloté par l'ÉTAT et non par le message** (`main._sync_pact_toast`, appelé à chaque rafraîchissement) :
+il **survit donc à une reconnexion** — l'offre vit dans l'état, pas dans un message fugace — et
+disparaît dès qu'elle cesse d'exister côté serveur (proposant éliminé, offre soldée, course perdue).
+Ancré à 196 px, sous le toast d'action adverse (142 px) : les deux coexistent sans se recouvrir (un
+bot joue pendant qu'une offre attend). Répondre est possible **hors tour** — c'est tout l'intérêt.
+
+### 5. LA TRAHISON — le moment que la mécanique existe pour produire
+
+À réception du `system_event` `pact_broken` (porté par l'`attack_result` qui l'a provoquée, donc
+**synchrone avec le combat**) :
+
+1. **bandeau pleine largeur** « ⚡ TRAHISON — X A ROMPU SON PACTE AVEC Y » (rouge, brique
+   `phase_banner`, celle du PROTOCOLE FINAL) ;
+2. **sting `betrayal`** — nouveau SFX : un **triton** (fa♯→do), l'intervalle le plus instable de la
+   gamme, grave et sans résolution. Il tranche volontairement avec `pact_sealed` (quinte juste,
+   montante) : l'oreille comprend AVANT que l'œil ne lise le bandeau ;
+3. **`duck_music()`** — appel DÉFENSIF (`has_method`), le ducking date de §8.122 ;
+4. **kill feed + Journal** (catégorie combat, entrée majeure) ;
+5. **marque ⚡** sur la chip du traître, pour le reste de la partie (posée par l'état, cf. §2).
+
+L'**expiration**, elle, est volontairement **DISCRÈTE** : une ligne de Journal, aucun bandeau, aucun
+son. Un pacte qui s'éteint n'est pas un drame — mais il ne doit pas non plus disparaître en silence
+total, sinon les deux signataires continueraient de se croire couverts. Une **offre ignorée** ne
+produit **rien du tout** : l'annoncer reviendrait à dire à toute la table « X a été ignoré ».
+
+### 6. RYTHME des bots
+
+Le serveur répond **instantanément** à la place d'un bot (dans le traitement de l'offre). Le client
+ne montre jamais cette réponse en même temps que l'envoi : elle passe par la **file de narration des
+actions adverses** déjà en place (toast de pouvoir / journal), au même rythme que le reste du tour.
+
+### 7. Rapport Post-Op — section « LES PACTES » (onglet TRAHISONS)
+
+`betrayal_report.gd` gagne `pact_timeline(pacts)` et `pacts_broken_by(pacts, pid)`.
+
+- **Une ligne par pacte**, dans l'ordre de leur FIN : `X ↔ Y — TENU` · `ROMPU PAR X AU ROUND N`
+  (rouge — la seule des quatre issues qui soit un manquement) · `EXPIRÉ AU ROUND N` ·
+  `OFFRE DÉCLINÉE`. Les offres restées **pendantes** à la fin sont écartées (une question sans
+  réponse n'est pas une histoire) ; les **refus** sont gardés — « il a demandé, on lui a dit non »
+  fait partie du récit, et c'est la seule trace publique de ce qui s'est joué au chat.
+- **PRIORITÉ ABSOLUE du pacte rompu sur LE COUP DE POIGNARD** (`CONFIG.pact_breaks_win`) : une
+  attaque flaggée `pact_broken` devient automatiquement le coup de poignard, **au-dessus** de toute
+  l'heuristique de calme et de kills — *le calme n'est qu'une présomption de confiance ; un pacte
+  rompu en est la preuve, publiquement signée puis publiquement brisée*. Le détail de la section
+  affiche alors « PACTE ROMPU » avant la durée de calme.
+- La section est **omise** si aucun pacte n'a jamais été proposé ; inversement, une partie **sans un
+  seul combat mais AVEC des pactes** ouvre désormais l'onglet (elle a une histoire).
+- **Carte de partage** : si le coup de poignard partagé a rompu un pacte, la ligne trahison le dit.
+
+### 8. Profils — « PACTES ROMPUS : N »
+
+Profil **public** (carte du palmarès, teinte muette) et profil **personnel** (onglet STATISTIQUES).
+**Masquée à 0** dans les deux cas : ne rien afficher vaut mieux qu'un compteur à zéro dont on ne
+saurait pas dire s'il signifie « loyal » ou « serveur pas à jour ».
+
+### 9. Refus traduits — et le seul refus CHIFFRÉ du jeu
+
+`PACT_ERROR_KEYS` (miroir des 8 `reason` serveur) → clés `PACT_ERR_*`. `cooldown` est le seul refus
+qui porte un nombre (`NetworkManager.last_error_remaining_rounds`) : sans lui, « trop tôt »
+n'apprend rien au joueur.
+
+⚠️ **Les deux familles de codes SE CHEVAUCHENT** (`not_your_turn`, `invalid_target`,
+`ranked_disabled` existent pour les capacités de héros §8.119 comme pour les pactes) et le message
+`{"type":"error"}` ne dit pas quelle action il refuse. `main.gd` mémorise donc la **dernière famille
+émettrice** (`_last_coded_action`) au moment de l'envoi et la **CONSOMME** dans `_on_game_error` — un
+marqueur périmé est impossible à conserver.
+
+### 10. i18n
+
+**38 clés** ajoutées en fin de `translations/ui_strings.csv` (FR/EN/IT) : `PACT_*` (bouton, toast,
+tooltips, journal, bandeau), `PACT_ERR_*` (**8** raisons — le cahier des charges en annonçait 6 ;
+les 8 sont livrées pour qu'aucun code ne puisse s'afficher en brut), `HUD_SHEET_PACT`,
+`REPORT_PACT*`, `PROFILE_PACTS_BROKEN`, `SHARE_PACT_BROKEN`. Vérifiées **114/114** résolues par
+`TranslationServer.translate` dans les trois locales.
+
+### 11. Fichiers & validation
+
+> **NOUVEAU** : `scripts/game/pact_state.gd`. **MODIFIÉS** : `scripts/game/main.gd`,
+> `scripts/game/betrayal_report.gd`, `scripts/game/operation_report.gd`, `scripts/ui/hud.gd`,
+> `scripts/ui/player_chip.gd`, `scripts/ui/profile.gd`, `scripts/ui/public_profile.gd`,
+> `scripts/managers/network_manager.gd`, `scripts/managers/game_state.gd`,
+> `scripts/managers/audio_manager.gd`, `translations/ui_strings.csv`.
+>
+> **Validation.** `--import` **0 ERROR** ; boots headless **0 ERROR** : `game/main.tscn`,
+> `game/operation_report.tscn`, `ui/profile.tscn`, `ui/public_profile.tscn`, `ui/main_menu.tscn`.
+> `BetrayalReport.self_check()` forcé hors scène : **OK**. i18n **114/114**.
+> **Contre-épreuve de mutation** (3 régressions client injectées à chaud : priorité du pacte rompu
+> supprimée, offres pendantes gardées dans la chronologie, sens de la proposition inversé) →
+> **3/3 détectées**, avec témoin négatif sur sources saines, restauration vérifiée par hash.
+> ⚠️ **Le critère de détection d'un assert Godot est le marqueur `Assertion failed` en sortie, PAS
+> le code de retour** : un `assert` faux N'INTERROMPT PAS le script en `--headless --script` (il
+> journalise et poursuit) — une contre-épreuve qui se fierait au code de sortie conclurait à tort.
+>
+> ⚠️⚠️ **MISE EN PAGE NON VÉRIFIÉE À L'ŒIL.** Un boot headless à 0 ERROR ne prouve RIEN sur le rendu :
+> ni le glyphe `↔` réellement dessiné, ni la position du toast persistant (196 px) face au toast
+> d'action adverse, ni la largeur du bloc PACTE dans la fiche joueur, ni le bandeau de trahison.
+> Recette de capture PNG : cf. §8.111.

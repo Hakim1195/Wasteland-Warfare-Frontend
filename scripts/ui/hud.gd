@@ -42,6 +42,12 @@ signal amount_quick(delta: int)
 # Émis au clic d'un bouton de la carte POUVOIR (lot E) : action ∈ {"eclipse", "spy"}. main.gd
 # rouvre la fenêtre correspondante — le HUD ne connaît AUCUNE règle de faction.
 signal power_action_requested(action: String)
+# --- PACTES DE NON-AGRESSION (§8.123) : le HUD ne décide RIEN, il relaie deux intentions ---
+# Émis au clic de « PROPOSER UN PACTE » dans la fiche joueur (main.gd envoie l'action au serveur,
+# seul juge de la légalité — le grisage local n'est qu'un confort, jamais une règle).
+signal pact_offer_requested(target_player_id: int)
+# Émis par les boutons ACCEPTER / REFUSER du toast d'offre — répondre est possible HORS TOUR.
+signal pact_response_requested(pact_id: int, accept: bool)
 
 # Brique identité joueur (E1 §8.73) : réutilisée par la fiche joueur, la zone opérateur et le
 # bandeau de combat compact.
@@ -262,6 +268,8 @@ var _op_identity: Label = null
 var _op_power_title: Label = null
 var _op_power_state: Label = null
 var _op_stats_box: VBoxContainer = null
+# PACTES (§8.123) : rappel compact de MES engagements en cours (masqué si je n'en ai aucun).
+var _op_pacts: Label = null
 var _op_built := false
 
 # --- FICHE JOUEUR (panneau gauche) : ordre de navigation + joueur affiché. ---
@@ -868,6 +876,16 @@ func _build_operator_zone() -> void:
 	_op_power_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	zone.add_child(_op_power_state)
 
+	# PACTES (§8.123) : rappel COMPACT de MES engagements en cours, sous mes stats. Sans lui, le
+	# joueur devrait ouvrir la fiche de chaque adversaire pour se souvenir avec qui il est lié —
+	# exactement l'information qu'il doit avoir sous les yeux au moment de choisir une cible.
+	_op_pacts = Label.new()
+	_op_pacts.add_theme_font_size_override("font_size", FS_SMALL)
+	_op_pacts.add_theme_color_override("font_color", ACCENT_CYAN)
+	_op_pacts.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_op_pacts.visible = false
+	zone.add_child(_op_pacts)
+
 	_op_stats_box = VBoxContainer.new()
 	_op_stats_box.add_theme_constant_override("separation", 2)
 	zone.add_child(_op_stats_box)
@@ -891,6 +909,10 @@ func set_operator_panel(data: Dictionary) -> void:
 	var state := str(data.get("power_state", ""))
 	_op_power_state.text = state
 	_op_power_state.visible = state != ""
+	# PACTES (§8.123) : ligne résolue par main.gd (« ↔ NOM (R5) · ↔ NOM (R6) »), "" = aucun pacte.
+	var pact_line := str(data.get("pacts_line", ""))
+	_op_pacts.text = pact_line
+	_op_pacts.visible = pact_line != ""
 	var hero = data.get("hero", {})
 	_fill_hero_stats(_op_stats_box, hero if typeof(hero) == TYPE_DICTIONARY else {})
 	# §8.119 — FLUCTUATION VISIBLE DES PP hors Split-Screen VS. Les PP bougeaient à chaque assaut
@@ -1050,6 +1072,15 @@ func set_player_sheet(data: Dictionary) -> void:
 		Color("eef3f7") if status_key == "HUD_SHEET_STATUS_ALIVE" else HERO_DANGER)
 	body.add_child(st)
 
+	# ---- Bloc PACTE (§8.123) : proposer / voir l'engagement en cours avec CE joueur ----
+	# Alimenté par main.gd (qui seul connaît l'état complet) ; absent → bloc entièrement masqué,
+	# donc rien à afficher sur sa PROPRE fiche ni face à un serveur non redéployé.
+	var pact_data = data.get("pact")
+	if typeof(pact_data) == TYPE_DICTIONARY and not (pact_data as Dictionary).is_empty():
+		body.add_child(_sheet_separator())
+		body.add_child(_sheet_eyebrow("HUD_SHEET_PACT"))
+		_build_pact_block(body, pact_data)
+
 	# ---- Bloc TERRITOIRE (uniquement si la fiche a été ouverte par un clic de territoire) ----
 	var terr = data.get("territory")
 	if typeof(terr) == TYPE_DICTIONARY and not (terr as Dictionary).is_empty():
@@ -1066,6 +1097,58 @@ func set_player_sheet(data: Dictionary) -> void:
 			rad.add_theme_color_override("font_color", Color("7fff00"))
 			body.add_child(rad)
 	open_player_sheet()
+
+# PACTES (§8.123) — contenu du bloc PACTE de la fiche joueur. `d` (construit par main.gd) :
+#   { "state": "none"|"sent"|"incoming"|"active",
+#     "enabled": bool, "reason_key": String, "reason_arg": int,
+#     "expires_at_round": int, "pact_id": int, "traitor": bool }
+#
+# RÈGLE D'ERGONOMIE : **jamais de bouton mort et muet.** Quand la proposition est impossible, le
+# bouton reste VISIBLE mais grisé, et son tooltip DIT POURQUOI (plafond atteint, trêve en cours
+# avec le nombre de rounds, offre déjà pendante, PROTOCOLE FINAL). Un bouton qui refuse sans
+# expliquer apprend au joueur à ne plus le regarder.
+func _build_pact_block(body: VBoxContainer, d: Dictionary) -> void:
+	var state := str(d.get("state", "none"))
+	var target_pid := int(d.get("pid", -9999))
+
+	if state == "active":
+		var line := _sheet_line(tr("PACT_SHEET_ACTIVE_FMT") % int(d.get("expires_at_round", 0)))
+		line.add_theme_color_override("font_color", ACCENT_CYAN)
+		body.add_child(line)
+		# Rappel EXPLICITE de la règle : le pacte n'empêche RIEN. Sans cette phrase, un joueur peut
+		# croire que le jeu bloquera son attaque — et se sentir trahi par l'interface, pas par
+		# l'adversaire. C'est le sens même du dispositif : la retenue est un choix, pas une règle.
+		var warn := _sheet_line(tr("PACT_SHEET_NO_EFFECT"))
+		warn.add_theme_font_size_override("font_size", FS_SMALL)
+		warn.add_theme_color_override("font_color", HERO_MUTED)
+		body.add_child(warn)
+		return
+
+	var btn := Button.new()
+	btn.name = "PactOfferButton"
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.add_theme_font_size_override("font_size", FS_BODY)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	if state == "sent":
+		# Accusé de réception LOCAL : le joueur a cliqué, il doit voir qu'il s'est passé quelque
+		# chose — même si la réponse d'en face peut ne jamais venir (l'offre sera soldée en silence).
+		btn.text = tr("PACT_OFFER_SENT")
+		btn.disabled = true
+		btn.tooltip_text = tr("PACT_OFFER_SENT_TOOLTIP")
+	else:
+		btn.text = tr("PACT_OFFER_BUTTON") % int(d.get("duration_rounds", 2))
+		btn.disabled = not bool(d.get("enabled", false))
+		if btn.disabled:
+			var key := str(d.get("reason_key", ""))
+			if key != "":
+				var arg := int(d.get("reason_arg", 0))
+				btn.tooltip_text = (tr(key) % arg) if key == "PACT_ERR_COOLDOWN" else tr(key)
+		else:
+			btn.tooltip_text = tr("PACT_OFFER_TOOLTIP")
+			btn.pressed.connect(func() -> void: pact_offer_requested.emit(target_pid))
+	body.add_child(btn)
 
 func _sheet_eyebrow(key: String) -> Label:
 	var l := Label.new()
@@ -1655,6 +1738,105 @@ func show_action_toast(rich_text: String, accent: Color = Color("36c5d9"), durat
 	_action_toast_tween.tween_callback(func() -> void:
 		if _action_toast != null and is_instance_valid(_action_toast):
 			_action_toast.visible = false)
+
+# =========================================================
+# Toast d'OFFRE DE PACTE (§8.123) — PERSISTANT, avec deux boutons
+# =========================================================
+# Le SEUL toast du jeu qui ne s'efface pas tout seul : il porte une DÉCISION, pas une information.
+# Il reste jusqu'à la réponse du joueur ou jusqu'à ce que l'offre cesse d'exister côté serveur
+# (proposant éliminé, offre soldée, course perdue) — main.gd le retire alors via `hide_pact_offer`.
+#
+# POURQUOI hors tour : répondre à un pacte est la seule interaction du jeu qui ne dépend pas de
+# l'horloge des tours. Le toast est donc actif même pendant le tour d'un adversaire — d'où le
+# `mouse_filter = STOP` (il doit capter ses clics, contrairement aux autres toasts qui les laissent
+# passer vers le plateau).
+var _pact_toast: PanelContainer = null
+var _pact_toast_id: int = -1
+
+func show_pact_offer(pact_id: int, proposer_name: String, accent: Color) -> void:
+	_ensure_pact_toast()
+	_pact_toast_id = int(pact_id)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.058824, 0.07451, 0.094118, 0.96)
+	style.border_color = accent
+	style.set_border_width_all(0)
+	style.border_width_left = 3
+	style.set_corner_radius_all(0)
+	style.set_content_margin_all(10)
+	_pact_toast.add_theme_stylebox_override("panel", style)
+	var text_node: RichTextLabel = _pact_toast.get_node("Box/PactText")
+	text_node.clear()
+	text_node.append_text(tr("PACT_OFFER_TOAST") % proposer_name.to_upper())
+	_pact_toast.visible = true
+	_pact_toast.reset_size()
+	# Ancré SOUS le toast d'action adverse (142 px) pour ne jamais le recouvrir : les deux peuvent
+	# coexister (un bot joue son tour pendant qu'une offre attend ma réponse).
+	_pact_toast.position = Vector2((size.x - _pact_toast.size.x) / 2.0, 196.0)
+
+# Retire le toast. `pact_id` négatif = « quel qu'il soit » (fin de partie, changement de scène) ;
+# sinon on ne retire QUE le toast de cette offre — sans quoi une offre B fraîchement reçue serait
+# effacée par la résolution tardive d'une offre A.
+func hide_pact_offer(pact_id: int = -1) -> void:
+	if _pact_toast == null or not is_instance_valid(_pact_toast):
+		return
+	if pact_id >= 0 and _pact_toast_id != int(pact_id):
+		return
+	_pact_toast.visible = false
+	_pact_toast_id = -1
+
+# Id de l'offre actuellement affichée (-1 = aucune) — main.gd s'en sert pour ne pas ré-afficher
+# en boucle le même toast à chaque rediffusion d'état.
+func current_pact_offer_id() -> int:
+	return _pact_toast_id if (_pact_toast != null and is_instance_valid(_pact_toast)
+		and _pact_toast.visible) else -1
+
+func _ensure_pact_toast() -> void:
+	if _pact_toast != null and is_instance_valid(_pact_toast):
+		return
+	_pact_toast = PanelContainer.new()
+	_pact_toast.name = "PactOfferToast"
+	# STOP (et non IGNORE) : ce toast est cliquable, c'est toute sa raison d'être.
+	_pact_toast.mouse_filter = Control.MOUSE_FILTER_STOP
+	var box := VBoxContainer.new()
+	box.name = "Box"
+	box.add_theme_constant_override("separation", 8)
+	_pact_toast.add_child(box)
+
+	var rtl := RichTextLabel.new()
+	rtl.name = "PactText"
+	rtl.bbcode_enabled = true
+	rtl.fit_content = true
+	rtl.scroll_active = false
+	rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rtl.add_theme_font_size_override("normal_font_size", FS_TITLE)
+	box.add_child(rtl)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_child(row)
+	row.add_child(_pact_toast_button("PACT_ACCEPT", ACCENT_CYAN, true))
+	row.add_child(_pact_toast_button("PACT_DECLINE", HERO_MUTED, false))
+	add_child(_pact_toast)
+
+func _pact_toast_button(key: String, accent: Color, accept: bool) -> Button:
+	var b := Button.new()
+	b.text = tr(key)
+	b.focus_mode = Control.FOCUS_NONE
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	b.add_theme_font_size_override("font_size", FS_BODY)
+	b.add_theme_color_override("font_color", accent)
+	b.custom_minimum_size = Vector2(120, 0)
+	b.pressed.connect(func() -> void:
+		# On masque IMMÉDIATEMENT (le joueur a tranché — laisser le toast serait laisser croire que
+		# le clic n'a pas pris) mais la vérité reste serveur : un refus `not_pending` se contentera
+		# d'un message d'erreur, sans jamais réafficher la question.
+		var pid_local := _pact_toast_id
+		hide_pact_offer(pid_local)
+		if pid_local >= 0:
+			pact_response_requested.emit(pid_local, accept))
+	return b
 
 # =========================================================
 # Toast d'ACTIVATION DE POUVOIR (lot E) — « ⚡ Razzia (relance totale) »

@@ -1099,14 +1099,20 @@ func populate_betrayals(data: Dictionary) -> void:
 	var matrix: Dictionary = data.get("matrix", {}) if typeof(data.get("matrix")) == TYPE_DICTIONARY else {}
 
 	_build_backstab_section(data.get("backstab", {}), names, colors)
+	# §8.123 — LES PACTES : posés juste après le coup de poignard, à dessein. Le lecteur vient
+	# d'apprendre QUI a frappé QUI par surprise ; la ligne suivante lui dit s'il y avait une
+	# promesse derrière. Section OMISE si aucun pacte n'a jamais été proposé.
+	_build_pacts_section(data.get("pacts", []), names, colors)
 	_build_turning_section(data.get("turning_point", {}), data.get("turning_series", []), names)
 	_build_matrix_section(matrix, names, colors)
 	_build_chain_section(data.get("chain", []), names, colors)
 
 	# Il n'y a « rien à raconter » que si AUCUNE unité n'est tombée entre joueurs : dans ce cas,
 	# l'onglet resterait un squelette de titres vides — on le masque plutôt que de le montrer creux.
+	# §8.123 : une partie sans un seul combat mais AVEC des pactes a bel et bien une histoire.
 	var has_story := int(matrix.get("total", 0)) > 0 \
 		or not (data.get("chain", []) as Array).is_empty() \
+		or not (data.get("pacts", []) as Array).is_empty() \
 		or not (data.get("backstab", {}) as Dictionary).is_empty()
 	_tabs.set_tab_hidden(TAB_BETRAYALS, not has_story)
 
@@ -1130,7 +1136,12 @@ func _build_backstab_section(stab: Dictionary, names: Dictionary, colors: Dictio
 	else:
 		box.add_child(_stab_line(stab, names, colors, ACCENT_GOLD))
 		var detail := Label.new()
-		var bits: Array[String] = [tr("BETRAYAL_CALM_FMT") % int(stab.get("calm_rounds", 0))]
+		var bits: Array[String] = []
+		# §8.123 — une trahison DÉCLARÉE se dit d'abord : elle explique à elle seule pourquoi cette
+		# attaque a été retenue, là où « calme depuis N rounds » n'est qu'une présomption.
+		if bool(stab.get("pact_broken", false)):
+			bits.append(tr("REPORT_BACKSTAB_PACT"))
+		bits.append(tr("BETRAYAL_CALM_FMT") % int(stab.get("calm_rounds", 0)))
 		if bool(stab.get("hero_kill", false)):
 			bits.append(tr("BETRAYAL_STAB_HERO"))
 		elif bool(stab.get("conquered", false)):
@@ -1159,6 +1170,50 @@ func _stab_line(stab: Dictionary, names: Dictionary, colors: Dictionary, tint: C
 	rtl.text = "[color=#%s]%s[/color]  [color=#8a97a5]%s[/color]" % [
 		tint.to_html(false), head, tr("BETRAYAL_UNITS_FMT") % int(stab.get("kills", 0))]
 	return rtl
+
+# LES PACTES (§8.123) — une ligne par pacte de la partie, dans l'ordre de leur FIN. Les pactes
+# TENUS et les REFUS sont montrés au même titre que les ruptures : le récit, c'est aussi qui a
+# proposé et qui a tenu parole. Section entièrement OMISE si aucun pacte n'a jamais existé (partie
+# ordinaire, ou serveur non redéployé → liste vide).
+func _build_pacts_section(rows: Array, names: Dictionary, colors: Dictionary) -> void:
+	if rows.is_empty():
+		return
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	box.add_child(_eyebrow(tr("REPORT_PACTS_TITLE")))
+	for r in rows:
+		if typeof(r) != TYPE_DICTIONARY:
+			continue
+		var status := str(r.get("status", ""))
+		var a := _bb_name(int(r.get("a", 0)), names, colors)
+		var b := _bb_name(int(r.get("b", 0)), names, colors)
+		var body := ""
+		match status:
+			"broken":
+				body = tr("REPORT_PACT_BROKEN_BY") % [
+					a, b, _bb_name(int(r.get("broken_by", 0)), names, colors),
+					int(r.get("round", 0))]
+			"expired":
+				body = tr("REPORT_PACT_EXPIRED") % [a, b, int(r.get("round", 0))]
+			"declined":
+				body = tr("REPORT_PACT_DECLINED") % [a, b]
+			_:
+				body = tr("REPORT_PACT_HELD") % [a, b]
+		var rtl := RichTextLabel.new()
+		rtl.bbcode_enabled = true
+		rtl.fit_content = true
+		rtl.scroll_active = false
+		rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rtl.add_theme_font_size_override("normal_font_size", 14)
+		# Le ROUGE est réservé à la RUPTURE : c'est la seule des quatre issues qui soit un
+		# manquement. Un pacte tenu est cyan (l'accord), une expiration et un refus restent muets.
+		var tint := "#d6453f" if status == "broken" else \
+			("#36c5d9" if status == "active" else "#8a97a5")
+		rtl.text = "[color=%s]%s[/color]" % [tint, body]
+		box.add_child(rtl)
+	_betrayal_box.add_child(box)
+	_betrayal_sections += 1
 
 # Fragment BBCode « pseudo teinté », ÉCHAPPÉ (un pseudo peut contenir un « [ » — piège n° 1 du chat).
 func _bb_name(pid: int, names: Dictionary, colors: Dictionary) -> String:
