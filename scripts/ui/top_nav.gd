@@ -769,6 +769,105 @@ func _on_quit_confirm() -> void:
 	AudioManager.play_sfx("click")
 	get_tree().quit()
 
+# =========================================================
+# CÉLÉBRATIONS DU HUB (§8.122, LOT F) — solde animé + toast de PROMOTION
+# =========================================================
+
+# Fait DÉFILER le solde de Coins de la jauge (achat confirmé en boutique). Relais vers la brique
+# xp_coins_bar, SEULE à savoir animer ce compteur (le pattern y vit depuis le Rapport Post-Op).
+func animate_coins(target: int) -> void:
+	if _xp_bar != null and is_instance_valid(_xp_bar):
+		_xp_bar.animate_coins_to(target)
+
+
+# --- Toast de promotion de division ---------------------------------------------------------
+# Clés de la mémoire LOCALE (settings.cfg [progress]) — cf. SettingsManager.get_progress.
+const PROGRESS_DIVISION_KEY := "ladder_division"
+const PROGRESS_POINTS_KEY := "ladder_points"
+const PROMO_TOAST_HOLD := 3.2
+const PROMO_TOAST_FADE := 0.45
+# Miroir de leaderboard._division_name : seule ÉLITE a besoin d'un libellé traduit (accent).
+const DIVISION_LABELS := {"ELITE": "DIVISION_ELITE"}
+
+var _promo_toast: Control = null
+
+# Compare la division du profil (champ DÉRIVÉ `division` de /auth/me) à la dernière connue
+# localement. Aucun appel réseau, aucun champ serveur neuf : on exploite ce que la nav a DÉJÀ fetché.
+#
+# ⚠️ POURQUOI ON COMPARE AUSSI LES POINTS : le seul changement de nom de division ne dit pas dans
+# quel SENS on a bougé. Points en hausse + division différente = PROMOTION. Points en baisse (ou
+# égaux) = relégation, ou remise à zéro de fin de saison — dans les deux cas on n'affiche RIEN :
+# on ne célèbre pas la douleur, et on ne la souligne pas non plus (décision produit).
+#
+# ⚠️ ÉCHELON (« OR II ») : /auth/me n'expose PAS le tier, seulement la division et les RP bruts.
+# On l'affiche donc s'il arrive un jour dans le payload, et on se contente de la division sinon.
+# Le DÉRIVER ici imposerait de recopier les seuils du ladder côté client — exactement le genre de
+# duplication qui finit par diverger du serveur.
+func _maybe_promotion_toast(data: Dictionary) -> void:
+	var division := str(data.get("division", ""))
+	if division == "":
+		return
+	var points := int(data.get("season_points", 0))
+	var last_division := SettingsManager.get_progress(PROGRESS_DIVISION_KEY)
+	var last_points := int(SettingsManager.get_progress(PROGRESS_POINTS_KEY, "0"))
+	SettingsManager.set_progress(PROGRESS_DIVISION_KEY, division)
+	SettingsManager.set_progress(PROGRESS_POINTS_KEY, str(points))
+	# Toute première lecture (nouvelle machine, profil neuf) : on mémorise, on ne célèbre pas.
+	if last_division == "":
+		return
+	if division == last_division or points <= last_points:
+		return
+	var tier := str(data.get("division_tier", data.get("tier", "")))
+	_show_promotion_toast(_division_label(division, tier))
+
+func _division_label(division: String, tier: String) -> String:
+	var name_txt: String = tr(str(DIVISION_LABELS[division])) if DIVISION_LABELS.has(division) \
+		else division
+	if tier == "":
+		return name_txt
+	return tr("DIVISION_TIER_FMT").format({"division": name_txt, "tier": tier})
+
+# Toast or sous la barre de nav : apparition, maintien, disparition. Non bloquant, non cliquable.
+func _show_promotion_toast(label: String) -> void:
+	if _promo_toast != null and is_instance_valid(_promo_toast):
+		_promo_toast.queue_free()
+	var panel := PanelContainer.new()
+	panel.name = "PromotionToast"
+	panel.top_level = true
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.058824, 0.07451, 0.094118, 0.96)
+	sb.set_corner_radius_all(0)
+	sb.set_border_width_all(2)
+	sb.border_color = GOLD
+	sb.set_content_margin_all(14.0)
+	panel.add_theme_stylebox_override("panel", sb)
+
+	var lbl := Label.new()
+	lbl.text = tr("TOAST_PROMOTION") % label
+	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 20)
+	lbl.add_theme_color_override("font_color", GOLD)
+	panel.add_child(lbl)
+
+	add_child(panel)
+	# Positionné APRÈS le premier calcul de taille (sinon `size` vaut zéro et le toast part à
+	# gauche de l'écran).
+	panel.modulate.a = 0.0
+	await get_tree().process_frame
+	if not is_instance_valid(panel):
+		return
+	panel.position = Vector2((get_viewport_rect().size.x - panel.size.x) * 0.5, NAV_H + 18.0)
+	_promo_toast = panel
+	AudioManager.play_sfx("promotion")
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, PROMO_TOAST_FADE)
+	tw.tween_interval(PROMO_TOAST_HOLD)
+	tw.tween_property(panel, "modulate:a", 0.0, PROMO_TOAST_FADE)
+	tw.tween_callback(panel.queue_free)
+
+
 func _style_danger_button(btn: Button) -> void:
 	if btn == null:
 		return
@@ -803,6 +902,7 @@ func _on_profile_loaded(data: Dictionary) -> void:
 	if not is_inside_tree():
 		return
 	_profile_data = data  # alimente le mini-profil sans nouvel appel réseau.
+	_maybe_promotion_toast(data)
 	# Jauge XP + Coins (lecture défensive : clés canoniques + repli sur anciens noms, piège float §5).
 	if _xp_bar:
 		var level := int(data.get("player_level", data.get("niveau", 1)))

@@ -653,6 +653,8 @@ func _play_permadeath() -> void:
 	stamp.scale = Vector2(2.2, 2.2)
 	stamp.modulate.a = 0.0
 	AudioManager.play_sfx("hero_down")
+	# §8.122 (LOT B) : mise à mort de héros → la musique plonge le temps du tampon K.O.
+	AudioManager.duck_music()
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(stamp, "scale", Vector2.ONE, 0.28) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)

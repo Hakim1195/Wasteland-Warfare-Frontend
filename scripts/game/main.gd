@@ -34,6 +34,10 @@ const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 # Helpers purs du Roster de Guerre (E1 §8.73) : sorted_pids reste la SOURCE UNIQUE de l'ordre
 # d'affichage des belligérants — réutilisé par la navigation ◀ ▶ de la fiche joueur (lot A).
 const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
+# Jauge de tension UNIQUE (§8.122, LOT A) : module PUR (statique) — la formule vit là-bas, le
+# contrôleur ne fait que l'ALIMENTER et la PROPAGER. Chargé par preload comme les autres modules
+# du dossier (le `class_name` existe, mais on n'en dépend pas — prudence cache d'import, CLAUDE.md).
+const WarIntensityCalc := preload("res://scripts/game/war_intensity.gd")
 
 @onready var button = $Button
 # Depuis la refonte HUD RTS (§8.29), le SubViewport du plateau est le 1ᵉʳ enfant de Main (plateau
@@ -194,6 +198,17 @@ const COMBAT_VS_SPEED := 2.5
 # SFX zone_alarm (E9 §8.81) : signature du dernier télégraphe joué (évite le rejeu à chaque refresh).
 var _last_zone_alarm_sig: String = ""
 
+# --- INTENSITÉ DE GUERRE (§8.122, LOT A) : cible recalculée à CHAQUE refresh d'état, valeur lissée
+#     en `_process`, propagée aux TROIS consommateurs par un chemin UNIQUE (aucun d'eux ne lit
+#     GameState de son côté). `_war_intensity_pushed` mémorise la dernière valeur RÉELLEMENT
+#     poussée : sous le seuil, on ne repousse rien → zéro travail inutile par frame. ---
+var _war_intensity_target: float = 0.0
+var _war_intensity: float = 0.0
+var _war_intensity_pushed: float = -1.0
+# En deçà de cet écart, la nouvelle valeur lissée ne change RIEN d'audible ni de visible : on
+# économise un set_shader_parameter + un appel audio à chaque frame.
+const WAR_INTENSITY_PUSH_EPSILON := 0.005
+
 func _ready():
 	button.pressed.connect(_on_debug_init)
 	# §8.121 — début de la durée annoncée par la carte de partage (cf. _arena_entered_at).
@@ -202,6 +217,10 @@ func _ready():
 	# Audio §8.66 : on bascule de la musique de menu vers la MUSIQUE DE COMBAT tendue de l'arène
 	# (lecteur unique → transition propre, plus de silence en jeu).
 	AudioManager.start_battle_ambient()
+	# §8.122 (LOT C) : ambiances DIÉGÉTIQUES de l'arène — vent du wasteland en continu + compteur
+	# Geiger (muet tant que `set_zone_proximity` n'a pas annoncé de menace, cf. _refresh). Leur
+	# extinction est prise en charge par AudioManager.start_menu_ambient (tous chemins de sortie).
+	AudioManager.start_arena_ambience()
 
 	NetworkManager.game_state_updated.connect(_on_state_updated)
 	NetworkManager.game_event.connect(_on_game_event)
@@ -1740,6 +1759,120 @@ func _push_zone_forecast() -> void:
 	_last_zone_alarm_sig = sig
 
 # =========================================================
+# INTENSITÉ DE GUERRE (§8.122, LOT A) — cible, lissage, propagation
+# =========================================================
+# Le contrôleur est le SEUL point où l'état devient « tension » : il construit le snapshot,
+# délègue le CALCUL au module pur, lisse, et pousse la valeur aux consommateurs. Ni AudioManager
+# ni board ne lisent GameState — c'est ce qui garantit qu'ils entendent tous la même guerre.
+
+func _process(delta: float) -> void:
+	var next := WarIntensityCalc.smooth(_war_intensity, _war_intensity_target, delta)
+	if is_equal_approx(next, _war_intensity) and _war_intensity_pushed >= 0.0:
+		return
+	_war_intensity = next
+	if absf(_war_intensity - _war_intensity_pushed) < WAR_INTENSITY_PUSH_EPSILON:
+		return
+	_war_intensity_pushed = _war_intensity
+	# LOT B/C : musique à couches + volume du Geiger d'ambiance.
+	AudioManager.set_war_intensity(_war_intensity)
+	# LOT E : désaturation / vignette / virage chromatique du fond de carte.
+	if is_instance_valid(board):
+		board.set_war_intensity(_war_intensity)
+
+# Recalcule la CIBLE depuis l'état public courant. Appelé par _refresh() (donc à chaque état reçu) :
+# jamais en `_process`, le snapshot ne change qu'avec l'état.
+func _update_war_intensity_target() -> void:
+	_war_intensity_target = WarIntensityCalc.compute(_war_intensity_snapshot())
+
+# Extrait de l'état public consommé par la formule. Tout vient de GameState — AUCUN champ neuf.
+func _war_intensity_snapshot() -> Dictionary:
+	# Moyenne des PV% des héros encore EN JEU (les éliminés/morts sortent du calcul : leur 0 % tirerait
+	# la tension au plafond alors qu'ils ne pèsent plus sur la partie).
+	var sum_ratio := 0.0
+	var counted := 0
+	for key in GameState.players.keys():
+		var p = GameState.players.get(str(key), null)
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		if str(p.get("status", "alive")) == "eliminated" or bool(p.get("is_dead", false)):
+			continue
+		var pv_max := int(p.get("hero_pv_max", 0))
+		if pv_max <= 0:
+			continue   # état pré-RPG : pas de héros, rien à moyenner.
+		sum_ratio += clampf(float(p.get("hero_pv_current", 0)) / float(pv_max), 0.0, 1.0)
+		counted += 1
+	# Aucun héros mesurable → 1.0 (« tous intacts »), le repli SÛR du module pur.
+	var heroes_ratio := (sum_ratio / float(counted)) if counted > 0 else 1.0
+	var mine: Dictionary = GameState.hero_of(_my_id())
+	var my_ratio := 1.0
+	if int(mine.get("pv_max", 0)) > 0:
+		my_ratio = clampf(float(mine.get("pv_current", 0)) / float(mine.get("pv_max", 1)), 0.0, 1.0)
+	# Zone : modèle CLUSTER §8.27 (liste "territories"), même lecture défensive que board.gd.
+	var zone_count := 0
+	var zone = GameState.contamination_zone
+	if typeof(zone) == TYPE_DICTIONARY and typeof(zone.get("territories")) == TYPE_ARRAY:
+		zone_count = (zone["territories"] as Array).size()
+	return {
+		"round": int(GameState.current_turn),
+		"alive_heroes_pv_ratio": heroes_ratio,
+		"my_hero_pv_ratio": my_ratio,
+		"zone_count": zone_count,
+		"final_protocol": bool(GameState.final_protocol_active),
+	}
+
+
+# GEIGER (§8.122, LOT C) — distance MINIMALE, en sauts d'adjacence, entre la zone contaminée et le
+# territoire à MOI le plus proche. 0 = un de mes territoires EST dans la zone. -1 = hors de portée
+# (ou je n'ai plus rien / la zone est vide) → AudioManager coupe le compteur.
+#
+# BFS MULTI-SOURCE depuis la zone, borné à la profondeur du dernier palier audible : sur 42 nœuds
+# c'est quelques dizaines d'itérations, et ça ne tourne qu'à la réception d'un état — jamais par
+# frame. On part de la ZONE (souvent 1 à 8 nœuds) plutôt que de mes territoires (jusqu'à 42) :
+# c'est le plus petit des deux fronts dans l'immense majorité des cas.
+func _zone_distance_to_me() -> int:
+	var zone = GameState.contamination_zone
+	if typeof(zone) != TYPE_DICTIONARY or typeof(zone.get("territories")) != TYPE_ARRAY:
+		return -1
+	var mine: Dictionary = {}
+	for tid in GameState.territories:
+		var o = GameState.territories[tid].get("owner_id")
+		if o != null and int(o) == _my_id():
+			mine[str(tid)] = true
+	if mine.is_empty():
+		return -1
+	var seen: Dictionary = {}
+	var frontier: Array = []
+	for tid in zone["territories"]:
+		var t := str(tid)
+		if not seen.has(t):
+			seen[t] = true
+			frontier.append(t)
+	if frontier.is_empty():
+		return -1
+	# Borne = index du dernier palier de la table de volumes (source unique côté AudioManager) :
+	# chercher plus loin ne servirait à rien, tout ce qui dépasse est « coupé ».
+	var max_hops: int = AudioManager.AMB_GEIGER_DB_BY_DISTANCE.size() - 1
+	for depth in range(max_hops + 1):
+		for t in frontier:
+			if mine.has(t):
+				return depth
+		if depth == max_hops:
+			break
+		var next_front: Array = []
+		for t in frontier:
+			for nb in MapData.neighbors_of(t, GameState.map_id):
+				var n := str(nb)
+				if seen.has(n):
+					continue
+				seen[n] = true
+				next_front.append(n)
+		frontier = next_front
+		if frontier.is_empty():
+			break
+	return -1
+
+
+# =========================================================
 # REBOURS GLOBAL DE PARTIE & PROTOCOLE FINAL (chantier « Tension & fin de partie », LOT F)
 # =========================================================
 
@@ -1762,6 +1895,10 @@ func _push_match_countdown() -> void:
 		if _phase_banner != null:
 			_phase_banner.show_banner(tr("FINAL_PROTOCOL_BANNER"), Color("d6453f"))
 		AudioManager.play_sfx("zone_alarm")
+		# §8.122 (LOT B) : l'annonce du PROTOCOLE FINAL passe DEVANT la musique. C'est aussi le
+		# moment où l'intensité saute à ≥ 0,85 (plancher WarIntensity) : sans ducking, le fondu
+		# d'entrée de la couche « high » et l'alarme se disputeraient les mêmes 2 secondes.
+		AudioManager.duck_music()
 		hud.add_feed_entries([{"category": "zone", "icon": "☢", "major": true, "tid": "",
 			"rich_text": tr("FINAL_PROTOCOL_LOG")}])
 	if not active:
@@ -1913,6 +2050,9 @@ func _play_combat_resolution(event: Dictionary) -> void:
 			_combat_queue.append(event.duplicate(true))
 		return
 	_combat_animating = true
+	# §8.122 (LOT D) : la carte vivante se met en retrait pendant le spectacle (aucune nuée
+	# d'oiseaux lancée par-dessus un duel). Levé par _combat_finished, à la fin des DEUX files.
+	board.set_ambient_busy(true)
 	await _do_play_combat(event)
 
 # Identité d'un camp d'un attack_result — le SERVEUR fait AUTORITÉ (§8.85).
@@ -2141,6 +2281,7 @@ func _combat_finished() -> void:
 		call_deferred("_play_pace_queue")
 		return
 	_combat_animating = false
+	board.set_ambient_busy(false)   # §8.122 (LOT D) : les deux files sont vides, la carte revit.
 	if _refresh_pending:
 		_refresh_pending = false
 		_refresh()
@@ -2168,6 +2309,7 @@ func _maybe_pace_event(event) -> void:
 	# Si une animation (combat ou action) est déjà en cours, _combat_finished prendra le relais.
 	if not _combat_animating:
 		_combat_animating = true
+		board.set_ambient_busy(true)   # §8.122 (LOT D) — cf. _play_combat_resolution.
 		_play_pace_queue()
 
 # Draine la file : un toast + un flash de territoire par action, puis rend la main à
@@ -2368,6 +2510,12 @@ func _refresh():
 	_push_zone_forecast()
 	# Rebours GLOBAL de partie + mini-classement de départage (chantier « Tension », LOT F).
 	_push_match_countdown()
+	# INTENSITÉ DE GUERRE (§8.122, LOT A) : nouvelle CIBLE. Le lissage et la propagation (musique,
+	# ambiance, shader) se font en `_process` — ici on ne fait que recalculer la destination.
+	_update_war_intensity_target()
+	# GEIGER (§8.122, LOT C) : proximité de la zone radioactive, en sauts d'adjacence. Recalculé
+	# ICI (à l'état reçu) et JAMAIS en `_process` : la zone ne bouge qu'entre deux états.
+	AudioManager.set_zone_proximity(_zone_distance_to_me())
 	# Tracker d'objectif vivant (E6 §8.78) : jauge de progression sous l'objectif secret.
 	_push_objective_tracker()
 	# Destinataires du chat privé (§8.33) : autres joueurs résolus en pseudo.

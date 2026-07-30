@@ -28,6 +28,8 @@ extends Control
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 # Barre de navigation supérieure partagée (hub Warzone) — montée en tête d'écran (onglet BOUTIQUE).
 const TopNav = preload("res://scripts/ui/top_nav.gd")
+# Séquence d'unlock (§8.122, LOT F) — surcouche générique de révélation d'un article acquis.
+const UnlockCelebrationScene := preload("res://scenes/ui/unlock_celebration.tscn")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -92,6 +94,12 @@ var _factions: Dictionary = {}
 # Nom (traduit) du dernier article dont l'achat a été LANCÉ — pour libeller le message de succès,
 # le signal d'achat étant global (il ne rappelle pas quel article a été acheté).
 var _pending_purchase_name: String = ""
+# §8.122 (LOT F) : article dont l'achat vient d'être CONFIRMÉ — mémorisé pour la séquence d'unlock
+# (même motif que `_pending_purchase_name` : le signal de succès est global et anonyme). Vidé dès
+# consommation, pour qu'un second `shop_purchase_success` (ré-émission) ne rejoue pas la séquence.
+var _pending_purchase_item: Dictionary = {}
+# Référence à la barre de nav montée par cet écran : elle porte le compteur de Coins à animer.
+var _nav: Control = null
 
 # Onglet actif (id de TAB_DEFS) + boutons construits (id -> Button) pour le restylage actif/inactif.
 var _active_tab: String = "characters"
@@ -106,6 +114,7 @@ func _ready():
 	var nav := TopNav.new()
 	nav.active_tab = "shop"
 	add_child(nav)
+	_nav = nav   # §8.122 (LOT F) : porte le compteur de Coins que l'on fait DÉCOMPTER après achat.
 	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
 	AudioManager.start_menu_ambient()
 
@@ -735,6 +744,13 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 		var in_depot := _eyebrow(tr("SHOP_IN_DEPOT"))
 		in_depot.add_theme_color_override("font_color", GOLD)
 		v.add_child(in_depot)
+		# Chip « NOUVEAU » (§8.122, LOT F) : possédé mais jamais consulté sur cette machine. La
+		# consultation s'enregistre dans l'écran PERSONNAGES (c'est là qu'un article a une fiche) —
+		# ici le chip est un rappel : « tu as acheté ça, tu n'es jamais allé le voir ». 100 % local.
+		if not SettingsManager.is_item_seen(id):
+			var chip := _eyebrow(tr("SHOP_NEW_BADGE"))
+			chip.add_theme_color_override("font_color", GOLD)
+			v.add_child(chip)
 		# Skin possédé (M5 §8.69) : bouton ÉQUIPER / ÉQUIPÉ ✓ (un skin équipé par faction).
 		# Finisher possédé (lot G) : MÊME bouton (un seul finisher équipé, tous factions confondues).
 		if category == "skin" or category == "finisher":
@@ -794,22 +810,175 @@ func _on_buy_pressed(item: Dictionary):
 	var id := str(item.get("id", ""))
 	var item_name := tr(str(item.get("name", ""))).to_upper()
 	_pending_purchase_name = item_name
-	# Pack de Coins : achat en ARGENT RÉEL → aucun pré-contrôle de solde (on PAIE pour GAGNER des Coins).
+	# Pack de Coins : achat en ARGENT RÉEL → aucun pré-contrôle de solde (on PAIE pour GAGNER des
+	# Coins), et AUCUNE confirmation maison : le flux d'argent réel a la sienne, en dehors du jeu.
 	if str(item.get("currency_type", "virtual")) == "fiat":
 		NetworkManager.purchase_item_fiat(id)
 		return
-	# Article en Coins (faction / skin / Pass) : pré-contrôle local pour un retour INSTANTANÉ et
-	# localisé (le serveur reste l'autorité finale).
+	# Article en Coins (faction / skin / finisher / Pass) : pré-contrôle local pour un retour
+	# INSTANTANÉ et localisé (le serveur reste l'autorité finale).
 	if _credits < int(item.get("price", 0)):
 		_set_status(tr("SHOP_INSUFFICIENT") % item_name, true)
 		return
-	NetworkManager.purchase_item_virtual(id)
+	# §8.122 (LOT F) : CONFIRMATION SYSTÉMATIQUE. Décision produit assumée — pas d'option « ne plus
+	# demander ». Un clic unique engageait jusqu'ici plusieurs milliers de Coins sans retour possible
+	# (aucun remboursement côté serveur) : c'est autant une mise en scène qu'un garde-fou.
+	_confirm_purchase(item, item_name)
+
+
+# =========================================================
+# CONFIRMATION D'ACHAT (§8.122, LOT F)
+# =========================================================
+const CONFIRM_PANEL_MIN_W := 460.0
+
+var _confirm_dialog: Control = null
+
+func _confirm_purchase(item: Dictionary, item_name: String) -> void:
+	if _confirm_dialog != null and is_instance_valid(_confirm_dialog):
+		_confirm_dialog.queue_free()
+	var price := int(item.get("price", 0))
+
+	var dim := ColorRect.new()
+	dim.name = "PurchaseConfirm"
+	dim.color = Color(0, 0, 0, 0.62)
+	dim.top_level = true
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(dim)
+	dim.position = Vector2.ZERO
+	dim.size = get_viewport_rect().size
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(CONFIRM_PANEL_MIN_W, 0)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(GUNMETAL, 0.98)
+	sb.set_corner_radius_all(0)
+	sb.set_border_width_all(2)
+	sb.border_color = GOLD
+	sb.set_content_margin_all(26.0)
+	panel.add_theme_stylebox_override("panel", sb)
+	center.add_child(panel)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	panel.add_child(v)
+
+	var title := _eyebrow(tr("SHOP_CONFIRM_TITLE"))
+	title.add_theme_color_override("font_color", GOLD)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(title)
+
+	var name_lbl := _title_label(item_name, 26)
+	name_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(name_lbl)
+
+	var price_lbl := _title_label(_format_credits(price) + " ¢", 22)
+	price_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	price_lbl.add_theme_color_override("font_color", GOLD)
+	price_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(price_lbl)
+
+	# Le solde APRÈS achat est la vraie information manquante : « 4 500 ¢ » ne dit rien, « il vous
+	# restera 200 ¢ » dit tout.
+	var balance := _body_label(tr("SHOP_CONFIRM_BALANCE") % maxi(0, _credits - price))
+	balance.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	balance.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(balance)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	v.add_child(row)
+
+	var cancel := Button.new()
+	cancel.text = tr("SHOP_CONFIRM_CANCEL")
+	cancel.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	cancel.custom_minimum_size = Vector2(170, 46)
+	cancel.add_theme_font_override("font", _font)
+	cancel.add_theme_font_size_override("font_size", 16)
+	WarzoneUI.apply_ghost_button(cancel)
+	cancel.pressed.connect(func() -> void:
+		AudioManager.play_sfx("back")
+		dim.queue_free())
+	cancel.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	row.add_child(cancel)
+
+	var ok := Button.new()
+	ok.text = tr("SHOP_CONFIRM_OK")
+	ok.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	ok.custom_minimum_size = Vector2(190, 46)
+	_style_cta_button(ok)
+	ok.pressed.connect(func() -> void:
+		AudioManager.play_sfx("confirm")
+		dim.queue_free()
+		# L'article est mémorisé pour la SÉQUENCE D'UNLOCK : le signal de succès est global, il ne
+		# rappelle pas CE qui a été acheté (même raison que `_pending_purchase_name`).
+		_pending_purchase_item = item.duplicate(true)
+		NetworkManager.purchase_item_virtual(str(item.get("id", ""))))
+	ok.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	row.add_child(ok)
+
+	WarzoneUI.add_corner_notches(panel, 16.0, GOLD)
+	_confirm_dialog = dim
 
 # --- Résultats d'achat (R1) -------------------------------------------------
 # Succès : le serveur renvoie le solde + l'inventaire à jour ({credits, items}) → on les applique.
 func _on_purchase_success(data: Dictionary) -> void:
+	# §8.122 (LOT F) : le solde AVANT que l'inventaire ne l'écrase — c'est de là que part le
+	# décompte animé (sinon on tweenerait de la valeur finale vers elle-même).
+	var before := _credits
 	_on_inventory_loaded(data)
 	_set_status(tr("SHOP_ACQUIRED") % _pending_purchase_name)
+	if _nav != null and is_instance_valid(_nav) and _credits != before:
+		_nav.animate_coins(_credits)
+	# SÉQUENCE D'UNLOCK : réservée aux articles qu'on POSSÈDE ensuite et qu'on peut montrer
+	# (personnage / skin / finisher). Un Pass n'a pas de « visuel d'objet » à révéler, et un pack de
+	# Coins ne passe même pas par ici (fiat) — les célébrer produirait une carte vide.
+	var item := _pending_purchase_item
+	_pending_purchase_item = {}
+	if item.is_empty():
+		return
+	var category := str(item.get("category", ""))
+	if category == "faction" or category == "skin" or category == "finisher":
+		_play_unlock(item)
+
+
+# Surcouche de révélation (scenes/ui/unlock_celebration.tscn) : vue GÉNÉRIQUE, on ne lui passe
+# qu'un nom, un visuel et une couleur d'accent. Le portrait vient du .tres de la faction concernée
+# (la faction elle-même, ou `hero_key` pour un skin) ; un finisher n'en a pas → plaque d'accent.
+func _play_unlock(item: Dictionary) -> void:
+	var fid := str(item.get("hero_key", ""))
+	if fid == "":
+		fid = str(item.get("id", ""))
+	var accent: Color = GOLD
+	if _factions.has(fid) and _factions[fid].get("color") is Color:
+		accent = _factions[fid]["color"]
+	var cine = UnlockCelebrationScene.instantiate()
+	add_child(cine)     # dernier enfant de l'écran → au-dessus de la nav et de la grille
+	cine.play({
+		"name": tr(str(item.get("name", ""))).to_upper(),
+		"texture": _unlock_portrait(fid),
+		"accent": accent,
+	})
+
+# Portrait du héros d'une faction (hero_path de son .tres) — null si la ressource manque : la
+# séquence affiche alors sa plaque d'accent (repli silencieux, jamais d'erreur).
+func _unlock_portrait(faction_id: String) -> Texture2D:
+	var path := FACTIONS_DIR + faction_id + ".tres"
+	if faction_id == "" or not ResourceLoader.exists(path):
+		return null
+	var res = load(path)
+	if res == null:
+		return null
+	var hp := str(res.get("hero_path"))
+	if hp == "" or not ResourceLoader.exists(hp):
+		return null
+	var tex = load(hp)
+	return tex if tex is Texture2D else null
 
 # Échec (HTTP 400/501) : on affiche le message du serveur EN ROUGE (« Crédits insuffisants »…).
 func _on_purchase_failed(message: String) -> void:

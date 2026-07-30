@@ -105,6 +105,9 @@ func play(data: Dictionary) -> void:
 		if bool(_params.get("shockwave", true)):
 			_shockwave(secondary)
 	AudioManager.play_sfx(str(_params.get("sting", "hero_down")))
+	# §8.122 (LOT B) : la musique s'efface sous le sting du finisher — sans ce ducking, la couche
+	# « high » d'une fin de partie tendue mange l'impact du seul moment vraiment irréversible du jeu.
+	AudioManager.duck_music()
 
 	var tw := create_tween()
 	tw.tween_property(self, "modulate:a", 1.0, IN_TIME)

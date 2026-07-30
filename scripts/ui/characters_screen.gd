@@ -238,9 +238,16 @@ func _on_heroes_loaded(heroes: Array) -> void:
 # sheet_back_button -> fondu). L'entrée d'écran (_ready) appelle _show_roster(false) : la RACINE de
 # l'écran fait déjà son propre fondu (WarzoneUI.animate_screen_enter) — fondre EN PLUS roster_view
 # à l'entrée ferait un double fondu (2 tweens sur 2 Color différentes → sursaut visuel).
+# §8.122 (LOT F) : un chip « NOUVEAU » a été consommé pendant qu'on était dans une fiche → la grille
+# doit être reconstruite au retour, sinon le chip resterait affiché jusqu'au prochain écran.
+var _roster_dirty := false
+
 func _show_roster(animate: bool = true) -> void:
 	_state = "roster"
 	_sheet_index = -1
+	if _roster_dirty:
+		_roster_dirty = false
+		_build_roster_grid()
 	if sheet_view:
 		sheet_view.visible = false
 	if roster_view:
@@ -256,6 +263,13 @@ func _show_sheet(index: int) -> void:
 		return
 	_state = "sheet"
 	_sheet_index = index
+	# §8.122 (LOT F) : ouvrir la fiche = « j'ai vu ce personnage » → le chip NOUVEAU disparaîtra au
+	# retour au roster. On marque la grille SALE plutôt que de la reconstruire tout de suite : elle
+	# est masquée à cet instant, la reconstruire ici serait du travail jeté.
+	var seen_key := str(hero.get("faction_id", ""))
+	if seen_key != "" and not SettingsManager.is_item_seen(seen_key):
+		SettingsManager.mark_item_seen(seen_key)
+		_roster_dirty = true
 	if roster_view:
 		roster_view.visible = false
 	if sheet_view:
@@ -374,6 +388,11 @@ func _make_roster_card(index: int, hero: Dictionary) -> PanelContainer:
 	var is_favorite := fav_fid != "" and fav_fid == fid
 	if is_favorite:
 		v.add_child(_make_favorite_row())
+	# --- Chip « NOUVEAU » (§8.122, LOT F) : personnage POSSÉDÉ dont la fiche n'a jamais été ouverte
+	# sur cette machine. 100 % LOCAL (user://seen_items.json) — le serveur ne sait pas ce que le
+	# joueur a « déjà regardé », et n'a pas à le savoir. Ouvrir la fiche fait disparaître le chip. ---
+	if owned and not SettingsManager.is_item_seen(fid):
+		v.add_child(_make_new_row())
 
 	# --- 1. Vignette : repli STATIQUE (voir _make_roster_thumbnail). ---
 	v.add_child(_make_roster_thumbnail(fid, accent))
@@ -539,6 +558,24 @@ func _make_favorite_row() -> HBoxContainer:
 	row.add_child(spacer)
 	var lbl := Label.new()
 	lbl.text = "CHAR_FAVORITE"  # clé brute -> auto-traduction (FR/EN/IT)
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", GOLD)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(lbl)
+	return row
+
+# Rangée « ⬤ NOUVEAU » (§8.122, LOT F) — même gabarit que la rangée FAVORI (flux normal aligné à
+# droite plutôt qu'un overlay ancré : la largeur du libellé change avec la langue).
+func _make_new_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(spacer)
+	var lbl := Label.new()
+	lbl.text = "SHOP_NEW_BADGE"   # clé brute -> auto-traduction (FR/EN/IT)
 	lbl.add_theme_font_override("font", _font)
 	lbl.add_theme_font_size_override("font_size", 11)
 	lbl.add_theme_color_override("font_color", GOLD)

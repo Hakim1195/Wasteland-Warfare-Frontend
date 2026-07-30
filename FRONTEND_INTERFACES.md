@@ -1720,3 +1720,223 @@ victoire) · replays vidéo · partage réseau direct (API Twitter & co) · over
 > de vraies données de partie**, la plaque « INTEL CLASSIFIÉ » **en jeu** (maintien du clic, survol
 > 0,6 s, cohabitation avec le filet de titre de la zone OBJECTIFS), le renseignement d'espionnage
 > masqué, et le bouton « OUVRIR LE DOSSIER » après un export **depuis l'arène**.
+
+---
+
+## §8.122 — SENSORIEL & IMMERSION : intensité de guerre, musique dynamique, ambiances, carte vivante, célébrations
+
+> **Chantier 100 % FRONTEND.** Aucun endpoint, aucun message WebSocket, **aucune modification de
+> `CONTRAT_RESEAU.md`** : tout se dérive de l'**état public déjà diffusé**. Sept lots (A→G).
+> Objectif : faire **sentir** la guerre — l'écran disait ce qui se passait, il ne le faisait pas
+> ressentir.
+
+### §8.122.1 — LOT A : `war_intensity`, la jauge de tension UNIQUE
+
+`scripts/game/war_intensity.gd` (`class_name WarIntensity`) — **fonctions STATIQUES pures**, zéro
+I/O, zéro autoload : testable sans scène.
+
+**Formule** (constantes nommées en tête du fichier, à équilibrer au playtest) :
+
+| Terme | Poids | Source (état public) |
+|---|---|---|
+| Durée de partie | `0,30 × min(round / 8, 1)` | `current_turn` |
+| Héros qui saignent | `0,25 × (1 − moyenne des PV% VIVANTS)` | `players[*].hero_pv_*` |
+| MES PV | `0,15 × (1 − mes PV%)` | `GameState.hero_of(moi)` |
+| Zone radioactive | `0,15 × min(zone_count / 8, 1)` | `contamination_zone.territories` |
+| PROTOCOLE FINAL | `+0,25` | `final_protocol_active` |
+
+Le tout **clampé [0,1]**, puis **plancher `FINAL_PROTOCOL_FLOOR = 0,85`** si le PROTOCOLE FINAL est
+armé. Ce plancher n'est pas cosmétique : sans lui, un protocole déclenché tôt sur une partie propre
+rendait ≈ 0,38 — donc aucune couche musicale « high », aucune vignette — alors que l'écran, lui,
+annonçait l'urgence.
+
+**Lissage** `smooth(current, target, delta)` : exponentiel `1 − e^(−0,4·dt)`, **indépendant du
+framerate** (τ = 2,5 s). Un `lerp` naïf aurait fait monter la musique 5× plus vite sur un PC rapide.
+
+**Propagation — UN SEUL chemin** (`main.gd`) : `_refresh()` recalcule la **cible**, `_process()`
+lisse et pousse. Aucun consommateur ne lit `GameState` :
+
+```
+état serveur → main._update_war_intensity_target()   (à chaque état reçu)
+             → main._process()  → AudioManager.set_war_intensity(v)   (LOT B)
+                                → board.set_war_intensity(v)          (LOT E)
+```
+
+Un **epsilon de 0,005** évite de repousser une valeur qui ne change rien d'audible ni de visible.
+
+> ⚠️ **INVARIANT** : il n'existe **qu'une** formule de tension. Un consommateur qui veut « sa »
+> tension ajuste **ses seuils**, jamais une 2ᵉ formule — sinon la musique, le son et l'image
+> racontent trois guerres différentes.
+
+Harnais : `tools/test_war_intensity.tscn` (**18 asserts**) — fourchettes de recette (début
+0,05-0,15 · fin serrée 0,70-1,00), monotonie, plancher, indépendance au framerate.
+
+### §8.122.2 — LOT B : musique dynamique à couches
+
+`audio_manager.gd` — à côté du `_music_player` historique (**conservé**, c'est le chemin des menus
+ET le repli), un trio `_battle_layers` sur le bus `Music` :
+
+- **Mode couches activé UNIQUEMENT si les TROIS stems existent** (`music/battle_base|mid|high`).
+  Un seul manquant → `battle_ambient`, comportement **strictement inchangé**, **aucun log d'erreur**
+  (le cas « fichiers absents » est le cas nominal tant que la production audio n'a pas livré).
+- Les trois `play()` partent dans la **même frame** (boucles alignées à l'échantillon).
+- Bandes avec **hystérésis 0,05** : `mid` entre à `v > 0,35` / sort à `v < 0,30` ; `high` entre à
+  `v > 0,65` / sort à `v < 0,60`. Fondus de 1,5 s.
+- **Resynchronisation défensive** toutes les 60 s : dérive > 50 ms → `seek` sur la base, `print`
+  silencieux.
+- **`duck_music(amount_db, duration)`** : la musique s'efface sous un sting puis revient. Appelée
+  sur **4 moments** — sting de finisher (`hero_down_cinematic`), mise à mort (`split_screen_vs`),
+  PROTOCOLE FINAL (`main.gd`), révélation du **vainqueur** (`operation_report`, §8.121).
+
+> 🔧 **Refactor de `_fade_music_in`** : le fondu pilote désormais le niveau **nominal**
+> (`_music_base_db`) et non `volume_db` en direct. Volume réel = `nominal + offset de ducking`.
+> Sans ça, un ducking déclenché **pendant** le fondu d'entrée était écrasé à la frame suivante.
+
+### §8.122.3 — LOT C : ambiances diégétiques (bus `Ambience`)
+
+Nouveau bus **`Ambience`** dans `default_bus_layout.tres` (routé Master, −12 dB au repos) + slider
+« AMBIANCE » dans Paramètres (défaut **0,25 linéaire = −12 dB**). Nouvelle catégorie d'override :
+`assets/audio/amb/` (`_load_override("amb", nom)`).
+
+| Ambiance | Où | Niveau |
+|---|---|---|
+| `geiger` | Arène | **−6 / −14 / −22 dB** selon la distance (0/1/2 sauts), coupé au-delà — fondu 1 s |
+| `wind` | Arène | −18 dB fixe |
+| `radio_hub` | **QG uniquement** | −20 dB fixe |
+
+**Geiger proportionnel à la menace** — `main._zone_distance_to_me()` : **BFS multi-source** depuis
+la zone contaminée vers mes territoires, **borné** à la profondeur du dernier palier audible.
+Recalculé **à chaque état reçu**, jamais en `_process`. On part de la zone (1 à 8 nœuds) plutôt que
+de mes territoires (jusqu'à 42) : c'est le plus petit des deux fronts.
+
+> ⚠️ **Le Geiger n'est PAS piloté par `war_intensity`** — et c'est délibéré. Il ne mesure pas la
+> tension globale, il mesure « la radioactivité est à N territoires de chez moi ». Le brancher sur
+> l'intensité le ferait crépiter en fin de partie même à l'autre bout de la carte : il **mentirait**
+> sur ce qu'il indique. C'est le seul écart au principe « une seule source de tension », et il est
+> assumé.
+
+**Cycle de vie sans bookkeeping de scène** : `start_menu_ambient()` coupe couches + vent + Geiger +
+radio ; `start_battle_ambient()` coupe la radio ; le menu principal **rallume** la radio juste après.
+Un `_exit_tree` d'arène n'aurait couvert qu'un chemin de sortie sur quatre (victoire, abandon,
+élimination, coupure réseau).
+
+**Talkie chat** (`hud.gd`) : `radio_crackle` **puis** `chat_ping` 60 ms plus tard — le message cesse
+d'être un « bip d'appli ».
+
+### §8.122.4 — LOT D : carte vivante (`AmbientLayer`)
+
+Deux nœuds neufs dans `board.tscn` + `scripts/game/ambient_layer.gd` (orchestrateur, **VUE PURE** :
+il ne lit **jamais** `GameState` — `board.generate_board()` lui passe un contexte résolu).
+
+**⚠️ ORDRE DE RENDU (documenté, car l'ordre d'arbre ne suffit pas)** — `TerritoryOverlay` et
+`BadgeLayer` sont ajoutés **par code**, donc *après* les nœuds de la scène :
+
+| Nœud | z_index | Origine |
+|---|---|---|
+| `BoardBackground` · `AmbientBack` · `TerritoriesContainer` · `TerritoryOverlay` | 0 | .tscn / code |
+| **`AmbientFront`** | **1** | .tscn |
+| **`BadgeLayer`** | **2** | code (`board.gd`) |
+| `attack_arrow` · flèche d'intention | 40 · 50 | code |
+
+Cinq effets : **cendres** (40, calque arrière) · **fumées de guerre** (pool de 10 émetteurs
+recyclés, 24 particules au round courant → 12 au round−1 → extinction au round−2) · **feux de camp**
+(la « capitale » = plus grosse garnison, égalité tranchée **alphabétiquement** pour que le feu ne
+saute pas d'un refresh à l'autre) · **éclairs de zone** (8-15 s, flash blanc-vert α 0,30 +
+`thunder_far`) · **nuée d'oiseaux** (60-90 s, Bézier en 6-8 s, **un seul Tween**, sautée pendant un
+combat via `board.set_ambient_busy`).
+
+**Budget : 40 + 10×24 + 6×8 = 328 particules ≤ 500** (vérifié par assert). Tous les émetteurs en
+`local_coords = false`. Aucune allocation en `_process`. **Un seul** appel de refresh, en fin de
+`generate_board()`.
+
+> 🔧 Le flash d'éclair passe par **`board.flash_territory_color()`**, extrait de `flash_territory` :
+> depuis l'overlay « vraies frontières » (§8.51) il n'existe plus de matériau `toxic_pulsation` par
+> territoire à faire pulser — c'est le repli prévu au cahier des charges, et il épouse la vraie côte.
+
+### §8.122.5 — LOT E : cycle de tension visuel
+
+`shaders/tactical_map.gdshader` — uniforme `war_intensity` (défaut 0 = rendu historique **à
+l'identique**). Trois effets, **tous plafonnés** (constantes commentées dans le shader) :
+
+| Effet | Plafond (à intensité 1,0) |
+|---|---|
+| Désaturation du fond de carte | **15 %** |
+| Vignette périphérique | **0,25** d'opacité |
+| Virage des **coins** vers le rouge sombre | **8 %** |
+
+La vignette démarre au rayon normalisé **0,55** : sous ce seuil la **zone centrale de jeu conserve
+exactement sa luminosité d'origine**, à toute intensité. Le shader **ne touche pas** aux
+remplissages ni aux liserés de territoires — ils vivent dans `territory_overlay.gdshader`, un
+Sprite2D distinct dessiné par-dessus. C'est ce qui garantit que la tension ne peut **pas** dégrader
+le contraste des couleurs de joueur, du télégraphe ou des cibles.
+
+`board.set_war_intensity(v)` pousse l'uniforme (valeur déjà lissée en amont) ; `board._ready()` la
+remet à 0 — `tactical_map_material.tres` est une ressource **partagée mise en cache**, une partie
+quittée à 0,9 aurait rouvert la suivante avec la vignette déjà en place.
+
+En `reduced_motion` l'uniforme **reste appliqué** (c'est statique, pas du mouvement).
+
+### §8.122.6 — LOT F : célébrations du hub
+
+1. **Confirmation d'achat SYSTÉMATIQUE** (`shop.gd`) — nom + prix + **« SOLDE APRÈS ACHAT : N ¢ »**
+   + CONFIRMER/ANNULER. Pas d'option « ne plus demander » (décision produit). Les packs **fiat** en
+   sont exclus : le flux d'argent réel a sa propre confirmation, hors du jeu.
+2. **Compteur de Coins animé** — `xp_coins_bar.animate_coins_to()` (décompte 0,6 s + flash or), qui
+   **réutilise** `_flash_coins()` du Rapport Post-Op. `shop.gd` capture le solde **avant** que
+   l'inventaire ne l'écrase, sinon on tweenerait de la valeur finale vers elle-même.
+3. **Chip « NOUVEAU »** — `user://seen_items.json` via `SettingsManager.is_item_seen/mark_item_seen`.
+   Article possédé jamais consulté → chip or (boutique + écran Personnages). Ouvrir la fiche
+   l'enregistre. **Aucun appel réseau** : le serveur ne sait pas ce que le joueur a « déjà regardé ».
+4. **Séquence d'unlock** — `scenes/ui/unlock_celebration.tscn` (100 % code, générique) :
+   assombrissement 0,25 s → **silhouette** noire 0,40 s → révélation (`TRANS_BACK` 1,15→1,0) + sting
+   + ~30 particules or. **1,15 s animés** (contrat ≤ 2,5 s), clic = skip, `reduced_motion` =
+   affichage direct. Déclenchée pour personnage / skin / finisher (un Pass n'a pas d'objet à révéler).
+5. **Pulse d'équipement au draft** (`faction_selection.gd`) — signature **triée** de la panoplie
+   (le finisher voyage dans le même bloc `equipped`, slot `__finisher__`) comparée à celle du dernier
+   draft ; si elle a changé → pulse unique du présentoir (1,06 · 0,4 s). Le tri est indispensable :
+   l'ordre des clés JSON n'est pas garanti, une signature instable ferait pulser à chaque draft.
+6. **Toast de promotion** (`top_nav.gd`) — au retour du profil **déjà fetché**. Règle :
+   **division changée ET points en hausse**. Points en baisse ⇒ relégation **ou** reset de saison :
+   dans les deux cas **RIEN** (on ne célèbre pas la douleur, on ne la souligne pas non plus).
+   Première lecture ⇒ on mémorise sans célébrer.
+   > ⚠️ `/auth/me` expose `division` et `season_points`, **pas l'échelon**. Le toast affiche donc
+   > « ▲ PROMOTION : OR » et non « OR II » ; l'échelon s'affichera **automatiquement** si le champ
+   > arrive un jour dans le payload. Le **dériver** côté client imposerait de recopier les seuils du
+   > ladder — exactement le genre de duplication qui finit par diverger du serveur.
+
+Mémoires locales : section **`[progress]`** de `settings.cfg` (`get_progress`/`set_progress`).
+
+### §8.122.7 — LOT G : réglages, i18n, validation
+
+- **Paramètres** : 4ᵉ slider **AMBIANCE** (bloc AUDIO, construit par code — zéro retouche de
+  `.tscn`, donc zéro risque sur les NodePath `@export`) · toggle **CARTE VIVANTE** (section CONFORT,
+  défaut ON, **grisé + mention** quand `reduced_motion` est actif). Basculer `reduced_motion`
+  **reconstruit** la section pour que le joueur voie la conséquence de son propre clic.
+  > Le forçage vit dans le **consommateur** (`ambient_layer`), pas dans `SettingsManager` : le
+  > joueur retrouve son choix intact s'il décoche `reduced_motion`.
+- **i18n (FR/EN/IT)** — 11 clés : `SETTINGS_AMBIENCE` · `SETTINGS_LIVING_MAP` (+ `_HINT`) ·
+  `SHOP_CONFIRM_TITLE` · `SHOP_CONFIRM_BALANCE` · `SHOP_CONFIRM_OK` · `SHOP_CONFIRM_CANCEL` ·
+  `SHOP_NEW_BADGE` · `UNLOCK_EYEBROW` · `UNLOCK_CONTINUE` · `TOAST_PROMOTION`.
+- **README audio enrichi** (`assets/audio/README.md`) : tables « MUSIQUE DYNAMIQUE » (durées/BPM
+  identiques obligatoires, seuils, repli) et « AMBIANCES » (dossier `amb/`, rôles, volumes cibles).
+  C'est le **bon de commande** de la production audio.
+
+**Validation exécutée :**
+
+| Contrôle | Résultat |
+|---|---|
+| `--import` headless | **0 ERROR** |
+| Boot `main` · `main_menu` · `shop` · `settings` · `faction_selection` · `characters_screen` | **0 ERROR** chacun |
+| `tools/test_war_intensity.tscn` | **18 asserts verts** |
+| `tools/test_ambient_layer.tscn` (LOTS C/D/E) | **33 asserts verts** |
+| `tools/test_hub_celebrations.tscn` (LOT F) | **24 asserts verts** |
+| `CONTRAT_RESEAU.md` | **inchangé** (critère de recette) |
+
+> ⚠️⚠️ **CE QUI N'A PAS ÉTÉ VU.** La validation ci-dessus est **fonctionnelle**, pas visuelle ni
+> sonore. N'ont **pas** été vérifiés à l'œil / à l'oreille : le rendu de la vignette et de la
+> désaturation **en partie réelle** (et donc la recette « mode daltonien parfaitement lisible à
+> intensité 1,0 », qui reste À FAIRE) ; la mise en page des deux nouvelles rangées de Paramètres ;
+> le dialogue de confirmation d'achat et la séquence d'unlock **à l'écran** ; le toast de promotion
+> (il exige une vraie montée de division) ; le framerate en partie **6 joueurs** carte vivante ON.
+> Les placeholders audio (Geiger, vent, radio, tonnerre, promotion) n'ont **jamais été écoutés** :
+> ils sont synthétisés et validés par le code, pas par l'oreille.

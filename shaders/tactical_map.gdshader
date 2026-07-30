@@ -47,6 +47,28 @@ uniform float pad_frac : hint_range(0.0, 0.45) = 0.0;                  // demi-b
 uniform vec3  ocean_fallback : source_color = vec3(0.42, 0.42, 0.23); // mer de repli si le bord est une terre
 uniform float ocean_sat_max : hint_range(0.0, 1.0) = 0.32;            // saturation au-dela = terre -> remplacee par la mer
 
+// --- CYCLE DE TENSION VISUEL (§8.122, LOT E) -------------------------------
+// Pousse par board.set_war_intensity() (valeur DEJA lissee par main.gd — ce shader ne lisse rien
+// et ne connait ni le temps ni l'etat de jeu). 0 = rendu historique a l'identique.
+uniform float war_intensity : hint_range(0.0, 1.0) = 0.0;
+
+// PLAFONDS CHIFFRES — la lisibilite tactique est le point fort n°1 du projet : ce sont des MAXIMA,
+// atteints seulement a war_intensity = 1.0. NE PAS les monter sans repasser la recette daltonienne
+// (mode colorblind + motifs a intensite 1,0 doit rester parfaitement lisible).
+const float TENSION_DESAT_MAX     = 0.15;  // desaturation du FOND de carte
+const float TENSION_VIGNETTE_MAX  = 0.25;  // opacite de la vignette PERIPHERIQUE
+const float TENSION_RED_MAX       = 0.08;  // virage des COINS vers le rouge sombre
+// Rayon normalise (0 = centre, 1 = coin) a partir duquel la vignette commence a exister. Sous ce
+// seuil, la ZONE CENTRALE DE JEU n'est JAMAIS assombrie — c'est un interdit explicite du cahier
+// des charges, pas un reglage esthetique.
+const float TENSION_VIGNETTE_INNER = 0.55;
+const float TENSION_VIGNETTE_OUTER = 1.0;
+const vec3  TENSION_RED = vec3(0.35, 0.05, 0.05);
+
+// ⚠️ CE SHADER NE TOUCHE PAS aux remplissages ni aux liseres de territoires : ils vivent dans
+// territory_overlay.gdshader (Sprite2D distinct, dessine PAR-DESSUS ce fond). C'est ce qui garantit
+// que la tension ne peut pas degrader le contraste des couleurs de joueur ni du telegraphe.
+
 float lum(vec3 c) {
 	return dot(c, vec3(0.299, 0.587, 0.114));
 }
@@ -99,6 +121,24 @@ void fragment() {
 	float gline = min(gd.x, gd.y);
 	float grid = (1.0 - smoothstep(0.0, grid_width, gline)) * grid_alpha;
 	grad += accent * grid;
+
+	// --- CYCLE DE TENSION (§8.122, LOT E) : la carte « se ferme » a mesure que la partie converge.
+	// Applique EN DERNIER, apres les cotes et le graticule : la tension modifie l'ambiance du fond,
+	// jamais la lecture des informations posees dessus.
+	if (war_intensity > 0.0) {
+		// Distance normalisee au centre : 0 au centre, ~0.71 au milieu d'un bord, 1.0 dans un coin.
+		vec2 d = (UV - vec2(0.5)) * 2.0;
+		float r = length(d) * 0.70710678;
+		float edge = smoothstep(TENSION_VIGNETTE_INNER, TENSION_VIGNETTE_OUTER, r);
+		// 1) Desaturation globale du fond (plafonnee) — la couleur quitte le monde.
+		float g = lum(grad);
+		grad = mix(grad, vec3(g), TENSION_DESAT_MAX * war_intensity);
+		// 2) Virage chromatique des COINS vers le rouge sombre (nul au centre : facteur `edge`).
+		grad = mix(grad, TENSION_RED, TENSION_RED_MAX * war_intensity * edge);
+		// 3) Vignette peripherique. `edge` valant 0 sous TENSION_VIGNETTE_INNER, le centre du
+		//    plateau conserve EXACTEMENT sa luminosite d'origine, a toute intensite.
+		grad *= 1.0 - TENSION_VIGNETTE_MAX * war_intensity * edge;
+	}
 
 	COLOR = vec4(clamp(grad, 0.0, 1.0), tex.a);
 }

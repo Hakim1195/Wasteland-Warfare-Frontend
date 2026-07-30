@@ -84,10 +84,14 @@ func _ready() -> void:
 		logout_button.pressed.connect(_on_logout_pressed)
 		WarzoneUI.wire_button_sfx(logout_button)  # SFX d'interface (survol/clic — R6)
 
-	# Audio : 3 sliders branchés sur le SettingsManager.
+	# Audio : 3 sliders branchés sur le SettingsManager (+ AMBIANCE, construit par code ci-dessous).
 	_setup_volume_slider(master_slider, master_value, "master")
 	_setup_volume_slider(music_slider, music_value, "music")
 	_setup_volume_slider(sfx_slider, sfx_value, "sfx")
+	# §8.122 (LOT C/G) : 4ᵉ volume — bus `Ambience` (Geiger, vent, radio du QG). Ajouté PAR CODE
+	# sous la rangée SFX plutôt que dans le .tscn : même geste que la section CONFORT, et zéro
+	# retouche de scène (donc zéro risque sur les NodePath @export existants).
+	_build_ambience_slider()
 
 	# Affichage : mode fenêtre (segments) + résolution (segments numériques).
 	_setup_window_mode()
@@ -106,6 +110,8 @@ func _ready() -> void:
 	# libellés construits par code (section confort + statut). Les nœuds .tscn se re-traduisent
 	# tout seuls ; le désabonnement est implicite (signal coupé à la libération du nœud).
 	LocaleManager.locale_changed.connect(_on_locale_changed_rebuild)
+	# §8.122 (LOT G) : `reduced_motion` conditionne l'état de la rangée CARTE VIVANTE → relayout.
+	SettingsManager.comfort_changed.connect(_on_comfort_changed_relayout)
 
 # --- Audio : sliders de volume ---------------------------------------------
 func _setup_volume_slider(slider: HSlider, value_label: Label, bus: String) -> void:
@@ -125,6 +131,45 @@ func _setup_volume_slider(slider: HSlider, value_label: Label, bus: String) -> v
 func _update_value_label(label: Label, v: float) -> void:
 	if label:
 		label.text = "%d %%" % int(round(v * 100.0))
+
+# --- Volume AMBIANCE (§8.122, LOT C/G) : 4ᵉ rangée du bloc AUDIO, construite par code ------------
+# Gabarit COPIÉ des rangées .tscn (libellé 230 px, slider extensible, valeur 64 px alignée à droite)
+# pour que les quatre lignes s'alignent au pixel près. Ajoutée en QUEUE de `AudioRows` : le volume
+# d'ambiance vient après Général / Musique / Effets, comme dans le mixage lui-même.
+func _build_ambience_slider() -> void:
+	if sfx_slider == null:
+		return
+	var rows := sfx_slider.get_parent().get_parent()   # SfxRow -> AudioRows
+	if rows == null:
+		return
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+
+	var lbl := Label.new()
+	lbl.text = "SETTINGS_AMBIENCE"   # clé BRUTE -> auto-traduction (et re-traduction) par Godot
+	lbl.custom_minimum_size = Vector2(230, 0)
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 16)
+	lbl.add_theme_color_override("font_color", TEXT)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(lbl)
+
+	var slider := HSlider.new()
+	row.add_child(slider)
+
+	var value := Label.new()
+	value.custom_minimum_size = Vector2(64, 0)
+	value.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	value.add_theme_font_override("font", _font)
+	value.add_theme_font_size_override("font_size", 16)
+	value.add_theme_color_override("font_color", ACCENT)
+	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(value)
+
+	rows.add_child(row)
+	# Câblage APRÈS insertion dans l'arbre (le helper pose la valeur initiale et branche le signal).
+	_setup_volume_slider(slider, value, "ambience")
 
 # --- Affichage : mode fenêtre (segments PLEIN ÉCRAN / FENÊTRÉ) --------------
 func _setup_window_mode() -> void:
@@ -330,18 +375,49 @@ func _build_comfort_section() -> void:
 	hint.add_theme_color_override("font_color", MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(hint)
+	# CARTE VIVANTE (§8.122, LOT D/G) — cendres, fumées, feux de camp, éclairs, oiseaux du plateau.
+	# ⚠️ GRISÉE et forcée à OFF tant que `reduced_motion` est actif : cette option n'est QUE du
+	# mouvement, il n'y aurait rien à en garder. On grise plutôt que de masquer, avec la raison
+	# écrite juste dessous — un réglage qui DISPARAÎT laisse croire à un bug.
+	var t5 := _comfort_toggle("SETTINGS_LIVING_MAP", "living_map")
+	root.add_child(t5)
+	var map_hint := Label.new()
+	map_hint.text = tr("SETTINGS_LIVING_MAP_HINT")
+	map_hint.add_theme_font_override("font", _font)
+	map_hint.add_theme_font_size_override("font_size", 12)
+	map_hint.add_theme_color_override("font_color", MUTED)
+	map_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(map_hint)
+	if bool(SettingsManager.get_comfort("reduced_motion")):
+		t5.modulate = Color(1, 1, 1, 0.35)
+		for child in t5.get_children():
+			if child is Button:
+				child.disabled = true
+	else:
+		map_hint.visible = false   # la mention n'a de sens que quand l'option est neutralisée
 	# Mémorisés pour la reconstruction au changement de langue (_on_locale_changed_rebuild).
-	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3, t4, hint]
+	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3, t4, hint, t5, map_hint]
 
 # Changement de langue À CHAUD : purge et reconstruit la section confort (seul bloc de cet écran
 # dont les libellés sont posés par code), puis re-traduit la ligne de statut.
 func _on_locale_changed_rebuild(_code: String) -> void:
+	_rebuild_comfort_section()
+	_set_status(tr("SETTINGS_STATUS"))
+
+func _rebuild_comfort_section() -> void:
 	for n in _comfort_nodes:
 		if is_instance_valid(n):
 			n.queue_free()
 	_comfort_nodes.clear()
 	_build_comfort_section()
-	_set_status(tr("SETTINGS_STATUS"))
+
+# §8.122 (LOT G) : basculer `reduced_motion` change l'ÉTAT d'une AUTRE rangée (CARTE VIVANTE grisée
+# ou non, mention affichée ou non). Sans cette reconstruction, le joueur devrait quitter puis
+# rouvrir l'écran pour voir la conséquence de son propre clic. Différée : on ne libère pas les
+# nœuds pendant que le callback du bouton qui a déclenché le changement s'exécute encore.
+func _on_comfort_changed_relayout(key: String, _value) -> void:
+	if key == "reduced_motion":
+		_rebuild_comfort_section.call_deferred()
 
 # Rangée « libellé + segments » : un bouton par valeur, le courant actif. `values` =
 # Array[[valeur, libellé]]. La valeur peut être String ou float (seul `ui_scale` s'en sert depuis

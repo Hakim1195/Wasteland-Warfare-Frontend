@@ -148,6 +148,13 @@ func _ready() -> void:
 	_index_territory_nodes()
 	_load_faction_accents()
 	_setup_territory_overlay()
+	# §8.122 (LOT E) : remise à zéro EXPLICITE de la tension. `tactical_map_material.tres` est une
+	# ressource PARTAGÉE mise en cache par le ResourceLoader : sans ce reset, une partie quittée à
+	# intensité 0,9 rouvrirait la suivante avec la vignette déjà en place, jusqu'au 1er état reçu.
+	set_war_intensity(0.0)
+	# §8.122 (LOT D) : carte vivante — orchestrateur des deux calques d'ambiance (cendres, fumées,
+	# feux de camp, éclairs, oiseaux). Monté ici pour qu'il existe AVANT le premier generate_board.
+	_setup_ambient_layer()
 	# Mode daltonien (E10 §8.82) : au changement, on purge la table de couleurs (recalculée avec
 	# la palette Okabe-Ito) et on redessine — toute l'UI suit via get_player_color.
 	if not SettingsManager.comfort_changed.is_connected(_on_comfort_changed):
@@ -191,6 +198,63 @@ func _setup_territory_overlay() -> void:
 	mat.set_shader_parameter("id_map", idtex)
 	_overlay.material = mat
 	add_child(_overlay)
+
+# =========================================================
+# CARTE VIVANTE (§8.122, LOT D) — montage de l'orchestrateur d'ambiance
+# =========================================================
+const AmbientLayerScript := preload("res://scripts/game/ambient_layer.gd")
+var _ambient: Node = null
+
+# Les deux CALQUES sont déclarés dans board.tscn (ordre de rendu documenté là-bas) ; l'orchestrateur
+# est un Node NEUTRE monté ici. Si l'un des calques manque (scène ancienne / .tscn corrompu), on
+# n'installe rien : le plateau se rend exactement comme avant (repli silencieux).
+func _setup_ambient_layer() -> void:
+	var back := get_node_or_null("AmbientBack") as Node2D
+	var front := get_node_or_null("AmbientFront") as Node2D
+	if back == null or front == null:
+		return
+	_ambient = Node.new()
+	_ambient.name = "AmbientLayer"
+	_ambient.set_script(AmbientLayerScript)
+	add_child(_ambient)
+	_ambient.setup(back, front, self, _background_rect())
+
+# Rect du fond de carte, en coordonnées locales du plateau (les cendres doivent le couvrir, et la
+# nuée d'oiseaux le traverser de bord à bord). Repli : rect vide → cendres centrées sur l'origine.
+func _background_rect() -> Rect2:
+	var bg := get_node_or_null("BoardBackground")
+	if bg is Control:
+		return Rect2((bg as Control).position, (bg as Control).size)
+	return Rect2()
+
+# Verrou d'animation de combat (poussé par main.gd) : relayé tel quel à la carte vivante, qui s'en
+# sert pour ne PAS lancer d'oiseaux par-dessus un duel.
+func set_ambient_busy(v: bool) -> void:
+	if _ambient != null and is_instance_valid(_ambient):
+		_ambient.set_busy(v)
+
+
+# =========================================================
+# CYCLE DE TENSION VISUEL (§8.122, LOT E)
+# =========================================================
+# `war_intensity` arrive DÉJÀ LISSÉE de main.gd (source unique §8.122 LOT A) : le plateau ne fait
+# que la relayer au shader du fond de carte. Aucun `_process` ici — c'est main.gd qui cadence.
+var _war_intensity := 0.0
+var _board_bg: CanvasItem = null
+
+func set_war_intensity(v: float) -> void:
+	_war_intensity = clampf(v, 0.0, 1.0)
+	_push_war_intensity()
+
+# Pousse l'uniforme sur le ShaderMaterial de `BoardBackground` (tactical_map.gdshader). Silencieux
+# si le nœud ou le matériau manque : la carte s'affiche alors sans cycle de tension, jamais d'erreur.
+func _push_war_intensity() -> void:
+	if _board_bg == null or not is_instance_valid(_board_bg):
+		_board_bg = get_node_or_null("BoardBackground")
+	if _board_bg == null or not (_board_bg.material is ShaderMaterial):
+		return
+	(_board_bg.material as ShaderMaterial).set_shader_parameter("war_intensity", _war_intensity)
+
 
 # Charge la couleur d'accent de chaque faction depuis ses ressources data-driven (.tres).
 # Même pattern robuste que faction_selection.gd : scan du dossier, export-safe (.remap),
@@ -431,6 +495,10 @@ func generate_board() -> void:
 	_build_owner_colors()
 	var contaminated := _contaminated_set()
 	var forecast := _forecast_set()
+	# CARTE VIVANTE (§8.122, LOT D) : « capitale » de chaque joueur = son territoire à la plus
+	# grosse garnison. Accumulée DANS la boucle ci-dessous (elle parcourt déjà tout le plateau) :
+	# une 2ᵉ passe sur les 42 territoires pour ça seul serait du gaspillage.
+	var capital_by_owner: Dictionary = {}
 	# Carte réduite (G5 §8.71) : territoires de LA CARTE JOUÉE — les nœuds hors carte sont
 	# masqués/désactivés plus bas ; le rect englobant des actifs recadre la caméra tactique.
 	var map_terrs: Dictionary = MapData.map_territories(GameState.map_id)
@@ -507,6 +575,14 @@ func generate_board() -> void:
 			if tid == _selected_source:
 				fill_col = fill_col.lightened(0.35)
 			fill_alpha = OWN_FALLBACK_ALPHA if is_mine else HOLO_FALLBACK_ALPHA
+			# Capitale du propriétaire (§8.122, LOT D) : plus grosse garnison ; à ÉGALITÉ, le tid
+			# le plus petit alphabétiquement gagne → le feu de camp ne saute pas d'un territoire à
+			# l'autre à chaque refresh quand deux garnisons se valent (ordre STABLE exigé).
+			var opid := int(territory_owner)
+			var best = capital_by_owner.get(opid)
+			if best == null or garrison > int(best["g"]) \
+					or (garrison == int(best["g"]) and str(tid) < str(best["tid"])):
+				capital_by_owner[opid] = {"tid": str(tid), "g": garrison}
 		else:
 			# Territoire NEUTRE : pas d'hologramme → gris kaki très sombre (« vide »).
 			fill_col = NEUTRAL_FILL_COLOR
@@ -581,6 +657,27 @@ func generate_board() -> void:
 		# reduced_motion (E10) : fige les pulsations du plateau (télégraphe/attaque).
 		m.set_shader_parameter("motion_scale",
 			0.0 if bool(SettingsManager.get_comfort("reduced_motion")) else 1.0)
+
+	# Cycle de tension (§8.122, LOT E) : l'uniforme vit sur un matériau PARTAGÉ (.tres) donc il
+	# survit d'un refresh à l'autre — on le repousse quand même ici pour que le rendu ne puisse pas
+	# diverger de la valeur courante si le matériau était rechargé.
+	_push_war_intensity()
+
+	# CARTE VIVANTE (§8.122, LOT D) : appel UNIQUE par refresh — capitales triées par id de joueur
+	# (même ordre que la palette de sièges → un joueur garde SON émetteur de braises) et zone
+	# courante pour les éclairs.
+	if _ambient != null and is_instance_valid(_ambient):
+		var owner_ids: Array = capital_by_owner.keys()
+		owner_ids.sort()
+		var capitals: Array = []
+		for opid in owner_ids:
+			capitals.append({"tid": str(capital_by_owner[opid]["tid"]),
+				"color": get_player_color(int(opid))})
+		_ambient.refresh({
+			"round": int(GameState.current_turn),
+			"contaminated": contaminated.keys(),
+			"capitals": capitals,
+		})
 
 	# Cadre actif (G5) : mémorisé pour la caméra — Rect2() vide sur la carte COMPLÈTE (le
 	# cadrage historique plein plateau est alors conservé, non-régression classic).
@@ -722,6 +819,10 @@ func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool =
 	if _badge_layer == null or not is_instance_valid(_badge_layer):
 		_badge_layer = Node2D.new()
 		_badge_layer.name = "BadgeLayer"
+		# §8.122 (LOT D) : les badges de troupes doivent rester AU-DESSUS du calque d'ambiance
+		# AmbientFront (z_index 1, déclaré dans board.tscn) — une fumée de guerre ne masque jamais
+		# un nombre de troupes. Voir le commentaire d'ordre de rendu dans board.tscn.
+		_badge_layer.z_index = 2
 		add_child(_badge_layer)
 	var badge = _badges.get(tid)
 	if badge == null or not is_instance_valid(badge):
@@ -790,6 +891,11 @@ func is_contaminated(tid: String) -> bool:
 const ConquestFlashShader: Shader = preload("res://shaders/conquest_flash.gdshader")
 
 func conquest_flash(tid: String, accent: Color) -> void:
+	# CARTE VIVANTE (§8.122, LOT D) : le territoire pris se met à FUMER. On le notifie ICI — c'est
+	# le point unique par lequel passe toute conquête côté vue (main.gd n'en connaît pas d'autre) —
+	# et le panache survit ensuite à sa propre logique d'ancienneté (round courant → round-2).
+	if _ambient != null and is_instance_valid(_ambient):
+		_ambient.on_conquest(tid, int(GameState.current_turn))
 	var node = _nodes.get(tid)
 	if node == null:
 		return
@@ -821,6 +927,10 @@ func spawn_zone_tick(tid: String) -> void:
 	if _badge_layer == null or not is_instance_valid(_badge_layer):
 		_badge_layer = Node2D.new()
 		_badge_layer.name = "BadgeLayer"
+		# §8.122 (LOT D) : les badges de troupes doivent rester AU-DESSUS du calque d'ambiance
+		# AmbientFront (z_index 1, déclaré dans board.tscn) — une fumée de guerre ne masque jamais
+		# un nombre de troupes. Voir le commentaire d'ordre de rendu dans board.tscn.
+		_badge_layer.z_index = 2
 		add_child(_badge_layer)
 	var lbl := Label.new()
 	lbl.text = "-1"
@@ -840,20 +950,29 @@ func spawn_zone_tick(tid: String) -> void:
 # du propriétaire, 0,4 s. Réutilise le Polygon2D de remplissage legacy (_ensure_fill — inutilisé
 # depuis l'overlay « vraies frontières » §8.51) comme calque de flash ponctuel.
 func flash_territory(tid: String) -> void:
+	var accent: Color = NEUTRAL_COLOR
+	var t: Dictionary = GameState.territories.get(tid, {})
+	var o = t.get("owner_id")
+	if o != null:
+		accent = get_player_color(int(o))
+	flash_territory_color(tid, Color(accent.r, accent.g, accent.b, 0.55), 0.4)
+
+# Flash d'un territoire à une couleur ARBITRAIRE (§8.122, LOT D — éclair de zone blanc-vert).
+# EXTRAIT de flash_territory : les deux effets partagent le même Polygon2D de remplissage legacy,
+# et une 2ᵉ implémentation aurait fini par diverger (z-order, nettoyage du matériau, durée).
+# L'alpha de `color` fait foi ; le fondu ramène simplement à 0.
+func flash_territory_color(tid: String, color: Color, duration: float) -> void:
 	var node = _nodes.get(tid)
 	if node == null:
 		return
 	var fill := _ensure_fill(tid, node)
 	if fill == null:
 		return
-	var accent: Color = NEUTRAL_COLOR
-	var t: Dictionary = GameState.territories.get(tid, {})
-	var o = t.get("owner_id")
-	if o != null:
-		accent = get_player_color(int(o))
+	# Purge d'un éventuel ShaderMaterial (conquest_flash / legacy toxique) : sinon le shader
+	# écraserait COLOR et le flash serait invisible.
 	fill.material = null
-	fill.color = Color(accent.r, accent.g, accent.b, 0.55)
+	fill.color = color
 	fill.visible = true
 	var tw := fill.create_tween()
-	tw.tween_property(fill, "color:a", 0.0, 0.4)
+	tw.tween_property(fill, "color:a", 0.0, maxf(duration, 0.05))
 	tw.tween_callback(func() -> void: fill.visible = false)

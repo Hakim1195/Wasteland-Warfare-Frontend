@@ -865,6 +865,10 @@ func _apply_reveal(slot: Dictionary, animated: bool) -> void:
 		# Vainqueur : sting APPUYÉ (la fanfare de conquête, déjà au catalogue — on ne crée pas un
 		# 11ᵉ son pour un 11ᵉ moment) + pulsation de la ligne entière.
 		AudioManager.play_sfx("conquest")
+		# §8.122 (LOT B) : la révélation du VAINQUEUR (§8.121) est le point d'orgue du rapport —
+		# la musique lui laisse la place. Une seule ligne le mérite : les autres révélations
+		# s'enchaînent toutes les 1,2 s, ducker chacune ferait pomper la bande-son.
+		AudioManager.duck_music()
 		var row := ctrl.get_parent()
 		while row != null and not (row is PanelContainer):
 			row = row.get_parent()

@@ -227,6 +227,39 @@ func set_coins(coins: int) -> void:
 
 
 # =========================================================
+# COMPTEUR DE COINS ANIMÉ (§8.122, LOT F) — décompte + flash or
+# =========================================================
+# Durée du DÉCOMPTE après un achat confirmé. Volontairement courte : au-delà, le joueur a le temps
+# de cliquer ailleurs et le solde « se termine » sur un autre écran.
+const COINS_COUNT_TIME := 0.6
+
+var _coins_tween: Tween = null
+
+# Fait DÉFILER le solde jusqu'à `target` (dépense confirmée en boutique), puis lueur dorée. Le
+# décompte est ce qui rend la dépense PALPABLE — un solde qui saute d'un chiffre à l'autre ne
+# raconte rien. Réutilise `_flash_coins()`, la lueur déjà écrite pour les paliers du Rapport
+# Post-Op : une seule mise en scène de « quelque chose est arrivé aux Coins » dans tout le jeu.
+func animate_coins_to(target: int, duration: float = COINS_COUNT_TIME) -> void:
+	target = maxi(0, target)
+	if _coins_tween and _coins_tween.is_valid():
+		_coins_tween.kill()
+	if _coins_label == null or target == _coins or duration <= 0.0:
+		set_coins(target)
+		_flash_coins()
+		return
+	_coins_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_coins_tween.tween_method(func(v: float) -> void: set_coins(int(round(v))),
+		float(_coins), float(target), duration)
+	_coins_tween.tween_callback(_flash_coins)
+
+
+# Lueur dorée seule (sans changement de solde) — exposée pour les appelants qui ont déjà écrit la
+# valeur (ex. rafraîchissement d'inventaire arrivé avant l'animation).
+func flash_coins() -> void:
+	_flash_coins()
+
+
+# =========================================================
 # API ANIMÉE (Rapport Post-Opération)
 # =========================================================
 

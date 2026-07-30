@@ -131,6 +131,9 @@ var _abandon_armed := false
 #   _unread        : conv_key → nombre de messages non lus
 const CHAT_CONV_GENERAL := "general"
 const CHAT_HISTORY_CAP := 200
+# §8.122 (LOT C) — écart entre le craquement de talkie et le bip de notification de chat. 60 ms :
+# assez pour être perçu comme deux évènements successifs, trop court pour se lire comme un retard.
+const CHAT_RADIO_DELAY := 0.06
 var _conversations: Dictionary = {}
 var _unread: Dictionary = {}
 var _current_conv := CHAT_CONV_GENERAL
@@ -1753,7 +1756,12 @@ func push_chat_message(conv_key: String, who: String, text: String, notify: bool
 	_refresh_chat_badges()
 	_show_chat_toast(conv_key, who)
 	if modulate.a > 0.5:
-		AudioManager.play_sfx("chat_ping")
+		# §8.122 (LOT C) : craquement de talkie PUIS notification — 60 ms d'écart suffisent à faire
+		# entendre « une transmission arrive » plutôt qu'« une appli notifie ». Le délai passe par
+		# un timer de scène (get_tree().create_timer) : `await` ici bloquerait push_chat_message.
+		AudioManager.play_sfx("radio_crackle")
+		get_tree().create_timer(CHAT_RADIO_DELAY).timeout.connect(
+			func() -> void: AudioManager.play_sfx("chat_ping"))
 
 func _chat_line(who: String, text: String, stamp: String) -> String:
 	return "[color=#8a8f7a][%s][/color] %s ❯ %s" % [stamp, who, text]

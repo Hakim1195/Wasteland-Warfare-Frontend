@@ -24,3 +24,16 @@ bus/2/mute = false
 bus/2/bypass_fx = false
 bus/2/volume_db = 0.0
 bus/2/send = &"Master"
+; Bus AMBIANCE (§8.122, LOT C) — boucles diégétiques (Geiger, vent, radio du QG). Séparé des SFX
+; pour deux raisons : (1) ce sont des boucles CONTINUES, pas des ponctuations — les couper avec les
+; SFX rendrait le monde muet ; (2) leur dosage est un goût personnel (certains veulent le Geiger
+; fort, d'autres l'éteindre) → son propre slider dans Paramètres.
+; -12 dB au repos = « présent mais discret » (décision Hakim 2026-07-27). Cette valeur n'est le
+; niveau effectif QUE si SettingsManager n'a pas encore appliqué le sien (il écrase le volume du
+; bus au démarrage) — le défaut jumeau côté réglages vaut 0,25 linéaire, soit exactement -12 dB.
+bus/3/name = &"Ambience"
+bus/3/solo = false
+bus/3/mute = false
+bus/3/bypass_fx = false
+bus/3/volume_db = -12.0
+bus/3/send = &"Master"

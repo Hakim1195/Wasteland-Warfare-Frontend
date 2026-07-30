@@ -22,11 +22,79 @@ assets/audio/
 │   ├── chat_ping.ogg  ← message de chat reçu dans une conversation non affichée (lot B)
 │   ├── finisher_steel.ogg    ← sting du finisher « Barrage d'acier »   (lot D/G)
 │   ├── finisher_orbital.ogg  ← sting du finisher « Frappe orbitale »   (lot D/G)
-│   └── finisher_ash.ogg      ← sting du finisher « Nuage de cendres »  (lot D/G)
+│   ├── finisher_ash.ogg      ← sting du finisher « Nuage de cendres »  (lot D/G)
+│   ├── radio_crackle.ogg     ← craquement de talkie AVANT chat_ping    (§8.122 lot C)
+│   ├── thunder_far.ogg       ← tonnerre lointain (éclair de zone)      (§8.122 lot D)
+│   └── promotion.ogg         ← sting de montée de division (hub)       (§8.122 lot F)
+├── amb/                      ← ⚠️ DOSSIER NEUF (§8.122 lot C) — bus `Ambience`, boucles
+│   ├── geiger.ogg            ← compteur Geiger (clics apériodiques)
+│   ├── wind.ogg              ← vent du wasteland (arène)
+│   └── radio_hub.ogg         ← radio militaire du QG (menu principal)
 └── music/
     ├── menu_ambient.ogg     ← MUSIQUE des menus (BOUCLÉE automatiquement)
-    └── battle_ambient.ogg   ← MUSIQUE de l'arène / combat (BOUCLÉE, §8.66)
+    ├── battle_ambient.ogg   ← MUSIQUE de l'arène / combat (BOUCLÉE, §8.66)
+    ├── battle_base.ogg      ← ⚠️ MUSIQUE DYNAMIQUE, couche 1/3 (§8.122 lot B)
+    ├── battle_mid.ogg       ← ⚠️ MUSIQUE DYNAMIQUE, couche 2/3
+    └── battle_high.ogg      ← ⚠️ MUSIQUE DYNAMIQUE, couche 3/3
 ```
+
+---
+
+## 🎚️ MUSIQUE DYNAMIQUE À COUCHES (§8.122, lot B) — bon de commande
+
+L'arène ne joue plus une piste fixe : **trois stems jouent EN PARALLÈLE** et sont crossfadés par
+`war_intensity` (jauge de tension 0→1 calculée côté client). Plus la partie se tend, plus il y a de
+couches audibles.
+
+| Fichier | Rôle | Entre à | Sort à | Niveau audible |
+|---|---|---|---|---|
+| `music/battle_base.ogg` | Lit de base — toujours présent | dès le début | jamais | `MUSIC_TARGET_DB` (−4 dB) |
+| `music/battle_mid.ogg` | Percussions / tension moyenne | intensité **> 0,35** | **< 0,30** | −6 dB |
+| `music/battle_high.ogg` | Cuivres / urgence, fin de partie | intensité **> 0,65** | **< 0,60** | −6 dB |
+
+> Les seuils d'entrée et de sortie diffèrent volontairement (hystérésis 0,05) : sans cette bande
+> morte, une intensité qui oscille autour du seuil ferait « pomper » la couche en boucle.
+
+**⚠️ CONTRAINTES DE PRODUCTION — non négociables :**
+
+1. **DURÉE STRICTEMENT IDENTIQUE** pour les 3 fichiers (à l'échantillon près) et **MÊME BPM**. Les
+   trois lecteurs partent dans la même frame et ne sont jamais relancés : un écart de durée les
+   désynchroniserait à chaque bouclage.
+2. **Boucle propre** (pas de silence ni de clic au raccord) — même exigence que `menu_ambient`.
+3. Les trois pistes doivent **s'empiler** musicalement : `mid` et `high` sont des ADDITIONS à
+   `base`, pas des variantes. Mixer chaque stem pour qu'il sonne juste seul ET superposé.
+4. **Format `.ogg`**, pic normalisé ≈ −3 dB.
+
+**Comportement de repli (aucun de ces fichiers n'est requis pour livrer) :** si **un seul** des trois
+manque, le jeu reste sur `battle_ambient` — comportement historique **strictement inchangé**, sans le
+moindre log d'erreur. Il n'y a **jamais** de lecture partielle (2 stems sur 3).
+
+Un mécanisme de **resynchronisation défensive** vérifie toutes les 60 s que les couches n'ont pas
+dérivé de plus de 50 ms et les recale sur `battle_base` le cas échéant (log `print` silencieux).
+
+---
+
+## 🌫️ AMBIANCES DIÉGÉTIQUES (§8.122, lot C) — dossier `amb/`
+
+Boucles **continues** routées sur le bus **`Ambience`** (slider « AMBIANCE » dans Paramètres, défaut
+−12 dB). Séparées des SFX parce qu'elles ne ponctuent rien : elles habitent le monde.
+
+| Fichier | Rôle | Où | Niveau cible (lecteur) |
+|---|---|---|---|
+| `amb/geiger.ogg` | Compteur Geiger — **le son signature du jeu** | Arène | **−6 dB** (zone chez moi) · **−14 dB** (à 1 territoire) · **−22 dB** (à 2) · coupé au-delà |
+| `amb/wind.ogg` | Vent du wasteland, permanent | Arène | −18 dB (fixe) |
+| `amb/radio_hub.ogg` | Radio militaire — souffle, bips, voix indistinctes | QG **uniquement** | −20 dB (fixe) |
+
+> 🔊 **Le Geiger doit rester UTILISABLE, pas décoratif** : son volume dit « la radioactivité est à N
+> territoires de chez moi ». Livrer une boucle de **clics apériodiques** (irréguliers) — un train
+> régulier sonnerait comme un métronome et perdrait toute lisibilité d'information.
+> Boucle courte (3–5 s) suffisante, sans motif reconnaissable qui trahirait le point de bouclage.
+
+> 🗣️ **`radio_hub` : aucune parole intelligible.** Des fragments de voix, jamais un mot —
+> sans quoi il faudrait le produire en FR/EN/IT.
+
+**Repli :** dossier vide → placeholders synthétisés (Poisson pour le Geiger, bruit filtré + LFO pour
+le vent, souffle + bips + formants pour la radio). Le jeu est **100 % fonctionnel sans ces fichiers**.
 
 > ⚔️ **Ambiance de guerre (refonte UI arène, lot F).** Déposer `music/battle_ambient.{ogg,wav,mp3}`
 > **remplace TOUT** — aucune ligne de code à toucher (mécanique `_load_override`). À défaut, le repli
@@ -59,9 +127,9 @@ assets/audio/
 
 ## 🎚️ Routage & volume
 
-- Les **SFX** sortent sur le bus **`SFX`**, la musique sur le bus **`Music`**
-  (`default_bus_layout.tres`). Les **volumes sont pilotés par l'écran Paramètres** via
-  `SettingsManager` → rien à régler ici.
+- Les **SFX** sortent sur le bus **`SFX`**, la musique (couches comprises) sur le bus **`Music`**,
+  les **ambiances** sur le bus **`Ambience`** (`default_bus_layout.tres`). Les **volumes sont
+  pilotés par l'écran Paramètres** via `SettingsManager` → rien à régler ici.
 - Garde les niveaux **normalisés** (pic ≈ -3 dB) et les SFX **courts** (hover/click < 0,1 s) pour
   rester cohérent avec le rythme de l'UI.
 

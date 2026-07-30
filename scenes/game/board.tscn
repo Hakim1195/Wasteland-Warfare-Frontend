@@ -17,6 +17,10 @@ offset_bottom = 1522.0
 mouse_filter = 2
 texture = ExtResource("2_8jv87")
 
+; CARTE VIVANTE (§8.122, LOT D) — calque ARRIÈRE : cendres globales, dessinées par-dessus le fond
+; de carte mais SOUS les territoires. Placé ici (2ᵉ enfant) : l'ordre d'arbre suffit, z_index 0.
+[node name="AmbientBack" type="Node2D" parent="."]
+
 [node name="TerritoriesContainer" type="Node2D" parent="." unique_id=1805152090]
 
 [node name="alaska" type="Area2D" parent="TerritoriesContainer" unique_id=1887934964]
@@ -306,3 +310,13 @@ polygon = PackedVector2Array(31.293621, 34.863686, 32.861206, 33.331947, 33.5579
 position = Vector2(199.05002, 115.9875)
 scale = Vector2(83.9375, 49.328125)
 polygon = PackedVector2Array(20.943558, 21.002468, 22.063442, 20.799746, 22.170662, 20.880835, 22.337452, 21.69173, 22.301712, 22.259357, 22.623383, 24.083876, 22.599552, 24.570414, 22.337452, 25.036678, 21.479671, 26.719288, 21.038868, 27.003101, 20.443188, 26.65847, 20.145348, 24.996134, 20.181087, 23.820333, 21.098438, 23.556793)
+
+; CARTE VIVANTE (§8.122, LOT D) — calque AVANT : fumées de guerre, feux de camp, éclairs, oiseaux.
+; ⚠️ ORDRE DE RENDU : il doit passer AU-DESSUS des remplissages de territoires (Sprite2D
+; « TerritoryOverlay », ajouté PAR CODE dans board._ready → donc APRÈS ce nœud dans l'arbre) et
+; RESTER SOUS les badges de troupes (« BadgeLayer », lui aussi créé par code, encore après).
+; L'ordre d'arbre ne peut donc pas suffire : on tranche par z_index.
+;   BoardBackground 0 · AmbientBack 0 · TerritoriesContainer 0 · TerritoryOverlay 0
+;   → AmbientFront 1 · BadgeLayer 2 (posé dans board.gd) · attack_arrow 40 · flèche d'intention 50
+[node name="AmbientFront" type="Node2D" parent="."]
+z_index = 1

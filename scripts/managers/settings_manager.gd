@@ -43,12 +43,19 @@ const COMFORT_DEFAULTS := {
 	# une section neuve) : c'est le même contrat qu'un réglage d'accessibilité — une clé, un défaut,
 	# un signal, consommé à la volée par le HUD sans redémarrage.
 	"streamer_mode": false,
+	# CARTE VIVANTE (§8.122, LOT D) — cendres, fumées de guerre, feux de camp, éclairs de zone,
+	# nuées d'oiseaux sur le plateau. Défaut ON (c'est le chantier « faire SENTIR la guerre »), mais
+	# FORCÉ À OFF quand `reduced_motion` est actif : la carte vivante n'est QUE du mouvement, il n'y
+	# a rien à en garder de statique. La coercition vit dans le consommateur (ambient_layer.gd), pas
+	# ici : le réglage doit conserver la valeur choisie par le joueur pour la retrouver s'il coupe
+	# `reduced_motion` — un forçage écrit sur disque lui ferait perdre son choix.
+	"living_map": true,
 }
 var _comfort := {}
 
 # Clé interne -> nom du bus audio (default_bus_layout.tres). Lecture défensive : si le
 # bus n'existe pas (layout absent), on ignore proprement (pas d'erreur « Invalid bus »).
-const BUSES := {"master": "Master", "music": "Music", "sfx": "SFX"}
+const BUSES := {"master": "Master", "music": "Music", "sfx": "SFX", "ambience": "Ambience"}
 
 # Résolutions proposées en mode fenêtré (16:9). Index persisté.
 const RESOLUTIONS: Array[Vector2i] = [
@@ -60,7 +67,11 @@ const RESOLUTIONS: Array[Vector2i] = [
 const DEFAULT_RESOLUTION_INDEX := 2  # 1920 × 1080
 
 # État courant (valeurs par défaut = ce qui s'applique au tout premier lancement).
-var _volumes := {"master": 0.8, "music": 0.7, "sfx": 0.8}
+# ⚠️ `ambience` (§8.122, LOT C) : 0,25 linéaire = -12,0 dB, le niveau « présent mais discret »
+# décidé pour le bus Ambience (cf. default_bus_layout.tres). Il paraît bas à côté des trois autres
+# — c'est VOULU : ce sont des boucles permanentes (Geiger, vent, radio), pas des ponctuations ;
+# au même niveau que les SFX elles couvriraient la musique en continu.
+var _volumes := {"master": 0.8, "music": 0.7, "sfx": 0.8, "ambience": 0.25}
 var _fullscreen := true
 var _resolution_index := DEFAULT_RESOLUTION_INDEX
 
@@ -70,8 +81,71 @@ var _resolution_index := DEFAULT_RESOLUTION_INDEX
 # n'est pas un réglage de confort typé/gated, mais une préférence libre → API dédiée.
 var _selected_faction: String = ""
 
+# =========================================================
+# MÉMOIRES LOCALES DE PROGRESSION (§8.122, LOT F)
+# =========================================================
+# Deux persistances 100 % LOCALES, sans le moindre appel réseau (exigence du chantier) :
+#
+#  1. `[progress]` dans settings.cfg — petites valeurs « dernière fois que j'ai vu X » : division
+#     de ladder, solde de RP, panoplie équipée au dernier draft. Elles servent à DÉTECTER UN
+#     CHANGEMENT entre deux sessions (promotion, skin nouvellement équipé). Toujours des String :
+#     le contenu est comparé, jamais calculé.
+#  2. `user://seen_items.json` — ids d'articles dont la fiche a déjà été ouverte. Alimente le chip
+#     « NOUVEAU » (boutique + écran Personnages). Fichier SÉPARÉ : il grossit avec l'inventaire et
+#     n'a rien à faire dans un fichier de réglages.
+const SEEN_ITEMS_PATH := "user://seen_items.json"
+
+var _progress := {}
+var _seen_items := {}
+
+func get_progress(key: String, default_value: String = "") -> String:
+	return str(_progress.get(key, default_value))
+
+func set_progress(key: String, value: String) -> void:
+	if str(_progress.get(key, "")) == str(value):
+		return   # rien de neuf : on n'écrit pas sur le disque pour rien
+	_progress[key] = str(value)
+	_save()
+
+# Article déjà consulté ? Un id inconnu est réputé NEUF → chip « NOUVEAU ». C'est le bon défaut :
+# au pire on signale une fois de trop un article que le joueur connaissait déjà.
+func is_item_seen(item_id) -> bool:
+	return _seen_items.has(str(item_id))
+
+func mark_item_seen(item_id) -> void:
+	var key := str(item_id)
+	if key == "" or _seen_items.has(key):
+		return
+	_seen_items[key] = true
+	_save_seen_items()
+
+func _load_seen_items() -> void:
+	_seen_items.clear()
+	if not FileAccess.file_exists(SEEN_ITEMS_PATH):
+		return
+	var f := FileAccess.open(SEEN_ITEMS_PATH, FileAccess.READ)
+	if f == null:
+		return
+	var data = JSON.parse_string(f.get_as_text())
+	f.close()
+	# Fichier corrompu / d'un format antérieur : on repart d'un ensemble vide plutôt que de crasher.
+	# Conséquence maximale : quelques chips « NOUVEAU » de trop. Aucune donnée de jeu n'est en jeu.
+	if typeof(data) != TYPE_ARRAY:
+		return
+	for id in data:
+		_seen_items[str(id)] = true
+
+func _save_seen_items() -> void:
+	var f := FileAccess.open(SEEN_ITEMS_PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify(_seen_items.keys()))
+	f.close()
+
+
 func _ready() -> void:
 	_load()
+	_load_seen_items()
 	_apply_all()
 	_apply_ui_scale()
 
@@ -229,6 +303,11 @@ func _load() -> void:
 		_comfort[key] = cfg.get_value("comfort", key, COMFORT_DEFAULTS[key])
 	# Gameplay (§8.93) : id de faction choisi (str() défensif — un ConfigFile relit en Variant).
 	_selected_faction = str(cfg.get_value("gameplay", "selected_faction", _selected_faction))
+	# Mémoires locales de progression (§8.122) : section libre, clés inconnues tolérées (une clé
+	# retirée du code devient simplement inerte — même contrat que `combat_display`).
+	_progress.clear()
+	for key in cfg.get_section_keys("progress") if cfg.has_section("progress") else []:
+		_progress[str(key)] = str(cfg.get_value("progress", key, ""))
 
 func _save() -> void:
 	var cfg := ConfigFile.new()
@@ -240,4 +319,6 @@ func _save() -> void:
 	for key in COMFORT_DEFAULTS:
 		cfg.set_value("comfort", key, _comfort.get(key, COMFORT_DEFAULTS[key]))
 	cfg.set_value("gameplay", "selected_faction", _selected_faction)
+	for key in _progress:
+		cfg.set_value("progress", key, str(_progress[key]))
 	cfg.save(_CONFIG_PATH)

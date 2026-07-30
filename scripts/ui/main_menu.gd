@@ -156,6 +156,10 @@ func _ready() -> void:
 	# --- Audio (R6) : nappe d'ambiance + SFX d'interface (no-op headless). La nav pose ses propres
 	# SFX ; ici il ne reste que le CTA START. ---
 	AudioManager.start_menu_ambient()
+	# §8.122 (LOT C) : RADIO MILITAIRE du QG — boucle diégétique du menu principal SEULEMENT (elle
+	# s'arrête d'elle-même dès qu'un sous-écran appelle start_menu_ambient, qui coupe l'ambiance
+	# précédente). C'est le QG qui « vit », pas la boutique ni le classement.
+	AudioManager.start_hub_ambience()
 	WarzoneUI.wire_button_sfx(play_button)
 
 	# Re-traduction des textes FORMATÉS au retour des réglages (R4) — les clés brutes se

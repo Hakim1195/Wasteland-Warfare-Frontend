@@ -314,6 +314,54 @@ func _on_shop_inventory_for_draft(data: Dictionary) -> void:
 			_pass_granted_ids[str(fid)] = true
 	_refresh_access()
 	_refresh_card(true)
+	# §8.122 (LOT F) : la panoplie (skins équipés + finisher) n'est connue qu'ICI — c'est le seul
+	# moment du draft où l'on puisse la comparer à celle du draft précédent.
+	_maybe_pulse_loadout()
+
+
+# =========================================================
+# PULSE D'ÉQUIPEMENT (§8.122, LOT F)
+# =========================================================
+# Le joueur qui vient d'équiper un skin ou un finisher dans le hub n'avait AUCUN retour au moment
+# où ça compte : l'entrée en partie. Un pulse unique du présentoir héros le lui montre — discret,
+# une seule fois, et seulement si la panoplie A CHANGÉ depuis le dernier draft.
+#
+# La comparaison est LOCALE (settings.cfg [progress]) : aucun champ serveur « ma panoplie du
+# dernier draft » n'existe, et en créer un pour un pulse de 0,4 s serait disproportionné.
+const LOADOUT_PROGRESS_KEY := "draft_loadout"
+const LOADOUT_PULSE_SCALE := 1.06
+const LOADOUT_PULSE_TIME := 0.4
+
+func _maybe_pulse_loadout() -> void:
+	# Signature STABLE de la panoplie. Le FINISHER en fait partie sans traitement particulier : le
+	# serveur le range dans le MÊME bloc `equipped`, sous le slot réservé « __finisher__ » (cf.
+	# backend shop.py) — une seule boucle couvre donc skins ET finisher.
+	# Le tri est indispensable : l'ordre des clés d'un Dictionary JSON n'est pas garanti d'une
+	# session à l'autre, et une signature instable ferait pulser à CHAQUE draft.
+	var parts: Array = []
+	var fids: Array = _equipped_map.keys()
+	fids.sort()
+	for fid in fids:
+		parts.append("%s=%s" % [str(fid), str(_equipped_map[fid])])
+	var signature := "|".join(parts)
+	var previous := SettingsManager.get_progress(LOADOUT_PROGRESS_KEY)
+	SettingsManager.set_progress(LOADOUT_PROGRESS_KEY, signature)
+	# Premier draft sur cette machine : on mémorise sans rien célébrer (tout serait « nouveau »).
+	if previous == "" or previous == signature:
+		return
+	if bool(SettingsManager.get_comfort("reduced_motion")):
+		return
+	_pulse_hero_stage()
+
+func _pulse_hero_stage() -> void:
+	var target: Control = _hero3d if _hero3d != null and is_instance_valid(_hero3d) else hero_portrait
+	if target == null or not is_instance_valid(target):
+		return
+	target.pivot_offset = target.size * 0.5
+	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(target, "scale", Vector2.ONE * LOADOUT_PULSE_SCALE, LOADOUT_PULSE_TIME * 0.5)
+	tw.tween_property(target, "scale", Vector2.ONE, LOADOUT_PULSE_TIME * 0.5)
+
 
 func _on_shop_rotation_for_draft(data: Dictionary) -> void:
 	_rotation_ids.clear()
