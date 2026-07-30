@@ -64,6 +64,11 @@ const ROW_PAD_L := 6.0      # marge gauche COMMUNE (en-têtes + rangées) → co
 var _debrief_tab: VBoxContainer = null
 var _debrief_eyebrow: Label = null
 var _debrief_rows_box: VBoxContainer = null
+# --- DÉPARTAGE AU SCORE (chantier « Tension & fin de partie », LOT B/F) : tableau du bloc PUBLIC
+#     `game_over.final_scores`, rendu dans l'onglet BILAN sous le tableau comparatif. Masqué si le
+#     serveur ne l'envoie pas (antérieur au chantier, §9.2). ---
+var _scores_wrap: VBoxContainer = null
+var _scores_rows: VBoxContainer = null
 var _missions_lbl: Label = null
 var _return_btn: Button = null
 # Poignées DIRECTES vers les nœuds .tscn du récap de zone — MASQUÉS depuis le §8.100 (la colonne
@@ -338,6 +343,19 @@ func _build_tabs() -> void:
 	legend.add_theme_color_override("font_color", TEXT_MUTED)
 	legend.add_theme_font_size_override("font_size", 10)
 	_debrief_tab.add_child(legend)
+
+	# DÉPARTAGE AU SCORE (LOT B/F) — MASQUÉ par défaut : la section n'apparaît que si le serveur a
+	# envoyé `final_scores`. Elle a du sens dans TOUS les modes de fin (« où en étaient les autres ? »),
+	# pas seulement après une victoire au temps.
+	_scores_wrap = VBoxContainer.new()
+	_scores_wrap.visible = false
+	_scores_wrap.add_theme_constant_override("separation", 2)
+	_scores_wrap.add_child(_eyebrow(tr("SCOREBOARD_TITLE")))
+	_scores_rows = VBoxContainer.new()
+	_scores_rows.add_theme_constant_override("separation", 0)
+	_scores_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scores_wrap.add_child(_scores_rows)
+	_debrief_tab.add_child(_scores_wrap)
 
 	# Timeline de domination (DÉPLACÉE depuis l'onglet CLASSEMENT) — MASQUÉE par défaut (serveur
 	# antérieur / historique vide, §9.2).
@@ -641,6 +659,131 @@ func populate_debrief(rows: Array) -> void:
 
 	for i in range(rows.size()):
 		_debrief_rows_box.add_child(_make_debrief_row(rows[i], i % 2 == 1))
+
+# =========================================================
+# DÉPARTAGE AU SCORE + PARIS D'OBSERVATEUR
+# (chantier « Tension & fin de partie », LOT B/E, rendu LOT F)
+# =========================================================
+
+# Tableau de DÉPARTAGE — bloc PUBLIC `game_over.final_scores`, DÉJÀ TRIÉ par le serveur selon le
+# barème strict (objectif % > PV de héros % > kills de combat). On le rend TEL QUEL : re-trier ici
+# risquerait d'afficher un ordre différent de celui qui a désigné le vainqueur.
+# `colors` = { "<player_id>": Color } résolu par main.gd (View pure §6.1) ; `my_id` colorise ma ligne.
+# Liste vide (serveur antérieur) → section masquée, aucune erreur (§9.2).
+func populate_final_scores(rows: Array, colors: Dictionary = {}, my_id: int = -9999) -> void:
+	if _scores_wrap == null or _scores_rows == null:
+		return
+	for c in _scores_rows.get_children():
+		_scores_rows.remove_child(c)
+		c.queue_free()
+	if rows.is_empty():
+		_scores_wrap.visible = false
+		return
+	_scores_wrap.visible = true
+
+	# En-têtes : OPÉRATEUR · OBJECTIF · PV HÉROS · KILLS — dans l'ordre EXACT du barème, pour que la
+	# lecture de gauche à droite soit la lecture du départage.
+	var heads := HBoxContainer.new()
+	heads.add_theme_constant_override("separation", 0)
+	heads.add_child(_spacer(ROW_PAD_L))
+	heads.add_child(_fixed_cell(tr("COMMON_OPERATOR"), DBF_NAME_W, TEXT_MUTED, 10,
+		HORIZONTAL_ALIGNMENT_LEFT))
+	for h in ["SCOREBOARD_COL_OBJECTIVE", "SCOREBOARD_COL_HP", "SCOREBOARD_COL_KILLS"]:
+		heads.add_child(_fixed_cell(tr(h), DBF_COL_W + 24.0, TEXT_MUTED, 10,
+			HORIZONTAL_ALIGNMENT_RIGHT))
+	_scores_rows.add_child(heads)
+
+	for i in range(rows.size()):
+		var r = rows[i]
+		if typeof(r) != TYPE_DICTIONARY:
+			continue
+		var pid := int(r.get("player_id", -1))
+		var is_me := pid == my_id
+		# Un non-contender (éliminé / retiré) ne pouvait plus gagner au temps : rendu MUET, sans
+		# quoi le tableau laisserait croire qu'il était encore en course.
+		var contender := bool(r.get("contender", true))
+		var tint: Color = ACCENT_CYAN if is_me else (TEXT_PRIMARY if contender else TEXT_MUTED)
+		var wrap := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.content_margin_top = 3
+		sb.content_margin_bottom = 3
+		sb.content_margin_left = ROW_PAD_L
+		sb.bg_color = Color(1, 1, 1, 0.025) if i % 2 == 1 else Color(0, 0, 0, 0)
+		wrap.add_theme_stylebox_override("panel", sb)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 0)
+		wrap.add_child(row)
+
+		var name_box := HBoxContainer.new()
+		name_box.add_theme_constant_override("separation", 6)
+		name_box.custom_minimum_size = Vector2(DBF_NAME_W, 0)
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(8, 8)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sw.color = colors.get(str(pid), TEXT_MUTED)
+		name_box.add_child(sw)
+		var pseudo := Label.new()
+		pseudo.text = str(r.get("username", "")).to_upper()
+		pseudo.add_theme_font_size_override("font_size", 12)
+		pseudo.add_theme_color_override("font_color", tint)
+		name_box.add_child(pseudo)
+		row.add_child(name_box)
+
+		row.add_child(_fixed_cell("%d%%" % int(r.get("objective_pct", 0)), DBF_COL_W + 24.0,
+			tint, 12, HORIZONTAL_ALIGNMENT_RIGHT))
+		row.add_child(_fixed_cell("%d%%" % int(r.get("hero_pv_pct", 0)), DBF_COL_W + 24.0,
+			tint, 12, HORIZONTAL_ALIGNMENT_RIGHT))
+		row.add_child(_fixed_cell(str(int(r.get("kills", 0))), DBF_COL_W + 24.0,
+			tint, 12, HORIZONTAL_ALIGNMENT_RIGHT))
+		_scores_rows.add_child(wrap)
+
+
+# PARIS D'OBSERVATEUR (LOT E) — bloc PRIVÉ `game_over.bet_results` du destinataire :
+# { results: [{bet_type, value, won, xp, coins}], totals: {xp, coins, won, total} }.
+# Rendu en UNE ligne synthétique dans l'onglet BILAN (« PARIS D'OBSERVATEUR : 2/3 corrects ·
+# +25 XP +15 ¢ »), suivie du détail par pari. {} (n'a pas parié / serveur antérieur) → rien.
+func populate_bet_results(data: Dictionary) -> void:
+	if _scores_wrap == null or data.is_empty():
+		return
+	var results = data.get("results", [])
+	if typeof(results) != TYPE_ARRAY or results.is_empty():
+		return
+	var totals: Dictionary = data.get("totals", {}) if typeof(data.get("totals")) == TYPE_DICTIONARY else {}
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	box.add_child(_eyebrow(tr("BETS_TITLE")))
+	var head := Label.new()
+	head.text = tr("BETS_SUMMARY_FMT") % [int(totals.get("won", 0)), int(totals.get("total", 0)),
+		int(totals.get("xp", 0)), int(totals.get("coins", 0))]
+	head.add_theme_font_size_override("font_size", 13)
+	head.add_theme_color_override("font_color", ACCENT_GOLD if int(totals.get("won", 0)) > 0 else TEXT_MUTED)
+	box.add_child(head)
+	for r in results:
+		if typeof(r) != TYPE_DICTIONARY:
+			continue
+		var won := bool(r.get("won", false))
+		var line := Label.new()
+		line.text = "%s %s" % [tr("BET_" + _bet_key(str(r.get("bet_type", "")))),
+			tr("BET_WON") % int(r.get("xp", 0)) if won else tr("BET_LOST")]
+		line.add_theme_font_size_override("font_size", 11)
+		line.add_theme_color_override("font_color", ACCENT_GOLD if won else TEXT_MUTED)
+		box.add_child(line)
+	_scores_wrap.add_child(box)
+
+
+# Suffixe de clé i18n d'un type de pari (miroir de observer_bets.BET_TYPES). Type inconnu (serveur
+# plus récent) → libellé muet plutôt qu'une clé brute affichée à l'écran.
+func _bet_key(bet_type: String) -> String:
+	match bet_type:
+		"winner":
+			return "WINNER"
+		"next_hero_down":
+			return "NEXT_HERO"
+		"end_reason":
+			return "END_REASON"
+	return "UNKNOWN"
+
 
 # Une ligne du tableau BILAN (§8.100). Vainqueur → panneau lavé OR + liseré gauche or (maquette) ;
 # moi → pseudo cyan ; éliminé → muet + ✕ rouge ; sinon texte primaire. Les colonnes UNITÉS/ZONE
@@ -1248,13 +1391,21 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 # réservés au haut du tableau ; Pass Spécial → ×1.25 (floor) sur le TOTAL, matérialisé par un poste
 # bonus (miroir process_match_results).
 static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
-		continents_conquered: int, pass_applied: bool, pass_bonus_override: int = -1) -> Array:
+		continents_conquered: int, pass_applied: bool, pass_bonus_override: int = -1,
+		placement_override: int = -1) -> Array:
 	var items: Array = []
 	items.append({"key": "REPORT_XP_CONQ", "value": 10 * conquests})
 	items.append({"key": "REPORT_XP_KILL", "value": 2 * enemy_kills})
 	if rank <= 1:
 		items.append({"key": "REPORT_XP_CONT", "value": 5 * continents_conquered})
-	if rank == 0:
+	# FORFAIT DE PLACEMENT (chantier « Tension & fin de partie », LOT D) : il a REMPLACÉ l'ancien
+	# forfait de victoire (+150 au 1er, conditionné à l'objectif) par 100 au 1er / 50 au 2e, et
+	# INCONDITIONNEL. Le montant vient du SERVEUR (`xp_inputs.xp_placement`) : c'est une valeur
+	# d'équilibrage, elle bougera au playtest sans redéploiement de client (règle §6).
+	# Repli LOCAL (override < 0, serveur antérieur au chantier) : ancien barème, +150 au seul 1er.
+	if placement_override >= 0:
+		items.append({"key": _placement_key(rank), "value": placement_override})
+	elif rank == 0:
 		items.append({"key": "REPORT_XP_WIN", "value": 150})
 	items = _nonzero(items)
 	# Bonus Pass : le SERVEUR fait foi (`xp_inputs.xp_pass_bonus`, qui porte le multiplicateur du
@@ -1274,15 +1425,31 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 # XP HÉROS (rewards.compute_hero_match_xp) : +1/unité tuée, +150 objectif, +5/territoire en fin,
 # +100/coup de grâce, +1/4 PV de dégâts héros.
 static func hero_xp_breakdown(enemy_units_killed: int, objective_win: bool,
-		territories_end: int, hero_kills: int, hero_damage: int) -> Array:
+		territories_end: int, hero_kills: int, hero_damage: int,
+		placement_override: int = -1, rank: int = 0) -> Array:
 	var items: Array = []
 	items.append({"key": "REPORT_HXP_UNITS", "value": enemy_units_killed})
-	if objective_win:
+	# LOT D : le +150 « objectif atteint » est devenu un forfait de PLACEMENT (150 au 1er / 60 au 2e,
+	# quel que soit le mode de victoire) — AUCUN CUMUL, c'est la MÊME ligne de barème. Montant fourni
+	# par le serveur (`xp_inputs.hero_xp_placement`) ; repli LOCAL = ancien barème conditionnel.
+	if placement_override >= 0:
+		items.append({"key": _placement_key(rank), "value": placement_override})
+	elif objective_win:
 		items.append({"key": "REPORT_HXP_OBJ", "value": 150})
 	items.append({"key": "REPORT_HXP_TERR", "value": 5 * territories_end})
 	items.append({"key": "REPORT_HXP_GRAVE", "value": 100 * hero_kills})
 	items.append({"key": "REPORT_HXP_DMG", "value": hero_damage / 4})
 	return _nonzero(items)
+
+# Libellé du poste de PLACEMENT selon le rang (1er / 2e / autre). Clé distincte pour les deux
+# premières places : « PLACEMENT (1ᵉʳ) » se lit d'un coup d'œil, « PLACEMENT » seul obligerait à
+# aller chercher son rang ailleurs dans le rapport.
+static func _placement_key(rank: int) -> String:
+	if rank == 0:
+		return "PLACEMENT_LINE_1ST"
+	if rank == 1:
+		return "PLACEMENT_LINE_2ND"
+	return "PLACEMENT_LINE_OTHER"
 
 # Somme des postes d'un breakdown (le « total reconstruit »).
 static func _breakdown_total(items: Array) -> int:
@@ -1304,13 +1471,21 @@ static var _self_checked := false
 
 static func _self_check() -> void:
 	_self_checked = true
-	# XP de profil — miroir de rewards.compute_match_xp (+ Pass ×1.25 floor).
+	# XP de profil — REPLI LOCAL (serveur antérieur au chantier « Tension », aucun override) :
+	# ancien barème conservé tel quel, +150 au seul 1er.
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false)) == 205)  # 30+20+5+150
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 256)   # floor(1.25×205)
 	assert(_breakdown_total(player_xp_breakdown(2, 3, 10, 5, false)) == 50)   # rang 3+ : ni cont ni win
-	# XP héros — miroir de rewards.compute_hero_match_xp.
+	# XP de profil — barème SERVEUR (LOT D) : forfait de PLACEMENT fourni, 100 au 1er / 50 au 2e.
+	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false, -1, 100)) == 155)  # 30+20+5+100
+	assert(_breakdown_total(player_xp_breakdown(1, 3, 10, 1, false, -1, 50)) == 105)   # 30+20+5+50
+	assert(_breakdown_total(player_xp_breakdown(2, 3, 10, 5, false, -1, 0)) == 50)     # 3e : rien
+	# XP héros — repli LOCAL (bonus « objectif ») puis barème SERVEUR (placement, sans cumul).
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55)) == 308)    # 25+150+20+100+ (55/4=13)
 	assert(_breakdown_total(hero_xp_breakdown(9, false, 0, 0, 9)) == 11)      # 9 + (9/4=2)
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 150, 0)) == 308)  # 1er : idem 150
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 60, 1)) == 218)   # 2e : 60, PAS 150+60
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 0, 2)) == 158)    # 3e : aucun forfait
 
 # Entrées EXACTES du barème telles que le SERVEUR les a utilisées (bloc ADDITIF `xp_inputs` de
 # `match_rewards`). {} si le serveur est antérieur → chaque appelant retombe sur son estimation
@@ -1335,7 +1510,9 @@ func _build_player_detail(box: VBoxContainer, rewards: Dictionary) -> void:
 		int(srv.get("conquests", d.get("conquests", 0))), kills,
 		int(srv.get("continents_conquered", d.get("continents_final", 0))),
 		bool(rewards.get("pass_bonus_applied", false)),
-		int(srv.get("xp_pass_bonus", -1)))
+		int(srv.get("xp_pass_bonus", -1)),
+		# LOT D : forfait de placement RÉELLEMENT crédité (−1 = serveur antérieur → repli local).
+		int(srv.get("xp_placement", -1)))
 	_render_detail(box, tr("REPORT_XP_EYEBROW"), xp_items,
 		int(rewards.get("xp_earned", _breakdown_total(xp_items))), "REPORT_UNIT_XP")
 
@@ -1351,7 +1528,10 @@ func _build_hero_detail(box: VBoxContainer, rewards: Dictionary) -> void:
 		bool(srv.get("objective_win", d.get("objective_done", false))),
 		int(srv.get("territories_end", d.get("territories_final", 0))),
 		int(srv.get("hero_kills", d.get("hero_kills", 0))),
-		int(srv.get("hero_damage", d.get("hero_damage", 0))))
+		int(srv.get("hero_damage", d.get("hero_damage", 0))),
+		# LOT D : forfait de placement HÉROS réellement crédité (−1 = serveur antérieur).
+		int(srv.get("hero_xp_placement", -1)),
+		int(srv.get("rank", d.get("rank", 0))))
 	_render_detail(box, tr("REPORT_HXP_EYEBROW"), items,
 		int(rewards.get("hero_xp_earned", _breakdown_total(items))), "REPORT_UNIT_XP")
 

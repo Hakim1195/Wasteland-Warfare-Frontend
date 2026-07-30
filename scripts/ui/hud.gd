@@ -196,6 +196,20 @@ var _zone_chip: Button = null
 # %ObjectiveLabel. ≥ 80 % → pulse OR (proche de la victoire).
 var _objective_tracker: VBoxContainer = null
 var _objective_pulse := false
+# --- REBOURS GLOBAL DE PARTIE (chantier « Tension & fin de partie », LOT F) -----------------------
+# Chip discret MM:SS sous le chrono de TOUR, calé sur `GameState.match_deadline_epoch` avec le MÊME
+# offset d'horloge que le chrono de tour (`_srv_offset`) — un PC à l'heure fausse n'y change rien.
+# Masqué si aucune échéance (serveur antérieur / limite désactivée). Sous FINAL_PROTOCOL_SECONDS :
+# pulse rouge. Le bandeau « ⚠ PROTOCOLE FINAL » et le tic sonore sont pilotés par main.gd (View pure).
+const FINAL_PROTOCOL_SECONDS := 120
+var _match_chip: Label = null
+var _match_deadline_epoch: float = 0.0
+var _match_urgent := false
+var _match_last_tick := -1
+# Mini-classement de DÉPARTAGE (PROTOCOLE FINAL uniquement) : panneau compact 3-5 lignes, alimenté
+# par main.gd depuis l'état PUBLIC. Créé à la demande, détruit à la sortie du protocole.
+var _tiebreak_panel: PanelContainer = null
+var _tiebreak_rows: VBoxContainer = null
 # Prévision de combat (G4 §8.63) : ligne « PRÉVISION : victoire NN % … » créée par code sous
 # l'instruction (onglet ACTIONS), visible uniquement au survol d'une cible valide en Phase 3.
 var _odds_label: Label = null
@@ -262,6 +276,7 @@ func _ready() -> void:
 	_build_reassault_button()
 	_build_amount_shortcuts()
 	_ensure_zone_chip()
+	_ensure_match_chip()
 	_apply_charter_ornaments()
 	# Fiche joueur repliée au départ : l'écran s'ouvre sur le plateau, pas sur un panneau.
 	_collapse_player_sheet_initially()
@@ -308,6 +323,9 @@ func _process(delta: float) -> void:
 			Color(1, 1, 1, 1), 1.0 - p)
 	elif _next_phase_pulse and still:
 		%NextPhaseButton.modulate = ACCENT_GOLD   # état figé mais distinct (accessibilité)
+	# Rebours GLOBAL de partie (LOT F) : rendu à chaque frame comme le chrono de tour, mais
+	# INDÉPENDANT de lui (il tourne aussi pendant un tour de bot, où `turn_timer` est nul).
+	_render_match_countdown(still)
 	if _srv_active:
 		var remaining_f := _srv_deadline_epoch - (Time.get_unix_time_from_system() + _srv_offset)
 		_render_remaining(int(ceil(maxf(0.0, remaining_f))))
@@ -343,6 +361,132 @@ func _render_remaining(remaining: int) -> void:
 	else:
 		%TimerLabel.modulate.a = 1.0
 		_last_tick_second = -1
+
+# =========================================================
+# REBOURS GLOBAL DE PARTIE + MINI-CLASSEMENT DE DÉPARTAGE
+# (chantier « Tension & fin de partie », LOT F)
+# =========================================================
+
+func _ensure_match_chip() -> void:
+	if _match_chip != null and is_instance_valid(_match_chip):
+		return
+	_match_chip = Label.new()
+	_match_chip.name = "MatchCountdownChip"
+	_match_chip.tooltip_text = tr("MATCH_TIMER_TOOLTIP")
+	_match_chip.mouse_filter = Control.MOUSE_FILTER_STOP  # le tooltip a besoin de capter le survol
+	_match_chip.add_theme_font_size_override("font_size", FS_EYEBROW)
+	_match_chip.add_theme_color_override("font_color", HERO_MUTED)
+	_match_chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_match_chip.visible = false
+	# Inséré JUSTE SOUS le chrono de tour, dans son propre conteneur : les deux rebours se lisent
+	# empilés (tour au-dessus, partie en dessous) au lieu de se disputer une place au centre.
+	var anchor: Control = %TimerLabel
+	var parent := anchor.get_parent()
+	parent.add_child(_match_chip)
+	parent.move_child(_match_chip, anchor.get_index() + 1)
+
+
+# Échéance GLOBALE de la partie (epoch mur serveur), poussée par main.gd depuis l'état.
+# `server_time` sert au MÊME calcul d'offset que le chrono de tour (§8.31) : on ne fait jamais
+# confiance à l'horloge du PC. 0.0 → chip masqué (serveur antérieur / limite désactivée).
+func set_match_deadline(deadline_epoch: float, server_time: float) -> void:
+	_ensure_match_chip()
+	if server_time > 0.0:
+		_srv_offset = server_time - Time.get_unix_time_from_system()
+	_match_deadline_epoch = maxf(0.0, deadline_epoch)
+	_match_chip.visible = _match_deadline_epoch > 0.0
+
+
+# Rendu du rebours global : MM:SS, rouge pulsé sous FINAL_PROTOCOL_SECONDS, tic sonore par seconde
+# dans la dernière minute (le même `timer_tick` que la pré-alerte AFK — on ne crée pas un 2ᵉ son
+# pour un 2ᵉ rebours, l'oreille en ferait une bouillie).
+func _render_match_countdown(still: bool) -> void:
+	if _match_chip == null or not is_instance_valid(_match_chip) or _match_deadline_epoch <= 0.0:
+		return
+	var remaining := int(ceil(maxf(0.0,
+		_match_deadline_epoch - (Time.get_unix_time_from_system() + _srv_offset))))
+	_match_chip.text = tr("MATCH_TIMER_FMT") % [floori(remaining / 60.0), remaining % 60]
+	var urgent := remaining <= FINAL_PROTOCOL_SECONDS
+	if urgent != _match_urgent:
+		_match_urgent = urgent
+		_match_chip.add_theme_color_override(
+			"font_color", TIMER_URGENT_COLOR if urgent else HERO_MUTED)
+	if urgent and not still:
+		_match_chip.modulate.a = 0.55 + 0.45 * absf(sin(float(Time.get_ticks_msec()) / 300.0))
+	else:
+		_match_chip.modulate.a = 1.0
+	# Tic sonore de la DERNIÈRE MINUTE seulement : à 2 min il serait interminable.
+	if urgent and remaining <= 60 and remaining > 0 and remaining != _match_last_tick:
+		_match_last_tick = remaining
+		AudioManager.play_sfx("timer_tick")
+
+
+func _ensure_tiebreak_panel() -> void:
+	if _tiebreak_panel != null and is_instance_valid(_tiebreak_panel):
+		return
+	_tiebreak_panel = PanelContainer.new()
+	_tiebreak_panel.name = "TiebreakBoard"
+	_tiebreak_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.88)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(2)
+	st.border_color = TIMER_URGENT_COLOR
+	st.set_content_margin_all(10.0)
+	_tiebreak_panel.add_theme_stylebox_override("panel", st)
+	# HAUT-GAUCHE : la colonne droite porte déjà le chip de zone et ABANDONNER, le centre le
+	# bandeau de tour. La gauche est la seule zone libre pendant une fin de partie.
+	_tiebreak_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_tiebreak_panel.offset_left = 16.0
+	_tiebreak_panel.offset_top = 96.0
+	add_child(_tiebreak_panel)
+	WarzoneUI.add_corner_notches(_tiebreak_panel, 14.0)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	_tiebreak_panel.add_child(box)
+	var title := Label.new()
+	title.text = tr("SCOREBOARD_TITLE")
+	title.add_theme_font_size_override("font_size", FS_EYEBROW)
+	title.add_theme_color_override("font_color", TIMER_URGENT_COLOR)
+	box.add_child(title)
+	_tiebreak_rows = VBoxContainer.new()
+	_tiebreak_rows.add_theme_constant_override("separation", 1)
+	box.add_child(_tiebreak_rows)
+
+
+# Mini-classement de DÉPARTAGE, affiché UNIQUEMENT pendant le PROTOCOLE FINAL.
+# `rows` (résolues par main.gd, View pure §6.1) : liste ordonnée de
+#   { name: String, color: Color, objective: String, hero_pv: int, kills: int }
+# `objective` est une CHAÎNE déjà décidée par le contrôleur : le vrai pourcentage pour SOI,
+# « ??? » pour autrui — le % d'objectif d'un adversaire reste SECRET jusqu'au game_over, et c'est
+# précisément cette incertitude qui fait la tension. Liste vide → panneau retiré.
+func set_tiebreak_board(rows: Array) -> void:
+	if rows.is_empty():
+		if _tiebreak_panel != null and is_instance_valid(_tiebreak_panel):
+			_tiebreak_panel.queue_free()
+			_tiebreak_panel = null
+			_tiebreak_rows = null
+		return
+	_ensure_tiebreak_panel()
+	for c in _tiebreak_rows.get_children():
+		_tiebreak_rows.remove_child(c)
+		c.queue_free()
+	for r in rows:
+		if typeof(r) != TYPE_DICTIONARY:
+			continue
+		var line := RichTextLabel.new()
+		line.bbcode_enabled = true
+		line.fit_content = true
+		line.scroll_active = false
+		line.autowrap_mode = TextServer.AUTOWRAP_OFF
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.add_theme_font_size_override("normal_font_size", FS_SMALL)
+		var col: Color = r.get("color", Color("eef3f7"))
+		line.text = tr("SCOREBOARD_ROW_FMT") % [
+			col.to_html(false), str(r.get("name", "")),
+			str(r.get("objective", "")), int(r.get("hero_pv", 0)), int(r.get("kills", 0))]
+		_tiebreak_rows.add_child(line)
+
 
 # --- API du chrono SERVEUR (E3 §8.75), pilotée par update_display() et main._on_timer_update ---
 

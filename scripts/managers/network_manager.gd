@@ -79,6 +79,11 @@ signal player_abandoned(player_id: int)
 # forme STRUCTURÉE {type, params, volets} dont le client compose le libellé TRADUIT (§8.104).
 # `objective` est {} sur un serveur antérieur → repli automatique sur `description`.
 signal spy_result(target_player_id: int, description: String, objective: Dictionary)
+# PARI D'OBSERVATEUR accepté (chantier « Tension & fin de partie », LOT E) — message PRIVÉ
+# `observer_bet_ack` reçu par le seul parieur. `reward` = prime POTENTIELLE {xp, coins} du registre
+# serveur : l'overlay spectateur l'affiche SANS aucune valeur en dur (règle §6). Un REFUS arrive,
+# lui, par le message `{"type":"error", "reason": <code>}` déjà géré (last_error_reason).
+signal observer_bet_accepted(bet_type: String, value, reward: Dictionary)
 # Chat de salle (§8.33) : message relayé par le serveur, ESTAMPILLÉ (sender_id + sender_name réels,
 # pas d'usurpation). tab ∈ {"general","private"} ; target_id renseigné uniquement en privé (sinon -1).
 signal chat_message_received(tab: String, sender_id: int, sender_name: String, text: String, target_id: int)
@@ -165,6 +170,16 @@ var last_match_rewards: Dictionary = {}
 # ⚠️ Défaut `true` VOLONTAIRE : un serveur ANTÉRIEUR n'envoie pas le champ mais crédite ENCORE les
 # points de classement à toutes les parties — afficher « non classée » y serait un MENSONGE.
 var last_match_is_ranked: bool = true
+# --- Chantier « Tension & fin de partie » : blocs ADDITIFS du game_over -------------------------
+# `last_final_scores` (bloc PUBLIC, LOT B) : tableau de DÉPARTAGE trié — une entrée
+# { player_id, username, objective_pct, hero_pv_pct, kills, contender } par joueur. Envoyé dans TOUS
+# les modes de fin (il alimente l'onglet BILAN du Rapport Post-Op, pas seulement les fins au temps).
+# `last_bet_results` (bloc PRIVÉ, LOT E) : { results: [{bet_type, value, won, xp, coins}],
+# totals: {xp, coins, won, total} } — UNIQUEMENT si CE joueur a parié. {} sinon.
+# Propriétés (et non arguments de signal, pattern `last_objectives_reveal`) → la signature de
+# `match_over` reste INCHANGÉE (§1.5 additif strict).
+var last_final_scores: Array = []
+var last_bet_results: Dictionary = {}
 
 var socket = WebSocketPeer.new()
 var connected = false
@@ -353,6 +368,13 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# `true` (ce serveur-là crédite encore le ladder sur toutes les parties : le repli
 			# reproduit son comportement réel plutôt que d'annoncer à tort « non classée »).
 			last_match_is_ranked = bool(msg.get("is_ranked", true))
+			# Chantier « Tension » : DÉPARTAGE public (LOT B) + résultats PRIVÉS des paris (LOT E).
+			# Blocs ADDITIFS → absents d'un serveur antérieur, on retombe sur [] / {} et le Rapport
+			# Post-Op n'affiche simplement pas ces sections (client défensif §9.2).
+			var fscores = msg.get("final_scores", [])
+			last_final_scores = fscores if typeof(fscores) == TYPE_ARRAY else []
+			var bres = msg.get("bet_results", {})
+			last_bet_results = bres if typeof(bres) == TYPE_DICTIONARY else {}
 			var rewards: Dictionary = msg.get("match_rewards", {})
 			last_match_rewards = rewards
 			game_event.emit({"event_type": "game_over", "winner_id": msg.get("winner_id"),
@@ -407,6 +429,14 @@ func _handle_server_message(msg: Dictionary) -> void:
 				int(msg.get("budget_seconds", 0)),
 				str(msg.get("reason", "")),
 				float(msg.get("server_time", 0.0)))
+		"observer_bet_ack":
+			# PARI D'OBSERVATEUR accepté (LOT E) : message PRIVÉ au parieur. `value` reste BRUT (id de
+			# joueur OU chaîne de mode de fin, selon bet_type) — c'est la vue qui sait le lire.
+			var ack_reward = msg.get("reward", {})
+			observer_bet_accepted.emit(
+				str(msg.get("bet_type", "")),
+				msg.get("value"),
+				ack_reward if typeof(ack_reward) == TYPE_DICTIONARY else {})
 		"chat_message":
 			# Chat de salle (§8.33) : relais serveur estampillé. Ids JSON en float -> int() (piège §5).
 			chat_message_received.emit(
@@ -464,6 +494,14 @@ func request_salon_state() -> void:
 # "player_id":..., "faction_id":...} à toute la salle (relayé via le signal faction_locked).
 func send_faction_choice(faction_id: String) -> void:
 	send_action("faction_choice", {"faction_id": faction_id})
+
+# PARI D'OBSERVATEUR (chantier « Tension & fin de partie », LOT E) : réservé aux joueurs ÉLIMINÉS,
+# et fermé dès le PROTOCOLE FINAL. Le serveur répond EN PRIVÉ — `observer_bet_ack` si le pari est
+# pris, sinon `{"type":"error","reason": not_eliminated|already_bet|invalid_value|too_late}` que la
+# vue traduit (clés BET_ERR_*). `value` = player_id (winner / next_hero_down) ou l'un de
+# "objective"|"elimination"|"timeout" (end_reason).
+func send_observer_bet(bet_type: String, value) -> void:
+	send_action("observer_bet", {"bet_type": bet_type, "value": value})
 
 # Demande la photographie du Draft (G2 durci) : le serveur répond en PRIVÉ par un message
 # "draft_state" (relayé via draft_state_received). Appelé par faction_selection à son _ready

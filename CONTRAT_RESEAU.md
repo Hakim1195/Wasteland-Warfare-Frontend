@@ -1192,3 +1192,145 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
 >
 > **HORS PÉRIMÈTRE (chantier suivant, après RETEX du trio).** Les 7 autres pouvoirs de faction · usage des capacités par les bots · réactions hors tour · missions/succès adossés à `abilities_used` · entrée des pouvoirs en Classée (quand les 10 factions auront le leur : passer `casual_only` à `False` au registre suffira).
 
+
+---
+
+## §8.120 — TENSION & FIN DE PARTIE : zone croissante, timer global, victoire au score, objectifs élargis, XP de placement, paris d'observateur (volet RÉSEAU/MOTEUR)
+
+> **Périmètre.** Volet backend de `PROMPT_TENSION_FIN_DE_PARTIE.md` (détail frontend : **§8.120 de
+> `FRONTEND_INTERFACES.md`** ; valeurs d'équilibrage et règles : **§4 de `ARCHITECTURE_ET_REGLES.md`**).
+> **Strictement ADDITIF** (règle §1.5) : aucune clé de payload existante n'est renommée ou supprimée.
+> `victory_reason` gagne une VALEUR (`"timeout"`) — additif, le client a des replis (§9.2). **AUCUN
+> COMMIT — redéploiement VPS requis.** Client et serveur partent **ENSEMBLE** (gate de version WS §9).
+
+### 1. Champs ADDITIFS de l'état (`GameState` / `PlayerState` / `GameStatistics`)
+
+| Champ | Type | Défaut | Rôle |
+|---|---|---|---|
+| `GameState.match_deadline_epoch` | `float` | `0.0` | Échéance ABSOLUE de la partie en **epoch MUR** (`time.time()`), posée à la **création de l'état** = `now + settings.MATCH_TIME_LIMIT_S`. Le client en dérive son compte à rebours global via l'offset d'horloge existant (pattern `timer_update` §8.31) — **aucun message périodique**. `0.0` = aucune limite (état antérieur, ou `MATCH_TIME_LIMIT_S=0`). |
+| `GameState.final_protocol_active` | `bool` | `False` | PROTOCOLE FINAL armé (T−`FINAL_PROTOCOL_LEAD_S`) : bandeau client, plafond de croissance de zone **DOUBLÉ**, paris d'observateur **FERMÉS**. |
+| `GameState.zone_growth_this_round` | `int` | `0` | Territoires ajoutés par CROISSANCE depuis le début du round global. Remis à 0 par `_relocate_contamination` (seul point de reset). |
+| `PlayerState.observer_bets` | `dict` | `{}` | Paris du joueur : `{ "<bet_type>": {"value": ..., "at_hero_deaths": int} }`. **REDACTÉ** — chaque destinataire ne voit QUE les siens (cf. §4). |
+| `GameStatistics.hero_down_order` | `List[int]` | `[]` | Ids des joueurs dont le héros est tombé, **dans l'ordre chronologique**. Rend résoluble le pari « prochain héros abattu ». Donnée PUBLIQUE. |
+
+### 2. Évènements système (pipeline `system_events` existant, PUBLICS)
+
+- `{"code": "zone_grew", "territory_id": "<tid>"}` — la zone s'est étendue d'un territoire CONTIGU
+  (croissance intra-round). Émis **après** les dégâts, à l'entame de chaque tour de joueur. Une
+  ligne LEGACY `system_messages` accompagne l'évènement (anglais invariant, anciens clients).
+- `{"code": "final_protocol_started"}` — le PROTOCOLE FINAL vient d'être armé. Diffusé dans un
+  `action_result` d'`event_type` `final_protocol_started`, avec l'état à jour.
+- La fin au temps est diffusée comme un `action_result` d'`event_type` **`match_timeout`**
+  (`{"winner_id": ...}`), suivi du `game_over` standard. L'état diffusé porte déjà
+  `winner_id` + `victory_reason` : un client qui ignore l'évènement bascule quand même (§9.2).
+
+### 3. Action WS `observer_bet` (réservée aux joueurs ÉLIMINÉS)
+
+```json
+{"action": "observer_bet", "payload": {"action_id": "...", "bet_type": "winner", "value": 42}}
+```
+
+- `bet_type` ∈ `winner` · `next_hero_down` · `end_reason`.
+- `value` = `player_id` (les deux premiers) **ou** `"objective"|"elimination"|"timeout"` (`end_reason`).
+  « abandon » n'est **pas** pariable (ce n'est pas une victoire lisible sur le plateau).
+- **Pas de pari sur la ZONE** : son télégraphe est PUBLIC un round à l'avance, le pari serait gratuit.
+- Traitée **hors** `process_action` (le parieur n'est ni le joueur courant ni vivant) et **sans**
+  `_post_action_timer` : parier n'est pas une action de tour et ne touche pas le compteur AFK.
+- Réponse **PRIVÉE** au parieur : `{"type": "observer_bet_ack", "bet_type", "value", "reward": {"xp","coins"}}`.
+- Refus (convention zéro-4xx §8.112) : `{"type": "error", "message": ..., "reason": <code>}` avec
+  `reason` ∈ `not_eliminated` · `too_late` · `already_bet` · `invalid_value`. **Ordre des contrôles
+  figé** : éligibilité → fenêtre → unicité → valeur (dire « valeur invalide » à un joueur VIVANT
+  serait trompeur : sa vraie erreur est qu'il n'a rien à parier).
+- Le contrat tolère aussi la forme « à plat » `{"type": "observer_bet", ...}` (comme le chat) : le
+  routeur accepte `type` en alias d'`action` quand `action` est absent.
+
+### 4. State Redaction — extension aux paris
+
+`connection_manager._redact_state_for_player` masque désormais, **en plus** des objectifs secrets,
+`players[*].observer_bets` de **tous les autres** joueurs (écrasé par `{}`, la clé restant présente
+pour que le contrat soit stable). Un pari public serait un signal tactique gratuit (« l'éliminé a
+parié sur X » désignerait le favori à toute la table). Révélation au `game_over`, en bloc **PRIVÉ**.
+
+### 5. `game_over` — deux blocs ADDITIFS
+
+- **`final_scores` (PUBLIC)** : tableau de DÉPARTAGE **déjà trié** par le barème serveur, une entrée
+  par joueur : `{player_id, username, objective_pct, hero_pv_pct, kills, contender}`. Envoyé dans
+  **TOUS** les modes de fin (il alimente l'onglet BILAN du Rapport Post-Op — « où en étaient les
+  autres ? » a du sens même après une victoire par objectif). Pourcentages **ENTIERS** 0..100
+  (piège JSON float §5) et **plancherisés AVANT comparaison** : le classement affiché est
+  exactement celui que le serveur a appliqué.
+- **`bet_results` (PRIVÉ, par destinataire — piège n° 9)** : `{results: [{bet_type, value, won, xp,
+  coins}], totals: {xp, coins, won, total}}`. **Absent** pour qui n'a pas parié.
+- `victory_reason` accepte la valeur ADDITIVE **`"timeout"`**. `derive_match_type` la range sous
+  `elimination` (le `match_type` n'a que 2 valeurs, et une victoire au temps n'est **pas** une
+  victoire par objectif).
+
+### 6. Barème de DÉPARTAGE (module PUR `api/game/final_scoring.py`)
+
+Ordre **STRICT** — on ne compare le critère suivant qu'à égalité parfaite sur le précédent :
+1. **% d'accomplissement d'objectif** (= le MAX des deux volets du double objectif) ;
+2. **% de PV restants du héros** (héros non initialisé → 0 %, jamais 100 %) ;
+3. **unités ennemies tuées AU COMBAT** (jamais les kills de zone : la zone tue sans mérite).
+
+Égalité parfaite sur les trois → **ordre du tour** (`turn_order`, le premier à avoir joué gagne).
+Ce n'est pas « juste », c'est **déterministe et documenté** — tirer au sort une victoire serait pire.
+Les **contenders** sont les mêmes que dans `_check_victory` (vivants **ET** non retirés — Fallen
+Empire : un joueur qui a abandonné ne gagne pas au temps).
+
+### 7. Ledger — 8ᵉ raison canonique
+
+`economy.REASON_OBSERVER_BET = "observer_bet"` (**crédits uniquement** : parier ne coûte rien).
+Ajoutée à `ALL_REASONS` entre `mission_claim` et `season_reward`. Plafond structurel : **20 coins**
+par partie. Les coins de PALIER de niveau éventuellement franchi par la prime d'XP restent, eux,
+journalisés sous `match_level_coins` — jamais sous `observer_bet`.
+
+### 8. Configuration (`core/config.py`, surchargeable `.env`)
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `MATCH_TIME_LIMIT_S` | `900` | Durée max d'une partie. **`0` DÉSACTIVE** la limite (aucune fin au temps, aucun PROTOCOLE FINAL). ⚠️ Le rebours démarre à la **création de l'état** — draft (≤ 60 s) + placement (≤ 90 s) compris : c'est une borne de **durée de session**, pas de temps de jeu net. |
+| `FINAL_PROTOCOL_LEAD_S` | `120` | Avance du PROTOCOLE FINAL sur l'échéance. |
+
+### 9. Où vit le rebours global (et pourquoi pas dans une task dédiée)
+
+Les jalons vivent dans la **boucle de minuterie de salle EXISTANTE** (`router._turn_timeout`) :
+elle dort jusqu'au **plus tôt** de l'échéance de phase et du prochain jalon global, et appelle
+`_check_match_deadline` à **chaque** réveil, **avant** le test d'obsolescence de signature (le
+rebours global est indépendant du tour courant : il ne doit pas mourir avec la minuterie d'un tour
+périmé). Un cache in-memory par salle (`_match_deadlines`, même nature que `timers.*`) sert
+uniquement à calculer le prochain réveil **hors verrou** ; l'**autorité reste l'état Redis**.
+Sans ce réveil anticipé, la granularité du « T−2 min » serait celle du timer de phase — jusqu'à
+**180 s** d'erreur en phase d'Attaque, soit un bandeau qui arrive à T−0.
+
+**Cas limites couverts** : expiration pendant `pending_conquer`/`pending_eclipse_choice` (état résolu
+tel quel, rien n'est annulé) · pendant un tour de bot (le verrou de salle sérialise déjà) · pendant
+une animation client (le serveur n'attend jamais le client) · état sans joueur (aucune clôture, et
+**aucune boucle CPU** : le calcul de réveil renvoie `None` et jamais `0.0` quand l'échéance est passée).
+
+> **Fichiers.** NOUVEAUX : `api/game/zone_settings.py`, `api/game/final_scoring.py`,
+> `api/game/observer_bets.py`, `test_zone_growth.py`, `test_match_timer.py`,
+> `test_objectives_new_types.py`, `test_rewards_placement.py`, `test_observer_bets.py`.
+> MODIFIÉS : `api/game/engine.py`, `api/game/objectives.py`, `api/game/rewards.py`,
+> `api/game/economy.py`, `api/game/state_manager.py`, `api/game/state_schemas.py`,
+> `api/sockets/router.py`, `api/sockets/connection_manager.py`, `core/config.py`.
+>
+> **Validation.** `test_zone_growth.py` **43 ✅** · `test_match_timer.py` **55 ✅** ·
+> `test_objectives_new_types.py` **90 ✅** · `test_rewards_placement.py` **26 ✅** ·
+> `test_observer_bets.py` **59 ✅** · suite backend complète verte (non-régressions mises à jour :
+> `test_rewards.py` 317 ✅, `test_objectives_double.py` 40 ✅, `test_economy.py`, `test_map_registry.py`,
+> `test_setup_phase.py`, `test_bot_ai.py`, `test_repro_turn_combat.py`) — **sauf `test_missions.py` et
+> `test_simulation.py`**, en échec **PRÉ-EXISTANT sur HEAD** (vérifié en rejouant les deux suites
+> contre les sources extraites de `HEAD` : échecs identiques), hors périmètre.
+>
+> **⚠️ DÉFAUT D'ÉQUILIBRAGE CORRIGÉ EN COURS DE ROUTE.** `fortified_hold` était spécifié à
+> `min_garrison = 3` : à ce seuil l'objectif est **DÉJÀ REMPLI à la sortie du déploiement initial**
+> (3 j sur classic_42 : 14 territoires / 49 troupes ⇒ 8 × 3 = 24 troupes suffisent) et la partie se
+> terminait **au tour 1, sans qu'aucune action ne soit jouée** — reproduit par `test_bot_ai.py`
+> (vainqueur en 0 pas de boucle). Porté à **7** (8 × 7 = 56 > 49 sur tous les effectifs des deux
+> cartes) : arithmétique complète en commentaire dans `objectives.OBJECTIVE_PARAMS_BY_MAP`.
+>
+> **⚠️ POINT D'ÉQUILIBRAGE À TRANCHER AU PLAYTEST (livré tel que spécifié).** `conquer_territories`
+> à **15** sur classic_42 rend l'objectif atteignable **en UNE conquête à 3 joueurs** (distribution
+> initiale : 14 territoires chacun) — la partie de bots de non-régression se termine désormais au
+> **tour 3**. À 4/5/6 joueurs il faut respectivement +4/+6/+8 conquêtes, ce qui est sain. Valeur de
+> registre : une seule ligne à changer (18-20 rendrait les parties à 3 comparables aux autres).

@@ -1300,3 +1300,128 @@ Accessible par l'onglet de nav **OPÉRATEUR** et par la jauge d'XP cliquable. É
 > - **Logique : 29 OK / 0 échec** — `main.gd` instancié SEUL (hors arbre) avec des états serveur fictifs : `_ration_preview` (plancher PP, plafond PV), `_ability_block_reason` (ordre des 8 refus, RATIONNER autorisé en classée, BASTION au plancher exact, **FRAPPE FANTÔME jamais grisée à tort faute de cible**), `_ability_targets` (bouclier/ennemi exclus, télégraphe non ciblable), gardes de tour.
 >
 > ⚠️⚠️ **MISE EN PAGE NON PROUVÉE.** Un boot headless « 0 ERROR » ne prouve **RIEN** sur le rendu : la position du sous-titre des boutons, la lisibilité de l'écusson de bouclier sur le plateau, la trajectoire des flèches ▲/▼ et du flotteur de soin, et le bandeau de portée illimitée n'ont **PAS** été vus. À contrôler en **CAPTURE** (recette §8.111/§8.118) ou en partie locale.
+
+---
+
+## §8.120 — TENSION & FIN DE PARTIE (volet FRONTEND)
+
+> Contrat réseau : **§8.120 de `CONTRAT_RESEAU.md`** · règles et valeurs : **§4.6-§4.10 de
+> `ARCHITECTURE_ET_REGLES.md`** (dépôt backend). **Client défensif §9.2** : tous les champs consommés
+> ici sont ADDITIFS — absents d'un serveur non redéployé, chaque bloc se masque simplement.
+> ⚠️ **Client et serveur partent ENSEMBLE** (gate de version WS §9).
+
+### 1. Rebours GLOBAL de partie (`hud.gd`)
+
+- **Chip `⏱ MM:SS`** créé par code **juste sous `%TimerLabel`** (les deux rebours se lisent empilés :
+  tour au-dessus, partie en dessous). Calé sur `GameState.match_deadline_epoch` avec le **MÊME offset
+  d'horloge** que le chrono de tour (`_srv_offset`, §8.31) — une horloge PC fausse n'y change rien.
+  `match_deadline_epoch == 0.0` (serveur antérieur / limite désactivée) → chip **masqué**.
+- Sous **`FINAL_PROTOCOL_SECONDS = 120`** : couleur danger + **pulse** (coupé par `reduced_motion`,
+  E10 §8.82). **Tic sonore** (`timer_tick`, le même que la pré-alerte AFK — on ne crée pas un 2ᵉ son
+  pour un 2ᵉ rebours) uniquement dans la **dernière minute** : à 2 min il serait interminable.
+- Il tourne **indépendamment** du chrono de tour, donc **aussi pendant un tour de bot** (où
+  `turn_timer` est nul).
+
+### 2. Bandeau « ⚠ PROTOCOLE FINAL » + mini-classement de DÉPARTAGE
+
+- `main._push_match_countdown()` annonce le protocole **une seule fois** (garde
+  `_final_protocol_announced`) : `phase_banner` rouge + SFX `zone_alarm` + entrée ☢ au Journal.
+- **Mini-classement** (`hud.set_tiebreak_board`) : panneau compact ancré **HAUT-GAUCHE** (la colonne
+  droite porte le chip de zone et ABANDONNER, le centre le bandeau de tour), visible **uniquement**
+  pendant le PROTOCOLE FINAL, retiré à la sortie.
+- ⚠️ **Calculé CÔTÉ CLIENT, à dessein** : `final_scores` n'arrive qu'au `game_over` — trop tard pour
+  une course. PV de héros et kills de combat sont **publics** dans l'état ; le **% d'objectif des
+  autres est SECRET** → affiché **« ??? »** pour autrui et en vrai pour soi. Choix assumé : la tension
+  vient de ne pas savoir où en sont les adversaires. Le tri local ne porte donc que sur PV puis kills
+  (il **montre les critères**, il ne prétend pas être le classement final).
+
+### 3. Zone croissante — évènement `zone_grew`
+
+Le passage au shader `toxic_pulsation` est **déjà** assuré par `board.gd` (le territoire est entré
+dans `contamination_zone.territories`). `main._on_zone_grew()` ajoute ce que l'état seul ne dit pas —
+**quand** et **où** : `board.flash_territory` (soumis à `reduced_motion`), entrée ☢ **cliquable** au
+Journal (le clic recentre la caméra, E4 §8.76) et SFX. Le télégraphe de téléportation est **inchangé**.
+
+### 4. Tracker d'objectif — 3 nouveaux types (`scripts/ui/objective_tracker.gd`)
+
+- `leg_progress` gagne `control_specific_continents`, `destroy_units`, `fortified_hold` : formules
+  **MIROIR EXACT** d'`api/game/objectives.progress` (toute divergence ferait mentir la jauge).
+- `describe` compose les libellés depuis `type`/`params` (i18n §8.104) et **réutilise les clés
+  `CONT_*`** déjà traduites pour les noms de continents — on ne duplique jamais un nom de continent
+  dans une nouvelle clé. Clé absente → id « humanisé », jamais un `CONT_XXX` brut à l'écran.
+- **Auto-vérification par asserts** (pattern G4 §8.63) : `_self_check()` couvre les six ratios,
+  la paire vide (aucune division par zéro) et la sémantique OU du double objectif.
+- Le **contexte** est construit **une seule fois** par `main._objective_ctx()` — extrait de
+  `_push_objective_tracker` parce qu'il a désormais deux consommateurs (la jauge et le mini-classement) ;
+  deux constructions locales auraient fini par afficher deux pourcentages différents du même objectif.
+
+### 5. Rapport Post-Op (`operation_report.gd`)
+
+- **Verdict TIMEOUT** : quand `GameState.victory_reason == "timeout"`, le titre est préfixé de
+  `VERDICT_TIMEOUT` (« TEMPS ÉCOULÉ — VICTOIRE AU SCORE ») **sans perdre le nom du vainqueur** —
+  sans ce sur-titre, un joueur qui menait aux territoires ne comprendrait pas l'arrêt de la partie.
+  (`GameState.victory_reason` est désormais **miroité** côté client ; "" = serveur antérieur → aucun
+  sur-titre, comportement d'avant le chantier.)
+- **Tableau de DÉPARTAGE** (`populate_final_scores`) dans l'onglet **BILAN**, sous le tableau
+  comparatif : OPÉRATEUR · OBJECTIF · PV HÉROS · KILLS, **dans l'ordre exact du barème** (lire de
+  gauche à droite = lire le départage). Rendu **TEL QUEL** (le serveur a déjà trié) ; ma ligne en
+  cyan, les non-contenders en muet. Section **masquée** si `final_scores` est vide.
+- **Ligne PARIS** (`populate_bet_results`) : « PARIS D'OBSERVATEUR : 2/3 corrects · +25 XP +15 ¢ »
+  puis le détail par pari. Rien du tout si le joueur n'a pas parié.
+- **Lignes PLACEMENT** dans les onglets XP JOUEUR et XP HÉROS : le montant vient du **SERVEUR**
+  (`xp_inputs.xp_placement` / `xp_inputs.hero_xp_placement`) — c'est une valeur d'équilibrage, elle
+  bougera au playtest **sans redéploiement de client** (règle §6). Repli local (override `-1`,
+  serveur antérieur) = ancien barème (+150 au seul 1ᵉʳ, conditionné à l'objectif). Le libellé dépend
+  du rang (`PLACEMENT_LINE_1ST` / `_2ND` / `_OTHER`) : « PLACEMENT (1ᵉʳ) » se lit d'un coup d'œil.
+- `_self_check()` étendu : **repli local ET barème serveur** vérifiés, dont la **non-cumulativité**
+  héros (2ᵉ = 60, jamais 150 + 60).
+
+### 6. Overlay spectateur — panneau « PARIS » (`spectator_overlay.gd`)
+
+**Seul ajout** à cet overlay, volontairement compact et **non bloquant** (le plateau reste navigable) :
+panneau ancré HAUT-DROITE (la gauche est prise par le mini-classement pendant le PROTOCOLE FINAL),
+3 lignes = 3 types de pari, chacune `libellé + liste déroulante + MISER + état`.
+
+- **View PURE §6.1** : l'overlay ne connaît ni le réseau ni les règles — il émet `bet_placed`,
+  `main.gd` envoie, et lui repousse le verdict serveur.
+- Cibles = joueurs **encore en lice**, ni éliminés ni soi-même (résolues par `main._refresh_bet_panel`,
+  re-testées à **chaque** état : une cible peut tomber entre-temps).
+- Guichet fermé selon la **MÊME règle que le serveur** (`observer_bets.open_for`) : dès le PROTOCOLE
+  FINAL, les lignes non misées affichent `BET_LOCKED`.
+- Pari accepté → ligne **verrouillée** avec la mise et la **prime potentielle annoncée par le serveur**
+  (aucune valeur en dur côté client). Refus → code `reason` traduit (clés `BET_ERR_*`).
+- Au `game_over`, `show_bet_results` passe chaque ligne en **GAGNÉ / PERDU** : le parieur voit son
+  résultat sans avoir à le chercher (le Rapport Post-Op le redit, c'est voulu).
+
+### 7. i18n (41 clés ajoutées en fin de `translations/ui_strings.csv`, FR/EN/IT)
+
+`MATCH_TIMER_FMT` · `MATCH_TIMER_TOOLTIP` · `FINAL_PROTOCOL_BANNER` · `FINAL_PROTOCOL_LOG` ·
+`VERDICT_TIMEOUT` · `SCOREBOARD_TITLE` · `SCOREBOARD_UNKNOWN` · `SCOREBOARD_ROW_FMT` ·
+`SCOREBOARD_COL_OBJECTIVE` · `SCOREBOARD_COL_HP` · `SCOREBOARD_COL_KILLS` · `ZONE_GREW_LOG` ·
+`OBJ_DESC_CONTROL_SPECIFIC` · `OBJ_DESC_DESTROY_UNITS` · `OBJ_DESC_FORTIFIED_HOLD` ·
+`OBJ_SPECIFIC_FMT` · `OBJ_DESTROY_FMT` · `OBJ_FORTIFIED_FMT` · `PLACEMENT_LINE_1ST/_2ND/_OTHER` ·
+`BETS_TITLE` · `BETS_HINT` · `BETS_SUMMARY_FMT` · `BET_WINNER` · `BET_NEXT_HERO` · `BET_END_REASON` ·
+`BET_END_OBJECTIVE/_ELIMINATION/_TIMEOUT` · `BET_PLACE` · `BET_PLACED_FMT` · `BET_LOCKED` ·
+`BET_WON` · `BET_LOST` · `BET_UNKNOWN` · `BET_ACCEPTED_LOG` · `BET_ERR_*` (4 refus).
+
+Aucune clé supprimée. CSV **LF / UTF-8 sans BOM** (1 200 clés, aucun doublon), `.translation`
+régénérés par `--import`.
+
+> **Fichiers.** MODIFIÉS : `scripts/ui/hud.gd`, `scripts/ui/objective_tracker.gd`,
+> `scripts/ui/spectator_overlay.gd`, `scripts/game/main.gd`, `scripts/game/operation_report.gd`,
+> `scripts/managers/game_state.gd`, `scripts/managers/network_manager.gd`,
+> `translations/ui_strings.csv`. **Aucun `.tscn` retouché** (tout est construit par code).
+>
+> **Validation.** `--import` **exit 0, 0 ERROR** · boots headless **0 ERROR** :
+> `main_menu.tscn`, `game/main.tscn`, `game/operation_report.tscn`, `ui/spectator_overlay.tscn`,
+> `ui/search_screen.tscn` · auto-vérification du tracker exécutée **hors jeu** (`--script`) :
+> **OK** · **contre-épreuve de l'outillage** : un assert du Rapport saboté à 999 fait bien remonter
+> `SCRIPT ERROR: Assertion failed.` au boot de `operation_report.tscn` (donc `_self_check` tourne
+> réellement), source **restaurée dans le même bloc**, aucun marqueur `A RETIRER` résiduel.
+>
+> ⚠️⚠️ **MISE EN PAGE NON PROUVÉE.** Un boot headless « 0 ERROR » ne prouve **RIEN** sur le rendu.
+> N'ont **PAS** été vus : le chip de rebours global sous le chrono (chevauchement possible du bandeau
+> haut), le mini-classement HAUT-GAUCHE pendant le PROTOCOLE FINAL, le panneau PARIS HAUT-DROITE
+> (largeur des listes déroulantes, collision avec le chip de zone), le tableau de départage dans
+> l'onglet BILAN, et les lignes PLACEMENT/PARIS du Rapport. À contrôler en **CAPTURE** (recette
+> §8.111/§8.118) ou en partie locale avec `MATCH_TIME_LIMIT_S=180` dans le `.env`.

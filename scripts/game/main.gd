@@ -1718,6 +1718,83 @@ func _push_zone_forecast() -> void:
 		AudioManager.play_sfx("zone_alarm")
 	_last_zone_alarm_sig = sig
 
+# =========================================================
+# REBOURS GLOBAL DE PARTIE & PROTOCOLE FINAL (chantier « Tension & fin de partie », LOT F)
+# =========================================================
+
+# Vrai quand le PROTOCOLE FINAL a déjà été annoncé — évite de rejouer le bandeau à chaque refresh.
+var _final_protocol_announced := false
+
+# Pousse l'échéance GLOBALE au HUD et, pendant le PROTOCOLE FINAL, le mini-classement de départage.
+#
+# ⚠️ POURQUOI LE CLASSEMENT EST CALCULÉ ICI et non lu du serveur : le bloc `final_scores` n'arrive
+# qu'au `game_over` — trop tard pour une course. Les DEUX derniers critères (PV de héros, kills de
+# combat) sont des données PUBLIQUES de l'état, donc calculables en direct. Le PREMIER (% d'objectif)
+# est SECRET pour autrui : on affiche « ??? » pour les autres et notre VRAIE valeur pour nous. C'est
+# un choix assumé — la tension vient justement de ne pas savoir où en sont les adversaires.
+func _push_match_countdown() -> void:
+	hud.set_match_deadline(float(GameState.match_deadline_epoch), float(GameState.server_time))
+	var active: bool = bool(GameState.final_protocol_active) \
+		and GameState.stage == "playing" and GameState.winner_id == null
+	if active and not _final_protocol_announced:
+		_final_protocol_announced = true
+		if _phase_banner != null:
+			_phase_banner.show_banner(tr("FINAL_PROTOCOL_BANNER"), Color("d6453f"))
+		AudioManager.play_sfx("zone_alarm")
+		hud.add_feed_entries([{"category": "zone", "icon": "☢", "major": true, "tid": "",
+			"rich_text": tr("FINAL_PROTOCOL_LOG")}])
+	if not active:
+		hud.set_tiebreak_board([])
+		return
+	hud.set_tiebreak_board(_tiebreak_rows())
+
+
+# Lignes du mini-classement, TRIÉES comme le barème serveur (`final_scoring`) sur ce que le client
+# peut voir : PV de héros % puis kills de combat. On NE trie PAS sur le % d'objectif — il nous est
+# inconnu pour les autres, et un tri partiel serait plus trompeur qu'utile (l'ordre affiché ne
+# prétend donc PAS être le classement final, il montre les critères).
+func _tiebreak_rows() -> Array:
+	var stats: Dictionary = GameState.statistics if typeof(GameState.statistics) == TYPE_DICTIONARY else {}
+	var kills_by: Dictionary = stats.get("combat_kills_by_player", {}) \
+		if typeof(stats.get("combat_kills_by_player")) == TYPE_DICTIONARY else {}
+	var rows: Array = []
+	for key in GameState.players.keys():
+		var pid := int(key)
+		var p: Dictionary = GameState.players.get(str(key), {})
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		# Les éliminés ne peuvent plus gagner au temps (mêmes « contenders » que le serveur).
+		if str(p.get("status", "alive")) == "eliminated":
+			continue
+		var pv_max := int(p.get("hero_pv_max", 0))
+		var pv_pct := 0 if pv_max <= 0 else int(floor(100.0 * float(p.get("hero_pv_current", 0)) / float(pv_max)))
+		# % d'objectif : le nôtre est réel (le tracker le calcule déjà), celui des autres est SECRET.
+		var objective_txt := tr("SCOREBOARD_UNKNOWN")
+		if pid == _my_id():
+			objective_txt = "%d%%" % int(floor(100.0 * _my_objective_ratio()))
+		rows.append({
+			"name": _display_name(pid).to_upper(),
+			"color": board.get_player_color(pid),
+			"objective": objective_txt,
+			"hero_pv": pv_pct,
+			"kills": int(kills_by.get(str(pid), kills_by.get(pid, 0))),
+		})
+	rows.sort_custom(func(a, b):
+		if int(a.get("hero_pv", 0)) != int(b.get("hero_pv", 0)):
+			return int(a.get("hero_pv", 0)) > int(b.get("hero_pv", 0))
+		return int(a.get("kills", 0)) > int(b.get("kills", 0)))
+	return rows
+
+
+# Notre PROPRE progression d'objectif (0..1) : réutilise le module PUR du tracker et le MÊME
+# contexte — une 2ᵉ formule locale finirait par diverger de la jauge affichée juste à côté.
+func _my_objective_ratio() -> float:
+	var obj: Dictionary = GameState.objectives.get(str(_my_id()), {})
+	if typeof(obj) != TYPE_DICTIONARY or obj.is_empty():
+		return 0.0
+	return float(ObjectiveTracker.progress(obj, _objective_ctx()).get("best_ratio", 0.0))
+
+
 # NB (lot A) : l'ancien tiroir « INTEL : GUERRE » (E5 §8.77) est SUPPRIMÉ de l'arène — le module
 # PUR `WarRoom` reste la source unique des compteurs, désormais consommée par le Rapport Post-Op
 # (podium + BILAN) et par la fiche joueur ; aucune donnée n'est perdue.
@@ -1726,39 +1803,67 @@ func _push_zone_forecast() -> void:
 # continents entièrement possédés, statut de la cible d'élimination) et pousse la progression
 # au HUD (module pur ObjectiveTracker). Notre propre objectif porte type/params/description
 # (§4.4) — aucune fuite : le nom de la cible est déjà dans notre description.
+# Contexte PUBLIC de progression d'objectif — MIROIR de `api/game/objectives.build_context`.
+# EXTRAIT de `_push_objective_tracker` (chantier « Tension », LOT F) parce qu'il a désormais DEUX
+# consommateurs : la jauge du HUD et le mini-classement de départage (`_my_objective_ratio`). Une
+# 2ᵉ construction locale aurait fini par afficher deux pourcentages différents du même objectif.
+func _objective_ctx() -> Dictionary:
+	var me := _my_id()
+	# Mes continents ENTIÈREMENT possédés + ma possession PAR continent (carte courante G5).
+	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
+	var my_continents := 0
+	var owned_by_continent := {}
+	var continent_sizes := {}
+	for cid in cont_terrs.keys():
+		var tids: Array = cont_terrs[cid]
+		continent_sizes[str(cid)] = tids.size()
+		var mine := 0
+		for tid in tids:
+			var t: Dictionary = GameState.territories.get(str(tid), {})
+			var o = t.get("owner_id")
+			if o != null and int(o) == me:
+				mine += 1
+		owned_by_continent[str(cid)] = mine
+		if not tids.is_empty() and mine == tids.size():
+			my_continents += 1
+	# Garnisons de MES territoires (fortified_hold) — une seule passe sur la carte.
+	var owned_garrisons: Array = []
+	for tid in GameState.territories.keys():
+		var t2: Dictionary = GameState.territories.get(str(tid), {})
+		var o2 = t2.get("owner_id")
+		if o2 != null and int(o2) == me:
+			owned_garrisons.append(int(t2.get("garrison", 0)))
+	# MES kills AU COMBAT (destroy_units) — jamais les kills de ZONE (la zone tue sans mérite).
+	var stats: Dictionary = GameState.statistics if typeof(GameState.statistics) == TYPE_DICTIONARY else {}
+	var ck: Dictionary = stats.get("combat_kills_by_player", {}) \
+		if typeof(stats.get("combat_kills_by_player")) == TYPE_DICTIONARY else {}
+	# Cible d'élimination (volet kill de l'objectif double) : id au 1er niveau des params (§8.61).
+	var obj0: Dictionary = GameState.objectives.get(str(me), {})
+	var target_id := -9999
+	if typeof(obj0) == TYPE_DICTIONARY:
+		target_id = int(obj0.get("params", {}).get("target_id", -9999))
+	var target_alive := true
+	if GameState.players.has(str(target_id)):
+		var tp: Dictionary = GameState.players.get(str(target_id), {})
+		target_alive = str(tp.get("status", "alive")) != "eliminated" and not bool(tp.get("is_dead", false))
+	return {
+		"owned_count": WarRoom.territory_count(GameState.territories, me),
+		"continents_owned": my_continents,
+		"target_alive": target_alive,
+		"target_name": _display_name(target_id) if target_id != -9999 else tr("GAME_TARGET_FALLBACK"),
+		"owned_by_continent": owned_by_continent,
+		"continent_sizes": continent_sizes,
+		"combat_kills": int(ck.get(str(me), ck.get(me, 0))),
+		"owned_garrisons": owned_garrisons,
+	}
+
 func _push_objective_tracker() -> void:
 	var obj: Dictionary = GameState.objectives.get(str(_my_id()), {})
 	if typeof(obj) != TYPE_DICTIONARY or obj.is_empty():
 		hud.set_objective_progress({})
 		return
-	# Mes continents ENTIÈREMENT possédés (réutilise la synthèse E5, carte courante G5).
-	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
-	var my_continents := 0
-	for cid in cont_terrs.keys():
-		var tids: Array = cont_terrs[cid]
-		if tids.is_empty():
-			continue
-		var all_mine := true
-		for tid in tids:
-			var t: Dictionary = GameState.territories.get(str(tid), {})
-			var o = t.get("owner_id")
-			if o == null or int(o) != _my_id():
-				all_mine = false
-				break
-		if all_mine:
-			my_continents += 1
-	# Cible d'élimination (volet kill de l'objectif double) : id au 1er niveau des params (§8.61).
+	var ctx := _objective_ctx()
 	var target_id := int(obj.get("params", {}).get("target_id", -9999))
-	var target_alive := true
-	if GameState.players.has(str(target_id)):
-		var tp: Dictionary = GameState.players.get(str(target_id), {})
-		target_alive = str(tp.get("status", "alive")) != "eliminated" and not bool(tp.get("is_dead", false))
-	var ctx := {
-		"owned_count": WarRoom.territory_count(GameState.territories, _my_id()),
-		"continents_owned": my_continents,
-		"target_alive": target_alive,
-		"target_name": _display_name(target_id) if target_id != -9999 else tr("GAME_TARGET_FALLBACK"),
-	}
 	var data := ObjectiveTracker.progress(obj, ctx)
 	# i18n (2026-07-18) : description composée LOCALEMENT (type/params) en langue courante,
 	# repli sur la description serveur (anglais invariant) pour un type inconnu.
@@ -2240,6 +2345,8 @@ func _refresh():
 	_refresh_player_sheet()
 	# Télégraphe de zone (G1 §8.62) : chip discret sous le bandeau haut.
 	_push_zone_forecast()
+	# Rebours GLOBAL de partie + mini-classement de départage (chantier « Tension », LOT F).
+	_push_match_countdown()
 	# Tracker d'objectif vivant (E6 §8.78) : jauge de progression sous l'objectif secret.
 	_push_objective_tracker()
 	# Destinataires du chat privé (§8.33) : autres joueurs résolus en pseudo.
@@ -2266,6 +2373,9 @@ func _refresh():
 	_maybe_prompt_spy()
 	# Mode OBSERVATEUR (G3 §8.70) : si NOUS venons d'être éliminés, bandeau K.I.A. + caméra libre.
 	_maybe_show_spectator()
+	# Paris d'observateur (LOT E/F) : cibles vivantes + ouverture du guichet re-testées à chaque état
+	# (le PROTOCOLE FINAL ferme les paris, et une cible peut être tombée entre-temps).
+	_refresh_bet_panel()
 	if GameState.winner_id != null:
 		_show_victory()
 
@@ -2316,12 +2426,32 @@ func _play_event_feedback(event) -> void:
 				# un territoire devenu inattaquable ou une frappe venue de nulle part serait
 				# incompréhensible pour les adversaires).
 				_push_ability_toast(sev)
+			elif code == "zone_grew":
+				# ZONE CROISSANTE (chantier « Tension », LOT A/F) : le territoire vient de basculer
+				# dans le rendu contaminé (`toxic_pulsation`, posé par board.gd au refresh d'état).
+				# On y ajoute un FLASH court + une entrée ☢ au Journal — sans quoi l'extension
+				# passerait inaperçue au milieu d'un tour chargé.
+				_on_zone_grew(str(sev.get("territory_id", "")))
 	# Tics de zone (VFX) : flotteur -1 vert sur CHAQUE territoire touché (mêmes ticks dérivés
 	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_zone_forecast).
 	if _vfx_enabled():
 		for t in _derive_zone_ticks(event):
 			if typeof(t) == TYPE_DICTIONARY:
 				board.spawn_zone_tick(str(t.get("tid", "")))
+
+# ZONE CROISSANTE (chantier « Tension & fin de partie », LOT F) : rendu de l'extension. Le passage
+# au shader `toxic_pulsation` est déjà fait par board.gd (le territoire est entré dans
+# `contamination_zone.territories`) — on ajoute ici ce que l'état seul ne dit pas : QUAND, et OÙ.
+# Flash bref + entrée ☢ cliquable au Journal (le clic recentre la caméra, E4 §8.76).
+func _on_zone_grew(tid: String) -> void:
+	if tid == "":
+		return
+	if _vfx_enabled():
+		board.flash_territory(tid)
+	hud.add_feed_entries([{"category": "zone", "icon": "☢", "tid": tid, "major": false,
+		"rich_text": tr("ZONE_GREW_LOG") % _territory_name(tid).to_upper()}])
+	AudioManager.play_sfx("zone_alarm")
+
 
 # Contexte de résolution injecté à war_feed.parse : pseudos BBCode (E1), noms de territoires,
 # texte legacy en repli, et propriétaires PRÉ-combat pour attack_result (l'état reçu est déjà
@@ -2454,6 +2584,9 @@ func _maybe_show_banner() -> void:
 # =========================================================
 const SpectatorOverlayScene := preload("res://scenes/ui/spectator_overlay.tscn")
 var _spectator_shown := false
+# Overlay vivant (chantier « Tension », LOT F) : conservé pour lui pousser les options de paris, la
+# fermeture du guichet au PROTOCOLE FINAL et le verdict de fin. null tant qu'on n'est pas éliminé.
+var _spectator_overlay: Node = null
 
 func _maybe_show_spectator() -> void:
 	if _spectator_shown or GameState.winner_id != null:
@@ -2465,6 +2598,12 @@ func _maybe_show_spectator() -> void:
 	add_child(overlay)  # au-dessus du HUD (dernier enfant de Main), non bloquant (bandeau seul)
 	overlay.requeue_pressed.connect(_on_spectator_requeue)
 	overlay.quit_pressed.connect(_on_spectator_quit)
+	# PARIS D'OBSERVATEUR (chantier « Tension », LOT E/F) : la vue émet, le contrôleur envoie.
+	_spectator_overlay = overlay
+	overlay.bet_placed.connect(_on_spectator_bet)
+	if not NetworkManager.observer_bet_accepted.is_connected(_on_observer_bet_accepted):
+		NetworkManager.observer_bet_accepted.connect(_on_observer_bet_accepted)
+	_refresh_bet_panel()
 	# Caméra tactique LIBRE (pan drag droit/molette + zoom molette) : l'observateur explore.
 	camera.set_free_navigation(true)
 	# Échec de re-queue → retour au lobby (le socket est déjà fermé par requeue()).
@@ -2474,6 +2613,51 @@ func _maybe_show_spectator() -> void:
 	if not NetworkManager.requeue_unavailable.is_connected(_on_requeue_unavailable):
 		NetworkManager.requeue_unavailable.connect(_on_requeue_unavailable)
 	hud.add_log(tr("GAME_KIA_SPECTATOR"))
+
+# --- PARIS D'OBSERVATEUR (chantier « Tension & fin de partie », LOT E/F) ------------------------
+
+# Rafraîchit le panneau PARIS : options (joueurs encore EN LICE) + ouverture du guichet. Appelé à
+# l'apparition de l'overlay et à chaque refresh d'état (les cibles vivantes changent, et le
+# PROTOCOLE FINAL ferme les paris en cours de route).
+func _refresh_bet_panel() -> void:
+	if _spectator_overlay == null or not is_instance_valid(_spectator_overlay):
+		return
+	var options: Array = []
+	for key in GameState.players.keys():
+		var p: Dictionary = GameState.players.get(str(key), {})
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		# On ne parie que sur des joueurs encore EN LICE : ni un éliminé (il ne gagnera pas, et son
+		# héros est déjà tombé), ni nous-mêmes.
+		if str(p.get("status", "alive")) == "eliminated" or int(key) == _my_id():
+			continue
+		options.append({"id": int(key), "name": _display_name(int(key)).to_upper()})
+	_spectator_overlay.set_bet_options(options)
+	# MÊME règle que le serveur (`observer_bets.open_for`) : fermé dès le PROTOCOLE FINAL.
+	_spectator_overlay.set_bets_open(not bool(GameState.final_protocol_active)
+		and GameState.winner_id == null)
+
+
+# La vue a émis un choix → on l'envoie. Le serveur répond EN PRIVÉ : `observer_bet_ack` (accepté)
+# ou `{"type":"error","reason":<code>}` — ce dernier est déjà routé vers le journal par
+# _on_game_error, qui traduit le code (clés BET_ERR_*).
+func _on_spectator_bet(bet_type: String, value) -> void:
+	NetworkManager.send_observer_bet(bet_type, value)
+
+
+# Pari ACCEPTÉ : on verrouille la ligne avec un libellé LISIBLE de la mise (pseudo pour un pari de
+# joueur, libellé traduit pour un mode de fin) et la prime potentielle annoncée par le serveur.
+func _on_observer_bet_accepted(bet_type: String, value, reward: Dictionary) -> void:
+	if _spectator_overlay == null or not is_instance_valid(_spectator_overlay):
+		return
+	var label := ""
+	if bet_type == "end_reason":
+		label = tr("BET_END_" + str(value).to_upper())
+	else:
+		label = _display_name(int(value)).to_upper()
+	_spectator_overlay.lock_bet(bet_type, label, reward)
+	hud.add_log(tr("BET_ACCEPTED_LOG") % label)
+
 
 func _on_spectator_requeue() -> void:
 	# Le helper réseau ferme le WS, re-file la même modalité et rejoint l'écran de recherche (§8.116).
@@ -2521,6 +2705,12 @@ func _show_operation_report() -> void:
 	else:
 		title = tr("GAME_DEFEAT_TITLE_FMT") % _display_name(win)
 		title_color = Color("d6453f")  # rouge danger (défaite)
+	# VICTOIRE AU TEMPS (chantier « Tension », LOT B/F) : `victory_reason == "timeout"` est une
+	# valeur ADDITIVE du champ PUBLIC de l'état. Le titre garde le VAINQUEUR (l'information la
+	# plus attendue) et gagne un sur-titre explicite : sans lui, un joueur qui menait aux
+	# territoires ne comprendrait pas pourquoi la partie s'est arrêtée.
+	if str(GameState.victory_reason) == "timeout":
+		title = "%s — %s" % [tr("VERDICT_TIMEOUT"), title]
 	# Rapport d'Attrition depuis la Mémoire Tactique (§8.35) : pertes infligées par la zone, triées
 	# décroissant ; on met en avant le « plus lourd tribut » (médaille dorée).
 	var stats: Dictionary = GameState.statistics
@@ -2625,6 +2815,27 @@ func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match
 		# postes d'un non-vainqueur tant que rankings n'était pas connu.
 		_report_node.set_xp_detail(_xp_detail())
 		_report_node.populate_rewards(_local_rewards(), _match_is_ranked(), _has_played())
+		# Chantier « Tension & fin de partie » : DÉPARTAGE public (LOT B) + résultats PRIVÉS des
+		# paris (LOT E). Blocs ADDITIFS — vides sur un serveur antérieur, le rapport n'affiche alors
+		# simplement pas ces sections.
+		_report_node.populate_final_scores(NetworkManager.last_final_scores,
+			_scoreboard_colors(), _my_id())
+		_report_node.populate_bet_results(NetworkManager.last_bet_results)
+	# L'overlay spectateur, s'il est encore vivant sous le rapport, affiche aussi le verdict de ses
+	# paris : le parieur n'a pas à chercher où est passé son résultat.
+	var bets: Dictionary = NetworkManager.last_bet_results
+	if _spectator_overlay != null and is_instance_valid(_spectator_overlay) and not bets.is_empty():
+		var results = bets.get("results", [])
+		_spectator_overlay.show_bet_results(results if typeof(results) == TYPE_ARRAY else [])
+
+# Couleurs de plateau par player_id (str) pour le tableau de DÉPARTAGE du Rapport Post-Op : le
+# rapport est une View pure (§6.1), c'est le contrôleur qui résout la palette (source unique
+# board.get_player_color, même que le HUD et les pastilles).
+func _scoreboard_colors() -> Dictionary:
+	var out := {}
+	for key in GameState.players.keys():
+		out[str(int(key))] = board.get_player_color(int(key))
+	return out
 
 # Partie CLASSÉE ? (§8.88) — bloc PUBLIC du game_over, relayé en propriété par le NetworkManager
 # (même pattern que last_objectives_reveal). Défaut `true` côté manager = comportement legacy d'un

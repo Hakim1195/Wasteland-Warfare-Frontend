@@ -14,6 +14,11 @@ var setup_index: int = 0
 var initiative_rolls: Dictionary = {}
 var objectives: Dictionary = {}
 var winner_id = null  # null tant que la partie n'est pas gagnée
+# RAISON de la victoire (§8.91) — champ PUBLIC de l'état, miroité ici depuis le chantier « Tension &
+# fin de partie » (LOT B/F) : "objective" | "elimination" | "abandon" | "timeout" (valeur ADDITIVE).
+# Le Rapport Post-Op en tire le sur-titre « TEMPS ÉCOULÉ — VICTOIRE AU SCORE ». "" = serveur/état
+# ANTÉRIEUR au champ → aucun sur-titre, le rapport reste celui d'avant le chantier (repli §9.2).
+var victory_reason: String = ""
 
 # Carte jouée (registre multi-cartes G5 §8.71 : "classic_42" | "skirmish_atlantic").
 # Posée à chaque update_from_json ; défaut classic (rétro-compat serveur antérieur).
@@ -47,6 +52,16 @@ var contamination_zone: Dictionary = {}
 var turn_timer: Dictionary = {}
 var server_time: float = 0.0
 
+# --- TIMER GLOBAL DE PARTIE (chantier « Tension & fin de partie », LOT B) ---
+# `match_deadline_epoch` = échéance ABSOLUE de la partie en epoch MUR serveur. Le HUD en dérive son
+# compte à rebours global avec le MÊME offset d'horloge que le chrono de tour (§8.31) — aucun
+# message périodique n'est envoyé, l'epoch suffit. 0.0 = AUCUNE limite (serveur antérieur au champ,
+# ou MATCH_TIME_LIMIT_S=0) → le HUD masque simplement le chip (client défensif §9.2).
+var match_deadline_epoch: float = 0.0
+# `final_protocol_active` : PROTOCOLE FINAL armé (T-2 min) → bandeau, chrono pulsé rouge,
+# mini-classement de départage, et paris d'observateur FERMÉS. Défaut false (rétro-compat).
+var final_protocol_active: bool = false
+
 # « Mémoire Tactique » (§8.35 CONTRAT_RESEAU / §8.36 FRONTEND) : statistiques GLOBALES PUBLIQUES de
 # la partie, diffusées intégralement par le serveur (non rédigées). Modèle backend `GameStatistics` :
 #   - zone_kills_by_player : { "<player_id>": <kills> } — clés STR en JSON (§5), valeurs en float.
@@ -72,6 +87,7 @@ func update_from_json(state_data: Dictionary):
 	initiative_rolls = state_data.get("initiative_rolls", {})
 	objectives = state_data.get("objectives", {})
 	winner_id = state_data.get("winner_id", null)
+	victory_reason = str(state_data.get("victory_reason", ""))
 	# Carte jouée (registre multi-cartes G5 §8.71) — diffusée dans l'état ; défaut classic
 	# (serveur antérieur / état legacy). Consommée par board.gd (masquage) et MapData (adjacence).
 	map_id = str(state_data.get("map_id", "classic_42"))
@@ -93,6 +109,10 @@ func update_from_json(state_data: Dictionary):
 	var tt = state_data.get("turn_timer", null)
 	turn_timer = tt if typeof(tt) == TYPE_DICTIONARY else {}
 	server_time = float(state_data.get("server_time", 0.0))
+	# Timer GLOBAL de partie (LOT B) : champs ADDITIFS — absents d'un serveur/état antérieur → 0.0 /
+	# false, et le HUD n'affiche alors NI chip de rebours global NI bandeau PROTOCOLE FINAL.
+	match_deadline_epoch = float(state_data.get("match_deadline_epoch", 0.0))
+	final_protocol_active = bool(state_data.get("final_protocol_active", false))
 	# Le rafraîchissement de l'UI est piloté par le contrôleur d'arène (main.gd) via le
 	# signal NetworkManager.game_state_updated — l'état ne connaît pas l'UI (Règle d'Or §6.1).
 
