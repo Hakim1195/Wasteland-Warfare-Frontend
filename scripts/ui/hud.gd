@@ -196,6 +196,25 @@ var _zone_chip: Button = null
 # %ObjectiveLabel. ≥ 80 % → pulse OR (proche de la victoire).
 var _objective_tracker: VBoxContainer = null
 var _objective_pulse := false
+# --- MODE STREAMER (§8.121, LOT E) — anti stream-sniping -----------------------------------------
+# L'objectif secret est la SEULE information de l'écran qu'un spectateur puisse exploiter contre le
+# joueur (les PP, les stats et la carte sont déjà publics ou sans valeur prédictive). En mode
+# streamer, la zone OBJECTIFS et le tracker sont donc remplacés par une plaque « ⬛ INTEL CLASSIFIÉ
+# — MAINTENIR POUR RÉVÉLER » : le joueur maintient le clic (ou survole > 0,6 s) pour lire, et
+# l'information ne reste JAMAIS à l'écran plus longtemps que ce geste.
+# Le renseignement d'ESPIONNAGE (Chasseurs d'Ombres) passe par la MÊME plaque plutôt que par le
+# Journal : une ligne de journal ne peut pas être « maintenue pour révéler », et la laisser en clair
+# aurait rouvert exactement la fuite que ce mode ferme.
+const INTEL_HOVER_DELAY := 0.6
+var _streamer_mode := false
+var _intel_revealed := false      # vrai pendant le maintien / après le survol prolongé
+var _intel_gate: Button = null    # la plaque cliquable
+var _intel_hovering := false
+var _intel_hover_clock := 0.0
+var _spy_intel: String = ""       # objectif espionné (mémorisé, affiché derrière la plaque)
+# Le tracker a-t-il des lignes à montrer ? Sans ce drapeau, démasquer l'intel rendrait VISIBLE un
+# tracker vide (objectif non encore résolu / spectateur) au lieu de le laisser masqué.
+var _objective_has_lines := false
 # --- REBOURS GLOBAL DE PARTIE (chantier « Tension & fin de partie », LOT F) -----------------------
 # Chip discret MM:SS sous le chrono de TOUR, calé sur `GameState.match_deadline_epoch` avec le MÊME
 # offset d'horloge que le chrono de tour (`_srv_offset`) — un PC à l'heure fausse n'y change rien.
@@ -281,6 +300,13 @@ func _ready() -> void:
 	# Fiche joueur repliée au départ : l'écran s'ouvre sur le plateau, pas sur un panneau.
 	_collapse_player_sheet_initially()
 
+	# MODE STREAMER (§8.121, LOT E) — posé EN DERNIER dans _ready : la plaque s'insère dans la zone
+	# OBJECTIFS, et _apply_charter_ornaments (ci-dessus) y a déjà glissé son filet de titre en
+	# comptant sur l'ordre des enfants. Inverser les deux déplacerait le filet sous la plaque.
+	_streamer_mode = bool(SettingsManager.get_comfort("streamer_mode"))
+	SettingsManager.comfort_changed.connect(_on_comfort_changed)
+	_apply_intel_gate()
+
 # Ornements de la charte « Warzone Command » (§2) posés sur les 3 panneaux vitrés de l'arène :
 # encoches de coin biseautées cyan (ADN angulaire) + filet fin sous chaque titre de bloc. Ils
 # étaient déjà la signature des écrans hub, mais l'arène ne les portait pas — c'est ce qui la
@@ -326,6 +352,13 @@ func _process(delta: float) -> void:
 	# Rebours GLOBAL de partie (LOT F) : rendu à chaque frame comme le chrono de tour, mais
 	# INDÉPENDANT de lui (il tourne aussi pendant un tour de bot, où `turn_timer` est nul).
 	_render_match_countdown(still)
+	# MODE STREAMER (§8.121) : révélation par SURVOL PROLONGÉ (> 0,6 s) en plus du maintien du clic —
+	# le maintien est le geste sûr en direct, le survol le geste confortable hors caméra.
+	if _streamer_mode and _intel_hovering and not _intel_revealed:
+		_intel_hover_clock += delta
+		if _intel_hover_clock >= INTEL_HOVER_DELAY:
+			_intel_revealed = true
+			_apply_intel_gate()
 	if _srv_active:
 		var remaining_f := _srv_deadline_epoch - (Time.get_unix_time_from_system() + _srv_offset)
 		_render_remaining(int(ceil(maxf(0.0, remaining_f))))
@@ -1102,6 +1135,121 @@ func set_zone_forecast(names: Array) -> void:
 # Tracker d'objectif vivant (E6 §8.78) — zone OBJECTIFS de la barre basse
 # =========================================================
 
+# =========================================================
+# MODE STREAMER (§8.121, LOT E) — plaque « INTEL CLASSIFIÉ »
+# =========================================================
+
+# Construit (une fois) la plaque de masquage, insérée AVANT %ObjectiveLabel dans la zone OBJECTIFS.
+# Un vrai `Button` (et non un `gui_input` sur le conteneur) : il expose `button_down`/`button_up`
+# pour le maintien, et n'exige AUCUNE retouche des `mouse_filter` de la barre basse — un STOP posé
+# sur un conteneur de la zone OBJECTIFS casserait le clic des widgets voisins (piège connu).
+func _ensure_intel_gate() -> void:
+	if _intel_gate != null and is_instance_valid(_intel_gate):
+		return
+	var anchor: Control = %ObjectiveLabel
+	var parent := anchor.get_parent()
+	var btn := Button.new()
+	btn.name = "IntelGate"
+	btn.text = tr("INTEL_CLASSIFIED")
+	btn.visible = false
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	btn.add_theme_font_size_override("font_size", FS_BODY)
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(0.05, 0.05, 0.07, 0.55)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(ACCENT_CYAN, 0.45)
+	sb.set_content_margin_all(6)
+	var hover := sb.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT_CYAN, 0.18)
+	hover.border_color = ACCENT_CYAN
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_color_override("font_color", HERO_MUTED)
+	btn.add_theme_color_override("font_hover_color", ACCENT_CYAN)
+	btn.button_down.connect(func() -> void:
+		_intel_revealed = true
+		_apply_intel_gate())
+	btn.button_up.connect(func() -> void:
+		_intel_revealed = false
+		_intel_hover_clock = 0.0
+		_apply_intel_gate())
+	btn.mouse_entered.connect(func() -> void:
+		_intel_hovering = true
+		_intel_hover_clock = 0.0)
+	btn.mouse_exited.connect(func() -> void:
+		_intel_hovering = false
+		_intel_hover_clock = 0.0
+		# Le curseur quitte la plaque → l'intel se referme immédiatement. C'est la garantie du mode :
+		# rien ne reste lisible à l'écran une fois le geste terminé.
+		if _intel_revealed:
+			_intel_revealed = false
+			_apply_intel_gate())
+	parent.add_child(btn)
+	parent.move_child(btn, anchor.get_index())
+	_intel_gate = btn
+
+# Applique l'état de masquage à la zone OBJECTIFS. Appelée au changement de réglage, à chaque
+# rafraîchissement d'objectif, et aux deux bouts du geste de révélation.
+func _apply_intel_gate() -> void:
+	_ensure_intel_gate()
+	var hide_intel := _streamer_mode and not _intel_revealed
+	_intel_gate.visible = _streamer_mode
+	_intel_gate.text = tr("INTEL_CLASSIFIED") if hide_intel else tr("INTEL_REVEALED")
+	%ObjectiveLabel.visible = not hide_intel
+	if _objective_tracker != null and is_instance_valid(_objective_tracker):
+		# On ne FORCE pas la visibilité du tracker : s'il était déjà masqué (aucun objectif résolu),
+		# il doit le rester — `_objective_has_lines` porte cette information.
+		_objective_tracker.visible = _objective_has_lines and not hide_intel
+	_refresh_spy_intel_label(hide_intel)
+
+# Réglage changé en cours de partie (l'écran Paramètres est atteignable depuis l'arène) : on
+# applique à chaud, sans redémarrage — même contrat que les autres réglages de confort.
+func _on_comfort_changed(key: String, value) -> void:
+	if key != "streamer_mode":
+		return
+	_streamer_mode = bool(value)
+	_intel_revealed = false
+	_intel_hovering = false
+	_intel_hover_clock = 0.0
+	_apply_intel_gate()
+
+# RENSEIGNEMENT D'ESPIONNAGE (Chasseurs d'Ombres §8.24) — mémorisé par le HUD et rendu SOUS la
+# plaque : en mode streamer il obéit donc au même geste que l'objectif propre. Hors mode streamer,
+# main.gd continue d'écrire la ligne en clair au Journal et au chat (comportement historique) et
+# n'appelle pas cette fonction.
+func set_spy_intel(text: String) -> void:
+	_spy_intel = str(text)
+	_apply_intel_gate()
+
+func _refresh_spy_intel_label(hidden: bool) -> void:
+	var existing: Node = null
+	if _objective_tracker != null and is_instance_valid(_objective_tracker):
+		existing = _objective_tracker.get_node_or_null("SpyIntel")
+	if _spy_intel == "" or hidden or _objective_tracker == null \
+			or not is_instance_valid(_objective_tracker):
+		if existing != null:
+			existing.queue_free()
+		return
+	if existing == null:
+		var lbl := Label.new()
+		lbl.name = "SpyIntel"
+		lbl.add_theme_font_size_override("font_size", FS_EYEBROW)
+		lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_objective_tracker.add_child(lbl)
+		existing = lbl
+	(existing as Label).text = tr("INTEL_SPY_LINE") % _spy_intel
+
+# Le mode streamer masque-t-il l'objectif en ce moment ? Lu par main.gd pour router le résultat
+# d'espionnage (plaque vs Journal en clair).
+func is_intel_masked() -> bool:
+	return _streamer_mode
+
+
 func _ensure_objective_tracker() -> void:
 	if _objective_tracker != null and is_instance_valid(_objective_tracker):
 		return
@@ -1122,8 +1270,11 @@ func set_objective_progress(data: Dictionary, tooltip: String = "") -> void:
 		_objective_tracker.remove_child(c)
 		c.queue_free()
 	if lines.is_empty():
+		_objective_has_lines = false
 		_objective_tracker.visible = false
+		_apply_intel_gate()
 		return
+	_objective_has_lines = true
 	_objective_tracker.visible = true
 	var multi: bool = lines.size() > 1
 	for i in range(lines.size()):
@@ -1164,6 +1315,9 @@ func set_objective_progress(data: Dictionary, tooltip: String = "") -> void:
 	_objective_pulse = float(data.get("best_ratio", 0.0)) >= 0.8 or bool(data.get("done", false))
 	if not _objective_pulse:
 		_objective_tracker.modulate = Color(1, 1, 1, 1)
+	# §8.121 — le tracker vient d'être reconstruit : on ré-applique le masquage streamer, sinon la
+	# jauge fraîchement peuplée réapparaîtrait en clair sous la plaque.
+	_apply_intel_gate()
 
 # Construit (une fois) le gros bouton « CONFIRMER LE DÉPLOIEMENT » et l'insère dans la barre
 # d'action de l'onglet ACTIONS, juste avant « Fin de Phase ». Masqué par défaut (§8.26).
@@ -1667,6 +1821,8 @@ func update_display() -> void:
 	if obj_txt == "":
 		obj_txt = tr("HUD_OBJECTIVE_SECRET")
 	%ObjectiveLabel.text = obj_txt
+	# §8.121 — mode streamer : le libellé vient d'être réécrit, on repose la plaque par-dessus.
+	_apply_intel_gate()
 
 	_refresh_cards()
 

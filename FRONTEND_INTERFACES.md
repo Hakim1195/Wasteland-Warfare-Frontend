@@ -1407,6 +1407,41 @@ panneau ancré HAUT-DROITE (la gauche est prise par le mini-classement pendant l
 Aucune clé supprimée. CSV **LF / UTF-8 sans BOM** (1 200 clés, aucun doublon), `.translation`
 régénérés par `--import`.
 
+
+### 8. CORRECTIF « REJOUER coince sur l'écran de création de partie » (bug §8.116/§8.70)
+
+> Signalé pendant la recette de §8.120, mais **antérieur** à ce chantier. Détail serveur et
+> contre-épreuves : **§8.120 §10 de `CONTRAT_RESEAU.md`**. Vaut pour les DEUX boutons REJOUER (rapport
+> post-op ET overlay observateur), qui passent tous deux par `NetworkManager.requeue()`.
+
+**Cause côté client — une course de requête.** `requeue()` appelait `mm_queue_join()` juste **avant**
+`TransitionManager.change_scene("search_screen.tscn")`. La réponse arrivait donc alors que
+`search_screen` n'était pas encore dans l'arbre : sa garde `if not is_inside_tree(): return`
+**jetait** `mm_queue_result`, et rien ne basculait sur le panneau RECHERCHE. Le
+`mm_queue_status()` du `_ready` pouvait ensuite répondre `idle` → `_on_mm_status_updated` faisait
+`_poll_timer.stop()` + `_show_config(false)` → **écran figé sur CONFIGURATION, plus aucun poll**.
+
+**Correctif — c'est l'ÉCRAN qui met en file.** `requeue()` mémorise seulement la modalité
+(`_pending_requeue`, lue une seule fois par `consume_pending_requeue()` — lecture DESTRUCTIVE, sinon
+un simple ÉCHAP → RETOUR relancerait une recherche fantôme) et change de scène.
+`search_screen._ready()` appelle `_start_requeue(pending)` : panneau RECHERCHE **optimiste** (le
+joueur a cliqué, il doit voir tout de suite qu'il se passe quelque chose), **ANNULER masqué** jusqu'à
+la confirmation serveur (un bouton qui annulerait un ticket inexistant serait un mensonge), puis
+`mm_queue_join(...)`. Émetteur et écouteur du signal sont désormais le **même nœud, déjà dans
+l'arbre** : la course disparaît par construction. Un refus (`banned`, `in_room`, HTTP ≠ 200) rebascule
+sur CONFIGURATION avec son message via `_on_mm_queue_result` — l'optimisme n'avale aucune erreur.
+
+Entrée normale dans l'écran (depuis le Menu Principal) : `consume_pending_requeue()` renvoie `{}` et
+l'écran interroge `/status` comme avant — comportement §8.116 **inchangé**.
+
+> **Fichiers.** MODIFIÉS : `scripts/managers/network_manager.gd` (`requeue`, `_pending_requeue`,
+> `consume_pending_requeue`), `scripts/ui/search_screen.gd` (`_ready`, `_start_requeue`).
+>
+> **Validation.** `--import` **0 ERROR** ; boots `search_screen.tscn`, `game/main.tscn`,
+> `spectator_overlay.tscn`, `main_menu.tscn` **0 ERROR**.
+> ⚠️ **Enchaînement bout en bout NON rejoué** (mourir → REJOUER → file → nouvelle partie) : il exige
+> une vraie salle multijoueur. Les deux causes sont couvertes par des tests côté serveur.
+
 > **Fichiers.** MODIFIÉS : `scripts/ui/hud.gd`, `scripts/ui/objective_tracker.gd`,
 > `scripts/ui/spectator_overlay.gd`, `scripts/game/main.gd`, `scripts/game/operation_report.gd`,
 > `scripts/managers/game_state.gd`, `scripts/managers/network_manager.gd`,
@@ -1425,3 +1460,263 @@ régénérés par `--import`.
 > (largeur des listes déroulantes, collision avec le chip de zone), le tableau de départage dans
 > l'onglet BILAN, et les lignes PLACEMENT/PARIS du Rapport. À contrôler en **CAPTURE** (recette
 > §8.111/§8.118) ou en partie locale avec `MATCH_TIME_LIMIT_S=180` dans le `.env`.
+
+---
+
+## §8.121 — STREAMABILITÉ & PARTAGE : rapport de trahison, révélation théâtrale, carte de partage, mode streamer (volet FRONTEND)
+
+> Contrat réseau (unique ajout backend — le journal d'attaques) : **§8.121 de `CONTRAT_RESEAU.md`**.
+> **Client défensif §9.2** : le seul champ consommé (`game_over.attack_log`) est ADDITIF — absent
+> d'un serveur non redéployé, le 5ᵉ onglet se masque et la carte de partage s'exporte sans sa ligne
+> de trahison. ⚠️ **Client et serveur partent ENSEMBLE** (gate de version WS §9).
+>
+> **Principe directeur (décision n° 1).** *Le serveur fournit les FAITS, le client raconte
+> l'HISTOIRE.* Toute l'analyse narrative est calculée côté client dans un module **PUR** testable ;
+> le backend n'a gagné qu'une trace brute.
+
+### 1. `scripts/game/betrayal_report.gd` — module PUR d'ANALYSE (`class_name BetrayalReport`)
+
+Quatre analyses, zéro nœud, zéro `tr()` (il renvoie des **clés i18n et des nombres**, la Vue
+compose — même contrainte que `war_feed` / `objective_tracker`, §8.104) :
+
+- **`aggression_matrix(attack_log, pids)`** → `{cells, attacks, max, total, pids}`. Grille N×N des
+  unités détruites par couple, **toutes les cases présentes** (0 compris) pour que la grille se
+  rende entière, + la case **maximale** (départage attaquant puis défenseur croissants : deux
+  joueurs de la même partie voient le même « pire agresseur »). Les attaques sur du **NEUTRE** sont
+  exclues — sinon un joueur qui ramasse des territoires ravagés par la zone passerait pour
+  l'agresseur n° 1 de la partie.
+- **`find_backstab(attack_log, config)`** → le **COUP DE POIGNARD**. `calm_rounds` = round de
+  l'attaque − round du dernier affrontement du couple (0 = jamais affrontés). Qualifié si
+  `calm_rounds ≥ 2` **et** `kills ≥ 1` ; ordre de mérite : kills, puis calme, puis le plus tôt, puis
+  le plus petit id. **Repli** (`confirmed: false`) : le **premier contact au plus long voisinage
+  pacifique** — la Vue affiche alors « GUERRE FRONTALE » et garde la ligne en muet.
+- **`find_turning_point(territory_history, config)`** → le **MOMENT DÉCISIF** : plus forte variation
+  du nombre de territoires d'un joueur sur **3 snapshots** consécutifs. ⚠️ Le critère est
+  l'**AMPLITUDE**, pas le signe : le plus grand basculement peut être la **poussée décisive du
+  vainqueur** (+16) plutôt qu'un effondrement (−10) — d'où **deux** libellés
+  (`BETRAYAL_TURNING_POINT` / `BETRAYAL_TURNING_POINT_UP`), écrire « L'EMPIRE DE X BASCULE » sur un
+  gain de territoires se lisait comme une défaite. À amplitude égale,
+  l'**effondrement** passe avant la conquête (un empire qui tombe est le récit ; le gagnant est déjà
+  au podium), puis la fenêtre la plus précoce. Partie strictement statique → `{}` (on n'affirme rien).
+- **`elimination_chain(statistics, attack_log)`** → **LA CHAÎNE DES CHUTES**. L'**attribution** fait
+  autorité depuis `statistics.eliminated_by_player` (la reconstruire depuis le journal se tromperait
+  quand perte du dernier territoire **et** permadeath tombent sur le même assaut) ; le journal ne
+  sert qu'à **dater**. Élimination non datable (journal tronqué par le plafond 300) → `round = 0`,
+  entrée repoussée en fin de chaîne, la Vue écrit « round inconnu » plutôt qu'un round inventé.
+- **`timeline_window(series, from, to)`** → tranche des séries **déjà** construites pour la courbe du
+  BILAN : la mini-vue du moment décisif ne peut pas raconter une autre histoire que la grande courbe.
+- **`self_check()`** (pattern G4 §8.63) — enchaîné dans `operation_report._self_check()` : un seul
+  boot du Rapport en build debug couvre les deux modules.
+
+> ⚠️⚠️ **ÉCART ASSUMÉ AVEC LA DÉFINITION PRODUIT.** La clause « … alors qu'ils étaient **VOISINS
+> depuis ≥ 2 rounds** » n'est **PAS calculable** : `territory_history` ne stocke que des **COMPTES**
+> de territoires (jamais la propriété), et le journal d'attaques ne porte pas d'id de territoire
+> (§8.121.5 du contrat réseau). Reconstituer un voisinage par round exigerait un champ backend plus
+> lourd que le journal lui-même. La notion est donc portée **entièrement** par la durée de **CALME**
+> (`calm_rounds`), qui en capture l'intention (« ils se laissaient tranquilles, et soudain… »).
+> **Documenté plutôt que deviné** (règle « interdiction de deviner »).
+
+### 2. 5ᵉ onglet « TRAHISONS » (`operation_report.gd`)
+
+`populate_betrayals(data)` — Vue **PURE** : `main._betrayal_data()` résout tout (module + pseudos
+avec préfixe `[IA]` + couleurs **PLATEAU** via `board.get_player_color`). Quatre sections dans
+l'ordre du récit : **coup de poignard** (RichTextLabel, les deux pseudos teintés — seul moyen de
+colorer deux fragments d'une phrase traduite dont l'ordre des mots varie ; pseudos **échappés**,
+piège n° 1) · **moment décisif** + mini-courbe · **matrice** (cellules teintées par intensité,
+liseré **or** sur la case max, en-têtes tronqués à **5 car. après retrait du préfixe `[IA]`** —
+à 4 car. **tous les bots s'affichaient « [IA] »** et devenaient indistinguables, défaut vu en
+capture ; l'infobulle porte le nom complet) · **chaîne des chutes**
+(`☠`, `◆` pour une mise à mort de héros).
+
+- **Onglet MASQUÉ** (`set_tab_hidden`) tant qu'aucune unité n'est tombée entre joueurs — le nœud
+  reste dans l'arbre (aucune retouche `.tscn`, piège n° 6). Une partie **sans trahison mais avec des
+  combats** reste VISIBLE : « GUERRE FRONTALE » est une information, pas un trou.
+- Peuplé **uniquement** depuis `_on_match_over` : le journal n'arrive **qu'avec** le `game_over`.
+- Bots **inclus** dans l'analyse (ils font partie de l'histoire) mais étiquetés `[IA]` comme partout.
+- Glyphes de charte (`✸ ☠ ◆ ❯`), **aucun emoji** (purge globale §8.102) — le `⚡` du cahier des
+  charges aurait rendu en « tofu » sur la police condensée.
+
+### 3. Révélation THÉÂTRALE des objectifs (LOT C)
+
+Les objectifs secrets apparaissent **un par un**, du **DERNIER** du classement au **VAINQUEUR**,
+`REVEAL_STEP_S = 1,2 s`, chaque carte « se retournant » (fondu + écrasement vertical
+`REVEAL_FLIP_S = 0,35 s`) avec un sting ; le vainqueur a le sting **appuyé** (`conquest`, déjà au
+catalogue — on ne crée pas un 11ᵉ son) et une **pulsation** de sa ligne.
+
+- **Ce n'est pas un flux de données neuf** : mise en scène de l'`objectives_reveal` déjà reçu (§8.83).
+- **Cadencé dans `_process`** et non par `await create_timer` : le rapport peut être libéré en cours
+  de séquence (retour au QG / re-file) — une coroutine se réveillerait sur un objet détruit.
+- **Skippable** : `_input` déclenche `skip_reveal()` **sans consommer l'évènement** → le clic atteint
+  aussi le bouton visé, donc la mise en scène n'« avale » jamais un clic sur **REJOUER**. Idempotent.
+- `reduced_motion` (E10 §8.82) → pose **instantanée**, aucun son, aucune attente.
+- Joué **uniquement sur le podium DÉFINITIF** (`provisional == false`) et **une seule fois**
+  (`_reveal_played`) : le podium provisoire (§8.100) ne porte aucun objectif révélé, et un re-push
+  doublerait la séquence.
+- État caché = `modulate.a = 0` (jamais `visible = false`) → **aucun saut de layout** pendant la
+  séquence.
+- ⚠️ L'indice `REVEAL_SKIP_HINT` est posé dans l'**ONGLET**, jamais dans `_podium_list` : cette
+  boîte est « **UN enfant par belligérant** », invariant vérifié par `tools/test_e11_report.gd` et
+  cassé par une première version de ce bloc.
+- ⚠️ **Écart assumé** : la séquence **force l'onglet CLASSEMENT** (une mise en scène jouée sur un
+  onglet masqué n'existe pas) — seul endroit du rapport où le programme choisit l'onglet.
+- ⚠️ **Écart assumé** : le volet REMPLI reste `✓` **vert** (et non « ✔ or » comme proposé) — c'est le
+  code couleur validé en §8.100 (`✓` vert / `✕` acier) ; l'or reste réservé au vainqueur.
+
+### 4. CARTE DE PARTAGE (LOT D) — `scripts/game/share_card.gd`
+
+Compositeur **offscreen** : `SubViewport` → `get_texture().get_image().save_png()`, composition
+**100 % code**, aucun asset nouveau (la MARQUE existante + `wasteland-warfare.com` en filigrane
+— décision n° 4 : c'est un objet marketing, il ramène vers le jeu).
+- **Filigrane = `assets/images/logo_mark.svg`** (emblème biohazard carré, la marque CANONIQUE du
+  jeu, déjà utilisée par `title_splash`, `top_nav`, `warzone_ui`, `ww_logo`). ⚠️ **Ne PAS reprendre
+  `logo_ww.png`** : ce lockup large (2400×1308) porte du lettrage fin qui devient illisible en
+  filigrane — défaut **vu en capture** et écarté par Hakim. Un SEUL filigrane, au pied de la carte
+  (une seconde occurrence en en-tête se disputait l'attention avec le verdict).
+
+- **`FORMATS`** : `1920×1080` (**deux colonnes** — héros à gauche, courbe + podium à droite) et
+  `1080×1920` (**empilé** — l'ordre de lecture change, ce n'est **pas** une mise à l'échelle).
+- Bouton **`❯ CARTE DE PARTAGE`** dans l'**EN-TÊTE** du rapport (rangée alignée à droite sous le
+  titre) et non dans la pile de CTA : celle-ci est déjà à 3 boutons pleine largeur, un 4ᵉ aurait
+  poussé les onglets hors du panneau.
+- Export → `user://captures/ww_<AAAAMMJJ_HHMMSS>_<format>.png`, puis **toast** `SHARE_CARD_SAVED`,
+  bouton **`OUVRIR LE DOSSIER`** (`OS.shell_open`, n'apparaît qu'**après** un export réussi) et
+  **résumé TEXTE** dans le presse-papiers.
+- ⚠️ **Aucune copie d'image dans le presse-papiers** (décision n° 3) : Godot 4 n'a pas d'API
+  portable. `SHARE_CLIPBOARD_SUMMARY` utilise des **placeholders nommés** (`{verdict}`, `{faction}`,
+  `{duration}`, `{kills}`, `{conquests}`, `{betrayals}`, `{site}`) pour que chaque langue réordonne.
+  Repli en dur si la clé manque — on n'écrit jamais « SHARE_CLIPBOARD_SUMMARY » dans le
+  presse-papiers du joueur.
+- **Échec honnête** : disque/droits refusés → `SHARE_CARD_FAILED` (un « 2 images enregistrées »
+  mensonger enverrait le joueur chercher des fichiers inexistants).
+- **Performance** : rien n'est construit avant le clic ; chaque `SubViewport` est **libéré** dès son
+  PNG écrit. Anti double-clic (`_share_busy`) : deux exports concurrents créeraient deux viewports
+  1920×1080 simultanés et deux horodatages pour la même partie.
+- **Thème posé sur la racine de la composition** : le SubViewport n'hérite pas du thème de
+  `operation_report.tscn` — sans lui, la carte serait rendue dans la police par défaut de Godot.
+- **Deux frames** avant la capture : la 1ʳᵉ laisse les conteneurs résoudre leur mise en page (sinon
+  tout est empilé en (0,0) sur l'image), la 2ᵉ dessine.
+- ⚠️⚠️ **PIÈGE MAJEUR — carte rendue au DOUBLE de sa taille.** `compose()` bâtit un arbre
+  **DÉTACHÉ**. `set_anchors_preset(PRESET_FULL_RECT)` (sans les offsets) recalcule les offsets pour
+  « conserver le rect courant » **contre un parent de taille 0** → `offset_right` reste à 1920, et
+  une fois greffé dans le viewport la taille devient `ancre(1920) + offset(1920) = 3840`. Le
+  contenu se mettait en page sur **2× la largeur** et le PNG était un cadrage tronqué (titre coupé
+  en 9:16). Correctif : **`set_anchors_and_offsets_preset`**, et surtout **ne jamais écrire
+  `root.size` avant**. Trouvé uniquement par une sonde qui imprimait `rect` vs `get_combined_minimum_size`
+  de chaque bloc — invisible au boot « 0 ERROR ».
+- **Marges MESURÉES, pas choisies** : en 16:9, 72 px de marge + la hauteur minimale du contenu
+  (942 px) dépassaient les 1080 px du cadre et **éjectaient les deux derniers blocs** (ligne de
+  trahison + filigrane) hors de l'image. Marge portée à **56 px** et graphique à 300 px de haut →
+  ~26 px de jeu. En 9:16, les tuiles de chiffres passent de 300 à **280 px** (3 × 300 + 32 = 932 sur
+  952 utiles ne laissait que 20 px).
+- **Durée annoncée** : mesurée CÔTÉ CLIENT depuis l'entrée dans l'arène (`main._arena_entered_at`).
+  Le serveur n'expose que l'**échéance** (`match_deadline_epoch`, §8.120), jamais l'instant de
+  création de l'état → l'écart avec la durée serveur est le draft (≤ 60 s) + le placement (≤ 90 s),
+  assumé pour un objet marketing.
+
+### 5. `scripts/ui/timeline_chart.gd` — courbe de domination EXTRAITE
+
+La `TimelineChart` était une **classe interne** d'`operation_report.gd`. Elle est désormais un
+fichier autonome : la carte de partage et la mini-vue du moment décisif dessinent la **même** courbe,
+et un `preload` croisé `share_card` ↔ `operation_report` aurait créé une **inclusion cyclique de
+ressources**. `setup()`/`_draw()` repris **à l'identique** ; `line_width` et `grid_alpha` deviennent
+paramétrables (défauts = valeurs historiques du Rapport). `operation_report` la reprend via
+`const TimelineChart := preload(...)`, utilisable comme **type** — le reste du fichier est intouché.
+
+### 6. MODE STREAMER (LOT E)
+
+Réglage **`streamer_mode`** (défaut **OFF**) dans `SettingsManager.COMFORT_DEFAULTS` (même contrat
+qu'un réglage d'accessibilité : une clé, un défaut, un signal, appliqué **à chaud** sans
+redémarrage) + bascule dans **Paramètres › CONFORT**, avec une ligne d'explication muette.
+
+- En partie, la zone **OBJECTIFS** et le **tracker** sont couverts par une plaque
+  **`⬛ INTEL CLASSIFIÉ — MAINTENIR POUR RÉVÉLER`** : **maintien du clic** (`button_down`/`button_up`)
+  **ou survol > 0,6 s** (`INTEL_HOVER_DELAY`) révèle, et la sortie du curseur **referme aussitôt**.
+- Un vrai `Button` (et non un `gui_input` sur le conteneur) : il expose le maintien nativement et
+  **n'exige aucune retouche des `mouse_filter`** de la barre basse — un `STOP` posé là casserait le
+  clic des widgets voisins (piège connu).
+- Posé **en dernier** dans `hud._ready` : `_apply_charter_ornaments` a déjà glissé son filet de titre
+  dans la zone OBJECTIFS en comptant sur l'ordre des enfants.
+- `_objective_has_lines` : démasquer ne rend **pas** visible un tracker vide (objectif non résolu /
+  spectateur).
+- **Espionnage** (Chasseurs d'Ombres §8.24) : en mode streamer, le renseignement passe par la **MÊME
+  plaque** (`hud.set_spy_intel`) et le chat/Journal ne reçoivent qu'une ligne **neutre**
+  (`INTEL_CLASSIFIED_SHORT`). Une ligne de journal ne peut pas se « maintenir pour révéler » — la
+  laisser en clair aurait rouvert exactement la fuite que ce mode ferme.
+- La révélation de **FIN** de partie (LOT C) reste normale : la partie est finie.
+- ⚠️ **Le draft n'affiche AUCUN objectif** (vérifié : `faction_selection.gd` n'en parle pas — les
+  objectifs sont attribués par le serveur *après* le draft). Le point « objectif affiché au draft »
+  du cahier des charges est donc **sans objet**, rien à masquer.
+- Rien d'autre ne change : pas de délai de flux, pas de masquage des PP/stats — l'objectif est la
+  seule information exploitable par un stream-sniper.
+
+### 7. i18n (42 clés ajoutées en fin de `translations/ui_strings.csv`, FR/EN/IT)
+
+`TAB_BETRAYALS` · `BETRAYAL_STAB_TITLE` · `BETRAYAL_BACKSTAB` · `BETRAYAL_NONE` ·
+`BETRAYAL_UNITS_FMT` · `BETRAYAL_CALM_FMT` · `BETRAYAL_STAB_HERO` · `BETRAYAL_STAB_CONQUEST` ·
+`BETRAYAL_TURN_TITLE` · `BETRAYAL_TURNING_POINT` · `BETRAYAL_TURNING_POINT_UP` ·
+`BETRAYAL_SWING_FMT` · `BETRAYAL_MATRIX_TITLE` ·
+`BETRAYAL_MATRIX_ROWS` · `BETRAYAL_MATRIX_LEGEND` · `BETRAYAL_CHAIN_TITLE` ·
+`BETRAYAL_CHAIN_ROUND_FMT` · `BETRAYAL_CHAIN_ROUND_UNKNOWN` · `BETRAYAL_CHAIN_LEGEND` ·
+`REVEAL_SKIP_HINT` · `SHARE_CARD_BUTTON` · `SHARE_CARD_WORKING` · `SHARE_CARD_SAVED` ·
+`SHARE_CARD_FAILED` · `SHARE_OPEN_FOLDER` · `SHARE_CLIPBOARD_SUMMARY` · `SHARE_CARD_TIMELINE` ·
+`SHARE_CARD_PODIUM` · `SHARE_VERDICT_WIN` · `SHARE_VERDICT_LOSS` · `SHARE_REASON_OBJECTIVE` ·
+`SHARE_REASON_ELIMINATION` · `SHARE_REASON_ABANDON` · `SHARE_STAT_KILLS` · `SHARE_STAT_CONQUESTS` ·
+`SHARE_STAT_DURATION` · `STREAMER_MODE_LABEL` · `STREAMER_MODE_HINT` · `INTEL_CLASSIFIED` ·
+`INTEL_CLASSIFIED_SHORT` · `INTEL_REVEALED` · `INTEL_SPY_LINE`.
+
+Aucune clé supprimée. CSV **LF / UTF-8 sans BOM** (**1 242 clés**, **0 doublon**, 4 colonnes
+partout), `.translation` régénérés par `--import`.
+
+### 8. HORS PÉRIMÈTRE (non fait, à dessein)
+
+Marqueurs **Steam Timelines** / succès / Rich Presence (chantier Steamworks) — les points d'ancrage
+naturels sont commentés dans le code aux trois sites concernés (élimination, coup de poignard,
+victoire) · replays vidéo · partage réseau direct (API Twitter & co) · overlay de spectateur externe
+· pactes de diplomatie (le Rapport de Trahison les intégrera plus tard).
+
+> **Fichiers.** NOUVEAUX : `scripts/game/betrayal_report.gd`, `scripts/game/share_card.gd`,
+> `scripts/ui/timeline_chart.gd`, `tools/test_betrayal_report.gd`/`.tscn`,
+> `tools/preview_betrayals.gd`/`.tscn`, `tools/preview_share_card.gd`/`.tscn`.
+> MODIFIÉS : `scripts/game/operation_report.gd`, `scripts/game/main.gd`, `scripts/ui/hud.gd`,
+> `scripts/ui/settings.gd`, `scripts/managers/settings_manager.gd`,
+> `scripts/managers/network_manager.gd`, `translations/ui_strings.csv`,
+> `tools/test_e11_report.gd` (l'assert « 4 onglets » devient « 5 onglets, le 5ᵉ masqué sur payload
+> legacy » — changement de contrat ASSUMÉ de ce chantier).
+> **Aucun `.tscn` de jeu retouché** (tout est construit par code).
+>
+> **Validation.**
+> - `--import` **exit 0, 0 ERROR** (les 3 `.translation` régénérés) ;
+> - **boots headless 0 ERROR** : `main_menu`, `game/main`, `game/operation_report`, `ui/settings`,
+>   `ui/spectator_overlay`, `ui/search_screen`, `faction_selection` ;
+> - `tools/test_betrayal_report.tscn` — **51 asserts OK / 0 KO** (module pur : matrice avec bots en
+>   ids négatifs, coup de poignard qualifié + départages, moment décisif, chaîne des chutes,
+>   journal vide/pourri ; rapport COMPLET → 5 onglets + onglet TRAHISONS visible + 4 sections ;
+>   rapport LEGACY → onglet masqué ; « guerre frontale » → onglet quand même visible ; analyse
+>   entièrement vide → masqué ; révélation : ordre `[5, -2, 1]` dernier→vainqueur, `reduced_motion`
+>   instantané, SKIP idempotent, REJOUER jamais bloqué, podium provisoire sans séquence ; carte de
+>   partage : 2 compositions dimensionnées et peuplées, payload minimal dégradé, résumé texte) ;
+> - **non-régression** `test_e11_report` **34 asserts verts**, `test_e10_comfort` 16,
+>   `test_e5_warroom` 36, `test_e1_roster` 11, `test_e2_vs` 7, `test_e3_timer` 9,
+>   `test_e7_command` 10, `test_e8_combat_rhythm` 6, `test_e9_feedback` 14,
+>   `test_hero_stats_view` 31 ;
+> - **contre-épreuve de l'outillage** : un assert de `BetrayalReport.self_check()` saboté à 999 fait
+>   bien remonter `SCRIPT ERROR: Assertion failed.` au boot d'`operation_report.tscn` (donc
+>   l'auto-vérification tourne RÉELLEMENT) ; source **restaurée dans le même bloc**, vérifiée
+>   identique à la sauvegarde, aucun marqueur résiduel ;
+> - **PREUVE VISUELLE** (`tools/preview_betrayals.tscn` + `tools/preview_share_card.tscn`, lancement
+>   FENÊTRÉ) : 3 captures du Rapport (révélation à mi-course, après SKIP, onglet TRAHISONS) et les
+>   **2 PNG réellement écrits sur disque** en `1920×1080` et `1080×1920`, **0 WARNING / 0 ERROR**.
+>   C'est cette recette — et non les boots — qui a débusqué les quatre défauts de mise en page
+>   corrigés ci-dessus (doublement de la carte, blocs éjectés, logo illisible, en-têtes « [IA] »).
+>
+> ⚠️ **3 tests de tooling en échec PRÉ-EXISTANT** (fichiers testés **intacts**, vérifié par
+> `git diff`) : `test_e6_objective` et `test_e4_feed` codent des libellés **français en dur**
+> (« 14/24 territoires », « ravagé ») alors que la machine tourne en **`locale=it`**
+> (`user://settings.cfg`) ; `test_w_roster` accède à `characters_screen.detail_box`, propriété qui
+> **n'existe plus** (dérive d'API). Aucun lien avec ce chantier — à traiter séparément.
+>
+> ⚠️⚠️ **CE QUI N'A PAS ÉTÉ VU** (aucune partie réelle n'a pu être jouée : le serveur de prod n'a
+> pas le journal d'attaques tant que le VPS n'est pas redéployé) : l'onglet TRAHISONS **peuplé par
+> de vraies données de partie**, la plaque « INTEL CLASSIFIÉ » **en jeu** (maintien du clic, survol
+> 0,6 s, cohabitation avec le filet de titre de la zone OBJECTIFS), le renseignement d'espionnage
+> masqué, et le bouton « OUVRIR LE DOSSIER » après un export **depuis l'arène**.

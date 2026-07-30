@@ -318,8 +318,20 @@ func _build_comfort_section() -> void:
 	root.add_child(t1)
 	root.add_child(t2)
 	root.add_child(t3)
+	# MODE STREAMER (§8.121, LOT E) — le seul réglage de cette section dont l'effet n'est pas
+	# évident au libellé : il gagne une ligne d'explication muette juste dessous (« masque votre
+	# objectif secret »), sans quoi un joueur ne saurait pas ce qu'il coupe.
+	var t4 := _comfort_toggle("STREAMER_MODE_LABEL", "streamer_mode")
+	root.add_child(t4)
+	var hint := Label.new()
+	hint.text = tr("STREAMER_MODE_HINT")
+	hint.add_theme_font_override("font", _font)
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", MUTED)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(hint)
 	# Mémorisés pour la reconstruction au changement de langue (_on_locale_changed_rebuild).
-	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3]
+	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3, t4, hint]
 
 # Changement de langue À CHAUD : purge et reconstruit la section confort (seul bloc de cet écran
 # dont les libellés sont posés par code), puis re-traduit la ligne de statut.

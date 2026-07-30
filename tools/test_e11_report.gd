@@ -112,10 +112,16 @@ func _ready() -> void:
 	assert(report_legacy._player_rewards_box.get_child_count() == 1)
 	assert(report_legacy._hero_progress_box.get_child_count() == 1)
 	assert(report_legacy._hero_identity_box.get_child_count() == 0)  # pas de hero_panel legacy
-	# Les 4 onglets (XP JOUEUR / XP HÉROS / CLASSEMENT / BILAN §8.99) sont TOUJOURS construits par
-	# _build_tabs(), quel que soit le payload — le 4ᵉ ne fait pas exception : payload legacy ici
-	# (aucune clé `debrief`) → le tableau BILAN reste vide, mais son onglet existe (§9.2).
-	assert(report_legacy._tabs.get_tab_count() == 4)
+	# Les onglets sont TOUJOURS construits par _build_tabs(), quel que soit le payload : payload
+	# legacy ici (aucune clé `debrief`) → le tableau BILAN reste vide, mais son onglet existe (§9.2).
+	# §8.121 — ils sont désormais CINQ (TRAHISONS ajouté). Le 5ᵉ est bien PRÉSENT dans l'arbre mais
+	# MASQUÉ tant qu'aucun journal d'attaques n'est arrivé : c'est exactement le contrat §9.2 (on ne
+	# retire jamais un onglet, on le cache).
+	assert(report_legacy._tabs.get_tab_count() == 5)
+	assert(report_legacy._tabs.is_tab_hidden(4))
+	assert(not report_legacy.is_betrayal_tab_visible())
+	assert(report_legacy._tabs.get_tab_title(4) == tr("TAB_BETRAYALS"))
+	assert(tr("TAB_BETRAYALS") != "TAB_BETRAYALS")
 	# Titre du 4ᵉ onglet : verrouille l'EXISTENCE de l'onglet BILAN (pas seulement le compte) et son
 	# titrage depuis l'i18n. Vérif au RUNTIME via tr() — ne JAMAIS grep le `.translation` compilé
 	# (hashé/compressé → faux négatif garanti).
@@ -123,7 +129,7 @@ func _ready() -> void:
 	# … et la clé est RÉELLEMENT traduite (sans ceci, l'assert ci-dessus comparerait tr() à tr() et
 	# passerait même si la clé manquait du CSV, en repli silencieux sur son propre nom).
 	assert(tr("REPORT_TAB_DEBRIEF") != "REPORT_TAB_DEBRIEF")
-	print("[OK] rapport LEGACY : sections masquees + placeholders + 4 onglets titres (8 asserts)")
+	print("[OK] rapport LEGACY : sections masquees + placeholders + 5 onglets titres (12 asserts)")
 
 	# 4-bis) §8.100 — podium PROVISOIRE (repli local avant game_over) : rangées + note discrète ;
 	# le re-populate du verdict serveur (provisional=false) retire la note.

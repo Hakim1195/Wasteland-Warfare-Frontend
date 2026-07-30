@@ -65,6 +65,13 @@ var _match_rankings: Array = []
 var _match_over_received := false
 # Pont missions (E11) : un seul fetch par fin de partie.
 var _missions_fetched_for_report := false
+# CARTE DE PARTAGE (§8.121, LOT D) — horodatage d'entrée dans l'arène, pour annoncer une DURÉE de
+# partie sur la carte. Mesuré CÔTÉ CLIENT à dessein : le serveur n'expose que l'ÉCHÉANCE
+# (`match_deadline_epoch`, §8.120), jamais l'instant de création de l'état ; on ne peut donc pas
+# reconstituer le temps écoulé depuis le draft. Ce que la carte annonce est donc « la durée telle
+# que CE joueur l'a vécue depuis son entrée dans l'arène » — l'écart avec la durée serveur est le
+# draft (≤ 60 s) et le placement (≤ 90 s), et c'est assumé pour un objet marketing.
+var _arena_entered_at := 0.0
 # Vrai pendant l'animation Split-Screen VS : le rafraîchissement du plateau est alors différé
 # (_refresh_pending) pour figer la mise à jour visuelle des troupes jusqu'à la fin du combat.
 var _combat_animating: bool = false
@@ -189,6 +196,8 @@ var _last_zone_alarm_sig: String = ""
 
 func _ready():
 	button.pressed.connect(_on_debug_init)
+	# §8.121 — début de la durée annoncée par la carte de partage (cf. _arena_entered_at).
+	_arena_entered_at = Time.get_unix_time_from_system()
 
 	# Audio §8.66 : on bascule de la musique de menu vers la MUSIQUE DE COMBAT tendue de l'arène
 	# (lecteur unique → transition propre, plus de silence en jeu).
@@ -1039,6 +1048,18 @@ func _on_spy_result(target_player_id: int, description: String, objective: Dicti
 	# i18n (§8.104) : libellé COMPOSÉ localement depuis la forme structurée {type, params} —
 	# repli sur la description serveur (anglais invariant) si le serveur ne l'envoie pas encore.
 	var txt := _objective_text(objective, description)
+	# MODE STREAMER (§8.121, LOT E) : le renseignement est aussi sensible que MON objectif — il
+	# passe donc par la MÊME plaque « maintenir pour révéler » (zone OBJECTIFS), et le chat/Journal
+	# ne reçoivent qu'une ligne NEUTRE. Écrire l'objectif espionné en clair dans un journal
+	# défilant aurait rouvert exactement la fuite que ce mode ferme (une ligne de journal ne peut
+	# pas se « maintenir pour révéler »).
+	if hud.is_intel_masked():
+		hud.set_spy_intel("%s — %s" % [_display_name(target_player_id), txt])
+		var masked := tr("GAME_SPY_RESULT_FMT") % [
+			_bb_pseudo(target_player_id), tr("INTEL_CLASSIFIED_SHORT")]
+		hud.add_chat_message("general", masked)
+		hud.add_log(masked)
+		return
 	var line := tr("GAME_SPY_RESULT_FMT") % [
 		_bb_pseudo(target_player_id), txt.replace("[", "[lb]")]
 	# Lot B : le renseignement est un message SYSTÈME local (aucun envoi réseau) — il s'affiche
@@ -2740,6 +2761,9 @@ func _show_operation_report() -> void:
 	# Inspection du champ de bataille (E11 §8.83) : rapport/flou masqués → caméra LIBRE sur
 	# l'état final (zéro réseau) ; retour → caméra pilotée à nouveau.
 	report.battlefield_inspect.connect(func(on: bool) -> void: camera.set_free_navigation(on))
+	# CARTE DE PARTAGE (§8.121, LOT D) : le rapport DEMANDE, le contrôleur RÉSOUT le payload (View
+	# pure §6.1 — c'est ici que vivent GameState, le board et les .tres de faction).
+	report.share_card_requested.connect(_on_share_card_requested)
 	if not NetworkManager.requeue_failed.is_connected(_on_requeue_failed):
 		NetworkManager.requeue_failed.connect(_on_requeue_failed)
 	# Récompenses du joueur LOCAL (Économie §8.47) : déjà reçues via match_over → animées d'emblée ;
@@ -2821,6 +2845,10 @@ func _on_match_over(_winner_id: int, _match_type: String, rankings: Array, match
 		_report_node.populate_final_scores(NetworkManager.last_final_scores,
 			_scoreboard_colors(), _my_id())
 		_report_node.populate_bet_results(NetworkManager.last_bet_results)
+		# §8.121 — RAPPORT DE TRAHISON (LOT B) : le journal d'attaques n'arrive QU'AVEC le game_over,
+		# donc c'est ici (et nulle part ailleurs) que le 5ᵉ onglet est peuplé. Serveur non redéployé
+		# → journal vide → l'onglet reste masqué (§9.2).
+		_report_node.populate_betrayals(_betrayal_data())
 	# L'overlay spectateur, s'il est encore vivant sous le rapport, affiche aussi le verdict de ses
 	# paris : le parieur n'a pas à chercher où est passé son résultat.
 	var bets: Dictionary = NetworkManager.last_bet_results
@@ -2971,6 +2999,146 @@ func _timeline_series() -> Array:
 				pts.append(int(snap.get(str(pid), 0)))
 		series.append({"color": board.get_player_color(pid), "points": pts})
 	return series
+
+# =========================================================
+# STREAMABILITÉ & PARTAGE (§8.121) — résolveurs du Rapport de Trahison et de la carte
+# =========================================================
+
+# RAPPORT DE TRAHISON (LOT B) — tout est calculé par le module PUR `BetrayalReport` ; ce résolveur
+# ne fait que lui fournir ses entrées (journal du game_over + timeline + statistics) et habiller le
+# résultat de ce qui appartient à la VUE : les pseudos affichables (préfixe [IA] compris) et les
+# couleurs PLATEAU (source unique `board.get_player_color`, partagée avec le podium et le BILAN).
+# {} si le serveur n'a pas envoyé de journal (non redéployé) → l'onglet reste masqué (§9.2).
+func _betrayal_data() -> Dictionary:
+	var log_ = NetworkManager.last_attack_log
+	if typeof(log_) != TYPE_ARRAY or (log_ as Array).is_empty():
+		return {}
+	# Ordre des lignes/colonnes de la matrice = le CLASSEMENT (le vainqueur en haut à gauche) ;
+	# on complète avec les belligérants absents du classement (défensif — un joueur déconnecté
+	# avant le game_over garderait sa ligne dans le récit).
+	var pids: Array = []
+	for p in _effective_rankings():
+		if not pids.has(int(p)):
+			pids.append(int(p))
+	for k in GameState.players:
+		if not pids.has(int(k)):
+			pids.append(int(k))
+	var history = GameState.statistics.get("territory_history", [])
+	var tp: Dictionary = BetrayalReport.find_turning_point(
+		history if typeof(history) == TYPE_ARRAY else [])
+	var names := {}
+	var colors := {}
+	for pid in pids:
+		names[str(int(pid))] = _display_name(int(pid))
+		colors[str(int(pid))] = board.get_player_color(int(pid))
+	var window: Array = []
+	if not tp.is_empty():
+		# La mini-vue est une TRANCHE de la courbe déjà affichée dans l'onglet BILAN : deux séries
+		# construites séparément auraient pu raconter deux histoires différentes.
+		window = BetrayalReport.timeline_window(_timeline_series(),
+			int(tp.get("from_index", 0)), int(tp.get("to_index", 0)))
+	return {
+		"backstab": BetrayalReport.find_backstab(log_),
+		"turning_point": tp,
+		"turning_series": window,
+		"matrix": BetrayalReport.aggression_matrix(log_, pids),
+		"chain": BetrayalReport.elimination_chain(GameState.statistics, log_),
+		"names": names,
+		"colors": colors,
+	}
+
+# CARTE DE PARTAGE (LOT D) — le rapport a demandé la carte : on résout le payload puis on lui rend
+# la main (c'est LUI qui héberge le SubViewport et affiche le résultat de l'export).
+func _on_share_card_requested() -> void:
+	if _report_node == null or not is_instance_valid(_report_node):
+		return
+	_report_node.run_share_export(_share_card_payload())
+
+# Payload de la carte : verdict, podium des 3 premiers, MON héros, palmarès, courbe de domination,
+# ligne de trahison, chiffres clés. 100 % de données DÉJÀ résolues ailleurs dans ce fichier (aucun
+# nouveau calcul) — la carte n'est qu'une seconde mise en page du même débriefing.
+func _share_card_payload() -> Dictionary:
+	var me := _my_id()
+	var win := int(GameState.winner_id) if GameState.winner_id != null else -1
+	var is_victory := win == me
+	var rankings := _effective_rankings()
+	var podium: Array = []
+	for i in range(mini(3, rankings.size())):
+		var pid := int(rankings[i])
+		podium.append({
+			"name": _display_name(pid),
+			"color": board.get_player_color(pid),
+			"medal": OperationReportScript.medal_for(i),
+		})
+	# Titres honorifiques que J'AI gagnés (mêmes formules que le podium — source unique).
+	var pids: Array = []
+	for p in rankings:
+		pids.append(int(p))
+	var titles: Array = []
+	for key in OperationReportScript.honor_titles(GameState.statistics, pids).get(me, []):
+		titles.append(tr(str(key)))
+
+	var hero: Dictionary = GameState.hero_of(me)
+	var fid := str(hero.get("faction", ""))
+	var finfo := _faction_info(fid)
+	var portrait: Texture2D = null
+	var hp := str(finfo.get("hero_path", ""))
+	if hp != "" and ResourceLoader.exists(hp):
+		var res = load(hp)
+		if res is Texture2D:
+			portrait = res
+
+	# Raison du verdict : la MÊME valeur PUBLIQUE que le sur-titre du rapport (§8.120), pour que la
+	# carte et le rapport ne puissent pas annoncer deux fins différentes.
+	var reason_key := ""
+	match str(GameState.victory_reason):
+		"timeout": reason_key = "VERDICT_TIMEOUT"
+		"objective": reason_key = "SHARE_REASON_OBJECTIVE"
+		"elimination": reason_key = "SHARE_REASON_ELIMINATION"
+		"abandon": reason_key = "SHARE_REASON_ABANDON"
+
+	var stab: Dictionary = _betrayal_data().get("backstab", {})
+	var betrayal_line := ""
+	if not stab.is_empty() and bool(stab.get("confirmed", false)):
+		betrayal_line = tr("BETRAYAL_BACKSTAB") % [
+			_display_name(int(stab.get("attacker", 0))),
+			_display_name(int(stab.get("defender", 0))),
+			int(stab.get("round", 0))]
+
+	var kills := WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", me)
+	var conquests := WarRoom.stat_of(GameState.statistics, "conquests_by_player", me)
+	var duration := _match_duration_text()
+	return {
+		"verdict": tr("SHARE_VERDICT_WIN") if is_victory else tr("SHARE_VERDICT_LOSS"),
+		"verdict_reason": tr(reason_key) if reason_key != "" else "",
+		"is_victory": is_victory,
+		"podium": podium,
+		"faction_name": str(finfo.get("name", "")),
+		"leader": str(finfo.get("leader", "")),
+		"portrait": portrait,
+		"accent": board.get_player_color(me),
+		"titles": titles,
+		"timeline": _timeline_series(),
+		"betrayal_line": betrayal_line,
+		"stats": [
+			[tr("SHARE_STAT_KILLS"), str(kills)],
+			[tr("SHARE_STAT_CONQUESTS"), str(conquests)],
+			[tr("SHARE_STAT_DURATION"), duration],
+		],
+		# Champs du résumé TEXTE copié dans le presse-papiers (share_card.clipboard_summary).
+		"duration": duration,
+		"kills": kills,
+		"conquests": conquests,
+		"betrayals": 1 if betrayal_line != "" else 0,
+	}
+
+# Durée « MM:SS » écoulée depuis l'entrée dans l'arène (cf. _arena_entered_at pour l'écart assumé
+# avec la durée serveur). Horodatage non initialisé → « — » plutôt qu'un 00:00 trompeur.
+func _match_duration_text() -> String:
+	if _arena_entered_at <= 0.0:
+		return "—"
+	var secs := maxi(0, int(Time.get_unix_time_from_system() - _arena_entered_at))
+	return "%d:%02d" % [secs / 60, secs % 60]
 
 # Stats personnelles de la partie (colonne MA PERFORMANCE) + état final de MON héros.
 func _my_match_stats() -> Dictionary:

@@ -180,6 +180,14 @@ var last_match_is_ranked: bool = true
 # `match_over` reste INCHANGÉE (§1.5 additif strict).
 var last_final_scores: Array = []
 var last_bet_results: Dictionary = {}
+# --- §8.121 : JOURNAL D'ATTAQUES (bloc PUBLIC du game_over) --------------------------------------
+# La seule donnée PAIRE-À-PAIRE de la partie : [{ turn, round, attacker_id, defender_id (null =
+# NEUTRE), kills, conquered, hero_kill }]. Il ne voyage QUE dans le game_over (il est explicitement
+# retiré des rediffusions d'état côté serveur) → c'est ICI qu'on le mémorise, sinon il est perdu.
+# Consommé par le 5ᵉ onglet TRAHISONS du Rapport Post-Op et par la carte de partage.
+# Propriété (pattern `last_objectives_reveal`) → signature de `match_over` INCHANGÉE (§1.5).
+# [] = serveur non redéployé → l'onglet se masque proprement (§9.2).
+var last_attack_log: Array = []
 
 var socket = WebSocketPeer.new()
 var connected = false
@@ -375,6 +383,12 @@ func _handle_server_message(msg: Dictionary) -> void:
 			last_final_scores = fscores if typeof(fscores) == TYPE_ARRAY else []
 			var bres = msg.get("bet_results", {})
 			last_bet_results = bres if typeof(bres) == TYPE_DICTIONARY else {}
+			# §8.121 — JOURNAL D'ATTAQUES (bloc PUBLIC). Mémorisé ICI et nulle part ailleurs : il
+			# n'est PAS diffusé avec l'état (retiré du chemin chaud côté serveur), donc ce message
+			# est sa SEULE occasion d'arriver. Absent (serveur antérieur) → [] et l'onglet
+			# TRAHISONS du Rapport Post-Op se masque (§9.2).
+			var alog = msg.get("attack_log", [])
+			last_attack_log = alog if typeof(alog) == TYPE_ARRAY else []
 			var rewards: Dictionary = msg.get("match_rewards", {})
 			last_match_rewards = rewards
 			game_event.emit({"event_type": "game_over", "winner_id": msg.get("winner_id"),
@@ -986,15 +1000,33 @@ func requeue() -> void:
 	# 1) Fermeture PROPRE du WS de la partie terminée (socket neuf — fix STATE_CLOSING). Le serveur
 	#    traite la déconnexion d'un éliminé sans abandon ni minuterie (§8.70).
 	leave_room()
-	# 2) Re-file publique de la MÊME modalité (classée → "ranked" ; sinon "casual" + carte/effectif),
-	#    puis on rejoint l'écran de recherche (il reprend le cours normal : poll /status).
-	if bool(_requeue_mode.get("is_ranked", false)):
-		mm_queue_join("ranked")
-	else:
-		mm_queue_join("casual", str(_requeue_mode.get("map_id", "classic_42")),
-			int(_requeue_mode.get("max_players", 6)))
+	# 2) On DÉLÈGUE la mise en file à l'écran de recherche au lieu de l'émettre ICI.
+	#
+	# ⚠️ CORRECTIF « REJOUER coince sur l'écran de création de partie ». L'ancien code appelait
+	# `mm_queue_join()` juste avant `change_scene()` : la réponse HTTP arrivait donc alors que
+	# `search_screen` n'était PAS ENCORE dans l'arbre, et sa garde `if not is_inside_tree(): return`
+	# JETAIT le signal `mm_queue_result`. Personne ne basculait sur le panneau RECHERCHE. Pire, le
+	# `mm_queue_status()` que l'écran émet à son `_ready` pouvait répondre `idle` (ticket pas encore
+	# écrit) → `_on_mm_status_updated` faisait `_poll_timer.stop()` + `_show_config(false)` : plus
+	# AUCUN poll ne repartait, l'écran restait figé sur CONFIGURATION alors qu'un ticket existait.
+	# En laissant l'écran émettre lui-même la requête, l'émetteur et l'écouteur sont le MÊME nœud —
+	# la course disparaît par construction, elle n'est pas rattrapée après coup.
+	_pending_requeue = _requeue_mode.duplicate(true)
 	_requeue_active = false
 	TransitionManager.change_scene("res://scenes/ui/search_screen.tscn")
+
+
+# Modalité à RE-FILER, consommée par `search_screen._ready()` (cf. `requeue()`). Dictionnaire VIDE =
+# entrée normale dans l'écran (depuis le Menu Principal) : l'écran interroge alors `/status` comme
+# avant. Lecture DESTRUCTIVE volontaire : un retour ultérieur sur l'écran ne doit pas re-filer tout
+# seul (sinon un simple ÉCHAP → RETOUR relancerait une recherche fantôme).
+var _pending_requeue: Dictionary = {}
+
+
+func consume_pending_requeue() -> Dictionary:
+	var pending := _pending_requeue
+	_pending_requeue = {}
+	return pending
 
 
 func _requeue_fail(message: String) -> void:

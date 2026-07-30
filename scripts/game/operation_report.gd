@@ -14,6 +14,10 @@ signal requeue_requested
 # Inspection du champ de bataille (E11 §8.83) : masque le rapport ET le flou (le plateau final
 # reste dessous) — main.gd libère/reprend la caméra. Zéro réseau : l'état final est déjà local.
 signal battlefield_inspect(enabled: bool)
+# CARTE DE PARTAGE (§8.121, LOT D) : le rapport reste une View PURE — il DEMANDE la carte, main.gd
+# résout le payload (héros, palmarès, trahison, couleurs plateau) et le lui repasse via
+# run_share_export(). Sans ce détour, le rapport devrait lire GameState / board / les .tres.
+signal share_card_requested
 
 const ACCENT_CYAN := Color("36c5d9")
 const ACCENT_GOLD := Color("e0b249")
@@ -30,6 +34,14 @@ const XpCoinsBarScript = preload("res://scripts/ui/xp_coins_bar.gd")
 const PlayerChipScene := preload("res://scenes/components/player_chip.tscn")
 # Helpers partagés (police mono du détail chiffré) — war_roster.gd expose ses statiques (§8.73).
 const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
+# Timeline de domination (E11 §8.83) — EXTRAITE en fichier autonome au §8.121 : la carte de partage
+# (LOT D) et la mini-vue du moment décisif (LOT B) dessinent la MÊME courbe. Utilisable comme TYPE
+# (`var x: TimelineChart`) comme n'importe quel script préchargé.
+const TimelineChart := preload("res://scripts/ui/timeline_chart.gd")
+# CARTE DE PARTAGE (§8.121, LOT D) — compositeur offscreen (SubViewport → PNG). Preload à SENS
+# UNIQUE : `share_card.gd` ne connaît PAS le rapport (il partage seulement TimelineChart), ce qui
+# évite toute inclusion cyclique de ressources.
+const ShareCardScript := preload("res://scripts/game/share_card.gd")
 
 # Garde anti double-construction : les récompenses peuvent arriver via populate(data.rewards) OU,
 # en cas de course (game_over reçu APRÈS l'affichage du rapport), via populate_rewards() (main.gd).
@@ -69,6 +81,16 @@ var _debrief_rows_box: VBoxContainer = null
 #     serveur ne l'envoie pas (antérieur au chantier, §9.2). ---
 var _scores_wrap: VBoxContainer = null
 var _scores_rows: VBoxContainer = null
+# --- Onglet 5 : TRAHISONS (§8.121, LOT B) — le RÉCIT de la partie, tiré du JOURNAL D'ATTAQUES.
+#     Index constant : l'onglet se masque/démasque (set_tab_hidden) selon la présence du journal,
+#     mais garde toujours sa place dans l'arbre (aucune retouche .tscn, piège n° 6). ---
+const TAB_BETRAYALS := 4
+# Largeur d'une colonne de la MATRICE D'AGRESSION : 176 (colonne des noms) + 6 × 52 = 488 px, ce
+# qui tient dans les 700 px utiles de l'onglet même à 6 belligérants (l'effectif maximum).
+const MTX_CELL_W := 52.0
+var _betrayal_tab: VBoxContainer = null
+var _betrayal_box: VBoxContainer = null
+var _betrayal_sections := 0
 var _missions_lbl: Label = null
 var _return_btn: Button = null
 # Poignées DIRECTES vers les nœuds .tscn du récap de zone — MASQUÉS depuis le §8.100 (la colonne
@@ -80,45 +102,6 @@ var _attrition_ref: VBoxContainer = null
 # conquêtes, kills, éliminations, hero_kills, hero_damage, objectif rempli — pour reconstituer le
 # barème localement (réconcilié aux totaux serveur). {} = payload legacy → aucune section détail.
 var _detail_inputs: Dictionary = {}
-
-# =========================================================
-# Timeline de domination (E11) — Control custom `_draw()`
-# =========================================================
-# Une polyligne par joueur (couleur plateau résolue par main.gd), X = rounds globaux,
-# Y = territoires possédés, grille discrète charte.
-class TimelineChart extends Control:
-	var series: Array = []   # [{ "color": Color, "points": Array[int] }]
-	var vmax := 1
-
-	func setup(s: Array) -> void:
-		series = s
-		vmax = 1
-		for entry in s:
-			for v in entry.get("points", []):
-				vmax = maxi(vmax, int(v))
-		queue_redraw()
-
-	func _draw() -> void:
-		var r := size
-		var grid := Color(0.211765, 0.772549, 0.85098, 0.12)
-		for i in range(5):
-			var y := r.y * float(i) / 4.0
-			draw_line(Vector2(0, y), Vector2(r.x, y), grid, 1.0)
-		var n := 0
-		for entry in series:
-			var pts_a: Array = entry.get("points", [])
-			n = maxi(n, pts_a.size())
-		if n < 2:
-			return
-		for entry in series:
-			var pts_in: Array = entry.get("points", [])
-			var poly := PackedVector2Array()
-			for i in range(pts_in.size()):
-				poly.append(Vector2(
-					r.x * float(i) / float(n - 1),
-					r.y * (1.0 - float(int(pts_in[i])) / float(vmax))))
-			if poly.size() >= 2:
-				draw_polyline(poly, entry.get("color", Color.WHITE), 2.0, true)
 
 # =========================================================
 # Helpers PURS (statiques, testés — pattern G4)
@@ -181,6 +164,7 @@ func _ready() -> void:
 	%BackToLobbyButton.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
 	%BackToLobbyButton.pressed.connect(func() -> void: AudioManager.play_sfx("back"))
 	_build_requeue_button()
+	_build_share_button()
 	_build_tabs()
 	_build_inspect_buttons()
 	if OS.is_debug_build() and not _self_checked:
@@ -260,6 +244,114 @@ func reset_requeue_button() -> void:
 		_requeue_btn.modulate.a = 1.0
 		_requeue_btn.text = tr("REPORT_REQUEUE")
 		_requeue_btn.disabled = false
+
+# =========================================================
+# CARTE DE PARTAGE (§8.121, LOT D) — bouton d'EN-TÊTE + export
+# =========================================================
+# Placé dans l'EN-TÊTE (rangée alignée à droite, juste sous le titre) et non dans la pile de CTA du
+# bas : celle-ci est déjà à trois boutons pleine largeur (RETOUR / REJOUER / INSPECTER) et un
+# quatrième aurait repoussé les onglets hors du panneau. Aucune retouche .tscn (tout par code).
+var _share_btn: Button = null
+var _share_row: HBoxContainer = null
+var _share_note: Label = null
+var _open_folder_btn: Button = null
+var _share_busy := false
+
+func _build_share_button() -> void:
+	var vbox: VBoxContainer = %ReportTitle.get_parent()
+	_share_row = HBoxContainer.new()
+	_share_row.name = "ShareRow"
+	_share_row.alignment = BoxContainer.ALIGNMENT_END
+	_share_row.add_theme_constant_override("separation", 10)
+
+	_share_note = Label.new()
+	_share_note.visible = false
+	_share_note.add_theme_font_size_override("font_size", 13)
+	_share_note.add_theme_color_override("font_color", ACCENT_GOLD)
+	_share_note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_share_row.add_child(_share_note)
+
+	# Bouton « OUVRIR LE DOSSIER » : n'apparaît QU'APRÈS un export réussi — proposer d'ouvrir un
+	# dossier vide serait une fausse piste.
+	_open_folder_btn = _ghost_button(tr("SHARE_OPEN_FOLDER"), ACCENT_CYAN)
+	_open_folder_btn.visible = false
+	_open_folder_btn.pressed.connect(func() -> void:
+		AudioManager.play_sfx("click")
+		OS.shell_open(ShareCardScript.captures_dir_absolute()))
+	_share_row.add_child(_open_folder_btn)
+
+	# Glyphe de charte « ❯ » et non un emoji appareil-photo : les pictogrammes emoji rendent en
+	# « tofu » sur la police condensée du jeu (purge globale §8.102).
+	_share_btn = _ghost_button(tr("SHARE_CARD_BUTTON"), ACCENT_GOLD)
+	_share_btn.pressed.connect(func() -> void:
+		AudioManager.play_sfx("confirm")
+		share_card_requested.emit())
+	_share_row.add_child(_share_btn)
+
+	vbox.add_child(_share_row)
+	# Juste après le titre + son séparateur (index 2 = sous `Sep`) → lecture « verdict, puis
+	# actions de partage, puis onglets ».
+	vbox.move_child(_share_row, mini(2, vbox.get_child_count() - 1))
+
+# Petit bouton « ghost » de charte (bordure teintée, remplissage translucide, angles droits).
+func _ghost_button(text: String, tint: Color) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.add_theme_font_size_override("font_size", 14)
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.bg_color = Color(tint, 0.10)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(tint, 0.6)
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 7
+	sb.content_margin_bottom = 7
+	var hover := sb.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(tint, 0.26)
+	hover.border_color = tint
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_stylebox_override("disabled", sb)
+	btn.add_theme_color_override("font_color", tint)
+	btn.add_theme_color_override("font_hover_color", TEXT_PRIMARY)
+	btn.add_theme_color_override("font_disabled_color", TEXT_MUTED)
+	btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	return btn
+
+# Exporte les deux PNG. `payload` est résolu par main.gd (cf. signal share_card_requested).
+# Anti double-clic (`_share_busy`) : deux exports concurrents créeraient deux SubViewport 1920×1080
+# en même temps et deux horodatages différents pour la même partie.
+func run_share_export(payload: Dictionary) -> void:
+	if _share_busy or _share_btn == null:
+		return
+	_share_busy = true
+	_share_btn.disabled = true
+	_share_btn.text = tr("SHARE_CARD_WORKING")
+	_share_note.visible = false
+	var card = ShareCardScript.new()
+	add_child(card)
+	var saved: Array = await card.export_pngs(payload)
+	card.queue_free()
+	# Résumé TEXTE dans le presse-papiers (décision n° 3 : Godot 4 ne sait pas copier une image).
+	# Posé même si l'écriture des PNG a échoué — le joueur a au moins de quoi raconter sa partie.
+	DisplayServer.clipboard_set(ShareCardScript.clipboard_summary(payload))
+	_share_btn.disabled = false
+	_share_btn.text = tr("SHARE_CARD_BUTTON")
+	_share_note.visible = true
+	if saved.is_empty():
+		# Échec HONNÊTE : un « 2 images enregistrées » alors que le disque a refusé enverrait le
+		# joueur chercher des fichiers inexistants.
+		_share_note.text = tr("SHARE_CARD_FAILED")
+		_share_note.add_theme_color_override("font_color", DANGER)
+	else:
+		_share_note.text = tr("SHARE_CARD_SAVED") % saved.size()
+		_share_note.add_theme_color_override("font_color", ACCENT_GOLD)
+		_open_folder_btn.visible = true
+	_share_busy = false
 
 # Refonte EN ONGLETS (E-visuel) PAR CODE : un TabContainer s'insère dans ReportVBox à l'emplacement
 # de l'eyebrow d'attrition ; 4 pages (ScrollContainer > VBox) — XP JOUEUR / XP HÉROS / CLASSEMENT /
@@ -369,11 +461,23 @@ func _build_tabs() -> void:
 	_timeline_wrap.add_child(_timeline_chart)
 	_debrief_tab.add_child(_timeline_wrap)
 
+	# --- Onglet 5 : TRAHISONS (§8.121) — ce que la partie a RACONTÉ ---------------------------
+	# Nourri par le JOURNAL D'ATTAQUES du game_over, analysé par le module PUR BetrayalReport.
+	# MASQUÉ par défaut : un serveur non redéployé n'envoie pas de journal (§9.2), et une partie
+	# sans le moindre affrontement entre joueurs n'a rien à raconter ici.
+	_betrayal_tab = _add_tab_page("TabBetrayals")
+	_betrayal_box = VBoxContainer.new()
+	_betrayal_box.add_theme_constant_override("separation", 10)
+	_betrayal_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_betrayal_tab.add_child(_betrayal_box)
+
 	# Titres d'onglets (§8.100 — texte SEUL, sans emoji ; traduits, posés APRÈS l'ajout des pages).
 	_tabs.set_tab_title(0, tr("REPORT_TAB_PLAYER"))
 	_tabs.set_tab_title(1, tr("REPORT_TAB_HERO"))
 	_tabs.set_tab_title(2, tr("REPORT_TAB_RANKING"))
 	_tabs.set_tab_title(3, tr("REPORT_TAB_DEBRIEF"))
+	_tabs.set_tab_title(TAB_BETRAYALS, tr("TAB_BETRAYALS"))
+	_tabs.set_tab_hidden(TAB_BETRAYALS, true)
 
 # Une page d'onglet : ScrollContainer (contenu long → défilement vertical, jamais de débordement) >
 # VBoxContainer de contenu. `id` = nom ASCII du nœud (le titre visible est posé par set_tab_title).
@@ -532,8 +636,14 @@ func populate_podium(rows: Array, provisional: bool = false) -> void:
 	for c in _podium_list.get_children():
 		_podium_list.remove_child(c)
 		c.queue_free()
+	# La mise en scène en cours porte sur des nœuds qu'on vient de détruire : on la remet à zéro
+	# AVANT de reconstruire (sans quoi _process animerait des références invalides).
+	_reset_reveal()
+	var built: Array = []
 	for i in range(rows.size()):
-		_podium_list.add_child(_make_podium_row(rows[i]))
+		var wrap := _make_podium_row(rows[i])
+		_podium_list.add_child(wrap)
+		built.append({"row": rows[i], "wrap": wrap})
 	if provisional and not rows.is_empty():
 		var note := Label.new()
 		note.name = "ProvisionalNote"
@@ -541,6 +651,11 @@ func populate_podium(rows: Array, provisional: bool = false) -> void:
 		note.add_theme_color_override("font_color", TEXT_MUTED)
 		note.add_theme_font_size_override("font_size", 11)
 		_podium_list.add_child(note)
+	# RÉVÉLATION THÉÂTRALE (§8.121, LOT C) — seulement sur le podium DÉFINITIF : le podium
+	# provisoire (§8.100) est calculé localement et ne porte AUCUN objectif révélé (`has_reveal`
+	# faux), et rejouer la séquence à l'arrivée du verdict serveur la doublerait.
+	if not provisional:
+		_arm_reveal(built)
 
 # Une ligne du podium (§8.100 — restylée sans emojis) : panneau à liseré gauche (OR pour le
 # vainqueur, cyan discret sinon), indicatif de rang mono « 01 », brique PlayerChip, badges de
@@ -587,8 +702,11 @@ func _make_podium_row(r: Dictionary) -> Control:
 	indent.custom_minimum_size = Vector2(28, 0)
 	line2.add_child(indent)
 	# Objectif révélé (bloc PUBLIC objectives_reveal) — ✓ vert / ✕ acier ; mention neutre si
-	# serveur antérieur (has_reveal false).
+	# serveur antérieur (has_reveal false). NOMMÉ (§8.121) : c'est la « carte » que la révélation
+	# théâtrale retourne — la retrouver par son nom évite de faire remonter la poignée à travers
+	# trois conteneurs imbriqués.
 	var obj := Label.new()
+	obj.name = "ObjectiveLine"
 	if bool(r.get("has_reveal", false)):
 		var done := bool(r.get("completed", false))
 		obj.text = ("✓ " if done else "✕ ") + str(r.get("objective", ""))
@@ -613,6 +731,183 @@ func _make_podium_row(r: Dictionary) -> Control:
 	line2.add_child(stats)
 	card.add_child(line2)
 	return wrap
+
+# =========================================================
+# RÉVÉLATION THÉÂTRALE DES OBJECTIFS (§8.121, LOT C)
+# =========================================================
+# Le moment de VOD par excellence : jusqu'ici les objectifs secrets de TOUS les joueurs
+# s'affichaient d'un bloc, instantanément — la partie perdait son dénouement. Ils apparaissent
+# désormais UN PAR UN, du DERNIER du classement au VAINQUEUR (le suspense monte vers celui qui a
+# gagné), 1,2 s d'intervalle, chaque carte « se retournant » (fondu + écrasement vertical 0,35 s)
+# avec un sting ; le vainqueur a un sting appuyé et une pulsation.
+#
+# Ce n'est PAS un nouveau flux de données : c'est une mise en scène de l'`objectives_reveal` que le
+# rapport recevait déjà (§8.83). Aucun appel réseau, aucune donnée supplémentaire.
+#
+# Trois garanties NON NÉGOCIABLES :
+#   • SKIPPABLE — un clic n'importe où révèle tout instantanément (`_input` ne consomme PAS
+#     l'évènement : le clic atteint AUSSI le bouton visé, donc rien n'est « avalé ») ;
+#   • `reduced_motion` (E10 §8.82) → affichage INSTANTANÉ d'office, aucune attente ;
+#   • le bouton REJOUER n'est JAMAIS désactivé par la séquence (elle ne touche que des `modulate`).
+const REVEAL_STEP_S := 1.2      # intervalle entre deux révélations
+const REVEAL_FLIP_S := 0.35     # durée du « retournement » d'une carte
+
+# File des cartes restant à retourner (ordre : dernier du classement → vainqueur).
+var _reveal_queue: Array = []
+var _reveal_order: Array = []   # pids dans l'ordre de révélation (lecture de validation)
+var _reveal_running := false
+var _reveal_clock := 0.0
+var _reveal_played := false     # la séquence ne se joue qu'UNE fois par rapport
+var _reveal_hint: Label = null
+
+func _reset_reveal() -> void:
+	_reveal_queue.clear()
+	_reveal_order.clear()
+	_reveal_running = false
+	_reveal_clock = 0.0
+	if _reveal_hint != null and is_instance_valid(_reveal_hint):
+		_reveal_hint.queue_free()
+	_reveal_hint = null
+
+# Prépare (et lance) la séquence depuis les lignes du podium DÉJÀ construites.
+# `built` = [{ "row": Dictionary (la ligne résolue par main.gd), "wrap": Control (le panneau) }].
+func _arm_reveal(built: Array) -> void:
+	# Rien à révéler : payload legacy / podium provisoire → l'écran se comporte comme avant.
+	var revealable: Array = []
+	for entry in built:
+		var row: Dictionary = entry["row"]
+		if not bool(row.get("has_reveal", false)):
+			continue
+		var node: Node = (entry["wrap"] as Control).find_child("ObjectiveLine", true, false)
+		if node == null:
+			continue
+		revealable.append({
+			"pid": int(row.get("pid", 0)),
+			"node": node,
+			"is_winner": str(row.get("medal", "")) == "01",
+		})
+	if revealable.is_empty():
+		return
+	# Ordre : DERNIER → VAINQUEUR. `built` suit le classement (01 d'abord), donc on l'inverse.
+	revealable.reverse()
+	for slot in revealable:
+		_reveal_order.append(int(slot["pid"]))
+	# Séquence déjà jouée (re-push du podium par un second game_over) ou confort d'accessibilité :
+	# tout est posé d'emblée, sans animation ni son.
+	if _reveal_played or bool(SettingsManager.get_comfort("reduced_motion")):
+		for slot in revealable:
+			_apply_reveal(slot, false)
+		_reveal_played = true
+		return
+	_reveal_played = true
+	for slot in revealable:
+		(slot["node"] as Control).modulate = Color(1, 1, 1, 0)
+		_reveal_queue.append(slot)
+	_reveal_running = true
+	_reveal_clock = 0.0
+	# On amène le joueur sur l'onglet CLASSEMENT : une mise en scène jouée sur un onglet masqué
+	# n'existe pas. C'est le seul endroit du rapport où le programme choisit l'onglet — assumé,
+	# c'est le dénouement de la partie.
+	if _tabs != null:
+		_tabs.current_tab = 2
+	_reveal_hint = Label.new()
+	_reveal_hint.name = "RevealSkipHint"
+	_reveal_hint.text = tr("REVEAL_SKIP_HINT")
+	_reveal_hint.add_theme_color_override("font_color", TEXT_MUTED)
+	_reveal_hint.add_theme_font_size_override("font_size", 11)
+	# ⚠️ Posé dans l'ONGLET, pas dans `_podium_list` : cette boîte est « UN enfant par belligérant »
+	# (invariant vérifié par tools/test_e11_report.gd, cassé par une première version de ce bloc).
+	# L'indice de skip n'est pas une ligne de podium — il n'a rien à y faire.
+	_ranking_tab.add_child(_reveal_hint)
+
+func _process(delta: float) -> void:
+	if not _reveal_running:
+		return
+	_reveal_clock -= delta
+	if _reveal_clock > 0.0:
+		return
+	# Cadencé dans `_process` (et non par une coroutine `await create_timer`) à dessein : le rapport
+	# peut être libéré en cours de séquence (retour au QG, re-file) — une coroutine se réveillerait
+	# alors sur un objet détruit, alors que `_process` s'arrête simplement avec le nœud.
+	if _reveal_queue.is_empty():
+		_finish_reveal()
+		return
+	var slot: Dictionary = _reveal_queue.pop_front()
+	_apply_reveal(slot, true)
+	_reveal_clock = REVEAL_STEP_S
+	if _reveal_queue.is_empty():
+		_finish_reveal()
+
+func _finish_reveal() -> void:
+	_reveal_running = false
+	if _reveal_hint != null and is_instance_valid(_reveal_hint):
+		_reveal_hint.queue_free()
+		_reveal_hint = null
+
+# Retourne UNE carte. `animated` faux = pose instantanée (skip / reduced_motion / re-push).
+func _apply_reveal(slot: Dictionary, animated: bool) -> void:
+	var node = slot.get("node")
+	if node == null or not is_instance_valid(node) or not (node is Control):
+		return
+	var ctrl := node as Control
+	if not animated:
+		ctrl.modulate = Color(1, 1, 1, 1)
+		ctrl.scale = Vector2.ONE
+		return
+	# Pivot recalculé À L'INSTANT du retournement : à la construction, le conteneur n'avait pas
+	# encore attribué sa taille au libellé (pivot à (0,0) → la carte « pousserait » depuis le coin).
+	ctrl.pivot_offset = ctrl.size * 0.5
+	ctrl.scale = Vector2(1.0, 0.06)
+	var t := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	t.tween_property(ctrl, "scale", Vector2.ONE, REVEAL_FLIP_S)
+	t.tween_property(ctrl, "modulate:a", 1.0, REVEAL_FLIP_S)
+	if bool(slot.get("is_winner", false)):
+		# Vainqueur : sting APPUYÉ (la fanfare de conquête, déjà au catalogue — on ne crée pas un
+		# 11ᵉ son pour un 11ᵉ moment) + pulsation de la ligne entière.
+		AudioManager.play_sfx("conquest")
+		var row := ctrl.get_parent()
+		while row != null and not (row is PanelContainer):
+			row = row.get_parent()
+		if row is Control:
+			var p := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			p.tween_property(row, "modulate", Color(1.35, 1.25, 1.0, 1.0), 0.25)
+			p.tween_property(row, "modulate", Color(1, 1, 1, 1), 0.45)
+	else:
+		AudioManager.play_sfx("sting")
+
+# SKIP — tout révéler tout de suite. Idempotent (double-clic sans effet de bord).
+func skip_reveal() -> void:
+	if not _reveal_running and _reveal_queue.is_empty():
+		return
+	_reveal_running = false
+	while not _reveal_queue.is_empty():
+		_apply_reveal(_reveal_queue.pop_front(), false)
+	_finish_reveal()
+
+func _input(event: InputEvent) -> void:
+	if not _reveal_running:
+		return
+	var clicked := event is InputEventMouseButton and (event as InputEventMouseButton).pressed
+	var keyed := event is InputEventKey and (event as InputEventKey).pressed
+	if clicked or keyed:
+		# ⚠️ L'évènement n'est PAS consommé (`set_input_as_handled` volontairement absent) : le clic
+		# doit continuer sa route vers le bouton visé, sinon la mise en scène « avalerait » un clic
+		# sur REJOUER — précisément ce qu'on s'interdit.
+		skip_reveal()
+
+# --- Accesseurs de VALIDATION (tools/test_betrayal_report.gd) : lecture seule, aucun effet ---
+func reveal_pending_count() -> int:
+	return _reveal_queue.size()
+
+func is_reveal_running() -> bool:
+	return _reveal_running
+
+func reveal_order_pids() -> Array:
+	return _reveal_order.duplicate()
+
+func is_requeue_actionable() -> bool:
+	return _requeue_btn != null and is_instance_valid(_requeue_btn) and not _requeue_btn.disabled
+
 
 # Tableau BILAN (§8.99, rendu maquette §8.100) — `rows` résolues par main.gd via
 # WarRoom.debrief_rows (module PUR) + enrichies de `color` (pastille plateau) :
@@ -770,6 +1065,289 @@ func populate_bet_results(data: Dictionary) -> void:
 		line.add_theme_color_override("font_color", ACCENT_GOLD if won else TEXT_MUTED)
 		box.add_child(line)
 	_scores_wrap.add_child(box)
+
+
+# =========================================================
+# ONGLET TRAHISONS (§8.121, LOT B) — le RÉCIT de la partie
+# =========================================================
+# `data` est résolu par main.gd (View pure §6.1 — aucune analyse ici, uniquement de la mise en page) :
+#   { "backstab": Dictionary,        # BetrayalReport.find_backstab — {} si aucun affrontement
+#     "turning_point": Dictionary,   # BetrayalReport.find_turning_point — {} si historique court
+#     "turning_series": Array,       # sous-fenêtre du graphique, centrée sur le basculement
+#     "matrix": Dictionary,          # BetrayalReport.aggression_matrix
+#     "chain": Array,                # BetrayalReport.elimination_chain
+#     "names": { "<pid>": String },  # pseudos DÉJÀ préfixés [IA] pour les bots
+#     "colors": { "<pid>": Color } } # couleurs PLATEAU (source unique board.get_player_color)
+# {} ou analyse entièrement vide → onglet MASQUÉ (serveur non redéployé, §9.2). Une partie SANS
+# trahison mais AVEC des combats reste affichée : « GUERRE FRONTALE » est une information.
+func populate_betrayals(data: Dictionary) -> void:
+	if _betrayal_box == null or _tabs == null:
+		return
+	for c in _betrayal_box.get_children():
+		_betrayal_box.remove_child(c)
+		c.queue_free()
+	_betrayal_sections = 0
+	if data.is_empty():
+		_tabs.set_tab_hidden(TAB_BETRAYALS, true)
+		return
+	var names: Dictionary = data.get("names", {}) if typeof(data.get("names")) == TYPE_DICTIONARY else {}
+	var colors: Dictionary = data.get("colors", {}) if typeof(data.get("colors")) == TYPE_DICTIONARY else {}
+	var matrix: Dictionary = data.get("matrix", {}) if typeof(data.get("matrix")) == TYPE_DICTIONARY else {}
+
+	_build_backstab_section(data.get("backstab", {}), names, colors)
+	_build_turning_section(data.get("turning_point", {}), data.get("turning_series", []), names)
+	_build_matrix_section(matrix, names, colors)
+	_build_chain_section(data.get("chain", []), names, colors)
+
+	# Il n'y a « rien à raconter » que si AUCUNE unité n'est tombée entre joueurs : dans ce cas,
+	# l'onglet resterait un squelette de titres vides — on le masque plutôt que de le montrer creux.
+	var has_story := int(matrix.get("total", 0)) > 0 \
+		or not (data.get("chain", []) as Array).is_empty() \
+		or not (data.get("backstab", {}) as Dictionary).is_empty()
+	_tabs.set_tab_hidden(TAB_BETRAYALS, not has_story)
+
+# LE COUP DE POIGNARD — en-tête du récit. `confirmed` faux = aucune vraie trahison détectée : on le
+# DIT (« GUERRE FRONTALE ») au lieu de présenter le premier échange de la partie comme un coup bas.
+func _build_backstab_section(stab: Dictionary, names: Dictionary, colors: Dictionary) -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	box.add_child(_eyebrow(tr("BETRAYAL_STAB_TITLE")))
+	if stab.is_empty() or not bool(stab.get("confirmed", false)):
+		var none := Label.new()
+		none.text = tr("BETRAYAL_NONE")
+		none.add_theme_color_override("font_color", TEXT_MUTED)
+		none.add_theme_font_size_override("font_size", 14)
+		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(none)
+		# Le repli reste informatif : « le plus long voisinage pacifique » raconte quand la table a
+		# arrêté de se faire confiance, même sans trahison qualifiée.
+		if not stab.is_empty():
+			box.add_child(_stab_line(stab, names, colors, TEXT_MUTED))
+	else:
+		box.add_child(_stab_line(stab, names, colors, ACCENT_GOLD))
+		var detail := Label.new()
+		var bits: Array[String] = [tr("BETRAYAL_CALM_FMT") % int(stab.get("calm_rounds", 0))]
+		if bool(stab.get("hero_kill", false)):
+			bits.append(tr("BETRAYAL_STAB_HERO"))
+		elif bool(stab.get("conquered", false)):
+			bits.append(tr("BETRAYAL_STAB_CONQUEST"))
+		detail.text = " · ".join(bits)
+		detail.add_theme_color_override("font_color", TEXT_MUTED)
+		detail.add_theme_font_size_override("font_size", 12)
+		box.add_child(detail)
+	_betrayal_box.add_child(box)
+	_betrayal_sections += 1
+
+# Ligne « ✸ [X] A POIGNARDÉ [Y] — ROUND N · M UNITÉS » : les deux pseudos sont teintés à leur
+# couleur PLATEAU (même repère visuel que le podium et le BILAN) via du BBCode sur un RichTextLabel,
+# seul moyen de colorer DEUX fragments d'une phrase traduite dont l'ordre des mots varie.
+func _stab_line(stab: Dictionary, names: Dictionary, colors: Dictionary, tint: Color) -> Control:
+	var rtl := RichTextLabel.new()
+	rtl.bbcode_enabled = true
+	rtl.fit_content = true
+	rtl.scroll_active = false
+	rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rtl.add_theme_font_size_override("normal_font_size", 15)
+	var att := _bb_name(int(stab.get("attacker", 0)), names, colors)
+	var dfd := _bb_name(int(stab.get("defender", 0)), names, colors)
+	var head: String = tr("BETRAYAL_BACKSTAB") % [att, dfd, int(stab.get("round", 0))]
+	rtl.text = "[color=#%s]%s[/color]  [color=#8a97a5]%s[/color]" % [
+		tint.to_html(false), head, tr("BETRAYAL_UNITS_FMT") % int(stab.get("kills", 0))]
+	return rtl
+
+# Fragment BBCode « pseudo teinté », ÉCHAPPÉ (un pseudo peut contenir un « [ » — piège n° 1 du chat).
+func _bb_name(pid: int, names: Dictionary, colors: Dictionary) -> String:
+	var raw := str(names.get(str(int(pid)), tr("COMMON_PLAYER"))).to_upper()
+	var col: Color = colors.get(str(int(pid)), TEXT_PRIMARY)
+	return "[color=#%s]%s[/color]" % [col.to_html(false), raw.replace("[", "[lb]")]
+
+# LE MOMENT DÉCISIF + mini-vue de la timeline RÉDUITE à la fenêtre du basculement (on réutilise la
+# même brique TimelineChart que l'onglet BILAN : deux graphiques différents pourraient se
+# contredire). Historique trop court → section entièrement omise.
+func _build_turning_section(tp: Dictionary, series: Array, names: Dictionary) -> void:
+	if tp.is_empty():
+		return
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	box.add_child(_eyebrow(tr("BETRAYAL_TURN_TITLE")))
+	var who := str(names.get(str(int(tp.get("pid", 0))), tr("COMMON_PLAYER"))).to_upper()
+	var lbl := Label.new()
+	# Le basculement le plus ample n'est pas forcément un EFFONDREMENT : ce peut être la poussée
+	# décisive du vainqueur. Deux libellés distincts — écrire « L'EMPIRE DE X BASCULE » sur un gain
+	# de +16 territoires se lirait comme une défaite.
+	var key := "BETRAYAL_TURNING_POINT" if int(tp.get("delta", 0)) < 0 \
+		else "BETRAYAL_TURNING_POINT_UP"
+	lbl.text = tr(key) % [int(tp.get("round", 0)), who]
+	lbl.add_theme_color_override("font_color", TEXT_PRIMARY)
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(lbl)
+	var delta := int(tp.get("delta", 0))
+	var swing := Label.new()
+	swing.text = tr("BETRAYAL_SWING_FMT") % [("%+d" % delta), int(tp.get("before", 0)),
+		int(tp.get("after", 0))]
+	swing.add_theme_font_override("font", RosterHelpers._mono_font())
+	swing.add_theme_font_size_override("font_size", 12)
+	swing.add_theme_color_override("font_color", DANGER if delta < 0 else ACCENT_CYAN)
+	box.add_child(swing)
+	if typeof(series) == TYPE_ARRAY and not (series as Array).is_empty():
+		var chart := TimelineChart.new()
+		chart.custom_minimum_size = Vector2(0, 76)
+		chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		box.add_child(chart)
+		chart.setup(series)
+	_betrayal_box.add_child(box)
+	_betrayal_sections += 1
+
+# LA MATRICE D'AGRESSION — grille N×N compacte, LIGNES = attaquants. Cellules teintées par
+# intensité (part de la case dans le maximum), liseré OR sur la case maximale.
+func _build_matrix_section(matrix: Dictionary, names: Dictionary, colors: Dictionary) -> void:
+	var pids: Array = matrix.get("pids", []) if typeof(matrix.get("pids")) == TYPE_ARRAY else []
+	if pids.size() < 2:
+		return
+	var cells: Dictionary = matrix.get("cells", {}) if typeof(matrix.get("cells")) == TYPE_DICTIONARY else {}
+	var best: Dictionary = matrix.get("max", {}) if typeof(matrix.get("max")) == TYPE_DICTIONARY else {}
+	var peak := maxi(1, int(best.get("kills", 0)))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	box.add_child(_eyebrow(tr("BETRAYAL_MATRIX_TITLE")))
+
+	# Rangée d'en-têtes : les DÉFENSEURS en colonnes (pastille couleur + pseudo abrégé).
+	var heads := HBoxContainer.new()
+	heads.add_theme_constant_override("separation", 0)
+	heads.add_child(_fixed_cell(tr("BETRAYAL_MATRIX_ROWS"), DBF_NAME_W, TEXT_MUTED, 10,
+		HORIZONTAL_ALIGNMENT_LEFT))
+	for d in pids:
+		heads.add_child(_matrix_head(int(d), names, colors))
+	box.add_child(heads)
+
+	for a in pids:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 0)
+		var name_box := HBoxContainer.new()
+		name_box.add_theme_constant_override("separation", 6)
+		name_box.custom_minimum_size = Vector2(DBF_NAME_W, 0)
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(8, 8)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sw.color = colors.get(str(int(a)), TEXT_MUTED)
+		name_box.add_child(sw)
+		var who := Label.new()
+		who.text = str(names.get(str(int(a)), tr("COMMON_PLAYER"))).to_upper()
+		who.add_theme_font_size_override("font_size", 11)
+		who.add_theme_color_override("font_color", TEXT_PRIMARY)
+		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		who.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		name_box.add_child(who)
+		row.add_child(name_box)
+		for d in pids:
+			var value := -1
+			if cells.has(a) and (cells[a] as Dictionary).has(d):
+				value = int(cells[a][d])
+			var is_peak := int(best.get("attacker", 0)) == int(a) \
+				and int(best.get("defender", 0)) == int(d) and int(best.get("kills", 0)) > 0
+			row.add_child(_matrix_cell(value, peak, is_peak))
+		box.add_child(row)
+
+	var legend := Label.new()
+	legend.text = tr("BETRAYAL_MATRIX_LEGEND")
+	legend.add_theme_color_override("font_color", TEXT_MUTED)
+	legend.add_theme_font_size_override("font_size", 10)
+	box.add_child(legend)
+	_betrayal_box.add_child(box)
+	_betrayal_sections += 1
+
+# En-tête de colonne de la matrice : pseudo TRONQUÉ (une grille 6×6 n'a pas la place d'un pseudo
+# entier), infobulle avec le nom complet, teinté à la couleur plateau du joueur.
+# ⚠️ Le préfixe « [IA] » est RETIRÉ de l'abrégé (défaut vu en capture : à 4 caractères, TOUS les
+# bots s'affichaient « [IA] » et devenaient indistinguables). L'appartenance IA reste lisible sur
+# la ligne du même joueur, qui porte le pseudo complet préfixé.
+func _matrix_head(pid: int, names: Dictionary, colors: Dictionary) -> Control:
+	var full := str(names.get(str(int(pid)), tr("COMMON_PLAYER"))).to_upper()
+	var short := full
+	var close := short.find("]")
+	if short.begins_with("[") and close >= 0:
+		short = short.substr(close + 1).strip_edges()
+	var cell := _fixed_cell(short.substr(0, 5), MTX_CELL_W, colors.get(str(int(pid)), TEXT_MUTED), 10,
+		HORIZONTAL_ALIGNMENT_CENTER)
+	cell.tooltip_text = full
+	cell.mouse_filter = Control.MOUSE_FILTER_PASS
+	return cell
+
+# Une case : `value < 0` = diagonale (on ne s'attaque pas soi-même → case barrée d'un « — »).
+# Fond cyan d'intensité proportionnelle, liseré or si c'est la case maximale de la partie.
+func _matrix_cell(value: int, peak: int, is_peak: bool) -> Control:
+	var wrap := PanelContainer.new()
+	wrap.custom_minimum_size = Vector2(MTX_CELL_W, 0)
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.content_margin_top = 3
+	sb.content_margin_bottom = 3
+	if value < 0:
+		sb.bg_color = Color(1, 1, 1, 0.02)
+	else:
+		var ratio := clampf(float(value) / float(peak), 0.0, 1.0)
+		sb.bg_color = Color(ACCENT_CYAN, 0.04 + 0.42 * ratio)
+	if is_peak:
+		sb.set_border_width_all(1)
+		sb.border_color = ACCENT_GOLD
+	wrap.add_theme_stylebox_override("panel", sb)
+	var l := Label.new()
+	l.text = "—" if value < 0 else str(value)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_override("font", RosterHelpers._mono_font())
+	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_color_override("font_color",
+		TEXT_MUTED if value <= 0 else (ACCENT_GOLD if is_peak else TEXT_PRIMARY))
+	wrap.add_child(l)
+	return wrap
+
+# LA CHAÎNE DES CHUTES — liste ORDONNÉE des éliminations : « [A] ☠ [B] · ROUND N », mise à mort de
+# héros marquée d'un ◆ (glyphes de charte, aucun emoji — §8.102).
+func _build_chain_section(chain, names: Dictionary, colors: Dictionary) -> void:
+	if typeof(chain) != TYPE_ARRAY or (chain as Array).is_empty():
+		return
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	box.add_child(_eyebrow(tr("BETRAYAL_CHAIN_TITLE")))
+	for i in range((chain as Array).size()):
+		var e = chain[i]
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		var rtl := RichTextLabel.new()
+		rtl.bbcode_enabled = true
+		rtl.fit_content = true
+		rtl.scroll_active = false
+		rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rtl.add_theme_font_size_override("normal_font_size", 13)
+		# Round 0 = élimination non datable (journal tronqué par le plafond de 300, §8.121) : on
+		# affiche l'acte SANS inventer un round.
+		var rnd := int(e.get("round", 0))
+		var when_txt := (tr("BETRAYAL_CHAIN_ROUND_FMT") % rnd) if rnd > 0 \
+			else tr("BETRAYAL_CHAIN_ROUND_UNKNOWN")
+		var mark := "◆ " if bool(e.get("hero", false)) else ""
+		rtl.text = "[color=#8a97a5]%02d[/color]  %s%s [color=#d6453f]☠[/color] %s  [color=#8a97a5]· %s[/color]" % [
+			i + 1, mark, _bb_name(int(e.get("killer", 0)), names, colors),
+			_bb_name(int(e.get("victim", 0)), names, colors), when_txt]
+		box.add_child(rtl)
+	var legend := Label.new()
+	legend.text = tr("BETRAYAL_CHAIN_LEGEND")
+	legend.add_theme_color_override("font_color", TEXT_MUTED)
+	legend.add_theme_font_size_override("font_size", 10)
+	box.add_child(legend)
+	_betrayal_box.add_child(box)
+	_betrayal_sections += 1
+
+# --- Accesseurs de VALIDATION (tools/test_betrayal_report.gd) : lecture seule, aucun effet ---
+func tab_count() -> int:
+	return _tabs.get_tab_count() if _tabs != null else 0
+
+func is_betrayal_tab_visible() -> bool:
+	return _tabs != null and not _tabs.is_tab_hidden(TAB_BETRAYALS)
+
+func betrayal_section_count() -> int:
+	return _betrayal_sections
 
 
 # Suffixe de clé i18n d'un type de pari (miroir de observer_bets.BET_TYPES). Type inconnu (serveur
@@ -1081,6 +1659,11 @@ func populate(data: Dictionary) -> void:
 	# aucune erreur (§9.2).
 	if data.has("debrief"):
 		populate_debrief(data.get("debrief", []))
+	# Onglet TRAHISONS (§8.121, FACULTATIF) : le journal d'attaques n'arrive qu'avec le game_over,
+	# donc cette clé est TOUJOURS absente à l'ouverture du rapport — c'est _on_match_over qui la
+	# pousse. La garde est là pour ne jamais MASQUER un onglet déjà peuplé par un push antérieur.
+	if data.has("betrayals"):
+		populate_betrayals(data.get("betrayals", {}))
 
 	# Bloc « Récompenses » animé (si les gains du joueur local sont déjà connus à l'affichage).
 	# is_ranked (§8.88, FACULTATIF) : défaut `true` = comportement legacy (points affichés).
@@ -1486,6 +2069,9 @@ static func _self_check() -> void:
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 150, 0)) == 308)  # 1er : idem 150
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 60, 1)) == 218)   # 2e : 60, PAS 150+60
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 0, 2)) == 158)    # 3e : aucun forfait
+	# §8.121 — le module d'ANALYSE narrative se vérifie lui-même (coup de poignard, moment décisif,
+	# matrice, chaîne des chutes) : on l'enchaîne ici pour qu'un seul boot du rapport couvre les deux.
+	BetrayalReport.self_check()
 
 # Entrées EXACTES du barème telles que le SERVEUR les a utilisées (bloc ADDITIF `xp_inputs` de
 # `match_rewards`). {} si le serveur est antérieur → chaque appelant retombe sur son estimation

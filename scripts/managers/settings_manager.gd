@@ -35,6 +35,14 @@ const COMFORT_DEFAULTS := {
 	"colorblind_mode": false,          # E10 : palette Okabe-Ito + motifs
 	"ui_scale": 1.0,                   # E10 : 0.9 / 1.0 / 1.15 / 1.3
 	"damage_numbers": true,            # E10 : flotteurs de dégâts
+	# MODE STREAMER (§8.121, LOT E) — masque l'OBJECTIF SECRET en partie (et le renseignement
+	# d'espionnage) derrière un « maintenir pour révéler ». Anti stream-sniping : l'objectif est la
+	# SEULE information de l'écran qu'un spectateur puisse exploiter contre le joueur.
+	# Défaut OFF : la très grande majorité des joueurs ne diffuse pas, et un masquage par défaut
+	# ajouterait un geste à chaque coup d'œil sur son objectif. Rangé dans le CONFORT (et non dans
+	# une section neuve) : c'est le même contrat qu'un réglage d'accessibilité — une clé, un défaut,
+	# un signal, consommé à la volée par le HUD sans redémarrage.
+	"streamer_mode": false,
 }
 var _comfort := {}
 

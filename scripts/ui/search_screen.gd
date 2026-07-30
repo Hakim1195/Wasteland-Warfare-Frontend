@@ -121,11 +121,40 @@ func _ready() -> void:
 	_ellipsis_timer.timeout.connect(_on_ellipsis_tick)
 	add_child(_ellipsis_timer)
 
+	# REJOUER (correctif) : si un re-queue est en attente, c'est CET écran qui émet la mise en file —
+	# pas `NetworkManager.requeue()`. L'émetteur et l'écouteur du signal `mm_queue_result` sont ainsi
+	# le MÊME nœud, déjà dans l'arbre : la réponse ne peut plus être jetée par la garde
+	# `is_inside_tree()` (c'était la cause du « REJOUER coince sur l'écran de création de partie »).
+	var pending: Dictionary = NetworkManager.consume_pending_requeue()
+	if not pending.is_empty():
+		_start_requeue(pending)
+		return
 	# Entrée IDEMPOTENTE (§8.116) : on interroge l'état RÉEL avant de figer un panneau -> un retour
 	# arrière sauvage (navigateur, ESC…) retombe toujours sur l'état SERVEUR. Le panneau
 	# CONFIGURATION reste affiché par défaut le temps de la réponse (pas de flash possible autrement,
 	# la requête est asynchrone).
 	NetworkManager.mm_queue_status()
+
+
+# Mise en file d'un RE-QUEUE (REJOUER) : panneau RECHERCHE affiché OPTIMISTE (le joueur a cliqué, il
+# doit voir tout de suite qu'il se passe quelque chose), puis requête. Un refus (`banned`, `in_room`,
+# HTTP non-200) est rattrapé par `_on_mm_queue_result`, qui rebascule sur CONFIGURATION avec son
+# message — l'optimisme n'avale donc aucune erreur.
+# ANNULER reste MASQUÉ jusqu'à la confirmation serveur : un bouton qui annulerait un ticket encore
+# inexistant serait un mensonge, et ferait diverger l'écran de l'état serveur.
+func _start_requeue(mode: Dictionary) -> void:
+	_current_state_key = "MM_SEARCHING"
+	_since_s = 0
+	_dots = 0
+	_show_search()
+	_cancel_button.visible = false
+	_update_state_label()
+	_update_chrono()
+	if bool(mode.get("is_ranked", false)):
+		NetworkManager.mm_queue_join("ranked")
+	else:
+		NetworkManager.mm_queue_join("casual", str(mode.get("map_id", "classic_42")),
+			int(mode.get("max_players", 6)))
 
 
 func _make_font() -> SystemFont:

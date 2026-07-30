@@ -101,6 +101,8 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
 { "type": "game_over", "winner_id": 11, "match_type": "objective", "rankings": [11, 12, 13], // rankings: Array<int> (1er d'abord ; départage 2e place serveur, §8.47)
   "is_ranked": false,   // bool — PUBLIC (§8.88, piège n° 9). Non classée ⇒ AUCUN ladder crédité (RP saisonnier).
   "is_private": false,  // bool — NOUVEAU §8.116, PUBLIC explicitement (piège n° 9). Partie issue d'un salon privé ⇒ le client masque REJOUER (salons éphémères)
+  "attack_log": [ { "turn": 12, "round": 3, "attacker_id": 11, "defender_id": 12,   // NOUVEAU §8.121 — PUBLIC, cap 300 ; defender_id null = territoire NEUTRE
+                    "kills": 2, "conquered": true, "hero_kill": false } ],          // ⚠️ ABSENT des diffusions d'état (voir §8.121)
   "match_rewards": { "11": { "xp_earned": 372, "coins_earned": 100,        // { "<player_id:str>": MatchRewards } — gains (§8.47 ; « points de match » RETIRÉS, §8.112)
     "level_up_triggered": true, "new_level": 12, "current_xp": 300, "xp_to_next_level": 100, "levels_gained": 2 } } } // ⚠️ toutes valeurs ENTIÈRES (piège float §5)
 { "type": "spy_result", "target_player_id": 12, "description": "Conquérir l'Asie" } // PRIVÉ (espion seul)
@@ -1307,6 +1309,60 @@ tel quel, rien n'est annulé) · pendant un tour de bot (le verrou de salle sér
 une animation client (le serveur n'attend jamais le client) · état sans joueur (aucune clôture, et
 **aucune boucle CPU** : le calcul de réveil renvoie `None` et jamais `0.0` quand l'échéance est passée).
 
+
+### 10. CORRECTIF « REJOUER coince sur l'écran de création de partie » (bug §8.116/§8.70)
+
+> Signalé pendant la recette de §8.120. **Deux défauts INDÉPENDANTS**, tous deux ANTÉRIEURS à ce
+> chantier (code §8.116 / §8.70), sur le chemin `REJOUER` — rapport post-op ET overlay observateur.
+
+**(a) Course de requête, côté CLIENT.** `NetworkManager.requeue()` appelait `mm_queue_join()` juste
+avant `TransitionManager.change_scene("search_screen.tscn")`. La réponse HTTP arrivait donc alors que
+`search_screen` n'était PAS ENCORE dans l'arbre, et sa garde `if not is_inside_tree(): return`
+**jetait** le signal `mm_queue_result` : personne ne basculait sur le panneau RECHERCHE. Pire, le
+`mm_queue_status()` que l'écran émet à son `_ready` pouvait répondre `idle` (ticket pas encore écrit)
+→ `_on_mm_status_updated` faisait `_poll_timer.stop()` + `_show_config(false)` : **plus aucun poll ne
+repartait**, l'écran restait figé sur CONFIGURATION alors qu'un ticket existait côté serveur.
+→ **Correctif** : `requeue()` ne met plus en file ; il mémorise la modalité
+(`NetworkManager.consume_pending_requeue()`) et c'est **`search_screen._ready()` qui émet le
+`mm_queue_join`**. Émetteur et écouteur sont le même nœud, déjà dans l'arbre : la course disparaît
+par construction au lieu d'être rattrapée après coup. Le panneau RECHERCHE s'affiche
+OPTIMISTE (le joueur a cliqué, il doit voir qu'il se passe quelque chose), ANNULER reste masqué
+jusqu'à la confirmation serveur, et tout refus (`banned`/`in_room`/HTTP≠200) rebascule sur
+CONFIGURATION via `_on_mm_queue_result`.
+
+**(b) Un joueur ÉLIMINÉ était encore « en salle », côté SERVEUR.** Rien ne retire la ligne
+`GameRoomPlayer` d'un éliminé (seul `_destroy_room` purge, au départ du DERNIER socket) et la salle
+reste `in_progress` tant que la partie tourne. Les gardes du matchmaking le voyaient donc en salle :
+`POST /matchmaking/queue` → `in_room`, `GET /matchmaking/status` → `in_game` → `_offer_resume()` →
+panneau CONFIGURATION en sous-état « reprise », polling arrêté. Un mort devait attendre que les
+AUTRES finissent leur partie pour pouvoir rejouer — alors que la PERMADEATH (§8.61) lui interdit tout
+retour, et que le bouton REJOUER de l'overlay observateur (§8.70) promet exactement le contraire.
+→ **Correctif** : nouvelle garde `_blocking_membership_room(db, redis, uid, …)` — `_active_membership_room`
+**plus** le filtre `_is_out_of_room()` qui lit l'état de partie en Redis et considère la salle NON
+BLOQUANTE si le joueur y est `eliminated` **ou** si la partie a déjà un `winner_id`. Utilisée par
+`queue_join`, `GET /status`, `private_create` et `private_join` ; **pas** par `private_leave` /
+`private_start`, qui s'en servent comme *résolution* de la salle du joueur et non comme *garde*.
+- La ligne de membership est **CONSERVÉE** : elle sert encore à `router._is_room_member`, donc un mort
+  qui crashe peut se reconnecter pour continuer à regarder. On rend la salle non bloquante, on ne
+  supprime rien.
+- **FAIL-OPEN INVERSÉ, assumé** : état Redis absent / corrompu / joueur absent de l'état → la garde
+  reste **BLOQUANTE**. On préfère un REJOUER refusé à un joueur bien VIVANT éjecté de sa partie.
+- La garde reste pleinement efficace pour un joueur vivant (contre-épreuve dans le test).
+
+> **Fichiers.** MODIFIÉS : `api/v1/endpoints/matchmaking.py` (garde + helpers),
+> `test_private_codes.py` (+9 asserts). Côté client : `scripts/managers/network_manager.gd`,
+> `scripts/ui/search_screen.gd`.
+>
+> **Validation.** `test_private_codes.py` **33 ✅ / 0 ❌** · suite backend inchangée (2 échecs
+> pré-existants). **Contre-épreuve de mutation** : garde remise à `_active_membership_room` →
+> **3 asserts tombent** (le test couvre donc réellement le bug), source restaurée dans le même bloc,
+> aucun marqueur résiduel. Client : `--import` **0 ERROR**, boots `search_screen.tscn`,
+> `game/main.tscn`, `spectator_overlay.tscn`, `main_menu.tscn` **0 ERROR**.
+>
+> ⚠️ **NON REJOUÉ EN PARTIE RÉELLE** : le scénario complet (mourir → REJOUER → file → nouvelle
+> partie) demande une vraie salle multijoueur. Les deux causes sont couvertes par des tests, mais
+> l'enchaînement bout en bout reste à confirmer en partie locale.
+
 > **Fichiers.** NOUVEAUX : `api/game/zone_settings.py`, `api/game/final_scoring.py`,
 > `api/game/observer_bets.py`, `test_zone_growth.py`, `test_match_timer.py`,
 > `test_objectives_new_types.py`, `test_rewards_placement.py`, `test_observer_bets.py`.
@@ -1334,3 +1390,96 @@ une animation client (le serveur n'attend jamais le client) · état sans joueur
 > initiale : 14 territoires chacun) — la partie de bots de non-régression se termine désormais au
 > **tour 3**. À 4/5/6 joueurs il faut respectivement +4/+6/+8 conquêtes, ce qui est sain. Valeur de
 > registre : une seule ligne à changer (18-20 rendrait les parties à 3 comparables aux autres).
+
+---
+
+## §8.121 — STREAMABILITÉ & PARTAGE : le JOURNAL D'ATTAQUES (volet RÉSEAU — unique ajout backend)
+
+> **Périmètre.** Volet backend de `PROMPT_STREAMABILITE_PARTAGE.md` (LOT A). Détail frontend :
+> **§8.121 de `FRONTEND_INTERFACES.md`** (Rapport de Trahison, révélation théâtrale, carte de
+> partage, mode streamer — **100 % client**). **Strictement ADDITIF** (règle §1.5) : aucune clé de
+> payload existante n'est renommée ou supprimée, **aucune règle de jeu modifiée** — le journal est
+> une TRACE, il n'influence rien. **AUCUN COMMIT — redéploiement VPS requis.** Client et serveur
+> partent **ENSEMBLE** (gate de version WS §9) : sans serveur redéployé, l'onglet TRAHISONS du
+> Rapport Post-Op se masque proprement (repli §9.2) et la carte de partage s'exporte sans sa ligne
+> de trahison.
+>
+> **Le problème résolu.** `GameStatistics` ne contient que des **agrégats PAR JOUEUR**
+> (`combat_kills_by_player`, `conquests_by_player`, `eliminations_by_player`…). Il est donc
+> **impossible de savoir QUI a frappé QUI** — donc impossible de raconter la partie (« le coup de
+> poignard », la matrice d'agression, la chaîne des chutes). C'est la SEULE donnée manquante ;
+> l'ANALYSE narrative, elle, est de la **présentation** et vit côté client (vues pures §6.1).
+>
+> ### 1. Champ ADDITIF `GameStatistics.attack_log: List[dict]` (défaut `[]`)
+>
+> Une entrée par attaque **RÉSOLUE**, appendée au site **UNIQUE** `engine._handle_attack` :
+>
+> ```jsonc
+> { "turn": 12,             // int — GameState.current_turn (compteur GLOBAL de tours-joueur)
+>   "round": 3,             // int — round GLOBAL (voir 2. ci-dessous)
+>   "attacker_id": 11,      // int — toujours le joueur courant
+>   "defender_id": 12,      // int | null — null = territoire NEUTRE (aucun adversaire)
+>   "kills": 2,             // int — pertes DÉFENSIVES infligées par cette attaque
+>   "conquered": true,      // bool — le territoire a changé de main
+>   "hero_kill": false }    // bool — le duel de CETTE attaque a achevé le héros défenseur
+> ```
+>
+> Valeurs `int`/`bool` **PURES** (piège JSON float §5). **PLAFOND `engine.ATTACK_LOG_CAP = 300`** :
+> au-delà, plus aucun append (même garde-fou que `TERRITORY_HISTORY_CAP`, borne mémoire/Redis).
+> 300 attaques couvrent très largement une partie bornée à 15 min (`MATCH_TIME_LIMIT_S`, §8.120) ;
+> une partie qui dépasserait ce volume garde son **début** de récit — exactement ce que le Rapport
+> de Trahison raconte. L'append est posé **APRÈS** le bloc de permadeath, à dessein : sans quoi
+> `hero_kill` ne pourrait pas refléter le coup de grâce de l'attaque en cours.
+>
+> ### 2. `round` — DÉRIVÉ de la timeline de domination, jamais de `current_turn`
+>
+> Le moteur n'a pas de compteur de round. `engine.current_global_round(state)` renvoie
+> **`len(statistics.territory_history) + 1`** : `_append_territory_snapshot` est appelé exactement
+> une fois par nouveau round global (`_end_turn`), donc le snapshot d'indice `i` photographie la
+> **FIN du round `i+1`**. Conséquence VOULUE : les rounds du journal sont **exactement l'axe X** de
+> la courbe de domination du Rapport Post-Op — « coup de poignard au round N » et « moment décisif
+> au round N » se lisent sur la même échelle. ⚠️ Ne **jamais** re-dériver le round depuis
+> `current_turn / effectif` : le nombre de tours par round **diminue** avec les éliminations.
+>
+> ### 3. Diffusion — EXCLU du chemin chaud, INCLUS dans le `game_over`
+>
+> - **`router._state_payload` RETIRE `statistics.attack_log`** de chaque rediffusion d'état (`pop`
+>   défensif). C'est le point de passage **unique** de toutes les diffusions porteuses d'état
+>   (`broadcast_state_to_room` depuis `router` **et** `bot_runner`, plus `_send_current_state`) —
+>   vérifié : aucun autre `model_dump` ne sort vers le réseau. Motif : le journal ne sert à **aucune
+>   vue en jeu** et grossit à chaque attaque ; le diffuser ferait payer à CHAQUE `action_result`
+>   (plusieurs par tour) le poids cumulé de toutes les attaques de la partie.
+> - **`game_over` gagne `attack_log`**, champ **PUBLIC** (piège n° 9 : identique pour tous, aucune
+>   donnée personnelle). Aucune redaction nécessaire : « qui a frappé qui » a déjà été diffusé en
+>   direct par les évènements `attack_result` (§8.85) — on ne fait que le **remettre d'un bloc**
+>   pour que le client puisse en tirer un récit sans avoir eu à mémoriser 300 évènements.
+>
+> ### 4. Rétro-compatibilité
+>
+> Défaut Pydantic `[]` → une partie **EN COURS** pendant le redéploiement se redésérialise sans le
+> champ et se remet à journaliser aussitôt (son récit démarre au redéploiement). Un client antérieur
+> ignore la clé du `game_over` ; un client à jour face à un serveur non redéployé lit `[]` et masque
+> l'onglet TRAHISONS (§9.2).
+>
+> > **Fichiers.** NOUVEAU : `test_attack_log.py`. MODIFIÉS : `api/game/state_schemas.py`,
+> > `api/game/engine.py`, `api/sockets/router.py`.
+> >
+> > **Validation.** `test_attack_log.py` **40 ✅ / 0 ❌** (append, forme exacte à 7 clés, types purs,
+> > défenseur neutre, cohérence `conquered` ↔ carte sur 60 tirages, `hero_kill` au coup de grâce +
+> > contre-épreuve « seulement blessé », attaque refusée sans trace, dérivation du round et son
+> > indépendance à `current_turn`, plafond 300, ABSENCE dans `_state_payload` avec non-régression des
+> > autres agrégats, présence dans l'export `game_over`, rétro-compat Redis). Suite backend complète
+> > verte — **sauf `test_missions.py` (37 OK / 4 KO) et `test_simulation.py` (`fastapi` absent du
+> > poste)**, en échec **PRÉ-EXISTANT sur HEAD** (déjà constaté en §8.119/§8.120), hors périmètre.
+> > **Contre-épreuve de mutation** : 5 régressions injectées à chaud (append supprimé, champ laissé
+> > dans les diffusions d'état, plafond désarmé, `hero_kill` jamais posé, round re-dérivé de
+> > `current_turn`) → **5/5 détectées**, sources restaurées dans le même bloc, 0 marqueur résiduel.
+>
+> ### 5. HORS PÉRIMÈTRE (assumé)
+>
+> Aucun `territory_id` dans les entrées : le récit se joue à l'échelle des **joueurs**, et les ids de
+> territoires doubleraient le poids du bloc sans nourrir aucune des quatre analyses du client. ⚠️
+> Conséquence documentée : la clause « **voisins depuis ≥ 2 rounds** » de la définition produit du
+> coup de poignard n'est **pas** calculable (il faudrait un historique de **propriété** par round,
+> alors que `territory_history` ne stocke que des **comptes**) — le client la remplace par la seule
+> durée de **calme** entre les deux joueurs, cf. §8.121 de `FRONTEND_INTERFACES.md`.
