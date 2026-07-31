@@ -1748,3 +1748,160 @@ N'entre dans **aucun** barème — ni XP, ni Coins, ni RP, ni classement.
 > `test_missions.py` et `test_simulation.py`**, en échec **PRÉ-EXISTANT sur HEAD** (vérifié en
 > rejouant les deux suites contre les sources extraites de `HEAD` : échecs identiques,
 > `IndexError` et `fastapi` absent du poste), hors périmètre.
+
+---
+
+## §8.124 — MODE ÉQUIPES : escouades, files DUO 2v2 & ESCOUADE 3v3, victoire commune
+
+> **Jouer entre amis, contre le monde.** Trois piliers : les **ESCOUADES** (groupe pré-partie à
+> code, mis en file d'un bloc par son chef), deux **PLAYLISTS d'équipe**, et les **règles d'équipe**
+> en partie (tir allié interdit, logistique partagée, objectif secret d'ÉQUIPE, victoire commune).
+> **Casual uniquement — la Classée reste solo à 5, intouchée.**
+>
+> ⚠️ **INVARIANT N° 1 DU CHANTIER : `team_id = 0` = SANS ÉQUIPE.** Une partie FFA porte
+> `team_mode == ""` et `team_id == 0` partout, et TOUT ce qui suit y est neutre. Une partie solo
+> classique est bit-à-bit celle d'avant le chantier — c'est vérifié par contre-épreuve
+> (`test_team_flow.py` [8] : à graine RNG identique, les MÊMES dés sortent).
+
+### 1. Registre des playlists — SOURCE SERVEUR (`api/game/teams.TEAM_PLAYLISTS`)
+
+| id | carte | équipes × taille | effectif | ouverte |
+|---|---|---|---|---|
+| `duo_2v2` | `skirmish_atlantic` | 2 × 2 | 4 | ✅ |
+| `squad_3v3` | `classic_42` | 2 × 3 | 6 | ✅ |
+| `trio_2v2v2` | `classic_42` | 3 × 2 | 6 | ⛔ `enabled: False` |
+
+`GET /squad/playlists` (PUBLIC, sans auth) → `{"playlists": {id: {map_id, team_size, team_count,
+capacity, enabled}}}` — **seules les OUVERTES sont servies**. Le client n'en code AUCUNE valeur en
+dur : une playlist fermée est **ABSENTE** du hub, pas grisée (une carte grisée est une promesse).
+Anti-fragmentation : chaque file divise le pool, on n'en ouvre que DEUX.
+
+⚠️⚠️ Les seuils d'objectifs de `trio_2v2v2` (`objectives.TEAM_OBJECTIVE_PARAMS_BY_PLAYLIST`) sont
+**PROVISOIRES** et à revalider AVANT toute activation : ils n'ont jamais été joués et ne se
+déduisent pas des deux autres (à 3 équipes sur classic_42, la parité tombe à 14 territoires par
+équipe — le seuil du 3v3, 24, serait hors d'atteinte).
+
+### 2. Escouades (REST, préfixe `/squad`) — pattern `/private`, sécurité IDENTIQUE
+
+`POST /squad/create {playlist}` · `POST /squad/join {code}` · `POST /squad/leave` ·
+`GET /squad/status` · `POST /squad/queue {playlist?}` · `POST /squad/dequeue`.
+
+Les SIX routes rendent la **MÊME shape** `SquadStateResponse` : `{squad, code, playlist, team_size,
+members: [{user_id, name, is_leader}], is_leader, in_queue, queued_since_s, reason, …}`. Un seul
+callback client (`NetworkManager._on_squad_response`) : six handlers auraient été six occasions
+d'oublier de propager `reason`.
+
+- **Sécurité des codes : RÉUTILISÉE À L'IDENTIQUE.** Même `generate_code`/`normalize_code`
+  (alphabet sans I/L/O/0/1, `secrets`), même table `sanctions`, même compteur `mm:fail:{uid}`,
+  même escalade, même raison unifiée **`unavailable`** — format invalide, code inconnu, escouade
+  PLEINE et escouade DÉJÀ EN FILE rendent tous le même code. **Aucun oracle** : un bruteforceur ne
+  doit pas pouvoir cartographier les codes valides. Il n'y a pas deux systèmes de codes ici, il y
+  en a UN.
+- ⚠️ **DIFFÉRENCE ASSUMÉE AVEC LE SALON PRIVÉ : les PSEUDOS sont exposés.** Le salon est anonyme
+  (« N/max », décision §8.116) parce qu'un code peut circuler n'importe où. Une escouade se rejoint
+  parce qu'un AMI vous a passé le code ; savoir qui est déjà là est le minimum vital d'un groupe.
+- **Le CHEF** met en file et dissout ; un membre qui part ne dissout rien. Aucun transfert de rôle
+  (ce serait une mécanique de clan — chantier distinct).
+- **Redis** : `mm:squad:{CODE}` (JSON) + `mm:squadof:{uid}` (index inverse, auto-réparant), TTL 24 h
+  rafraîchi à chaque écriture. L'escouade **SURVIT à la partie** — c'est sa raison d'être.
+- Une escouade PLUS GRANDE que l'équipe visée est refusée **AVANT** la file (`reason: "full"`) :
+  le packing ne scindant jamais un groupe, elle attendrait sinon indéfiniment sans qu'on lui dise
+  pourquoi.
+
+### 3. File d'équipe — GROUPES ATOMIQUES
+
+- ZSET `mm:q:team:{playlist}` (`matchmaking.team_bucket_key`). ⚠️ Ses membres sont des ids de
+  **GROUPE** (code d'escouade, ou `solo:<uid>`), jamais des ids de joueur : **l'atomicité est
+  structurelle, la file ne sait même pas découper**.
+- Un joueur SOLO est un **groupe de taille 1** → `POST /squad/queue` est l'UNIQUE point d'entrée des
+  deux cas. Un second chemin aurait été un second packing, un second heartbeat, une seconde purge.
+- **Ticket** : la MÊME clé `mm:ticket:{uid}` que les files solo (toutes les gardes « déjà en file »
+  du dépôt continuent de fonctionner sans une ligne de plus), enrichie de
+  `{queue: "team", playlist, group_id, group_size}`.
+- `GET /matchmaking/status` gagne un bloc **ADDITIF** `{"squad": {playlist, code, size}}`, **présent
+  uniquement pour un ticket d'équipe** : la réponse d'une file solo est bit-à-bit celle d'avant.
+  `code` vide = joueur solo en file d'équipe (« VOUS SEREZ ASSOCIÉ À DES COÉQUIPIERS »).
+- **PACKING** (`matchmaking.plan_team_bucket`, PUR) — deux passes, et la séparation compte :
+  1. **SÉLECTION** (densité, FIFO) : first-fit — décide QUI joue, maximise les humains embarqués ;
+  2. **RÉPARTITION** (équilibre) : plus grand groupe d'abord → équipe la moins peuplée — interdit
+     « une équipe 100 % humaine contre une 100 % bots » chaque fois qu'un autre packing existe.
+
+  Les mélanger COÛTE des humains : à 2×3 avec la file `[1, 1, 3]`, placer « dans la moins peuplée »
+  dès la sélection sépare les solos et le groupe de 3 ne rentre plus → 2 embarqués au lieu de 5.
+- **Bot-fill 60 s** (même `MM_QUEUE_BOT_FILL_S` que partout), mesuré sur le plus ANCIEN ticket
+  retenu. Une salle COMPLÈTE part immédiatement.
+- **HEARTBEAT — purge par GROUPE ENTIER** : un seul membre au ticket mort sort TOUTE l'escouade de
+  la file (tickets effacés). Jamais de scission silencieuse ; l'escouade reste FORMÉE, le chef
+  relance. Même règle à la formation : si un ticket disparaît entre la purge et l'engagement, la
+  salle entière est ANNULÉE et les groupes re-filés (la file solo, elle, remplace le disparu par un
+  bot — impossible ici sans scinder un groupe).
+- ⛔ **JAMAIS de playlist d'équipe CLASSÉE** : `_form_team_room` crée toujours `is_ranked=False`.
+
+### 4. État de partie — CHAMPS ADDITIFS
+
+| champ | défaut | rôle |
+|---|---|---|
+| `PlayerState.team_id` | `0` | équipe du joueur (**0 = FFA**). PUBLIC. |
+| `GameState.team_mode` | `""` | id de playlist (**"" = FFA**) — LA bascule de toutes les règles. PUBLIC. |
+| `GameState.team_objectives` | `{}` | `{team_id: objectif}` — **REDACTÉ** (voir ci-dessous). |
+| `GameState.winning_team_id` | `None` | équipe victorieuse. PUBLIC. |
+
+**REDACTION** (`connection_manager._redact_state_for_player`) : chaque joueur ne reçoit QUE
+l'objectif de SON équipe — mais il le reçoit **EN ENTIER**, et ses coéquipiers voient exactement le
+même. C'est la seule information volontairement **PARTAGÉE** du jeu : sans elle, une équipe ne peut
+pas coordonner sa course et le mode se réduit à « on ne se tire pas dessus ». Redaction **LEVÉE** au
+`game_over`.
+
+### 5. Événements & chat
+
+- **`team_victory {team_id, member_ids, victory_reason}`**, diffusé AVANT le `game_over` : le client
+  joue son bandeau pendant que le Rapport Post-Op se prépare. Purement SCÉNIQUE — tout est aussi
+  dans le `game_over`, un client qui l'ignore ne perd rien (§9.2).
+- **Chat : `tab: "team"`** — le serveur résout les destinataires **SUR L'ÉTAT**, aucun id n'est
+  transmis : un `tab:"team"` forgé ne peut donc pas adresser un autre camp. Hors partie d'équipe, le
+  canal n'existe pas (refusé comme canal inconnu).
+- **Refus de tir allié** : `ValueError` métier (convention zéro-4xx §8.112), traduction cliente
+  `ERR_FRIENDLY_FIRE`.
+- **Paris d'observateur** : nouveau code de refus `own_team` (clé `BET_ERR_OWN_TEAM`) sur le seul
+  pari « vainqueur ». Le client retire déjà son propre camp du sélecteur.
+
+### 6. `game_over` — QUATRE blocs additifs, tous PUBLICS (piège n° 9)
+
+`team_mode` · `winning_team_id` · `team_podium: [{team_id, rank, member_ids, score}]` (l'équipe
+VICTORIEUSE est placée en tête **d'autorité**, pas au score : elle a pu gagner par objectif alors
+qu'une autre menait au départage) · `team_objectives_reveal: [{team_id, objective, description,
+completed}]`. Tous vides en FFA. Les récompenses individuelles restent dans le bloc **PRIVÉ**
+`match_rewards`.
+
+⚠️ **`winner_id` reste renseigné en mode équipe** (le membre au meilleur score, cf.
+`engine._award_team_victory`) : tout l'aval du jeu est bâti sur « UN vainqueur » (récompenses,
+`MatchRecord`, historique, télémétrie, règlement des paris). Le rendre nullable aurait touché une
+dizaine de sites pour un gain nul. Ce n'est **qu'un porte-drapeau** : il ne décide PLUS des
+récompenses, `rewards.rank_map` raisonnant sur l'ÉQUIPE.
+
+### 7. Persistance — `game_room_players.team_id INTEGER NOT NULL DEFAULT 0`
+
+Auto-migrée au boot (`server_default` présent → aucune action humaine sur la prod). Archive de
+parité : `backend/migration_teams.sql`. Toutes les lignes historiques prennent 0 et redeviennent
+exactement ce qu'elles étaient : des parties chacun-pour-soi.
+
+> **Fichiers.** NOUVEAUX : `api/game/teams.py`, `api/v1/endpoints/squad.py`, `migration_teams.sql`,
+> `test_teams.py`, `test_team_packing.py`, `test_objectives_team.py`, `test_squad_flow.py`,
+> `test_team_flow.py`. MODIFIÉS : `api/game/matchmaking.py`, `objectives.py`, `rewards.py`,
+> `engine.py`, `state_schemas.py`, `state_manager.py`, `pacts.py`, `bot_ai.py`, `observer_bets.py`,
+> `telemetry.py`, `missions_progress.py`, `api/sockets/router.py`, `connection_manager.py`,
+> `matchmaker_runner.py`, `api/v1/endpoints/matchmaking.py`, `api/__init__.py`, `models/models.py`,
+> `models/schemas.py`.
+>
+> **Validation.** `test_teams.py` **60 ✅** · `test_team_packing.py` **42 ✅** (dont 200 scénarios
+> générés vérifiés sur 9 invariants) · `test_objectives_team.py` **52 ✅** · `test_squad_flow.py`
+> **63 ✅** · `test_team_flow.py` **58 ✅** — **0 ❌**. Non-régressions vertes :
+> `test_matchmaking_queue`, `test_private_codes`, `test_search_sanctions`, `test_pacts`,
+> `test_pacts_flow`, `test_bot_ai`, `test_hero_abilities(_flow)`, `test_economy`, `test_factions`,
+> `test_victory_reason`. Client : `--import` **0 ERROR**, boot headless des écrans de hub
+> **0 ERROR**, capture PNG de l'écran ESCOUADE relue (un défaut de sélection de playlist corrigé
+> grâce à elle).
+>
+> ⚠️ **DÉPLOIEMENT : VPS + CLIENT ENSEMBLE.** Le client interroge `/squad/playlists` : sur un
+> serveur non redéployé la réponse est vide → aucune carte de mode d'équipe, et le hub reste
+> exactement celui d'avant (dégradation propre, mais le mode est invisible).

@@ -52,6 +52,16 @@ signal private_join_result(ok: bool, data: Dictionary)
 signal private_left(data: Dictionary)
 signal private_start_result(data: Dictionary)
 # Salon privé (WS) : occupation INDIVIDUALISÉE (aucune liste de joueurs / pseudo / id, décision n° 2).
+# --- ESCOUADES & MODE ÉQUIPES (§8.124) ---
+# Réponse de N'IMPORTE quelle route /squad/* (elles partagent la MÊME shape SquadStateResponse) :
+# `data.squad == false` = l'appelant n'a pas d'escouade (ou vient de la quitter), `data.reason`
+# porte le discriminant applicatif (convention zéro-4xx §8.112).
+signal squad_state_received(ok: bool, data: Dictionary)
+# Registre SERVEUR des playlists d'équipe (§3.1) — le client n'en code AUCUNE valeur en dur.
+signal team_playlists_loaded(playlists: Dictionary)
+# VICTOIRE D'ÉQUIPE (§8.124) — diffusée AVANT le game_over pour la mise en scène du bandeau.
+signal team_victory(team_id: int, member_ids: Array, victory_reason: String)
+
 signal salon_state_updated(count: int, max_players: int, is_creator: bool)
 # Salon fermé par l'hôte (WS) : l'écran ramène à la recherche avec un message amical.
 signal salon_closed(reason: String)
@@ -217,6 +227,19 @@ var current_room_id: String = ""
 # Code du SALON PRIVÉ courant (§8.116) : posé par search_screen AVANT d'entrer dans salon_screen
 # (création OU jointure), lu par salon_screen pour l'afficher en héros. "" hors salon.
 var current_salon_code: String = ""
+
+# --- MODE ÉQUIPES (§8.124) ---
+# Cache local du REGISTRE serveur des playlists d'équipe ({playlist_id: {map_id, team_size,
+# team_count, capacity}}). VIDE tant que `fetch_team_playlists()` n'a pas répondu : les écrans
+# n'affichent alors AUCUNE carte de mode d'équipe — jamais une valeur devinée.
+var team_playlists: Dictionary = {}
+# Blocs d'ÉQUIPE du dernier `game_over` (mémorisés en propriété, pattern `last_objectives_reveal` :
+# le signal `match_over` reste INCHANGÉ, donc aucun écouteur existant à retoucher). Tous vides en
+# FFA — le Rapport Post-Op masque alors ses sections d'équipe.
+var last_team_mode: String = ""
+var last_winning_team_id: int = -1
+var last_team_podium: Array = []
+var last_team_objectives_reveal: Array = []
 # Session encore valide (§AC.5) : passe à false au 1er 401/403 → coupe les requêtes authentifiées et
 # bloque la tempête. Ré-armée à true sur une (re)connexion réussie (AuthManager.auth_success).
 var _session_valid := true
@@ -415,6 +438,18 @@ func _handle_server_message(msg: Dictionary) -> void:
 			# section « LES PACTES » du Rapport de Trahison se masque (§9.2).
 			var plist = msg.get("pacts", [])
 			last_match_pacts = plist if typeof(plist) == TYPE_ARRAY else []
+			# §8.124 — MODE ÉQUIPES : playlist, équipe victorieuse, podium par équipe et révélation
+			# des objectifs d'équipe (blocs PUBLICS). Mémorisés en propriétés — le signal
+			# `match_over` reste INCHANGÉ (aucun écouteur existant à retoucher), même patron que
+			# `last_objectives_reveal`. Absents (serveur antérieur) ou VIDES (partie FFA) → le
+			# Rapport Post-Op masque simplement ses sections d'équipe (§9.2).
+			last_team_mode = str(msg.get("team_mode", ""))
+			var wteam = msg.get("winning_team_id", null)
+			last_winning_team_id = int(wteam) if (typeof(wteam) == TYPE_FLOAT or typeof(wteam) == TYPE_INT) else -1
+			var tpod = msg.get("team_podium", [])
+			last_team_podium = tpod if typeof(tpod) == TYPE_ARRAY else []
+			var trev = msg.get("team_objectives_reveal", [])
+			last_team_objectives_reveal = trev if typeof(trev) == TYPE_ARRAY else []
 			var rewards: Dictionary = msg.get("match_rewards", {})
 			last_match_rewards = rewards
 			game_event.emit({"event_type": "game_over", "winner_id": msg.get("winner_id"),
@@ -433,6 +468,15 @@ func _handle_server_message(msg: Dictionary) -> void:
 				GameState.update_from_json(msg["state"])
 			game_state_updated.emit()
 			game_started_signal.emit()
+		"team_victory":
+			# §8.124 — VICTOIRE D'ÉQUIPE, diffusée AVANT le game_over : le client joue son bandeau
+			# pendant que le Rapport Post-Op se prépare. Purement scénique — tout est AUSSI dans le
+			# game_over, un client qui ignore ce message ne perd rien (§9.2).
+			var tmembers = msg.get("member_ids", [])
+			team_victory.emit(
+				int(msg.get("team_id", 0)),
+				tmembers if typeof(tmembers) == TYPE_ARRAY else [],
+				str(msg.get("victory_reason", "")))
 		"faction_locked":
 			# Un joueur a verrouillé sa faction pendant le Draft. On relaie aux écouteurs
 			# (faction_selection.gd) le couple (player_id, faction_id).
@@ -751,6 +795,63 @@ func _on_private_start(_result, _response_code, _headers, body, http_node):
 	if typeof(data) != TYPE_DICTIONARY:
 		data = {}
 	private_start_result.emit(data)
+
+# --- ESCOUADES & FILES D'ÉQUIPE (MODE ÉQUIPES §8.124) ---
+# ⚠️ Le REGISTRE des playlists est SERVEUR (`GET /squad/playlists`) : ce client ne code EN DUR ni
+# carte, ni effectif, ni même la liste des modes. `team_playlists` est le cache local du registre —
+# vide tant que la réponse n'est pas arrivée, et les écrans doivent alors n'afficher AUCUNE carte de
+# mode d'équipe plutôt qu'une valeur devinée (§9.5 : le serveur est l'autorité).
+func fetch_team_playlists() -> void:
+	_send_api_request("/squad/playlists", HTTPClient.METHOD_GET, {}, _on_team_playlists)
+
+func _on_team_playlists(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200:
+		team_playlists_loaded.emit({})
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	var playlists = data.get("playlists", {})
+	if typeof(playlists) != TYPE_DICTIONARY:
+		playlists = {}
+	team_playlists = playlists
+	team_playlists_loaded.emit(playlists)
+
+func squad_create(playlist: String) -> void:
+	_send_api_request("/squad/create", HTTPClient.METHOD_POST, {"playlist": playlist},
+		_on_squad_response)
+
+func squad_join(code: String) -> void:
+	# Le serveur NORMALISE (strip+upper) avant tout contrôle ; on nettoie aussi ici (affichage).
+	_send_api_request("/squad/join", HTTPClient.METHOD_POST,
+		{"code": code.strip_edges().to_upper()}, _on_squad_response)
+
+func squad_leave() -> void:
+	_send_api_request("/squad/leave", HTTPClient.METHOD_POST, {}, _on_squad_response)
+
+func squad_status() -> void:
+	_send_api_request("/squad/status", HTTPClient.METHOD_GET, {}, _on_squad_response)
+
+func squad_queue(playlist: String = "") -> void:
+	var payload := {}
+	if playlist != "":
+		payload["playlist"] = playlist
+	_send_api_request("/squad/queue", HTTPClient.METHOD_POST, payload, _on_squad_response)
+
+func squad_dequeue() -> void:
+	_send_api_request("/squad/dequeue", HTTPClient.METHOD_POST, {}, _on_squad_response)
+
+# UN SEUL callback pour les six routes : elles rendent toutes la MÊME shape
+# (`SquadStateResponse`). Un handler par route aurait été six occasions d'oublier de propager une
+# clé — et c'est précisément `reason` qu'on oublie (leçon de l'ancien `_join_ok`, cf. en-tête).
+# On propage donc le dict COMPLET : c'est l'ÉCRAN qui choisit le message.
+func _on_squad_response(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	squad_state_received.emit(response_code == 200, data)
 
 # --- Fermeture PROPRE du WebSocket (corrige le bug STATE_CLOSING du QUITTER, §6.1) ---
 # Calqué sur _requeue_enter : on ferme le socket ACTUEL puis on en recrée un NEUF — un WebSocketPeer

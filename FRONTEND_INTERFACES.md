@@ -2101,3 +2101,93 @@ les 8 sont livrées pour qu'aucun code ne puisse s'afficher en brut), `HUD_SHEET
 > ni le glyphe `↔` réellement dessiné, ni la position du toast persistant (196 px) face au toast
 > d'action adverse, ni la largeur du bloc PACTE dans la fiche joueur, ni le bandeau de trahison.
 > Recette de capture PNG : cf. §8.111.
+
+---
+
+## §8.124 — MODE ÉQUIPES (client) : écran ESCOUADE, identité de camp, arène d'équipe
+
+> Toute l'UI de ce chantier est **conditionnée à `GameState.team_mode != ""`** et se masque
+> d'elle-même en FFA. Un serveur non redéployé rend un registre de playlists VIDE → aucune carte de
+> mode d'équipe, et le hub est rigoureusement celui d'avant (§9.2). Aucun écran n'a de garde à
+> écrire : c'est `GameState.is_friendly` / `teammates_of` / `teams_map` qui portent la neutralité,
+> et `is_friendly` vaut **exactement `a == b`** en FFA.
+
+### Hub
+
+- **`main_menu.gd`** : les cartes DUO 2v2 / ESCOUADE 3v3 rejoignent la rangée, **construites depuis
+  le registre SERVEUR** (`GET /squad/playlists`) — aucune carte, aucun effectif, aucun id de mode
+  n'est codé en dur côté client. Une playlist fermée est **ABSENTE** (pas grisée : une carte grisée
+  est une promesse, une carte absente n'est rien). Le clic n'ouvre pas la recherche solo mais
+  l'écran ESCOUADE — le format est porté par la playlist, pas par un effectif.
+- **`scenes/ui/squad_screen.tscn` + `scripts/ui/squad_screen.gd` (NOUVEAU)** — cousin de
+  `salon_screen` : code en héros 72 px + COPIER, écran 100 % code-driven, VUE pure. **DEUX
+  différences assumées avec le salon privé** : (1) les **PSEUDOS sont affichés** (une escouade se
+  rejoint parce qu'un ami vous a passé le code) ; (2) l'escouade **SURVIT à la partie**. Revenir au
+  QG ne la quitte pas — seul le bouton QUITTER la dissout.
+  L'écran a DEUX visages (aucune escouade / escouade formée), construits une fois chacun et
+  montrés/cachés : rebâtir la hiérarchie à chaque poll ferait clignoter les champs de saisie sous
+  les doigts du joueur.
+  ⚠️ **Défaut CONSTATÉ EN CAPTURE et corrigé** : avec `toggle_mode` + le style ghost, la playlist
+  SÉLECTIONNÉE était rigoureusement identique à l'autre — le joueur ne pouvait pas savoir pour quel
+  format il cherchait. Elle porte désormais le style « choisi » des cartes de mode du QG (fond cyan
+  + bordure pleine + halo).
+- **`match_config.gd`** : `selected_team_playlist` — ne transporte que l'**ID**. Carte et effectif
+  viennent du registre serveur et de nulle part ailleurs. SOLO et ÉQUIPE sont exclusifs (choisir
+  l'un efface l'autre).
+- **`network_manager.gd`** : 6 routes `/squad/*` + `fetch_team_playlists`, **UN seul callback**
+  (`_on_squad_response`) — elles partagent la même shape, six handlers auraient été six occasions
+  d'oublier de propager `reason`. Signaux `squad_state_received`, `team_playlists_loaded`,
+  `team_victory`. Blocs d'équipe du `game_over` mémorisés en PROPRIÉTÉS (`last_team_podium`…),
+  patron `last_objectives_reveal` : le signal `match_over` reste INCHANGÉ.
+
+### Arène
+
+- **`game_state.gd`** : `team_mode`, `team_objectives` (déjà REDACTÉ par le serveur — aucun
+  filtrage de confidentialité à faire ici, comme pour `pacts`), `winning_team_id`, plus les
+  lectures partagées `team_of` / `is_friendly` / `teammates_of` / `teams_map` (le piège JSON float
+  §5 ne se paie ainsi qu'une fois).
+- **`board.gd` — identité de camp.** `PALETTE_TEAMS` : familles de teintes à ~18° d'écart
+  INTRA-équipe, ≥ 90° INTER-équipes. En mode **DALTONIEN** le principe s'INVERSE (`PALETTE_TEAMS_
+  COLORBLIND` + `_player_palette_index` rendant l'index d'ÉQUIPE) : le **MOTIF** devient commun au
+  camp, la nuance ne distingue plus que les individus — en deutan/protan, deux teintes voisines
+  d'une même famille sont précisément ce qui se confond le mieux. L'information la plus importante
+  va au canal le plus fiable. Un joueur SANS équipe dans une partie d'équipe (état incohérent) →
+  gris neutre : mieux vaut « je ne sais pas » que « il est avec toi ».
+- **`hud.gd` — chat ÉQUIPE.** Entrée « ◆ ÉQUIPE » en TÊTE du sélecteur (juste après « Tous ») :
+  c'est le canal le plus utilisé en équipe, il ne doit pas se perdre au milieu des privés. Id
+  réservé `-2`. `_conv_key_for_target` centralise les trois cas (tous / équipe / privé). Aucun id
+  n'est transmis au serveur — il résout les destinataires sur l'état.
+- **`objective_tracker.gd`** : trois formules `team_*`, MIROIR EXACT du serveur, lues sur le
+  contexte COMBINÉ résolu par `main._team_objective_ctx`. Vérifiées par l'auto-contrôle debug
+  (`_self_check`) au même titre que les six autres.
+- **`main.gd`** : c'est l'objectif d'ÉQUIPE qui pilote la jauge en mode équipe — afficher
+  l'individuel enverrait les joueurs courir après une victoire impossible (il ne fait plus gagner).
+  Titre de fin de partie : « VICTOIRE DE L'ÉQUIPE n » — sans quoi le coéquipier du `winner_id`
+  lirait « DÉFAITE » alors qu'il vient de gagner.
+- **`faction_selection.gd`** : bandeau « ÉQUIPE n » + picks des coéquipiers EN DIRECT ; une faction
+  prise par un coéquipier est grisée « PRIS PAR *pseudo* » (cas placé AVANT tous les autres verrous
+  d'accès : c'est le plus spécifique ET le plus actionnable, il nomme la personne). Les adversaires
+  restent un compteur anonyme.
+- **`spectator_overlay.gd`** : bandeau « VOTRE ÉQUIPE SE BAT ENCORE — X EST EN VIE » tant qu'un
+  coéquipier vit — « K.I.A. » ne dit pas la vérité quand la partie continue sans vous, et c'est ce
+  qui transforme une élimination en attente intéressée plutôt qu'en sortie. Le pari « vainqueur »
+  retire MON CAMP du sélecteur (le serveur le refuse déjà, autant ne pas le proposer : ce pari
+  serait gratuit et systématique, alors que l'intérêt du dispositif est de faire LIRE la table).
+- **`operation_report.gd`** : le **CLASSEMENT PAR ÉQUIPE** ouvre l'onglet CLASSEMENT, avant les
+  lignes individuelles — dans ce mode, un joueur veut d'abord savoir si SON CAMP a gagné. Objectif
+  d'équipe révélé sous chaque ligne (✓/✕). No-op intégral en FFA.
+
+### i18n
+
+41 clés FR/EN/IT ajoutées : `MODE_DUO_2V2` / `MODE_SQUAD_3V3` / `MODE_TRIO_2V2V2` (dérivées de l'id
+de playlist — une playlist ajoutée côté serveur n'a besoin QUE de sa clé), `MENU_MODE_TEAM_SUB`,
+`SQUAD_*` (16), `TEAM_*` (7), `CHAT_TEAM`, `ERR_FRIENDLY_FIRE`, `BET_ERR_OWN_TEAM`,
+`OBJ_TEAM_*_FMT` (3), `OBJ_DESC_TEAM_*` (3). ⚠️ Aucune clé `FACTION_<ID>` n'existe : les noms de
+factions vivent dans les `.tres` (`_faction_display_name` les y lit).
+
+> **Validation.** `--import` **0 ERROR** · boot headless `main_menu` / `squad_screen` /
+> `search_screen` / `salon_screen` **0 ERROR** · **capture PNG relue** de l'écran ESCOUADE dans ses
+> trois états (vide / formée / en file) — c'est elle qui a révélé le défaut de sélection de
+> playlist. ⚠️ Les autres écrans touchés (draft, HUD, Post-Op, overlay spectateur) n'ont PAS été
+> capturés en situation d'équipe : leur mise en page en mode équipe reste **non vérifiée
+> visuellement**.

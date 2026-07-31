@@ -83,6 +83,25 @@ static func leg_progress(objective: Dictionary, ctx: Dictionary) -> Dictionary:
 				have5 += 1
 		return {"label": TranslationServer.translate("OBJ_FORTIFIED_FMT") % [have5, n5, threshold],
 			"ratio": clampf(float(have5) / float(n5), 0.0, 1.0), "done": have5 >= n5}
+	# --- FAMILLE « ÉQUIPE » (MODE ÉQUIPES §8.124) : MIROIR EXACT d'`api/game/objectives.progress`,
+	#     mais lue sur un `ctx` COMBINÉ (possessions et kills de TOUTE l'équipe — résolu par
+	#     main.gd, `_team_objective_ctx`). Les libellés disent « ÉQUIPE » : c'est une jauge PARTAGÉE,
+	#     tous les membres voient exactement la même. ---
+	if otype == "team_conquer":
+		var nt := maxi(int(params.get("n", 12)), 1)
+		var havet := int(ctx.get("owned_count", 0))
+		return {"label": TranslationServer.translate("OBJ_TEAM_TERRITORIES_FMT") % [havet, nt],
+			"ratio": clampf(float(havet) / float(nt), 0.0, 1.0), "done": havet >= nt}
+	if otype == "team_destroy":
+		var nd := maxi(int(params.get("n", 30)), 1)
+		var haved := int(ctx.get("combat_kills", 0))
+		return {"label": TranslationServer.translate("OBJ_TEAM_DESTROY_FMT") % [haved, nd],
+			"ratio": clampf(float(haved) / float(nd), 0.0, 1.0), "done": haved >= nd}
+	if otype == "team_continents":
+		var nc := maxi(int(params.get("n", 2)), 1)
+		var havec := int(ctx.get("continents_owned", 0))
+		return {"label": TranslationServer.translate("OBJ_TEAM_CONTINENTS_FMT") % [havec, nc],
+			"ratio": clampf(float(havec) / float(nc), 0.0, 1.0), "done": havec >= nc}
 	return {"label": str(objective.get("description", TranslationServer.translate("OBJ_SECRET_FALLBACK"))),
 		"ratio": 0.0, "done": false}
 
@@ -126,6 +145,13 @@ static func describe(objective: Dictionary, target_name: String = "") -> String:
 	if otype == "fortified_hold":
 		return TranslationServer.translate("OBJ_DESC_FORTIFIED_HOLD") % [
 			int(params.get("n", 8)), int(params.get("min_garrison", 3))]
+	# --- FAMILLE « ÉQUIPE » (§8.124) — libellés au pluriel collectif (« votre équipe »). ---
+	if otype == "team_conquer":
+		return TranslationServer.translate("OBJ_DESC_TEAM_CONQUER") % int(params.get("n", 12))
+	if otype == "team_destroy":
+		return TranslationServer.translate("OBJ_DESC_TEAM_DESTROY") % int(params.get("n", 30))
+	if otype == "team_continents":
+		return TranslationServer.translate("OBJ_DESC_TEAM_CONTINENTS") % int(params.get("n", 2))
 	return str(objective.get("description", ""))
 
 # Nom TRADUIT d'un continent depuis son id snake_case, via les clés CONT_* existantes
@@ -199,3 +225,15 @@ static func _self_check() -> void:
 		"classic_objective": {"type": "destroy_units", "params": {"n": 10}}},
 		{"target_alive": true, "combat_kills": 8})
 	assert(dbl["lines"].size() == 2 and absf(float(dbl["best_ratio"]) - 0.8) < 0.001)
+	# --- FAMILLE « ÉQUIPE » (§8.124) : mêmes formules, contexte COMBINÉ. Le ctx d'équipe réutilise
+	#     les MÊMES clés que le ctx individuel (owned_count / combat_kills / continents_owned) —
+	#     c'est ce qui permet de garder UN seul jeu de formules des deux côtés du réseau. ---
+	var tconq := leg_progress({"type": "team_conquer", "params": {"n": 12}}, {"owned_count": 9})
+	assert(absf(float(tconq["ratio"]) - 0.75) < 0.001 and not bool(tconq["done"]))
+	assert(bool(leg_progress({"type": "team_conquer", "params": {"n": 12}},
+		{"owned_count": 12})["done"]))
+	assert(absf(float(leg_progress({"type": "team_destroy", "params": {"n": 30}},
+		{"combat_kills": 15})["ratio"]) - 0.5) < 0.001)
+	var tcont := leg_progress({"type": "team_continents", "params": {"n": 2}},
+		{"continents_owned": 1})
+	assert(absf(float(tcont["ratio"]) - 0.5) < 0.001 and not bool(tcont["done"]))

@@ -82,6 +82,64 @@ var statistics: Dictionary = {}
 # [] = aucun pacte, OU serveur non redéployé → toute l'UI de pacte se masque d'elle-même.
 var pacts: Array = []
 
+# --- MODE ÉQUIPES (§8.124) ---
+# Id de PLAYLIST ("duo_2v2" | "squad_3v3" | …), **"" = FFA**. C'est LA bascule de tout l'affichage
+# d'équipe du client : couleurs appariées, chips groupées, onglet de chat ÉQUIPE, tracker partagé.
+# Défaut "" → un serveur non redéployé donne une partie FFA, et TOUTE l'UI d'équipe se masque
+# d'elle-même (§9.2) — aucun écran n'a de garde à écrire.
+var team_mode: String = ""
+# Objectif secret PAR ÉQUIPE, **DÉJÀ REDACTÉ pour nous** : seul celui de NOTRE équipe est lisible,
+# les autres arrivent en {"type": "hidden"}. Le client n'a donc AUCUN filtrage à faire — comme pour
+# `pacts`. Clés = team_id (⚠️ STRING en JSON, piège §5).
+var team_objectives: Dictionary = {}
+# Équipe VICTORIEUSE (-1 tant que la partie continue, et TOUJOURS -1 en FFA).
+var winning_team_id: int = -1
+
+# Équipe d'un joueur (0 = SANS ÉQUIPE). Lecture UNIQUE de ce champ dans tout le client : les vues
+# passent par ici plutôt que de refaire un `int(players[pid].team_id)` chacune de leur côté — le
+# piège JSON float (§5) ne se paie ainsi qu'une fois.
+func team_of(pid) -> int:
+	var p = players.get(str(int(pid)), players.get(int(pid), null))
+	if typeof(p) != TYPE_DICTIONARY:
+		return 0
+	return int(p.get("team_id", 0))
+
+# Le joueur `a` est-il DU MÊME CAMP que `b` ? MIROIR EXACT de `teams.is_friendly` côté serveur —
+# **en FFA, ceci vaut « c'est le même joueur »**, ce qui rend toutes les vues neutres sans garde.
+func is_friendly(a, b) -> bool:
+	if a == null or b == null:
+		return false
+	if int(a) == int(b):
+		return true
+	var ta := team_of(a)
+	return ta != 0 and ta == team_of(b)
+
+# Ids des coéquipiers de `pid`, LUI EXCLU. Vide en FFA (miroir de `teams.teammates`).
+func teammates_of(pid) -> Array:
+	var my_team := team_of(pid)
+	if my_team == 0:
+		return []
+	var out: Array = []
+	for k in players.keys():
+		if int(k) != int(pid) and team_of(k) == my_team:
+			out.append(int(k))
+	out.sort()
+	return out
+
+# { team_id : [player_id, …] } — équipes triées, membres triés. {} en FFA.
+func teams_map() -> Dictionary:
+	var out: Dictionary = {}
+	for k in players.keys():
+		var t := team_of(k)
+		if t == 0:
+			continue
+		if not out.has(t):
+			out[t] = []
+		out[t].append(int(k))
+	for t in out.keys():
+		out[t].sort()
+	return out
+
 func update_from_json(state_data: Dictionary):
 	players = state_data.get("players", {})
 	territories = state_data.get("territories", {})
@@ -118,6 +176,13 @@ func update_from_json(state_data: Dictionary):
 	# PACTES (§8.123) : liste DÉJÀ redactée pour nous par le serveur (cf. la déclaration ci-dessus).
 	var pk = state_data.get("pacts", [])
 	pacts = pk if typeof(pk) == TYPE_ARRAY else []
+	# MODE ÉQUIPES (§8.124) : champs ADDITIFS — absents d'un serveur/état antérieur → "" / {} / -1,
+	# donc partie FFA, donc toute l'UI d'équipe reste masquée (§9.2).
+	team_mode = str(state_data.get("team_mode", ""))
+	var tobj = state_data.get("team_objectives", {})
+	team_objectives = tobj if typeof(tobj) == TYPE_DICTIONARY else {}
+	var wt = state_data.get("winning_team_id", null)
+	winning_team_id = int(wt) if (typeof(wt) == TYPE_FLOAT or typeof(wt) == TYPE_INT) else -1
 	# Chrono SERVEUR (E3 §8.75) : turn_timer peut être null (bot / hors minuterie) → {}.
 	var tt = state_data.get("turn_timer", null)
 	turn_timer = tt if typeof(tt) == TYPE_DICTIONARY else {}

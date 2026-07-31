@@ -136,6 +136,12 @@ var _abandon_armed := false
 #   conv_key       : "general" (canal public) | str(pid) (fil privé avec ce joueur)
 #   _unread        : conv_key → nombre de messages non lus
 const CHAT_CONV_GENERAL := "general"
+# Canal ÉQUIPE (MODE ÉQUIPES §8.124) — ADDITIF : il n'apparaît dans le sélecteur QUE si la partie
+# est une partie d'équipe. Id réservé -2 (le -1 étant déjà « Tous ») : les ids de joueur sont
+# positifs pour les humains et négatifs pour les bots, mais aucun bot n'est jamais destinataire de
+# chat (`set_chat_targets` ne reçoit que des humains) — la valeur est donc libre.
+const CHAT_CONV_TEAM := "team"
+const CHAT_TEAM_ID := -2
 const CHAT_HISTORY_CAP := 200
 # §8.122 (LOT C) — écart entre le craquement de talkie et le bip de notification de chat. 60 ms :
 # assez pour être perçu comme deux évènements successifs, trop court pour se lire comme un retard.
@@ -2030,7 +2036,15 @@ func _setup_chat_selector() -> void:
 func _on_chat_target_selected(index: int) -> void:
 	AudioManager.play_sfx("click")
 	var id := _chat_target_option.get_item_id(index)
-	_select_conversation(CHAT_CONV_GENERAL if id < 0 else _conv_key_for(id))
+	_select_conversation(_conv_key_for_target(id))
+
+
+# Clé de conversation d'un id de destinataire. Trois cas, et un seul endroit qui les connaît :
+# -1 = TOUS, CHAT_TEAM_ID = ÉQUIPE (§8.124), tout le reste = privé avec ce joueur.
+func _conv_key_for_target(id: int) -> String:
+	if id == CHAT_TEAM_ID:
+		return CHAT_CONV_TEAM
+	return CHAT_CONV_GENERAL if id < 0 else _conv_key_for(id)
 
 # Bascule la conversation AFFICHÉE : re-rendu complet, non-lus remis à zéro, placeholder adapté.
 func _select_conversation(conv_key: String) -> void:
@@ -2045,6 +2059,8 @@ func _select_conversation(conv_key: String) -> void:
 func _conv_display_name(conv_key: String) -> String:
 	if conv_key == CHAT_CONV_GENERAL:
 		return tr("CHAT_ALL")
+	if conv_key == CHAT_CONV_TEAM:
+		return tr("CHAT_TEAM")
 	for t in _chat_targets:
 		if str(int(t.get("id", -1))) == conv_key:
 			return str(t.get("name", "?"))
@@ -2058,7 +2074,7 @@ func _rebuild_chat_targets() -> void:
 	_chat_target_option.clear()
 	for t in _chat_targets:
 		var pid := int(t.get("id", -1))
-		var key := CHAT_CONV_GENERAL if pid < 0 else _conv_key_for(pid)
+		var key := _conv_key_for_target(pid)
 		var n := int(_unread.get(key, 0))
 		var label := str(t.get("name", "?"))
 		if n > 0:
@@ -2212,6 +2228,10 @@ func _on_chat_submit() -> void:
 	_chat_input.clear()
 	if _current_conv == CHAT_CONV_GENERAL:
 		chat_send_requested.emit("general", text, -1)
+	elif _current_conv == CHAT_CONV_TEAM:
+		# Le serveur résout les destinataires SUR L'ÉTAT (§8.124) : aucun id n'est transmis, donc
+		# un client modifié ne peut pas se servir de ce canal pour adresser un autre camp.
+		chat_send_requested.emit("team", text, -1)
 	else:
 		chat_send_requested.emit("prive", text, int(_current_conv))
 
@@ -2221,6 +2241,11 @@ func _on_chat_submit() -> void:
 # retombe proprement sur le canal général.
 func set_chat_targets(entries: Array) -> void:
 	_chat_targets = [{"id": -1, "name": tr("CHAT_ALL"), "color": ACCENT_CYAN}]
+	# MODE ÉQUIPES (§8.124) : « ÉQUIPE » vient EN TÊTE, juste après « Tous » — c'est le canal qu'on
+	# utilise le plus souvent en équipe, il ne doit pas se perdre au milieu des privés. Absent en
+	# FFA : `GameState.team_mode` vide → le sélecteur est rigoureusement celui d'avant (§9.2).
+	if GameState.team_mode != "" and not GameState.teammates_of(AuthManager.user_id).is_empty():
+		_chat_targets.append({"id": CHAT_TEAM_ID, "name": tr("CHAT_TEAM"), "color": ACCENT_GOLD})
 	for e in entries:
 		var pid := int(e.get("id", -9999))
 		if pid == -9999:
@@ -2229,7 +2254,7 @@ func set_chat_targets(entries: Array) -> void:
 			"color": e.get("color", Color("eef3f7"))})
 	var still_there := _current_conv == CHAT_CONV_GENERAL
 	for t in _chat_targets:
-		if _conv_key_for(int(t.get("id", -1))) == _current_conv:
+		if _conv_key_for_target(int(t.get("id", -1))) == _current_conv:
 			still_there = true
 	if not still_there:
 		_select_conversation(CHAT_CONV_GENERAL)

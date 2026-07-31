@@ -38,6 +38,10 @@ const RosterHelpers := preload("res://scripts/ui/war_roster.gd")
 # (LOT D) et la mini-vue du moment décisif (LOT B) dessinent la MÊME courbe. Utilisable comme TYPE
 # (`var x: TimelineChart`) comme n'importe quel script préchargé.
 const TimelineChart := preload("res://scripts/ui/timeline_chart.gd")
+# Composition des libellés d'objectifs (module PUR) — le classement par ÉQUIPE (§8.124) traduit
+# l'objectif révélé de chaque camp à partir de sa forme structurée {type, params}, exactement comme
+# la révélation individuelle. Aucun libellé serveur affiché tel quel.
+const ObjectiveTracker := preload("res://scripts/ui/objective_tracker.gd")
 # CARTE DE PARTAGE (§8.121, LOT D) — compositeur offscreen (SubViewport → PNG). Preload à SENS
 # UNIQUE : `share_card.gd` ne connaît PAS le rapport (il partage seulement TimelineChart), ce qui
 # évite toute inclusion cyclique de ressources.
@@ -639,6 +643,11 @@ func populate_podium(rows: Array, provisional: bool = false) -> void:
 	# La mise en scène en cours porte sur des nœuds qu'on vient de détruire : on la remet à zéro
 	# AVANT de reconstruire (sans quoi _process animerait des références invalides).
 	_reset_reveal()
+	# MODE ÉQUIPES (§8.124) : le CLASSEMENT PAR ÉQUIPE ouvre l'onglet, AVANT les lignes
+	# individuelles. C'est le verdict qui compte dans ce mode — un joueur d'équipe veut d'abord
+	# savoir si SON CAMP a gagné, la performance individuelle vient après. Les lignes individuelles
+	# restent affichées telles quelles en dessous (récompenses inchangées, §1.5).
+	_build_team_standings()
 	var built: Array = []
 	for i in range(rows.size()):
 		var wrap := _make_podium_row(rows[i])
@@ -656,6 +665,83 @@ func populate_podium(rows: Array, provisional: bool = false) -> void:
 	# faux), et rejouer la séquence à l'arrivée du verdict serveur la doublerait.
 	if not provisional:
 		_arm_reveal(built)
+
+# CLASSEMENT PAR ÉQUIPE (MODE ÉQUIPES §8.124) — bloc en tête de l'onglet CLASSEMENT, une ligne par
+# équipe : rang, libellé « ÉQUIPE n », pseudos des membres, et l'objectif d'équipe RÉVÉLÉ (la
+# redaction est levée au game_over, comme pour les objectifs individuels).
+#
+# NO-OP EN FFA : `last_team_podium` est vide → aucun nœud ajouté, l'onglet est rigoureusement celui
+# d'avant le chantier. Idem sur un serveur non redéployé (§9.2).
+func _build_team_standings() -> void:
+	var podium: Array = NetworkManager.last_team_podium
+	if podium.is_empty():
+		return
+	var winning := int(NetworkManager.last_winning_team_id)
+	# Objectifs d'équipe révélés, indexés par team_id pour une lecture O(1) dans la boucle.
+	var reveals := {}
+	for r in NetworkManager.last_team_objectives_reveal:
+		if typeof(r) == TYPE_DICTIONARY:
+			reveals[int(r.get("team_id", 0))] = r
+
+	var title := Label.new()
+	title.text = tr("TEAM_PODIUM_TITLE")
+	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_color_override("font_color", ACCENT_CYAN)
+	_podium_list.add_child(title)
+
+	for entry in podium:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var team_id := int(entry.get("team_id", 0))
+		var is_winner := team_id == winning
+		var wrap := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.set_content_margin_all(8)
+		sb.content_margin_left = 10
+		sb.border_width_left = 3
+		sb.bg_color = Color(ACCENT_GOLD, 0.09) if is_winner else Color(1, 1, 1, 0.02)
+		sb.border_color = ACCENT_GOLD if is_winner else Color(ACCENT_CYAN, 0.18)
+		wrap.add_theme_stylebox_override("panel", sb)
+
+		var box := VBoxContainer.new()
+		box.add_theme_constant_override("separation", 2)
+		wrap.add_child(box)
+
+		# Ligne 1 : « 01  ÉQUIPE 1 — PSEUDO A · PSEUDO B ».
+		var names := PackedStringArray()
+		for pid in entry.get("member_ids", []):
+			var p: Dictionary = GameState.players.get(str(int(pid)), {})
+			var who := str(p.get("username", ""))
+			names.append(who if who != "" else "#%d" % int(pid))
+		var head := Label.new()
+		head.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		head.text = "%02d  %s — %s" % [int(entry.get("rank", 0)) + 1,
+			tr("TEAM_BANNER") % team_id, " · ".join(names)]
+		head.add_theme_font_size_override("font_size", 16)
+		head.add_theme_color_override("font_color", ACCENT_GOLD if is_winner else TEXT_MUTED)
+		box.add_child(head)
+
+		# Ligne 2 : objectif d'équipe révélé (✓ / ✕) — mêmes marqueurs que les objectifs individuels
+		# (« ✓ » et « ✕ » rendent dans TOUTES les polices de repli, contrairement aux emojis).
+		var rev: Dictionary = reveals.get(team_id, {})
+		if not rev.is_empty():
+			var obj = rev.get("objective", {})
+			var txt := ObjectiveTracker.describe(obj) if typeof(obj) == TYPE_DICTIONARY else ""
+			if txt == "":
+				txt = str(rev.get("description", ""))
+			var done := bool(rev.get("completed", false))
+			var line := Label.new()
+			line.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+			line.text = "    %s %s" % ["✓" if done else "✕", txt]
+			line.add_theme_font_size_override("font_size", 12)
+			line.add_theme_color_override("font_color",
+				ACCENT_CYAN if done else TEXT_MUTED)
+			line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			box.add_child(line)
+
+		_podium_list.add_child(wrap)
+
 
 # Une ligne du podium (§8.100 — restylée sans emojis) : panneau à liseré gauche (OR pour le
 # vainqueur, cyan discret sinon), indicatif de rang mono « 01 », brique PlayerChip, badges de

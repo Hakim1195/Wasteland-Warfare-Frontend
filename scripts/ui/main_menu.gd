@@ -80,6 +80,15 @@ const MODES := [
 ]
 const DEFAULT_MODE := "trio"
 
+# --- MODES D'ÉQUIPE (MODE ÉQUIPES §8.124) ---
+# ⚠️ AUCUNE valeur en dur ici : les playlists viennent du REGISTRE SERVEUR (`GET /squad/playlists`,
+# §3.1) et sont ajoutées à la rangée à la réception. Une playlist `enabled: False` n'arrive pas dans
+# la réponse → sa carte est ABSENTE, pas grisée. Une carte grisée est une promesse (« bientôt ! ») ;
+# une carte absente n'est rien, ce qui est exactement ce qu'on veut d'un mode non ouvert.
+# Ces cartes ne passent PAS par MatchConfig : elles mènent à l'écran ESCOUADE, qui possède son
+# propre chemin de mise en file (le format est porté par la playlist, pas par un effectif).
+var _team_cards: Dictionary = {}
+
 # Nombre de défis mis en avant sur la carte du menu (§8.92) — la liste complète vit dans l'écran Défis.
 const MENU_CHALLENGES_MAX := 3
 
@@ -349,6 +358,43 @@ func _build_mode_cards() -> void:
 		cards_row.add_child(entry["panel"])
 		_mode_cards[m["id"]] = entry
 	_select_mode(DEFAULT_MODE)
+	# MODE ÉQUIPES (§8.124) : les cartes d'équipe s'ajoutent quand le registre serveur répond.
+	NetworkManager.team_playlists_loaded.connect(_on_team_playlists_loaded)
+	NetworkManager.fetch_team_playlists()
+
+
+# Ajoute une carte par playlist d'ÉQUIPE OUVERTE. Idempotent (une playlist déjà posée n'est pas
+# redoublée) : le registre peut être re-demandé sans conséquence. Serveur non redéployé → réponse
+# vide → AUCUNE carte, et le menu est rigoureusement celui d'avant le chantier (§9.2).
+func _on_team_playlists_loaded(playlists: Dictionary) -> void:
+	if not is_inside_tree() or cards_row == null:
+		return
+	var ids := playlists.keys()
+	ids.sort()
+	for pid in ids:
+		var key := str(pid)
+		if _team_cards.has(key):
+			continue
+		var spec: Dictionary = playlists[key]
+		var entry := _make_mode_card({
+			"id": key,
+			"name_key": "MODE_" + key.to_upper(),
+			"count": int(spec.get("capacity", 0)),
+			"ranked": false,
+			"team": true,
+		})
+		cards_row.add_child(entry["panel"])
+		_team_cards[key] = entry
+
+
+# Cartes d'ÉQUIPE : le clic ne SÉLECTIONNE pas un effectif, il OUVRE l'écran ESCOUADE (le format
+# est porté par la playlist elle-même). D'où ce chemin distinct de `_select_mode`.
+func _on_team_card_pressed(playlist_id: String) -> void:
+	AudioManager.play_sfx("click")
+	var mc := get_node_or_null("/root/MatchConfig")
+	if mc != null and mc.has_method("set_team_playlist"):
+		mc.set_team_playlist(playlist_id)
+	_go("res://scenes/ui/squad_screen.tscn")
 
 func _make_mode_card(m: Dictionary) -> Dictionary:
 	var ranked: bool = m["ranked"]
@@ -390,7 +436,12 @@ func _make_mode_card(m: Dictionary) -> Dictionary:
 	btn.add_theme_stylebox_override("pressed", empty)
 	btn.add_theme_stylebox_override("focus", empty)
 	var mode_id: String = m["id"]
-	btn.pressed.connect(func() -> void: _on_mode_card_pressed(mode_id))
+	# Carte d'ÉQUIPE (§8.124) : chemin distinct — elle OUVRE l'écran ESCOUADE au lieu de
+	# sélectionner un effectif (le format est porté par la playlist).
+	if bool(m.get("team", false)):
+		btn.pressed.connect(func() -> void: _on_team_card_pressed(mode_id))
+	else:
+		btn.pressed.connect(func() -> void: _on_mode_card_pressed(mode_id))
 	btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
 	panel.add_child(btn)
 
@@ -408,6 +459,10 @@ func _apply_mode_sub(entry: Dictionary) -> void:
 		return
 	if m["ranked"]:
 		sub.text = tr("MENU_MODE_RANKED_SUB")
+	elif bool(m.get("team", false)):
+		# Carte d'ÉQUIPE : sous-titre « EN ÉQUIPE · N OPÉRATEURS » — le mot ÉQUIPE doit être lisible
+		# AVANT le clic, sinon la carte ressemble à un simple effectif de plus dans la rangée.
+		sub.text = tr("MENU_MODE_TEAM_SUB") % int(m["count"])
 	else:
 		sub.text = tr("MENU_MODE_PLAYERS") % int(m["count"])
 

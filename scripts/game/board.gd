@@ -64,6 +64,40 @@ const PALETTE_COLORBLIND := [
 	Color("0072b2"),  # bleu profond
 ]
 
+# Palettes d'ÉQUIPE (MODE ÉQUIPES §8.124) — la palette par SIÈGE ci-dessus est parfaite pour du
+# chacun-pour-soi et catastrophique en équipe : six teintes maximalement écartées ne disent RIEN de
+# « qui est avec qui ». Le joueur doit lire son camp AU PREMIER COUP D'ŒIL, sans compter les chips.
+#
+# Construction, dans cet ordre de priorité :
+#   1. **ÉCART INTER-ÉQUIPES ≥ 90°** — deux camps ne doivent jamais pouvoir être confondus. Les
+#      teintes MÉDIANES sont à 20° (braise), 208° (glacier) et 118° (toxine) : écarts 172° / 98° / 90°.
+#   2. **ÉCART INTRA-ÉQUIPE ~18°** — assez proche pour lire « même camp » d'un coup d'œil, assez
+#      distinct pour désigner un coéquipier précis (« celui en orange »).
+#   3. Mêmes contraintes de fond que la palette par siège : lisibles sur le gunmetal #0F1318 et
+#      distinctes du gris NEUTRAL_COLOR #8A97A5.
+#
+# ⚠️ Ne PAS resserrer l'écart INTER-équipes pour « faire de plus jolies familles » : c'est la seule
+# distinction qui porte une règle de jeu (on ne peut pas attaquer son camp — un joueur qui se
+# trompe de camp clique et se fait refuser, sans comprendre pourquoi).
+# La 3ᵉ famille sert au 2v2v2 (playlist DÉSACTIVÉE) : elle est prête, elle n'est pas utilisée.
+const PALETTE_TEAMS := [
+	[Color("e8443c"), Color("e8703c"), Color("e89c3c")],  # ÉQUIPE 1 — braise   (  2° →  38°)
+	[Color("3cc0e8"), Color("3c94e8"), Color("3c68e8")],  # ÉQUIPE 2 — glacier  (190° → 226°)
+	[Color("8ce83c"), Color("60e83c"), Color("3ce860")],  # ÉQUIPE 3 — toxine   (100° → 136°)
+]
+
+# Palettes d'ÉQUIPE en mode DALTONIEN (E10 §8.82 + §8.124). Le principe s'INVERSE par rapport au
+# FFA : c'est le **MOTIF qui devient commun à l'équipe** (cf. `_player_palette_index`) et la NUANCE
+# qui distingue les membres. Raison : en deutan/protan, deux teintes voisines d'une même famille
+# sont précisément ce qui se confond le mieux — s'y fier pour lire son CAMP serait le pire choix.
+# Le motif, lui, ne dépend d'aucune perception chromatique.
+# Familles Okabe-Ito : chaudes (équipe 1), bleues (équipe 2), vert/rose (équipe 3).
+const PALETTE_TEAMS_COLORBLIND := [
+	[Color("e69f00"), Color("f0e442"), Color("d55e00")],  # ÉQUIPE 1 — chaudes
+	[Color("0072b2"), Color("56b4e9"), Color("004c73")],  # ÉQUIPE 2 — bleues
+	[Color("009e73"), Color("66c2a5"), Color("cc79a7")],  # ÉQUIPE 3 — vert / rose
+]
+
 # Visibilité Tactique (Partie 2) : badge de troupes + remplissage coloré des territoires.
 const TerritoryBadgeScene := preload("res://scenes/game/territory_badge.tscn")
 const FACTIONS_DIR := "res://resources/factions/"
@@ -473,14 +507,54 @@ func _build_owner_colors() -> void:
 	pids.sort()
 	_owner_colors.clear()
 	var colorblind: bool = bool(SettingsManager.get_comfort("colorblind_mode"))
+	# MODE ÉQUIPES (§8.124) : les couleurs s'APPARIENT par camp (cf. PALETTE_TEAMS). Aiguillage en
+	# tête, branche séparée — la table par SIÈGE ci-dessous reste intouchée pour le FFA.
+	if GameState.team_mode != "":
+		_build_team_colors(pids, colorblind)
+		return
 	for i in range(pids.size()):
 		var pid: int = pids[i]
 		var palette: Array = PALETTE_COLORBLIND if colorblind else PALETTE
 		_owner_colors[pid] = palette[i % palette.size()]
 
-# Index de PALETTE d'un joueur (0..5, ordre stable des ids) — sert au motif daltonien (pattern_id
-# par index de joueur, E10 §8.82).
+
+# Couleurs APPARIÉES par équipe : famille de teintes selon le camp, nuance selon le RANG DU MEMBRE
+# dans son équipe (ordre stable des ids). Deux joueurs de la même équipe portent donc deux nuances
+# voisines d'une même teinte ; deux équipes sont à ≥ 90° l'une de l'autre.
+# Joueur SANS équipe dans une partie d'équipe (état incohérent / bot mal affecté) → gris neutre
+# plutôt qu'une couleur d'équipe mensongère : mieux vaut « je ne sais pas » que « il est avec toi ».
+func _build_team_colors(pids: Array, colorblind: bool) -> void:
+	var palettes: Array = PALETTE_TEAMS_COLORBLIND if colorblind else PALETTE_TEAMS
+	var teams := GameState.teams_map()
+	var team_ids := teams.keys()
+	team_ids.sort()
+	for pid in pids:
+		var t := GameState.team_of(pid)
+		var ti := team_ids.find(t)
+		if t == 0 or ti < 0:
+			_owner_colors[pid] = NEUTRAL_COLOR
+			continue
+		var members: Array = teams[t]
+		var mi: int = max(0, members.find(int(pid)))
+		var family: Array = palettes[ti % palettes.size()]
+		_owner_colors[pid] = family[mi % family.size()]
+
+
+# Index de MOTIF daltonien d'un joueur (E10 §8.82) — le shader en dérive `territory_pattern`.
+#
+# ⚠️ DEUX SÉMANTIQUES, selon le mode :
+#   • **FFA** : index de SIÈGE (0..5, ordre stable des ids) → un motif PAR JOUEUR. C'est ce qui
+#     distingue six adversaires quand la couleur ne suffit pas.
+#   • **ÉQUIPE (§8.124)** : index d'ÉQUIPE → un motif PAR CAMP, COMMUN à ses membres. En mode
+#     daltonien, le motif devient donc le porteur de « qui est avec qui » (la nuance, elle, ne
+#     distingue plus que les individus) — cf. PALETTE_TEAMS_COLORBLIND. C'est l'inversion voulue :
+#     l'information la plus importante est confiée au canal le plus fiable.
 func _player_palette_index(pid: int) -> int:
+	if GameState.team_mode != "":
+		var team_ids := GameState.teams_map().keys()
+		team_ids.sort()
+		var ti := team_ids.find(GameState.team_of(pid))
+		return ti if ti >= 0 else 0
 	var pids: Array = []
 	for k in GameState.players.keys():
 		pids.append(int(k))

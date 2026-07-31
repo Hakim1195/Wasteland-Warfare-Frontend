@@ -401,6 +401,29 @@ func _refresh_access() -> void:
 		return
 	_apply_access_state(_factions[_index])
 
+
+# Nom AFFICHABLE d'une faction depuis son id — lu sur les ressources DÉJÀ chargées (`_factions`,
+# source unique du catalogue côté draft). Pas de clé `FACTION_<ID>` : les noms de factions vivent
+# dans les `.tres` (§4.3) et nulle part ailleurs. Id inconnu → l'id « humanisé », jamais une clé brute.
+func _faction_display_name(fid: String) -> String:
+	for f in _factions:
+		if str(f.id) == fid:
+			return str(f.name)
+	return fid.replace("_", " ").to_upper()
+
+
+# Pseudo du COÉQUIPIER ayant déjà verrouillé cette faction, ou "" (MODE ÉQUIPES §8.124).
+# Lit `_locked`, qui reçoit à la fois les broadcasts `faction_locked` et la resynchro `draft_state` :
+# les choix des coéquipiers apparaissent donc EN DIRECT, sans polling ni message dédié.
+# Vide en FFA (`teammates_of` rend [] hors mode équipe) → aucune garde à écrire ailleurs.
+func _teammate_holding(fid: String) -> String:
+	for mate in GameState.teammates_of(AuthManager.user_id):
+		if str(_locked.get(int(mate), "")) == fid:
+			var p: Dictionary = GameState.players.get(str(int(mate)), {})
+			var who := str(p.get("username", ""))
+			return who if who != "" else "#%d" % int(mate)
+	return ""
+
 # Applique l'état d'accès de la faction affichée : bandeau OR « GRATUITE CETTE SEMAINE »
 # (rotation), bandeau verrou + prix + renvoi BOUTIQUE (payante verrouillée, carte grisée,
 # CONFIRMER désactivé), rien pour une gratuite/possédée.
@@ -409,6 +432,21 @@ func _apply_access_state(f) -> void:
 	_ensure_access_banner()
 	var locked := _is_locked(fid)
 	var in_rotation: bool = _rotation_ids.has(fid) and not _owned_ids.has(fid)
+
+	# MODE ÉQUIPES (§8.124) — UNICITÉ INTRA-ÉQUIPE : une faction déjà verrouillée par un COÉQUIPIER
+	# est grisée et non confirmable. Ce cas passe AVANT tous les autres : il est le plus spécifique
+	# (« celle-là, pas elle ») et le plus actionnable — il nomme la personne, donc le joueur sait
+	# quoi faire. Les ADVERSAIRES peuvent toujours doubler nos factions (règle inchangée).
+	var mate_owner := _teammate_holding(fid)
+	if mate_owner != "":
+		_access_banner.visible = true
+		_access_banner.text = tr("TEAM_PICKED_BY") % mate_owner
+		_access_banner.add_theme_color_override("font_color", Color("8a97a5"))
+		card.modulate = Color(0.62, 0.66, 0.72, 1.0)
+		if not _confirmed:
+			confirm_button.disabled = true
+			confirm_button.text = tr("FS_LOCKED_BTN")
+		return
 
 	# Ordre des cas, du plus SPÉCIFIQUE au plus général (chantier T) : un crédit épuisé doit dire
 	# POURQUOI c'est verrouillé, et un déblocage par Pass doit se distinguer d'une possession.
@@ -665,6 +703,10 @@ func _on_confirm_pressed() -> void:
 # Réception du choix d'un autre joueur (broadcast serveur).
 func _on_faction_locked(player_id, faction_id) -> void:
 	_register_lock(player_id, faction_id)
+	# MODE ÉQUIPES (§8.124) : le pick d'un COÉQUIPIER doit se voir EN DIRECT sur le carrousel — s'il
+	# vient de prendre la faction affichée, elle devient grisée « PRIS PAR … » sans attendre que le
+	# joueur fasse défiler. `_refresh_access` ne fait rien si l'on a déjà confirmé.
+	_refresh_access()
 	_update_status()
 
 # Photographie complète du Draft renvoyée par le serveur (réponse à request_draft_state) :
@@ -742,6 +784,23 @@ func _update_status() -> void:
 	if expected > 0:
 		count_txt += " / " + str(expected)
 	status_label.text = tr("FS_STATUS") % [_index + 1, _factions.size(), count_txt]
+	# MODE ÉQUIPES (§8.124) : bandeau « ÉQUIPE n » préfixé au statut, avec les picks des
+	# coéquipiers DÉJÀ verrouillés. C'est la seule information de draft qui se partage — les
+	# adversaires restent un compteur anonyme (règle inchangée). Vide en FFA.
+	var my_team := GameState.team_of(AuthManager.user_id)
+	if my_team != 0:
+		var picks := PackedStringArray()
+		for mate in GameState.teammates_of(AuthManager.user_id):
+			var fid := str(_locked.get(int(mate), ""))
+			if fid == "":
+				continue
+			var p: Dictionary = GameState.players.get(str(int(mate)), {})
+			picks.append("%s ◆ %s" % [str(p.get("username", "#%d" % int(mate))),
+				_faction_display_name(fid)])
+		var banner := tr("TEAM_BANNER") % my_team
+		if picks.size() > 0:
+			banner += "  —  " + " · ".join(picks)
+		status_label.text = "%s\n%s" % [banner, status_label.text]
 
 func _process(_delta: float) -> void:
 	# Compte à rebours d'auto-verrouillage (G2 durci) : tant que le joueur n'a PAS confirmé et

@@ -75,6 +75,20 @@ func _ready() -> void:
 	title.add_theme_color_override("font_color", GOLD)
 	title_box.add_child(title)
 
+	# MODE ÉQUIPES (§8.124) : quand mon équipe SE BAT ENCORE, « K.I.A. » ne dit pas la vérité — la
+	# partie n'est pas finie POUR MOI, elle continue sans moi. Le bandeau le dit explicitement et
+	# nomme le survivant : c'est ce qui transforme une élimination en attente intéressée plutôt
+	# qu'en sortie. Absent en FFA, et absent si toute l'équipe est tombée (là, K.I.A. est exact).
+	var alive_mate := _first_alive_teammate()
+	if alive_mate != "":
+		var team_line := Label.new()
+		team_line.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		team_line.text = tr("TEAM_ALIVE_SPECTATOR") % alive_mate
+		team_line.add_theme_font_override("font", _font)
+		team_line.add_theme_font_size_override("font_size", 13)
+		team_line.add_theme_color_override("font_color", ACCENT)
+		title_box.add_child(team_line)
+
 	# §8.116 : après une partie PRIVÉE, pas de re-file (salons éphémères) → le bouton devient un
 	# retour au QG (émet quit_pressed, que main.gd route vers le QG). Sinon, re-file publique.
 	var _is_private := bool(GameState.is_private)
@@ -205,6 +219,17 @@ func _build_bet_row(bet_type: String) -> Control:
 # Alimente les listes déroulantes. `players` (résolus par main.gd — la vue ne lit pas l'état) :
 # liste de { id: int, name: String }. Les valeurs du pari « mode de fin » sont, elles, statiques.
 func set_bet_options(players: Array) -> void:
+	# MODE ÉQUIPES (§8.124) : MON CAMP est retiré du domaine du pari « vainqueur » — le serveur le
+	# refuse (`own_team`), autant ne pas le proposer. Raison : ce pari serait gratuit et
+	# systématique (tout mort le poserait sans réfléchir), or l'intérêt du dispositif est de faire
+	# LIRE la table. « Prochain héros abattu », lui, garde TOUT le monde : parier sur la chute d'un
+	# coéquipier n'a rien d'automatique, c'est même un pari de lecture froide.
+	var own_camp := {}
+	if GameState.team_mode != "":
+		for mate in GameState.teammates_of(AuthManager.user_id):
+			own_camp[int(mate)] = true
+		own_camp[int(AuthManager.user_id)] = true
+
 	for bet_type in ["winner", "next_hero_down"]:
 		var row: Dictionary = _bet_rows.get(bet_type, {})
 		if row.is_empty():
@@ -213,6 +238,8 @@ func set_bet_options(players: Array) -> void:
 		select.clear()
 		for p in players:
 			if typeof(p) != TYPE_DICTIONARY:
+				continue
+			if bet_type == "winner" and own_camp.has(int(p.get("id", -1))):
 				continue
 			select.add_item(str(p.get("name", "")))
 			select.set_item_metadata(select.item_count - 1, int(p.get("id", -1)))
@@ -295,3 +322,20 @@ func _make_button(text: String, accent: Color) -> Button:
 	btn.add_theme_color_override("font_hover_color", TEXT)
 	WarzoneUI.wire_button_sfx(btn)
 	return btn
+
+
+# Pseudo du PREMIER coéquipier encore en vie, ou "" (MODE ÉQUIPES §8.124).
+# "" couvre les trois cas où « K.I.A. » reste le bon mot : partie FFA, joueur sans équipe, ou
+# équipe entièrement tombée. Aucun appelant n'a donc de garde à écrire.
+func _first_alive_teammate() -> String:
+	if GameState.team_mode == "":
+		return ""
+	for mate in GameState.teammates_of(AuthManager.user_id):
+		var p: Dictionary = GameState.players.get(str(int(mate)), {})
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		if str(p.get("status", "alive")) == "eliminated" or bool(p.get("is_dead", false)):
+			continue
+		var who := str(p.get("username", ""))
+		return who if who != "" else "#%d" % int(mate)
+	return ""

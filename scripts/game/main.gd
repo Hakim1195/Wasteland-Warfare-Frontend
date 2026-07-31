@@ -1126,7 +1126,12 @@ func _objective_text(objective: Dictionary, fallback: String) -> String:
 
 # Envoi : le joueur a validé un message dans le HUD. On traduit le canal puis on relaie au réseau.
 func _on_chat_send(channel: String, text: String, target_id: int) -> void:
-	var net_tab := "private" if channel == "prive" else "general"
+	# « team » (MODE ÉQUIPES §8.124) traverse tel quel : c'est déjà le nom du canal côté contrat.
+	var net_tab := "general"
+	if channel == "prive":
+		net_tab = "private"
+	elif channel == "team":
+		net_tab = "team"
 	NetworkManager.send_chat_message(net_tab, text, target_id)
 
 # Réception : message ESTAMPILLÉ par le serveur (sender_id/sender_name réels, §8.33). On colore le
@@ -1144,6 +1149,11 @@ func _on_chat_message(tab: String, sender_id: int, sender_name: String, text: St
 	var conv_key := "general"
 	if tab == "private":
 		conv_key = str(target_id if mine else sender_id)
+	elif tab == "team":
+		# MODE ÉQUIPES (§8.124) : le canal d'équipe a SA propre conversation — le verser dans le
+		# général mélangerait un message destiné à deux personnes avec ceux vus par toute la table,
+		# et le joueur croirait avoir parlé en public (ou l'inverse).
+		conv_key = "team"
 	# Un message que J'ENVOIE ne doit jamais me notifier moi-même (badge/toast/son).
 	hud.push_chat_message(conv_key, who, esc_text, not mine)
 
@@ -2246,7 +2256,97 @@ func _objective_ctx() -> Dictionary:
 		"owned_garrisons": owned_garrisons,
 	}
 
+# Contexte COMBINÉ de l'objectif d'ÉQUIPE (MODE ÉQUIPES §8.124) — MIROIR d'
+# `api/game/objectives.build_team_context`. MÊMES CLÉS que `_objective_ctx` : les formules du
+# tracker sont donc les mêmes des deux côtés, seul le PÉRIMÈTRE change (mon camp au lieu de moi).
+#
+# ⚠️ « Combiné » = UNION là où ça compte : un continent est acquis à l'ÉQUIPE si chacun de ses
+# territoires appartient à l'un OU l'AUTRE de ses membres — un continent partagé à deux compte donc
+# UNE fois, alors qu'il ne comptait pour personne en lecture individuelle. C'est la seule règle du
+# mode où « partager » RAPPORTE, et la jauge doit le montrer, sinon les coéquipiers ne comprendront
+# jamais pourquoi ils devraient se répartir un continent.
+#
+# Membres MORTS inclus : leurs territoires restent sur la carte, exactement comme côté serveur —
+# sans quoi la jauge partagée chuterait au moment où l'équipe vient de perdre quelqu'un.
+func _team_objective_ctx() -> Dictionary:
+	var members := GameState.teammates_of(_my_id())
+	members.append(_my_id())
+	var owned := {}
+	for m in members:
+		owned[int(m)] = true
+
+	var cont_terrs: Dictionary = MapData.get_map(GameState.map_id).get("continent_territories", {})
+	var team_continents := 0
+	var owned_by_continent := {}
+	var continent_sizes := {}
+	for cid in cont_terrs.keys():
+		var tids: Array = cont_terrs[cid]
+		continent_sizes[str(cid)] = tids.size()
+		var ours := 0
+		for tid in tids:
+			var t: Dictionary = GameState.territories.get(str(tid), {})
+			var o = t.get("owner_id")
+			if o != null and owned.has(int(o)):
+				ours += 1
+		owned_by_continent[str(cid)] = ours
+		if not tids.is_empty() and ours == tids.size():
+			team_continents += 1
+
+	var owned_count := 0
+	var owned_garrisons: Array = []
+	for tid in GameState.territories.keys():
+		var t2: Dictionary = GameState.territories.get(str(tid), {})
+		var o2 = t2.get("owner_id")
+		if o2 != null and owned.has(int(o2)):
+			owned_count += 1
+			owned_garrisons.append(int(t2.get("garrison", 0)))
+
+	var stats: Dictionary = GameState.statistics if typeof(GameState.statistics) == TYPE_DICTIONARY else {}
+	var ck: Dictionary = stats.get("combat_kills_by_player", {}) \
+		if typeof(stats.get("combat_kills_by_player")) == TYPE_DICTIONARY else {}
+	var kills := 0
+	for m in members:
+		kills += int(ck.get(str(int(m)), ck.get(int(m), 0)))
+
+	return {
+		"owned_count": owned_count,
+		"continents_owned": team_continents,
+		"owned_by_continent": owned_by_continent,
+		"continent_sizes": continent_sizes,
+		"combat_kills": kills,
+		"owned_garrisons": owned_garrisons,
+	}
+
+
+# Objectif d'ÉQUIPE du joueur local, DÉJÀ REDACTÉ par le serveur (§3.4 — on ne reçoit que le nôtre).
+# {} en FFA, ou si l'entrée est le marqueur « hidden » (ce qui ne devrait jamais arriver pour NOTRE
+# équipe, mais un état corrompu ne doit pas afficher « type: hidden » dans la jauge).
+func _my_team_objective() -> Dictionary:
+	if GameState.team_mode == "":
+		return {}
+	var tid := GameState.team_of(_my_id())
+	if tid == 0:
+		return {}
+	var obj = GameState.team_objectives.get(str(tid), GameState.team_objectives.get(tid, {}))
+	if typeof(obj) != TYPE_DICTIONARY or str(obj.get("type", "")) in ["", "hidden"]:
+		return {}
+	return obj
+
+
 func _push_objective_tracker() -> void:
+	# MODE ÉQUIPES (§8.124) : c'est l'objectif d'ÉQUIPE qui pilote la jauge — le seul qui fasse
+	# GAGNER (l'objectif individuel ne décide plus rien en équipe, cf. `engine._check_team_victory`).
+	# Afficher l'individuel aurait envoyé les joueurs courir après une victoire impossible.
+	var team_obj := _my_team_objective()
+	if not team_obj.is_empty():
+		var tctx := _team_objective_ctx()
+		var tdata := ObjectiveTracker.progress(team_obj, tctx)
+		var ttxt := ObjectiveTracker.describe(team_obj)
+		if ttxt == "":
+			ttxt = str(team_obj.get("description", ""))
+		hud.set_objective_progress(tdata, "%s\n%s" % [tr("TEAM_OBJECTIVE_TITLE"), ttxt])
+		return
+
 	var obj: Dictionary = GameState.objectives.get(str(_my_id()), {})
 	if typeof(obj) != TYPE_DICTIONARY or obj.is_empty():
 		hud.set_objective_progress({})
@@ -3130,7 +3230,16 @@ func _show_operation_report() -> void:
 	var win := int(GameState.winner_id)
 	var title := ""
 	var title_color := Color("e0b249")  # or (victoire)
-	if win == _my_id():
+	# MODE ÉQUIPES (§8.124) : la victoire est COMMUNE — le titre nomme l'ÉQUIPE, pas le
+	# porte-drapeau. Sans ça, le coéquipier du `winner_id` lirait « DÉFAITE » alors qu'il vient de
+	# gagner (le `winner_id` n'est qu'un membre désigné, cf. `engine._award_team_victory`), et
+	# c'est exactement le genre de contresens qui tue la confiance dans un mode.
+	var win_team := int(GameState.winning_team_id)
+	if GameState.team_mode != "" and win_team > 0:
+		title = tr("TEAM_VICTORY_BANNER") % win_team
+		if GameState.team_of(_my_id()) != win_team:
+			title_color = Color("d6453f")
+	elif win == _my_id():
 		title = tr("GAME_VICTORY_TITLE_FMT") % _display_name(win)
 	else:
 		title = tr("GAME_DEFEAT_TITLE_FMT") % _display_name(win)
