@@ -1475,9 +1475,17 @@ func set_power_card(lines: Array, buttons: Array = []) -> void:
 		c.queue_free()
 	for l in lines:
 		var lbl := Label.new()
-		lbl.text = str(l)
+		# Une ligne est soit une CHAÎNE (cyan, cas historique), soit un `{text, color}` — extension
+		# ADDITIVE (§8.125) : l'ORDRE SECRET du traître est l'information la plus lourde du jeu et
+		# se noyait au milieu des lignes d'état, toutes de la même couleur. Un appelant historique
+		# passe toujours des chaînes et ne change pas d'un pixel.
+		if typeof(l) == TYPE_DICTIONARY:
+			lbl.text = str(l.get("text", ""))
+			lbl.add_theme_color_override("font_color", l.get("color", ACCENT_CYAN))
+		else:
+			lbl.text = str(l)
+			lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		lbl.add_theme_font_size_override("font_size", FS_BODY)
-		lbl.add_theme_color_override("font_color", ACCENT_CYAN)
 		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(lbl)
 	for b in buttons:

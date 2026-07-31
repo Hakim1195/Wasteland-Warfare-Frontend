@@ -95,6 +95,17 @@ var team_objectives: Dictionary = {}
 # Équipe VICTORIEUSE (-1 tant que la partie continue, et TOUJOURS -1 en FFA).
 var winning_team_id: int = -1
 
+# --- BATTLE ROYALE (§8.125) ---
+# Compteurs PUBLICS des mécaniques d'équipe : `{revives_done, revived, crates, surrender,
+# coup_used}`. Le HUD s'en sert pour griser ses boutons (déjà réanimé, déjà voté, coup déjà joué)
+# — jamais pour APPLIQUER une règle : le serveur reste l'autorité (§9.5).
+var battle_royale: Dictionary = {}
+# ORDRES DE TRAHISON, **DÉJÀ REDACTÉS pour nous** : s'il y a une entrée, elle est FORCÉMENT la
+# nôtre (le serveur ne sert jamais celle d'autrui). {} = je ne suis pas traître — et c'est
+# rigoureusement indiscernable d'une partie SANS traître, ce qui EST la mécanique. Aucun filtrage
+# de confidentialité à faire ici, comme pour `pacts`.
+var traitors: Dictionary = {}
+
 # Équipe d'un joueur (0 = SANS ÉQUIPE). Lecture UNIQUE de ce champ dans tout le client : les vues
 # passent par ici plutôt que de refaire un `int(players[pid].team_id)` chacune de leur côté — le
 # piège JSON float (§5) ne se paie ainsi qu'une fois.
@@ -183,6 +194,10 @@ func update_from_json(state_data: Dictionary):
 	team_objectives = tobj if typeof(tobj) == TYPE_DICTIONARY else {}
 	var wt = state_data.get("winning_team_id", null)
 	winning_team_id = int(wt) if (typeof(wt) == TYPE_FLOAT or typeof(wt) == TYPE_INT) else -1
+	var br = state_data.get("battle_royale", {})
+	battle_royale = br if typeof(br) == TYPE_DICTIONARY else {}
+	var tr_ = state_data.get("traitors", {})
+	traitors = tr_ if typeof(tr_) == TYPE_DICTIONARY else {}
 	# Chrono SERVEUR (E3 §8.75) : turn_timer peut être null (bot / hors minuterie) → {}.
 	var tt = state_data.get("turn_timer", null)
 	turn_timer = tt if typeof(tt) == TYPE_DICTIONARY else {}

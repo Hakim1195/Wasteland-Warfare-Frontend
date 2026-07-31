@@ -1905,3 +1905,129 @@ exactement ce qu'elles étaient : des parties chacun-pour-soi.
 > ⚠️ **DÉPLOIEMENT : VPS + CLIENT ENSEMBLE.** Le client interroge `/squad/playlists` : sur un
 > serveur non redéployé la réponse est vide → aucune carte de mode d'équipe, et le hub reste
 > exactement celui d'avant (dégradation propre, mais le mode est invisible).
+
+---
+
+## §8.125 — BATTLE ROYALE : refonte du mode Équipes (parcours, objectif, bonus, TRAHISON)
+
+> **Correctif de parcours + montée en enjeu.** Le §8.124 livrait deux cartes de mode qui menaient à
+> un écran générique, sans chrono ni feedback de recherche, avec des objectifs mous (24 territoires
+> à trois, 2 continents). Ce chantier en fait **UN mode identifié** — BATTLE ROYALE — avec sa
+> destination propre, un objectif public sans pitié, des bonus d'équipe, et une mécanique de
+> **trahison secrète**.
+>
+> ⚠️ L'invariant du §8.124 tient : **`team_id = 0` = SANS ÉQUIPE**, et tout ce qui suit est INERTE
+> en FFA. Chaque `can_*` de `battle_royale.py` commence par vérifier `state.team_mode`.
+
+### 1. Registre — les deux formats sur `classic_42`, 30 min, objectif PUBLIC
+
+| id | carte | format | effectif | timer | trahison |
+|---|---|---|---|---|---|
+| `duo_2v2` | `classic_42` | 2 × 2 | 4 | 30 min | ⛔ |
+| `squad_3v3` | `classic_42` | 2 × 3 | 6 | 30 min | ✅ |
+| `trio_2v2v2` | `classic_42` | 3 × 2 | 6 | 30 min | ⛔ (playlist DÉSACTIVÉE) |
+
+- **Le Théâtre Atlantique quitte le mode** : l'objectif « 5 continents sur 6 » y était impossible
+  (3 continents). Un seul équilibrage à régler, une seule lecture pour le joueur.
+- **`match_time_limit_of`** : la playlist IMPOSE 30 min et écrase `settings.MATCH_TIME_LIMIT_S`.
+  Hors playlist d'équipe elle rend 0 → réglage global inchangé.
+- ⚠️⚠️ Les seuils de `trio_2v2v2` restent **PROVISOIRES** : à 3 camps, 5 continents sur 6 est
+  probablement hors d'atteinte (il est réglé à 4). À revalider AVANT activation.
+
+### 2. Objectif — UN seul, IDENTIQUE, et PUBLIC
+
+`teams.objective_of()` rend la spec ; `assign_team_objectives` la donne à TOUTES les équipes.
+**5 continents sur 6, ou l'annihilation.** La redaction des objectifs d'équipe est **SUPPRIMÉE**.
+
+**Pourquoi ce revirement** : trois types tirés au hasard et cachés donnaient une course que personne
+ne pouvait lire chez l'adversaire — chaque camp avançait à l'aveugle et la fin tombait sans
+prévenir. Public, l'objectif devient un compte à rebours partagé : les deux camps savent ce que vise
+l'autre ET à combien il en est, et une remontée se lit des deux côtés. Le secret change de porteur —
+c'est désormais la TRAHISON qui le détient.
+
+### 3. `battle_royale.py` — module PUR, registre `BR_RULES`
+
+| mécanique | règle | pourquoi |
+|---|---|---|
+| **RÉANIMATION** | transfert de **100 PV** du réanimateur vers le mort ; plancher 1 PV ; 1 fois par joueur, 1 fois par victime | vrai coût → la permadeath garde son poids. Le ressuscité revient à **100 PV, pas à son max** : ramené *in extremis*, pas guéri |
+| **CAISSES** | tous les **50 kills d'équipe**, plafond 4, contenu (150 PV ou 12 unités) **RÉPARTI** entre les vivants | une caisse est une récompense d'ÉQUIPE ; la voir se partager est ce qui la rend collective |
+| **REDDITION** | vote **UNANIME** des vivants, à partir du round 3 | protège les coéquipiers qui y croient encore d'un joueur découragé |
+| **COUP D'ÉTAT** | tirage **TOUT-OU-RIEN**, résolution **DÉTERMINISTE**, round 4 min. | voir ci-dessous |
+
+- **Réanimation / coup d'État** passent par le pipeline GÉNÉRIQUE (`action_handlers`) → idempotence
+  `action_id` gratuite : un double-clic ne réanime pas deux fois et ne déclenche pas deux coups.
+- **La reddition est PRÉ-ROUTÉE hors tour** (comme `pact_respond`) : on décide de se rendre en
+  regardant l'autre camp écraser le sien, donc presque toujours pendant le tour de quelqu'un
+  d'autre. À l'unanimité, l'équipe est ÉLIMINÉE et `_check_victory` constate « dernière équipe
+  debout » — aucune seconde voie de victoire n'est recodée.
+- **Les caisses sont résolues dans `_handle_attack`**, seul endroit du moteur où un compteur de
+  kills bouge. Les accrocher en fin de tour les aurait décalées de l'action qui les mérite.
+
+### 4. TRAHISON — le secret le plus strict du jeu
+
+- **Tirage GLOBAL, tout-ou-rien** : soit CHAQUE équipe a exactement un traître, soit AUCUNE. Un
+  tirage indépendant par équipe aurait permis de raisonner sur les probabilités ; ici il n'y a rien
+  à calculer, seulement à se méfier. Un joueur SANS ordre ne peut rien déduire sur son équipe,
+  seulement qu'il n'est pas LE traître.
+- **La victime est désignée dès l'assignation** : le traître vit toute la partie avec un nom en
+  tête, et c'est cette cible fixe qui donne son poids à chaque échange avec elle.
+- **REDACTION à la source** (`_redact_state_for_player`) : chaque joueur ne reçoit QUE son propre
+  ordre ; un non-traître reçoit `{}`, **indiscernable d'une partie sans traître**. Diffuser ne
+  serait-ce que le NOMBRE de traîtres viderait le dispositif de tout son sens.
+- **Résolution DÉTERMINISTE, aucun dé** (`coup_outcome` : puissance = garnisons + PV de héros,
+  strictement supérieur). Ce coup décide la partie d'un geste et coûte la vie à celui qui échoue :
+  le laisser au hasard en ferait une loterie qu'on tente sans réfléchir. Déterministe, il devient un
+  CALCUL — accumuler l'avantage en silence, sous les yeux de sa victime, et choisir son moment. Et
+  la victime peut le VOIR venir en regardant la carte.
+- **RÉUSSITE** → `victory_reason = "coup"`, le traître gagne **SEUL**. ⚠️ Il reçoit un `team_id`
+  NEUF (son propre camp) : sans ça, `rewards.rank_map` classerait ses ex-coéquipiers avec lui et
+  ceux qu'il vient de trahir toucheraient le barème « 1ᵉʳ ». Prime : **100 coins**, 9ᵉ raison du
+  livre de comptes (`REASON_TRAITOR_BOUNTY` — le seul gain récompensant un geste contre son propre
+  camp mérite sa propre ligne dans le relevé).
+- **ÉCHEC** → le traître meurt, sa victime est **restaurée à l'identique**, et ses territoires sont
+  RÉPARTIS entre les survivants de son ancienne équipe (`_redistribute_territories`). Les laisser
+  en place aurait fait d'un coup raté un non-évènement ; les rendre neutres aurait offert un
+  boulevard à l'équipe adverse, qui n'y est pour rien.
+- `game_over` gagne **`traitors_reveal`** (redaction levée) et **`traitor_bounty`**. `{}` = partie
+  sans traître, et le client doit le DIRE : après 30 minutes de méfiance, le silence serait la pire
+  des réponses.
+
+### 5. Client — parcours et mise en scène
+
+- **UNE carte BATTLE ROYALE**, plus grande (210×160), OR, tout à droite et séparée de la rangée
+  d'effectifs. Sept choix alignés au même niveau visuel faisaient lire « deux effectifs de plus »
+  au lieu de « voici le mode entre amis ». Le format (2v2 / 3v3) descend d'un cran : il se choisit
+  DANS l'écran dédié, où l'on voit ce qu'il implique.
+- **Écran BATTLE ROYALE** : titre du mode, **règles annoncées avant de s'engager** (30 min,
+  objectif public, trahison possible en 3v3 — le découvrir en jeu serait une trahison du joueur),
+  et **CHRONO de recherche à la seconde**. C'est le correctif signalé : sans lui, la mise en file
+  n'affichait rien de vivant et le joueur ne savait pas si la recherche tournait.
+- **`coup_alarm.gd`** : voile rouge pulsant plein écran (|sin|, 2,2 Hz), **sirène SYNTHÉTISÉE**
+  (deux tons balayés, saturés, enveloppe 120 ms — le projet n'a pas d'asset d'alarme et en livrer
+  un aurait signifié un binaire non versionnable), bandeau « TRAHISON EN COURS », puis verdict.
+  NON BLOQUANTE : le joueur doit VOIR ce qui se passe pendant l'alarme.
+- **`crate_reveal.gd`** : « unboxing » de 3 s, punch-in en dépassement, montant en 56 px et
+  **répartition en COLONNES**.
+- ⚠️ **Deux défauts CONSTATÉS EN CAPTURE et corrigés** : (1) le titre de l'alarme était rouge sur
+  voile rouge, **illisible au pic du battement** — il est passé en blanc à contour noir, c'est le
+  VOILE qui porte la couleur ; (2) la caisse répétait son propre titre en pied de panneau et
+  centrait ses lignes de partage, empêchant de vérifier d'un coup d'œil que le partage est ÉGAL.
+
+> **Fichiers.** NOUVEAUX : `api/game/battle_royale.py`, `test_battle_royale.py`,
+> `frontend/scripts/game/coup_alarm.gd`, `frontend/scripts/game/crate_reveal.gd`.
+> MODIFIÉS : `teams.py`, `objectives.py`, `engine.py`, `state_schemas.py`, `economy.py`,
+> `connection_manager.py`, `router.py` · `main_menu.gd`, `squad_screen.gd`, `main.gd`,
+> `ui_strings.csv` (+28 clés).
+>
+> **Validation.** `test_battle_royale.py` **74 ✅** · `test_team_flow.py` **100 ✅** (13 sections,
+> dont réanimation / reddition / coup d'État / caisses par le pipeline réel) · `test_teams.py`
+> **60 ✅** · `test_objectives_team.py` **52 ✅** · `test_squad_flow.py` **64 ✅** ·
+> `test_team_packing.py` **42 ✅** — **0 ❌**. **Suite backend COMPLÈTE verte**, à l'exception de
+> `test_missions.py` / `test_simulation.py`, en échec **PRÉ-EXISTANT** (IndexError ; `fastapi`
+> absent du poste). Client : `--import` **0 ERROR**, boot headless de 4 scènes **0 ERROR**,
+> **captures PNG relues** (menu, écran BR, caisse, alarme, verdict).
+>
+> ⚠️ **NON VÉRIFIÉ** : aucune partie Battle Royale réelle jouée de bout en bout. Les boutons
+> RÉANIMER / SE RENDRE / COUP D'ÉTAT ne sont pas encore posés dans le HUD — les actions existent et
+> sont testées côté serveur, mais **rien ne les déclenche depuis l'interface**. C'est le premier
+> reste à faire.

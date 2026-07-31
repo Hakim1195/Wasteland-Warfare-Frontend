@@ -363,37 +363,120 @@ func _build_mode_cards() -> void:
 	NetworkManager.fetch_team_playlists()
 
 
-# Ajoute une carte par playlist d'ÉQUIPE OUVERTE. Idempotent (une playlist déjà posée n'est pas
-# redoublée) : le registre peut être re-demandé sans conséquence. Serveur non redéployé → réponse
-# vide → AUCUNE carte, et le menu est rigoureusement celui d'avant le chantier (§9.2).
+# UNE SEULE carte BATTLE ROYALE — pas une par playlist (§8.125).
+#
+# POURQUOI ce revirement : cinq cartes d'effectif solo PLUS deux cartes d'équipe faisaient sept
+# choix alignés au même niveau visuel, dont deux menaient à un tout autre jeu. Le joueur ne lisait
+# pas « voici le mode entre amis », il lisait « voici deux effectifs de plus ». Le Battle Royale
+# mérite d'être une DESTINATION, pas une option dans une rangée — d'où une carte PLUS GRANDE, or,
+# posée TOUT À DROITE et séparée du reste. Le choix du format (2v2 / 3v3) descend d'un cran : il
+# se fait DANS l'écran dédié, où il a du sens et où l'on voit ce qu'il implique.
+#
+# La carte n'apparaît QUE si le serveur sert au moins une playlist ouverte → serveur non redéployé
+# = menu rigoureusement identique à celui d'avant (§9.2).
 func _on_team_playlists_loaded(playlists: Dictionary) -> void:
 	if not is_inside_tree() or cards_row == null:
 		return
+	if playlists.is_empty() or _team_cards.has("battle_royale"):
+		return
+	# Séparateur : la carte BR n'appartient PAS à la rangée d'effectifs, elle la termine.
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(28, 0)
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cards_row.add_child(spacer)
+
+	var entry := _make_battle_royale_card(playlists)
+	cards_row.add_child(entry["panel"])
+	_team_cards["battle_royale"] = entry
+
+
+# Carte BATTLE ROYALE : plus grande (210×160 contre 150×130), liseré OR, double encoche, et un
+# sous-titre qui annonce les formats disponibles TELS QUE LE SERVEUR LES DONNE (aucun libellé en
+# dur — ouvrir un 2v2v2 ne demandera pas une ligne de client).
+func _make_battle_royale_card(playlists: Dictionary) -> Dictionary:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(210, 160)
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	panel.add_theme_stylebox_override("panel", _battle_royale_style(false))
+
+	var v := VBoxContainer.new()
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 4)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(v)
+
+	# Eyebrow « ☢ MODE » — rythme eyebrow → valeur de la charte (§2). Le ☢ rend dans toutes les
+	# polices de repli, contrairement aux emojis couleur (leçon des tofus §8.117).
+	var eyebrow := Label.new()
+	eyebrow.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	eyebrow.text = "☢  " + tr("MENU_MODE_EYEBROW_TEAM")
+	eyebrow.add_theme_font_override("font", _font)
+	eyebrow.add_theme_font_size_override("font_size", 12)
+	eyebrow.add_theme_color_override("font_color", GOLD)
+	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(eyebrow)
+
+	var name_lbl := Label.new()
+	name_lbl.text = "MODE_BATTLE_ROYALE"  # clé brute -> auto-traduction
+	name_lbl.add_theme_font_override("font", _font)
+	name_lbl.add_theme_font_size_override("font_size", 30)
+	name_lbl.add_theme_color_override("font_color", GOLD)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(name_lbl)
+
+	var formats := PackedStringArray()
 	var ids := playlists.keys()
 	ids.sort()
 	for pid in ids:
-		var key := str(pid)
-		if _team_cards.has(key):
-			continue
-		var spec: Dictionary = playlists[key]
-		var entry := _make_mode_card({
-			"id": key,
-			"name_key": "MODE_" + key.to_upper(),
-			"count": int(spec.get("capacity", 0)),
-			"ranked": false,
-			"team": true,
-		})
-		cards_row.add_child(entry["panel"])
-		_team_cards[key] = entry
+		formats.append(tr("MODE_" + str(pid).to_upper()))
+	var sub := Label.new()
+	sub.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	sub.text = " · ".join(formats)
+	sub.add_theme_font_override("font", _font)
+	sub.add_theme_font_size_override("font_size", 12)
+	sub.add_theme_color_override("font_color", MUTED)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(sub)
+
+	var btn := Button.new()
+	btn.flat = true
+	btn.focus_mode = Control.FOCUS_NONE
+	var empty := StyleBoxEmpty.new()
+	for s in ["normal", "hover", "pressed", "focus"]:
+		btn.add_theme_stylebox_override(s, empty)
+	btn.pressed.connect(_on_battle_royale_pressed)
+	btn.mouse_entered.connect(func() -> void:
+		AudioManager.play_sfx("hover")
+		panel.add_theme_stylebox_override("panel", _battle_royale_style(true)))
+	btn.mouse_exited.connect(func() -> void:
+		panel.add_theme_stylebox_override("panel", _battle_royale_style(false)))
+	panel.add_child(btn)
+
+	WarzoneUI.add_corner_notches(panel, 20.0, GOLD)
+	return {"panel": panel, "sub": sub, "mode": {"id": "battle_royale", "team": true}}
 
 
-# Cartes d'ÉQUIPE : le clic ne SÉLECTIONNE pas un effectif, il OUVRE l'écran ESCOUADE (le format
-# est porté par la playlist elle-même). D'où ce chemin distinct de `_select_mode`.
-func _on_team_card_pressed(playlist_id: String) -> void:
+func _battle_royale_style(hovered: bool) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.set_content_margin_all(16.0)
+	sb.bg_color = Color(GOLD, 0.20 if hovered else 0.10)
+	sb.set_border_width_all(2)
+	sb.border_color = GOLD
+	sb.shadow_color = Color(GOLD, 0.55 if hovered else 0.30)
+	sb.shadow_size = 16 if hovered else 8
+	return sb
+
+
+# La carte BATTLE ROYALE ne SÉLECTIONNE rien : elle OUVRE l'écran dédié, où le joueur choisit son
+# format et forme son escouade. C'est le correctif de parcours du §8.125 — une carte de mode doit
+# mener à SON mode, pas à un écran générique.
+func _on_battle_royale_pressed() -> void:
 	AudioManager.play_sfx("click")
 	var mc := get_node_or_null("/root/MatchConfig")
 	if mc != null and mc.has_method("set_team_playlist"):
-		mc.set_team_playlist(playlist_id)
+		mc.set_team_playlist("")   # aucun format présélectionné : l'écran dédié fait le choix.
 	_go("res://scenes/ui/squad_screen.tscn")
 
 func _make_mode_card(m: Dictionary) -> Dictionary:
@@ -436,12 +519,7 @@ func _make_mode_card(m: Dictionary) -> Dictionary:
 	btn.add_theme_stylebox_override("pressed", empty)
 	btn.add_theme_stylebox_override("focus", empty)
 	var mode_id: String = m["id"]
-	# Carte d'ÉQUIPE (§8.124) : chemin distinct — elle OUVRE l'écran ESCOUADE au lieu de
-	# sélectionner un effectif (le format est porté par la playlist).
-	if bool(m.get("team", false)):
-		btn.pressed.connect(func() -> void: _on_team_card_pressed(mode_id))
-	else:
-		btn.pressed.connect(func() -> void: _on_mode_card_pressed(mode_id))
+	btn.pressed.connect(func() -> void: _on_mode_card_pressed(mode_id))
 	btn.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
 	panel.add_child(btn)
 
@@ -457,12 +535,10 @@ func _apply_mode_sub(entry: Dictionary) -> void:
 	var sub: Label = entry["sub"]
 	if sub == null:
 		return
+	if bool(m.get("team", false)):
+		return   # carte BATTLE ROYALE : son sous-titre liste les formats, il ne se recalcule pas ici.
 	if m["ranked"]:
 		sub.text = tr("MENU_MODE_RANKED_SUB")
-	elif bool(m.get("team", false)):
-		# Carte d'ÉQUIPE : sous-titre « EN ÉQUIPE · N OPÉRATEURS » — le mot ÉQUIPE doit être lisible
-		# AVANT le clic, sinon la carte ressemble à un simple effectif de plus dans la rangée.
-		sub.text = tr("MENU_MODE_TEAM_SUB") % int(m["count"])
 	else:
 		sub.text = tr("MENU_MODE_PLAYERS") % int(m["count"])
 

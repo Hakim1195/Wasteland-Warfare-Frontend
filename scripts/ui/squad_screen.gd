@@ -87,6 +87,20 @@ func _ready() -> void:
 	add_child(_poll_timer)
 	_poll_timer.start()
 
+	# Chrono de recherche à la SECONDE (le poll, lui, ne bat que toutes les 2 s : un compteur qui
+	# saute de 2 en 2 se voit et donne l'impression d'un écran qui rame).
+	var tick := Timer.new()
+	tick.wait_time = 1.0
+	tick.timeout.connect(_on_tick)
+	add_child(tick)
+	tick.start()
+
+
+func _on_tick() -> void:
+	if _in_queue:
+		_queued_since += 1
+		_refresh_queue_status()
+
 
 func _make_font() -> SystemFont:
 	var f := SystemFont.new()
@@ -126,13 +140,30 @@ func _build_ui() -> void:
 	_root.add_theme_constant_override("separation", 12)
 	panel.add_child(_root)
 
+	# Rythme eyebrow → valeur (§2) : « MODE » puis le nom du mode en grand, OR.
 	var eyebrow := Label.new()
-	eyebrow.text = "SQUAD_TITLE"  # clé brute -> auto-traduction
+	eyebrow.text = "MENU_MODE_EYEBROW_TEAM"  # clé brute -> auto-traduction
 	eyebrow.add_theme_font_override("font", _font)
-	eyebrow.add_theme_font_size_override("font_size", 15)
-	eyebrow.add_theme_color_override("font_color", ACCENT)
+	eyebrow.add_theme_font_size_override("font_size", 12)
+	eyebrow.add_theme_color_override("font_color", MUTED)
 	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_root.add_child(eyebrow)
+
+	var title := Label.new()
+	title.text = "MODE_BATTLE_ROYALE"  # clé brute -> auto-traduction
+	title.add_theme_font_override("font", _font)
+	title.add_theme_font_size_override("font_size", 34)
+	title.add_theme_color_override("font_color", GOLD)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_root.add_child(title)
+
+	# RÈGLES DU MODE, annoncées AVANT de s'engager. Le joueur doit savoir dans quoi il entre : la
+	# partie dure 30 min, l'objectif est public, et — en 3v3 — quelqu'un à sa table a peut-être
+	# reçu l'ordre de l'abattre. Le découvrir en jeu serait une trahison du joueur, pas du camp.
+	var rules := _muted_label("BR_RULES_HINT", 12)
+	_root.add_child(rules)
+
+	WarzoneUI.add_filet(_root)
 
 	_build_no_squad_box()
 	_build_squad_box()
@@ -437,11 +468,36 @@ func _render() -> void:
 	_queue_button.disabled = not is_leader
 	if _in_queue:
 		_queue_button.text = "❯ " + tr("SQUAD_CANCEL_QUEUE")
-		var members: Array = _squad.get("members", [])
-		_set_status("SQUAD_IN_QUEUE", [members.size(), int(_squad.get("team_size", 0))], ACCENT)
+		_refresh_queue_status()
 	else:
 		_queue_button.text = "❯ " + tr("SQUAD_QUEUE_CTA")
 		_status_label.visible = false
+
+
+# Bandeau de recherche : « ESCOUADE 2/3 EN FILE — 01:24 ». Le CHRONO est le correctif de parcours
+# du §8.125 : sans lui, mettre en file n'affichait rien de vivant et le joueur ne savait pas si la
+# recherche tournait ou si l'écran avait planté. C'est exactement ce que le panneau RECHERCHE des
+# files solo affiche depuis §8.116 — il n'y avait aucune raison que le mode équipe en soit privé.
+func _refresh_queue_status() -> void:
+	if not _in_queue:
+		return
+	var members: Array = _squad.get("members", []) if bool(_squad.get("squad", false)) else []
+	var size := members.size() if not members.is_empty() else 1
+	var cap := int(_squad.get("team_size", 0)) if bool(_squad.get("squad", false)) else 1
+	var clock := "%02d:%02d" % [_queued_since / 60, _queued_since % 60]
+	if bool(_squad.get("squad", false)):
+		_set_status_raw("%s — %s" % [tr("SQUAD_IN_QUEUE") % [size, cap], clock], ACCENT)
+	else:
+		# Solo en file d'équipe : on lui rappelle qu'il sera associé à des coéquipiers, sinon
+		# l'attente ressemble à une file solo qui ne trouve personne.
+		_set_status_raw("%s — %s" % [tr("SQUAD_SOLO_FILL_HINT"), clock], ACCENT)
+
+
+func _set_status_raw(text: String, color: Color) -> void:
+	_status_label.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_status_label.text = text
+	_status_label.add_theme_color_override("font_color", color)
+	_status_label.visible = true
 
 
 func _spaced(code: String) -> String:
@@ -498,7 +554,7 @@ func _on_squad_state(ok: bool, data: Dictionary) -> void:
 	if reason in ["", "no_squad"]:
 		_squad = {}
 		if _in_queue:
-			_set_status("SQUAD_SOLO_FILL_HINT", [], ACCENT)
+			_refresh_queue_status()
 		else:
 			_status_label.visible = false
 	else:
