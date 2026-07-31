@@ -1381,3 +1381,4 @@ SQUAD_CREATE_DESC,"Crée une escouade PRIVÉE : seuls ceux à qui vous donnez le
 SQUAD_FIND_MATCH,"TROUVER UNE PARTIE","FIND A MATCH","TROVA UNA PARTITA"
 SQUAD_FIND_MATCH_HINT,"Vous entrez en file d'attente seul. Le serveur vous place dans une equipe avec d'autres joueurs.","You enter the queue alone. The server places you in a team with other players.","Entri in coda da solo. Il server ti inserisce in una squadra con altri giocatori."
 COMMON_CLICK_TO_CLOSE,"CLIQUEZ POUR FERMER","CLICK TO CLOSE","CLICCA PER CHIUDERE"
+SQUAD_SEARCHING_TITLE,"RECHERCHE D'UNE PARTIE EN COURS","SEARCHING FOR A MATCH","RICERCA DI UNA PARTITA IN CORSO"

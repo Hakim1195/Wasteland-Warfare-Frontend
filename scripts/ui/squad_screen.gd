@@ -55,6 +55,10 @@ var _squad: Dictionary = {}          # dernière réponse /squad/* (vide = aucun
 var _playlists: Dictionary = {}      # REGISTRE serveur — aucune valeur en dur ici (§3.1)
 var _selected_playlist: String = ""
 var _in_queue: bool = false
+# Visage RECHERCHE du SOLO (chrono + ANNULER) et contrôles qu'il remplace — cf. `_build_no_squad_box`.
+var _solo_queue_box: VBoxContainer = null
+var _solo_clock: Label = null
+var _no_squad_actions: Array = []
 var _queued_since: int = 0
 
 
@@ -125,23 +129,33 @@ func _build_ui() -> void:
 	add_child(center)
 
 	var panel := PanelContainer.new()
-	# Panneau ÉLARGI (680×620 → 820×560) : l'écran s'était densifié et tout se touchait. On gagne en
-	# LARGEUR (l'air entre les blocs rend l'écran lisible d'un coup d'œil) sans forcer la HAUTEUR —
-	# `custom_minimum_size` est un plancher, le panneau grandit tout seul avec son contenu. Un
-	# plancher trop haut creusait un grand vide sous les boutons du visage « aucune escouade ».
-	panel.custom_minimum_size = Vector2(820, 560)
+	# Panneau ÉLARGI en deux temps : 680×620 → 820×560 → **1080×730** (+32 %). L'écran s'était
+	# densifié (règles, formats, deux CTA, jointure par code, visage de recherche) et tout se
+	# touchait. L'air entre les blocs n'est pas du vide : c'est ce qui permet de lire l'écran d'un
+	# coup d'œil au lieu de le déchiffrer. `custom_minimum_size` reste un PLANCHER — le panneau
+	# grandit encore tout seul si un visage demande plus de place.
+	panel.custom_minimum_size = Vector2(1080, 730)
 	var pstyle := StyleBoxFlat.new()
 	pstyle.bg_color = Color(GUNMETAL, 0.92)
 	pstyle.set_corner_radius_all(0)
 	pstyle.set_border_width_all(2)
 	pstyle.border_color = Color(ACCENT, 0.7)
-	pstyle.set_content_margin_all(36.0)
+	pstyle.set_content_margin_all(48.0)
 	panel.add_theme_stylebox_override("panel", pstyle)
 	center.add_child(panel)
 	WarzoneUI.add_corner_notches(panel)
 
 	_root = VBoxContainer.new()
-	_root.add_theme_constant_override("separation", 16)
+	# INTERLIGNE ÉLARGI (16 → 22 → 32) en même temps que le cadre : agrandir le panneau sans écarter
+	# les lignes ne fait que déplacer la densité, il ne la réduit pas. Seuls les axes VERTICAUX sont
+	# écartés — les rangées horizontales (boutons côte à côte) gardent leur écart serré, qui EST ce
+	# qui les fait lire comme un groupe.
+	_root.add_theme_constant_override("separation", 32)
+	# CENTRAGE VERTICAL : sans lui, le contenu reste collé en haut du panneau agrandi et les 200 px
+	# gagnés deviennent un TROU sous les boutons au lieu d'une respiration. C'est le centrage qui
+	# transforme la hauteur en air — et il tient quel que soit le visage affiché (accueil, escouade,
+	# recherche), qui n'ont pas du tout la même hauteur de contenu.
+	_root.alignment = BoxContainer.ALIGNMENT_CENTER
 	panel.add_child(_root)
 
 	# Rythme eyebrow → valeur (§2) : « MODE » puis le nom du mode en grand, OR.
@@ -204,7 +218,7 @@ func _build_ui() -> void:
 # --- Visage n° 1 : AUCUNE escouade (créer / rejoindre) ---
 func _build_no_squad_box() -> void:
 	_no_squad_box = VBoxContainer.new()
-	_no_squad_box.add_theme_constant_override("separation", 12)
+	_no_squad_box.add_theme_constant_override("separation", 20)
 	_root.add_child(_no_squad_box)
 
 	# ⚠️ Plus de pavé explicatif sous le titre (§8.125) : il décrivait la création d'escouade, qui
@@ -276,11 +290,56 @@ func _build_no_squad_box() -> void:
 	WarzoneUI.wire_button_sfx(join_btn)
 	join_row.add_child(join_btn)
 
+	# --- Visage RECHERCHE SOLO : le joueur est en file SANS escouade -----------------------------
+	# ⚠️ DÉFAUT CORRIGÉ (signalé en jouant : « je ne peux pas annuler une recherche solo »).
+	# Le bouton ANNULER vivait dans `_squad_box`, MASQUÉ tant qu'on n'a pas d'escouade — un joueur
+	# parti en file seul se retrouvait donc SANS AUCUNE SORTIE, coincé jusqu'à ce qu'une partie se
+	# forme. Le visage « aucune escouade » n'avait tout simplement pas d'état « en recherche ».
+	# On lui en donne un, exclusif des actions : on ne crée pas d'escouade pendant qu'on cherche.
+	_solo_queue_box = VBoxContainer.new()
+	_solo_queue_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_solo_queue_box.add_theme_constant_override("separation", 24)
+	_solo_queue_box.visible = false
+	_no_squad_box.add_child(_solo_queue_box)
+
+	_solo_queue_box.add_child(_muted_label("SQUAD_SEARCHING_TITLE", 13))
+
+	_solo_clock = Label.new()
+	_solo_clock.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_solo_clock.add_theme_font_override("font", _font)
+	_solo_clock.add_theme_font_size_override("font_size", 52)
+	_solo_clock.add_theme_color_override("font_color", GOLD)
+	_solo_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_solo_queue_box.add_child(_solo_clock)
+
+	_solo_queue_box.add_child(_muted_label("SQUAD_SOLO_FILL_HINT", 12))
+
+	var cancel_btn := Button.new()
+	cancel_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	cancel_btn.text = "❯ " + tr("SQUAD_CANCEL_QUEUE")
+	cancel_btn.add_theme_font_override("font", _font)
+	cancel_btn.add_theme_font_size_override("font_size", 15)
+	cancel_btn.custom_minimum_size = Vector2(260, 50)
+	cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	WarzoneUI.apply_ghost_button(cancel_btn)
+	cancel_btn.pressed.connect(_on_solo_cancel_pressed)
+	WarzoneUI.wire_button_sfx(cancel_btn)
+	_solo_queue_box.add_child(cancel_btn)
+
+	# Les CONTRÔLES du visage « aucune escouade », regroupés pour être masqués d'un bloc pendant la
+	# recherche (référencés APRÈS coup : ils ont été créés au-dessus, dans l'ordre de la mise en page).
+	_no_squad_actions = [_create_playlist_row, quick_btn, create_btn, join_row]
+	for node in _no_squad_box.get_children():
+		# Les deux libellés d'aide (« vous entrez en file seul », « ou, pour jouer avec vos amis »)
+		# doivent disparaître aussi : ils décrivent des actions devenues indisponibles.
+		if node is Label:
+			_no_squad_actions.append(node)
+
 
 # --- Visage n° 2 : escouade FORMÉE (code, membres, file) ---
 func _build_squad_box() -> void:
 	_squad_box = VBoxContainer.new()
-	_squad_box.add_theme_constant_override("separation", 10)
+	_squad_box.add_theme_constant_override("separation", 20)
 	_squad_box.visible = false
 	_root.add_child(_squad_box)
 
@@ -314,7 +373,7 @@ func _build_squad_box() -> void:
 
 	# Liste des membres AVEC PSEUDOS (différence documentée vs salon anonyme).
 	_members_box = VBoxContainer.new()
-	_members_box.add_theme_constant_override("separation", 6)
+	_members_box.add_theme_constant_override("separation", 12)
 	_squad_box.add_child(_members_box)
 
 	WarzoneUI.add_filet(_squad_box)
@@ -487,7 +546,17 @@ func _render() -> void:
 	if not has_squad:
 		_selected_playlist = _selected_playlist if _selected_playlist != "" else \
 			(str(_playlist_ids()[0]) if not _playlist_ids().is_empty() else "")
-		_rebuild_playlist_buttons(_create_playlist_row, true)
+		# RECHERCHE SOLO en cours → visage RECHERCHE (chrono + ANNULER), actions masquées. Les deux
+		# états sont EXCLUSIFS : on ne crée pas d'escouade pendant qu'on cherche une partie.
+		_solo_queue_box.visible = _in_queue
+		for node in _no_squad_actions:
+			if is_instance_valid(node):
+				node.visible = not _in_queue
+		if _in_queue:
+			_refresh_queue_status()
+		else:
+			_rebuild_playlist_buttons(_create_playlist_row, true)
+			_status_label.visible = false
 		return
 
 	_code_label.text = _spaced(str(_squad.get("code", "")))
@@ -528,6 +597,13 @@ func _render() -> void:
 # files solo affiche depuis §8.116 — il n'y avait aucune raison que le mode équipe en soit privé.
 func _refresh_queue_status() -> void:
 	if not _in_queue:
+		return
+	# SOLO : le visage RECHERCHE porte DÉJÀ le titre, le chrono en 52 px et la mention « vous serez
+	# associé à des coéquipiers ». Le bandeau de statut redirait exactement la même chose une ligne
+	# plus bas (doublon constaté en capture) — on le tait et on ne met à jour que le compteur.
+	if _solo_clock != null and not bool(_squad.get("squad", false)):
+		_solo_clock.text = "%02d:%02d" % [_queued_since / 60, _queued_since % 60]
+		_status_label.visible = false
 		return
 	var members: Array = _squad.get("members", []) if bool(_squad.get("squad", false)) else []
 	var size := members.size() if not members.is_empty() else 1
@@ -599,6 +675,13 @@ func _on_squad_state(ok: bool, data: Dictionary) -> void:
 	# Pas (ou plus) d'escouade. `in_queue` reste possible : c'est le cas du SOLO en file d'équipe.
 	if data.has("in_queue"):
 		_in_queue = bool(data.get("in_queue", false))
+	# ⚠️ RESYNCHRONISATION DU CHRONO sur l'ANCIENNETÉ RÉELLE du ticket (serveur). Sans cette ligne,
+	# le solo ne comptait QUE ses propres tics locaux : revenir sur l'écran (ou rouvrir le client)
+	# repartait de 00:00 alors que le ticket attendait depuis plusieurs minutes — le compteur
+	# affichait donc une durée FAUSSE, et le joueur croyait que sa recherche venait de redémarrer.
+	# La branche « escouade » faisait déjà cette resynchronisation ; celle-ci l'avait oubliée.
+	if data.has("queued_since_s"):
+		_queued_since = int(data.get("queued_since_s", 0))
 	if reason in ["", "no_squad"]:
 		_squad = {}
 		if _in_queue:
@@ -689,8 +772,20 @@ func _on_find_match_pressed() -> void:
 		return
 	_in_queue = true          # bascule d'affichage IMMÉDIATE : le chrono part au clic, pas au poll.
 	_queued_since = 0
-	_refresh_queue_status()
+	_render()                 # bascule sur le visage RECHERCHE (chrono + ANNULER) sans attendre.
 	NetworkManager.squad_queue(_selected_playlist)
+
+
+# ANNULER une recherche SOLO. Même route que l'annulation d'escouade (`DELETE /squad/queue`) : le
+# serveur distingue lui-même le ticket solo du groupe. On repasse au visage d'accueil IMMÉDIATEMENT
+# — un bouton d'annulation qui laisse l'écran en « recherche » pendant 2 s (le temps du poll) donne
+# l'impression de n'avoir rien fait, et le joueur le reclique.
+func _on_solo_cancel_pressed() -> void:
+	AudioManager.play_sfx("click")
+	_in_queue = false
+	_queued_since = 0
+	_render()
+	NetworkManager.squad_dequeue()
 
 
 func _on_join_pressed() -> void:

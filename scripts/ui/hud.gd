@@ -1039,9 +1039,9 @@ func _on_sheet_step(delta: int) -> void:
 #   pid, pseudo, color, faction_name, leader, power_text, status_key, hero,
 #   territories: int, troops: int, cards: int,
 #   territory: { name, garrison, owner_name, contaminated, shielded, frozen } | null }
-# `focus` : DÉPLOYER le panneau après l'avoir rempli. Réservé aux gestes VOLONTAIRES du joueur —
-# un simple rafraîchissement de données passe à false et laisse la fiche dans l'état où il l'a mise.
-func set_player_sheet(data: Dictionary, focus: bool = false) -> void:
+# ⚠️ REMPLIT la fiche, et RIEN D'AUTRE : cette fonction n'OUVRE JAMAIS le panneau (§8.125).
+# Le tiroir de gauche appartient au joueur — il ne se déploie QUE par son propre bouton ◀/▶.
+func set_player_sheet(data: Dictionary) -> void:
 	_sheet_pid = int(data.get("pid", -9999))
 	var col: Color = data.get("color", Color("8a97a5"))
 	%SheetName.text = str(data.get("pseudo", "—")).to_upper()
@@ -1112,14 +1112,15 @@ func set_player_sheet(data: Dictionary, focus: bool = false) -> void:
 			var rad := _sheet_line(tr("HUD_CONTAMINATED"))
 			rad.add_theme_color_override("font_color", Color("7fff00"))
 			body.add_child(rad)
-	# ⚠️ ON N'OUVRE PLUS LA FICHE INCONDITIONNELLEMENT (§8.125). Cette fonction est appelée à CHAQUE
-	# rafraîchissement d'état — donc à chaque action de n'importe quel joueur — et l'ouverture
-	# automatique redéployait le panneau en boucle sous les doigts de celui qui venait de le replier.
-	# Le déploiement est désormais DEMANDÉ (`focus = true`) par les seuls gestes VOLONTAIRES : clic
-	# sur un territoire, clic sur une ligne du roster. Un rafraîchissement ne décide plus de ce que
-	# le joueur regarde.
-	if focus:
-		open_player_sheet()
+	# ⚠️⚠️ AUCUNE OUVERTURE AUTOMATIQUE, sous AUCUN prétexte (§8.125, corrigé deux fois).
+	# 1ʳᵉ version : ouverture à chaque appel — donc à chaque rafraîchissement d'état, donc à chaque
+	#   action de n'importe quel joueur : le panneau se rouvrait en boucle sous les doigts de celui
+	#   qui venait de le replier.
+	# 2ᵉ version : ouverture sur les « gestes volontaires » (clic territoire / roster). Toujours
+	#   faux — cliquer un territoire, c'est vouloir voir LE TERRITOIRE, pas déplier un panneau qu'on
+	#   a rangé exprès. Le joueur qui a replié son tiroir l'a fait pour dégager la carte.
+	# Règle FINALE : le tiroir n'obéit qu'à SON bouton ◀/▶. Cette fonction ne fait que préparer le
+	# contenu — il sera là, à jour, le jour où le joueur décidera d'ouvrir.
 
 # PACTES (§8.123) — contenu du bloc PACTE de la fiche joueur. `d` (construit par main.gd) :
 #   { "state": "none"|"sent"|"incoming"|"active",
@@ -2626,12 +2627,6 @@ func _set_player_sheet_hidden(hide_it: bool) -> void:
 		_sheet_tween.kill()
 	_sheet_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_sheet_tween.tween_property(panel, "position:x", target_x, SIDE_SLIDE_TIME)
-
-# Déploie la fiche si elle est repliée (appelée par set_player_sheet — un clic territoire doit
-# TOUJOURS montrer la fiche demandée).
-func open_player_sheet() -> void:
-	if _sheet_hidden:
-		_set_player_sheet_hidden(false)
 
 # Repli initial : différé d'une frame pour que les conteneurs aient résolu la géométrie (sinon
 # _sheet_width vaut 0 et le panneau ne se déplace pas).

@@ -2477,3 +2477,88 @@ rafraîchissement ne décide plus de ce que le joueur regarde. Le repli initial
 >
 > ⛔ **NON VÉRIFIÉ** : le non-déploiement de la fiche joueur ne se constate qu'EN JOUANT (il faut un
 > rafraîchissement d'état pour reproduire le défaut). Le code est en place et l'import passe.
+
+### 11. Tiroir « Fiche Joueur » — n'obéit QU'À SON BOUTON (§8.125, corrigé DEUX fois)
+
+Le panneau de gauche se dépliait tout seul. Deux tentatives ont été nécessaires, et la 1ʳᵉ
+correction était incomplète :
+
+1. **Cause initiale** — `hud.set_player_sheet()` se terminait par un `open_player_sheet()`
+   inconditionnel. Or cette fonction est appelée à CHAQUE rafraîchissement d'état, donc à chaque
+   action de n'importe quel joueur : le panneau se rouvrait en boucle sous les doigts de celui qui
+   venait de le replier.
+2. **Correction n° 1, insuffisante** — l'ouverture a été conditionnée à un paramètre `focus`, posé à
+   `true` sur les « gestes volontaires » (clic territoire, clic roster). **Mauvaise lecture du
+   besoin** : cliquer un territoire, c'est vouloir voir LE TERRITOIRE, pas déplier un panneau qu'on
+   a rangé exprès. Un joueur qui replie son tiroir le fait pour dégager la carte — le lui rouvrir au
+   premier clic annule sa décision.
+3. **Règle FINALE** : le tiroir n'obéit qu'à **son propre bouton ◀/▶**. `set_player_sheet()` ne fait
+   plus que PRÉPARER le contenu ; il sera là, à jour, le jour où le joueur décidera d'ouvrir.
+   Le paramètre `focus` et la fonction `open_player_sheet()` sont **supprimés** (plus aucun
+   appelant), et `main._open_player_sheet_for_territory` est **renommée
+   `_update_sheet_for_territory`** — garder le mot « open » dans le nom aurait conduit le prochain
+   lecteur à y rebrancher une ouverture, c'est-à-dire à recréer le défaut une troisième fois.
+
+Seuls DEUX sites touchent encore la visibilité du tiroir : `_toggle_player_sheet` (le bouton) et
+`_collapse_player_sheet_initially` (repli au démarrage).
+
+> **Validation — CONTRE-ÉPREUVE COMPORTEMENTALE, pas seulement `--import`.** Les deux corrections
+> précédentes compilaient parfaitement et étaient pourtant fausses : la compilation ne dit rien du
+> comportement. Un script mesure donc la position X du panneau après chaque déclencheur :
+>
+> | déclencheur | position | attendu |
+> |---|---|---|
+> | état initial | −352 | replié |
+> | rafraîchissement d'état | −352 | **inchangé** ✅ |
+> | **clic sur un territoire** | −352 | **inchangé** ✅ |
+> | clic sur une ligne du roster | −352 | **inchangé** ✅ |
+> | bouton ◀/▶ | +10 | **déployé** ✅ |
+>
+> `--import` **0 ERROR**, boot headless de 2 scènes **0 ERROR**.
+
+### 12. Annulation d'une recherche SOLO + respiration de l'écran (§8.125 — 5ᵉ passe)
+
+**a) ⭐ Un joueur en file SEUL ne pouvait pas annuler.** Le bouton ANNULER vivait dans `_squad_box`,
+**masqué tant qu'on n'a pas d'escouade** : le visage « aucune escouade » n'avait tout simplement pas
+d'état « en recherche ». Un joueur parti en file seul se retrouvait donc **sans aucune sortie**,
+coincé jusqu'à ce qu'une partie se forme.
+
+Ajout d'un **visage RECHERCHE SOLO** (`_solo_queue_box`) : titre, chrono en 52 px, rappel « vous
+serez associé à des coéquipiers », et **ANNULER LA RECHERCHE**. Il est EXCLUSIF des actions
+d'accueil (`_no_squad_actions` masqué) — on ne crée pas d'escouade pendant qu'on cherche. Les deux
+bascules sont IMMÉDIATES (`_render()` au clic, sans attendre le poll de 2 s) : un bouton qui laisse
+l'écran inchangé pendant deux secondes donne l'impression de n'avoir rien fait, et le joueur le
+reclique. L'annulation emprunte la route existante `POST /squad/dequeue`, qui distingue déjà
+elle-même le ticket solo du groupe.
+
+⚠️ **Chrono resynchronisé** : la branche « sans escouade » de `_on_squad_state` ne lisait jamais
+`queued_since_s`. Le solo ne comptait donc QUE ses tics locaux — revenir sur l'écran repartait de
+`00:00` alors que le ticket attendait depuis plusieurs minutes. La branche « escouade » faisait déjà
+cette resynchronisation ; celle-ci l'avait oubliée.
+
+⚠️ Le bandeau de statut redisait mot pour mot ce que le visage RECHERCHE affiche déjà (doublon
+constaté en capture) : il est tu tant que ce visage est à l'écran.
+
+**b) Respiration de l'écran** : panneau **820×560 → 1080×730** (+32 %), marge intérieure 36 → 48,
+et surtout **interligne 16 → 22 → 32**. Agrandir le cadre sans écarter les lignes ne fait que
+déplacer la densité, il ne la réduit pas. Seuls les axes VERTICAUX sont écartés — les rangées
+horizontales (boutons côte à côte) gardent leur écart serré, qui EST ce qui les fait lire comme un
+groupe. Le panneau modal d'explication suit (560 → 730, marge 24 → 32, interligne 10 → 16).
+
+⚠️ **Centrage vertical du contenu** (`_root.alignment = CENTER`) : sans lui, le contenu restait collé
+en haut du panneau agrandi et les 200 px gagnés devenaient un TROU sous les boutons au lieu d'une
+respiration. C'est le centrage qui transforme la hauteur en air — et il tient quel que soit le visage
+affiché (accueil, escouade, recherche), qui n'ont pas du tout la même hauteur de contenu.
+
+> **Validation — CONTRE-ÉPREUVE COMPORTEMENTALE.** Un script pilote les quatre états et vérifie la
+> présence du bouton d'annulation :
+>
+> | étape | `_solo_queue_box` | bouton ANNULER | chrono |
+> |---|---|---|---|
+> | accueil | masqué | absent ✅ | — |
+> | après « TROUVER UNE PARTIE » | visible | **présent** ✅ | 00:00 |
+> | après poll serveur (37 s) | visible | présent | **00:38** ✅ (resynchronisé) |
+> | après annulation | masqué | absent ✅ | — |
+>
+> `--import` **0 ERROR**, boot headless de 3 scènes **0 ERROR**, captures relues (accueil, escouade,
+> recherche, modal) — l'écran respire et le contenu est centré dans le cadre agrandi.

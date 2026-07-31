@@ -371,7 +371,7 @@ func _input_blocked() -> bool:
 func _on_territory_clicked(tid: String):
 	# Fiche joueur (lot A) : informative — s'ouvre au clic de TOUT territoire possédé (la logique
 	# de jeu suit en dessous, inchangée). Rétractable par son bouton-tiroir.
-	_open_player_sheet_for_territory(tid)
+	_update_sheet_for_territory(tid)
 	if GameState.winner_id != null:
 		return
 	# Jeu figé tant qu'une fenêtre modale (conquête §8.23, Éclipse/espionnage §8.3) est ouverte.
@@ -1287,21 +1287,24 @@ func _extract_power(desc: String) -> String:
 # afficher → on garde la fiche courante et on n'ouvre rien (le badge du plateau porte déjà l'info).
 # Remplace les 3 anciens panneaux (Inspecteur de Territoire, inspecteur héros adverse, panneau
 # héros local) — une seule fiche, un seul endroit où lire « qui possède quoi ».
-func _open_player_sheet_for_territory(tid: String) -> void:
+# ⚠️ RENOMMÉE de `_open_player_sheet_for_territory` (§8.125) : elle n'OUVRE plus le tiroir, elle
+# ne fait que le REMPLIR. Garder le mot « open » dans le nom aurait conduit le prochain lecteur
+# à y rebrancher une ouverture — c'est exactement le défaut qu'on vient de corriger deux fois.
+func _update_sheet_for_territory(tid: String) -> void:
 	# Propriétaire RÉEL du territoire : seul null = NEUTRE. owner_id peut être NÉGATIF (bot
 	# G2 §8.72) — l'ancien test `>= 0` classait à tort les territoires de bots comme neutres.
 	var raw_owner = _terr(tid).get("owner_id")
 	if raw_owner == null:
 		return
 	_sheet_territory = tid
-	_push_player_sheet(int(raw_owner), true)   # clic territoire = geste voulu.
+	_push_player_sheet(int(raw_owner))
 
 # Compose et pousse la fiche d'un joueur (View pure §6.1 : TOUT est résolu ici). `pid` = joueur
 # affiché ; `_sheet_territory` = territoire cliqué à détailler en bas de fiche ("" = aucun).
-# `focus` : DÉPLOYER le panneau après l'avoir rempli. VRAI seulement pour un geste VOLONTAIRE du
-# joueur (clic sur un territoire, clic sur une ligne du roster) — un simple rafraîchissement laisse
-# la fiche dans l'état où le joueur l'a mise (§8.125 : elle se rouvrait toute seule en boucle).
-func _push_player_sheet(pid: int, focus: bool = false) -> void:
+# ⚠️ NE DÉPLOIE JAMAIS le tiroir de gauche (§8.125) : elle ne fait que composer son CONTENU. Le
+# panneau n'obéit qu'à son propre bouton ◀/▶ — cliquer un territoire met donc la fiche à jour
+# SANS rien ouvrir, et le joueur la trouvera prête quand il décidera de regarder.
+func _push_player_sheet(pid: int) -> void:
 	if not GameState.players.has(str(pid)):
 		return
 	_sheet_pid = pid
@@ -1351,14 +1354,14 @@ func _push_player_sheet(pid: int, focus: bool = false) -> void:
 			"garrison": _garrison(_sheet_territory),
 			"contaminated": board.is_contaminated(_sheet_territory),
 		}
-	hud.set_player_sheet(data, focus)
+	hud.set_player_sheet(data)
 
 # Clic d'une flèche ◀ ▶ de la fiche (ou de tout appelant historique du roster E1 §8.73) : la fiche
 # bascule sur ce joueur (SANS bloc territoire — on change de belligérant, pas de zone) et la caméra
 # se focalise sur son territoire le plus garni.
 func _on_roster_player_clicked(pid: int) -> void:
 	_sheet_territory = ""
-	_push_player_sheet(pid, true)   # clic roster = geste voulu.
+	_push_player_sheet(pid)
 	# Territoire le plus garni du joueur — aucun territoire (éliminé rasé) → pas de focus.
 	var best_tid := ""
 	var best_garrison := -1

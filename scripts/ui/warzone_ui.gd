@@ -148,21 +148,21 @@ static func _open_info_modal(screen: Control, title: String, body: String, font:
 	veil.add_child(center)
 
 	var pan := PanelContainer.new()
-	pan.custom_minimum_size = Vector2(560, 0)
+	pan.custom_minimum_size = Vector2(730, 0)   # +30 %, même respiration que les écrans hôtes.
 	pan.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
 	st.set_corner_radius_all(0)
 	st.set_border_width_all(2)
 	st.border_color = ACCENT
-	st.set_content_margin_all(24.0)
+	st.set_content_margin_all(32.0)
 	st.shadow_color = Color(0, 0, 0, 0.5)
 	st.shadow_size = 10
 	pan.add_theme_stylebox_override("panel", st)
 	center.add_child(pan)
 
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 10)
+	col.add_theme_constant_override("separation", 16)
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pan.add_child(col)
 
