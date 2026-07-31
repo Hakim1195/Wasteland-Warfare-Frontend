@@ -89,18 +89,22 @@ static func make_hex_badge(text: String, font: Font, font_size: int, fill: Color
 # Applique le style « ghost » de la charte (§2) à un bouton : fond quasi transparent + fin liseré
 # cyan, fond cyan léger au survol, texte qui s'illumine en cyan. Angulaire (corner_radius 0).
 # Mutualise le style construit en code répété dans le HUD / les écrans (R6).
-# Pastille « i » CLIQUABLE/SURVOLABLE portant une explication longue en INFOBULLE.
+# Pastille « i » qui OUVRE UN PANNEAU MODAL d'explication.
 #
-# Sert à sortir les pavés explicatifs du corps des écrans : une règle de jeu de trois lignes posée
-# sous un titre se lit UNE fois puis devient du bruit permanent, alors que la même règle derrière un
-# « i » reste disponible sans jamais encombrer. Même principe que le détail des points du Classement.
+# ⚠️ MODAL, PAS une infobulle au survol (correction §8.125) : la 1ʳᵉ version posait un
+# `tooltip_text`, qui ne se déclenchait pas de façon fiable et — surtout — ne ressemblait EN RIEN au
+# détail des points du Classement, la référence maison. Le projet a déjà SON vocabulaire pour « je
+# t'explique une règle » : un voile sombre + un panneau bordé cyan qu'on referme en cliquant
+# n'importe où (`leaderboard._build_rules_overlay`). On le reproduit ici plutôt que d'inventer un
+# second dialecte.
 #
+# `parent_screen` reçoit le voile (il doit couvrir TOUT l'écran, pas seulement la ligne du titre).
 # ⚠️ La lettre « i » et non un glyphe « ⓘ » : les symboles hors ASCII rendent en TOFU dès que la
-# police de repli change (leçon §8.117/§8.121). Le cercle est dessiné par StyleBox, pas par le texte.
-static func make_info_badge(tooltip: String, font: Font = null, diameter: float = 20.0) -> Control:
+# police de repli change. Le cercle est dessiné par StyleBox, pas par le texte.
+static func make_info_badge(parent_screen: Control, title: String, body: String,
+							font: Font = null, diameter: float = 22.0) -> Control:
 	var badge := Button.new()
 	badge.text = "i"
-	badge.tooltip_text = tooltip
 	badge.focus_mode = Control.FOCUS_NONE
 	badge.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	badge.custom_minimum_size = Vector2(diameter, diameter)
@@ -110,15 +114,87 @@ static func make_info_badge(tooltip: String, font: Font = null, diameter: float 
 	badge.add_theme_font_size_override("font_size", int(diameter * 0.62))
 	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(ACCENT, 0.22 if state == "hover" else 0.10)
+		sb.bg_color = Color(ACCENT, 0.30 if state == "hover" else 0.12)
 		sb.set_corner_radius_all(int(diameter / 2.0))
 		sb.set_border_width_all(1)
-		sb.border_color = Color(ACCENT, 0.85 if state == "hover" else 0.55)
+		sb.border_color = Color(ACCENT, 0.95 if state == "hover" else 0.6)
 		sb.set_content_margin_all(0.0)
 		badge.add_theme_stylebox_override(state, sb)
 	badge.add_theme_color_override("font_color", ACCENT)
 	badge.add_theme_color_override("font_hover_color", Color.WHITE)
+	badge.pressed.connect(func() -> void:
+		_open_info_modal(parent_screen, title, body, font))
 	return badge
+
+
+# Voile + panneau d'explication — MÊME construction que `leaderboard._build_rules_overlay` : fond
+# noir à 60 %, panneau gunmetal bordé cyan, fermeture au clic N'IMPORTE OÙ (aucun bouton « fermer »
+# à chercher). Créé à la volée puis libéré : rien ne reste en mémoire une fois lu.
+static func _open_info_modal(screen: Control, title: String, body: String, font: Font) -> void:
+	if screen == null or not is_instance_valid(screen):
+		return
+	var veil := ColorRect.new()
+	veil.name = "InfoOverlay"
+	veil.color = Color(0, 0, 0, 0.6)
+	veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	veil.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed:
+			veil.queue_free())
+	screen.add_child(veil)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	veil.add_child(center)
+
+	var pan := PanelContainer.new()
+	pan.custom_minimum_size = Vector2(560, 0)
+	pan.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(2)
+	st.border_color = ACCENT
+	st.set_content_margin_all(24.0)
+	st.shadow_color = Color(0, 0, 0, 0.5)
+	st.shadow_size = 10
+	pan.add_theme_stylebox_override("panel", st)
+	center.add_child(pan)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 10)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pan.add_child(col)
+
+	var head := Label.new()
+	head.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	head.text = title
+	if font != null:
+		head.add_theme_font_override("font", font)
+	head.add_theme_font_size_override("font_size", 22)
+	head.add_theme_color_override("font_color", ACCENT)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(head)
+	add_filet(col)
+
+	var text := Label.new()
+	text.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	text.text = body
+	if font != null:
+		text.add_theme_font_override("font", font)
+	text.add_theme_font_size_override("font_size", 14)
+	text.add_theme_color_override("font_color", Color("eef3f7"))
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(text)
+
+	var hint := Label.new()
+	hint.text = "COMMON_CLICK_TO_CLOSE"  # clé brute -> auto-traduction
+	if font != null:
+		hint.add_theme_font_override("font", font)
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color("8a97a5"))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(hint)
 
 
 static func apply_ghost_button(btn: Button) -> void:

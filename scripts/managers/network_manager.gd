@@ -833,12 +833,6 @@ func squad_leave() -> void:
 func squad_status() -> void:
 	_send_api_request("/squad/status", HTTPClient.METHOD_GET, {}, _on_squad_response)
 
-# REJOINDRE UNE ESCOUADE OUVERTE (§8.125) — la porte d'entrée des joueurs sans amis : le serveur
-# complète un groupe existant, ou en fonde un OUVERT que les suivants pourront rejoindre.
-func squad_quickjoin(playlist: String) -> void:
-	_send_api_request("/squad/quickjoin", HTTPClient.METHOD_POST, {"playlist": playlist},
-		_on_squad_response)
-
 # Change le FORMAT de l'escouade sans lancer la recherche (§8.125) — CHEF uniquement. Le format est
 # une donnée de GROUPE : sans cette route, le choix du chef restait dans son seul client et ses
 # coéquipiers lisaient encore l'ancien.

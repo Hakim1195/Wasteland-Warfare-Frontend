@@ -1294,11 +1294,14 @@ func _open_player_sheet_for_territory(tid: String) -> void:
 	if raw_owner == null:
 		return
 	_sheet_territory = tid
-	_push_player_sheet(int(raw_owner))
+	_push_player_sheet(int(raw_owner), true)   # clic territoire = geste voulu.
 
 # Compose et pousse la fiche d'un joueur (View pure §6.1 : TOUT est résolu ici). `pid` = joueur
 # affiché ; `_sheet_territory` = territoire cliqué à détailler en bas de fiche ("" = aucun).
-func _push_player_sheet(pid: int) -> void:
+# `focus` : DÉPLOYER le panneau après l'avoir rempli. VRAI seulement pour un geste VOLONTAIRE du
+# joueur (clic sur un territoire, clic sur une ligne du roster) — un simple rafraîchissement laisse
+# la fiche dans l'état où le joueur l'a mise (§8.125 : elle se rouvrait toute seule en boucle).
+func _push_player_sheet(pid: int, focus: bool = false) -> void:
 	if not GameState.players.has(str(pid)):
 		return
 	_sheet_pid = pid
@@ -1348,14 +1351,14 @@ func _push_player_sheet(pid: int) -> void:
 			"garrison": _garrison(_sheet_territory),
 			"contaminated": board.is_contaminated(_sheet_territory),
 		}
-	hud.set_player_sheet(data)
+	hud.set_player_sheet(data, focus)
 
 # Clic d'une flèche ◀ ▶ de la fiche (ou de tout appelant historique du roster E1 §8.73) : la fiche
 # bascule sur ce joueur (SANS bloc territoire — on change de belligérant, pas de zone) et la caméra
 # se focalise sur son territoire le plus garni.
 func _on_roster_player_clicked(pid: int) -> void:
 	_sheet_territory = ""
-	_push_player_sheet(pid)
+	_push_player_sheet(pid, true)   # clic roster = geste voulu.
 	# Territoire le plus garni du joueur — aucun territoire (éliminé rasé) → pas de focus.
 	var best_tid := ""
 	var best_garrison := -1

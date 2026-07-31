@@ -2434,3 +2434,46 @@ capture — aucune erreur, juste un onglet manquant.
 > `test_simulation.py` (échecs **PRÉ-EXISTANTS**). Client : `--import` **0 ERROR**, boot headless de
 > 3 scènes **0 ERROR**, **captures relues** (menu sans pictogramme, écran BR élargi avec « i » et
 > nouveau CTA, onglets ORDRE et ÉQUIPE peuplés).
+
+### 10. Corrections d'ergonomie (§8.125 — 4ᵉ passe)
+
+**a) Infobulle → PANNEAU MODAL.** La 1ʳᵉ version posait un `tooltip_text` : il ne se déclenchait pas
+de façon fiable et — surtout — ne ressemblait EN RIEN au détail des points du Classement, la
+référence maison. Le projet a déjà SON vocabulaire pour « je t'explique une règle » : voile noir à
+60 % + panneau gunmetal bordé cyan, fermé par un clic N'IMPORTE OÙ
+(`leaderboard._build_rules_overlay`). `WarzoneUI.make_info_badge` le reproduit désormais à
+l'identique plutôt que d'inventer un second dialecte. Signature :
+`make_info_badge(parent_screen, title, body, font, diameter)` — `parent_screen` reçoit le voile,
+qui doit couvrir TOUT l'écran et pas seulement la ligne du titre.
+
+**b) ⭐ « TROUVER UNE PARTIE » — file d'attente SOLO, en un clic.** La 3ᵉ passe avait manqué la
+cible : `quickjoin` plaçait bien le joueur dans une escouade, mais il lui restait à cliquer
+« METTRE EN FILE » — deux manipulations pour quelqu'un qui veut juste jouer.
+
+La bonne réponse était déjà dans le serveur : `POST /squad/queue` **sans escouade** enfile un ticket
+SOLO, et `plan_team_bucket` compose les équipes avec les solos en attente (bots à 60 s, comme
+partout). Le bouton appelle donc directement cette route — **aucune escouade n'est créée**, aucun
+code, aucune salle vide. Le chrono de recherche démarre au clic (bascule d'affichage immédiate, sans
+attendre le poll).
+
+⚠️ **`POST /squad/quickjoin` et tout son annuaire Redis (`mm:squadopen:*`, `_sync_open_index`, champs
+`open` / `in_queue` sur l'escouade) ont été SUPPRIMÉS** — avec la file solo directe, ils ne servaient
+plus rien. Du code mort testé reste du code mort : il aurait fallu le maintenir à chaque évolution du
+matchmaking, pour une route que plus aucun écran n'appelait. Section de test correspondante retirée
+également ; `FakeRedis` conserve ses SET (inoffensifs, utiles au prochain besoin).
+
+**c) La FICHE JOUEUR ne se déploie plus toute seule.** `hud.set_player_sheet()` se terminait par
+`open_player_sheet()` — or cette fonction est appelée à CHAQUE rafraîchissement d'état, donc à chaque
+action de n'importe quel joueur : le panneau se rouvrait en boucle sous les doigts de celui qui
+venait de le replier. Le déploiement est désormais conditionné à un paramètre `focus`, passé à `true`
+par les SEULS gestes volontaires — clic sur un territoire, clic sur une ligne du roster. Un
+rafraîchissement ne décide plus de ce que le joueur regarde. Le repli initial
+(`_collapse_player_sheet_initially`) est inchangé.
+
+> **Validation de la 4ᵉ passe.** `test_squad_flow.py` **77 ✅** (après retrait de la section
+> `quickjoin`). Suite backend COMPLÈTE verte hors `test_missions.py` / `test_simulation.py` (échecs
+> **PRÉ-EXISTANTS**). Client : `--import` **0 ERROR**, boot headless de 3 scènes **0 ERROR**,
+> captures relues (écran BR avec « TROUVER UNE PARTIE » en tête, panneau modal d'explication ouvert).
+>
+> ⛔ **NON VÉRIFIÉ** : le non-déploiement de la fiche joueur ne se constate qu'EN JOUANT (il faut un
+> rafraîchissement d'état pour reproduire le défaut). Le code est en place et l'import passe.

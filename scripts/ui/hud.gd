@@ -1039,7 +1039,9 @@ func _on_sheet_step(delta: int) -> void:
 #   pid, pseudo, color, faction_name, leader, power_text, status_key, hero,
 #   territories: int, troops: int, cards: int,
 #   territory: { name, garrison, owner_name, contaminated, shielded, frozen } | null }
-func set_player_sheet(data: Dictionary) -> void:
+# `focus` : DÉPLOYER le panneau après l'avoir rempli. Réservé aux gestes VOLONTAIRES du joueur —
+# un simple rafraîchissement de données passe à false et laisse la fiche dans l'état où il l'a mise.
+func set_player_sheet(data: Dictionary, focus: bool = false) -> void:
 	_sheet_pid = int(data.get("pid", -9999))
 	var col: Color = data.get("color", Color("8a97a5"))
 	%SheetName.text = str(data.get("pseudo", "—")).to_upper()
@@ -1110,7 +1112,14 @@ func set_player_sheet(data: Dictionary) -> void:
 			var rad := _sheet_line(tr("HUD_CONTAMINATED"))
 			rad.add_theme_color_override("font_color", Color("7fff00"))
 			body.add_child(rad)
-	open_player_sheet()
+	# ⚠️ ON N'OUVRE PLUS LA FICHE INCONDITIONNELLEMENT (§8.125). Cette fonction est appelée à CHAQUE
+	# rafraîchissement d'état — donc à chaque action de n'importe quel joueur — et l'ouverture
+	# automatique redéployait le panneau en boucle sous les doigts de celui qui venait de le replier.
+	# Le déploiement est désormais DEMANDÉ (`focus = true`) par les seuls gestes VOLONTAIRES : clic
+	# sur un territoire, clic sur une ligne du roster. Un rafraîchissement ne décide plus de ce que
+	# le joueur regarde.
+	if focus:
+		open_player_sheet()
 
 # PACTES (§8.123) — contenu du bloc PACTE de la fiche joueur. `d` (construit par main.gd) :
 #   { "state": "none"|"sent"|"incoming"|"active",

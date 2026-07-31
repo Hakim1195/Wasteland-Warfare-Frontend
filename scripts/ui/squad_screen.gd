@@ -170,7 +170,8 @@ func _build_ui() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title_row.add_child(title)
 
-	title_row.add_child(WarzoneUI.make_info_badge(tr("BR_RULES_HINT"), _font, 22.0))
+	title_row.add_child(WarzoneUI.make_info_badge(
+		self, tr("MODE_BATTLE_ROYALE"), tr("BR_RULES_HINT"), _font, 22.0))
 
 	WarzoneUI.add_filet(_root)
 
@@ -216,21 +217,25 @@ func _build_no_squad_box() -> void:
 	_create_playlist_row.add_theme_constant_override("separation", 10)
 	_no_squad_box.add_child(_create_playlist_row)
 
-	# CTA n° 1 — JOUER AVEC DES INCONNUS. Placé EN PREMIER et en gros, parce que c'est le cas le plus
-	# fréquent : la plupart des joueurs arrivent seuls. Avant lui, un solo n'avait que « CRÉER », se
-	# retrouvait dans un groupe d'une personne que personne ne pouvait rejoindre (il faut un CODE),
-	# et le pool se pulvérisait en salons vides — la boucle signalée en jouant.
+	# CTA n° 1 — TROUVER UNE PARTIE, en UN clic et SANS RIEN D'AUTRE À FAIRE.
+	#
+	# ⚠️ C'est la voie du joueur qui arrive SEUL, et c'est la plus fréquente. La version précédente
+	# le faisait passer par une escouade (créée ou rejointe) puis lui demandait ENCORE de cliquer
+	# « METTRE EN FILE » — deux manipulations pour un joueur qui veut juste jouer. Ici on l'envoie
+	# DIRECTEMENT dans la file d'équipe, sans escouade du tout : le matchmaker le place dans une
+	# équipe avec d'autres solos (et complète aux bots au bout de 60 s, comme partout ailleurs).
+	# Le serveur sait déjà faire exactement ça — `squad_queue` sans escouade enfile un ticket solo.
 	var quick_btn := Button.new()
 	_style_cta(quick_btn)
 	quick_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	quick_btn.text = "❯ " + tr("SQUAD_QUICKJOIN")
-	quick_btn.custom_minimum_size = Vector2(300, 56)
+	quick_btn.text = "❯ " + tr("SQUAD_FIND_MATCH")
+	quick_btn.custom_minimum_size = Vector2(320, 58)
 	quick_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	quick_btn.tooltip_text = tr("SQUAD_QUICKJOIN_DESC")
-	quick_btn.pressed.connect(_on_quickjoin_pressed)
+	quick_btn.pressed.connect(_on_find_match_pressed)
 	WarzoneUI.wire_button_sfx(quick_btn)
 	_no_squad_box.add_child(quick_btn)
 
+	_no_squad_box.add_child(_muted_label("SQUAD_FIND_MATCH_HINT", 12))
 	_no_squad_box.add_child(_muted_label("SQUAD_OR_WITH_FRIENDS", 12))
 
 	var create_btn := Button.new()
@@ -676,14 +681,16 @@ func _on_create_pressed() -> void:
 	NetworkManager.squad_create(_selected_playlist)
 
 
-# REJOINDRE UNE ESCOUADE OUVERTE : le serveur cherche un groupe qui a une place libre dans ce
-# format et m'y met ; s'il n'en trouve aucun, il en fonde un OUVERT dont je deviens le point de
-# ralliement. Dans les deux cas je repars avec une escouade — jamais dans une impasse.
-func _on_quickjoin_pressed() -> void:
+# TROUVER UNE PARTIE — file d'équipe en SOLO, sans escouade et sans autre geste. Le matchmaker
+# compose l'équipe avec les autres solos en attente (bots à 60 s si le pool est vide).
+func _on_find_match_pressed() -> void:
 	AudioManager.play_sfx("click")
 	if _selected_playlist == "":
 		return
-	NetworkManager.squad_quickjoin(_selected_playlist)
+	_in_queue = true          # bascule d'affichage IMMÉDIATE : le chrono part au clic, pas au poll.
+	_queued_since = 0
+	_refresh_queue_status()
+	NetworkManager.squad_queue(_selected_playlist)
 
 
 func _on_join_pressed() -> void:
