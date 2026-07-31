@@ -125,7 +125,11 @@ func _build_ui() -> void:
 	add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(680, 620)
+	# Panneau ÉLARGI (680×620 → 820×560) : l'écran s'était densifié et tout se touchait. On gagne en
+	# LARGEUR (l'air entre les blocs rend l'écran lisible d'un coup d'œil) sans forcer la HAUTEUR —
+	# `custom_minimum_size` est un plancher, le panneau grandit tout seul avec son contenu. Un
+	# plancher trop haut creusait un grand vide sous les boutons du visage « aucune escouade ».
+	panel.custom_minimum_size = Vector2(820, 560)
 	var pstyle := StyleBoxFlat.new()
 	pstyle.bg_color = Color(GUNMETAL, 0.92)
 	pstyle.set_corner_radius_all(0)
@@ -137,7 +141,7 @@ func _build_ui() -> void:
 	WarzoneUI.add_corner_notches(panel)
 
 	_root = VBoxContainer.new()
-	_root.add_theme_constant_override("separation", 12)
+	_root.add_theme_constant_override("separation", 16)
 	panel.add_child(_root)
 
 	# Rythme eyebrow → valeur (§2) : « MODE » puis le nom du mode en grand, OR.
@@ -149,19 +153,24 @@ func _build_ui() -> void:
 	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_root.add_child(eyebrow)
 
+	# Titre + pastille « i ». Les RÈGLES DU MODE (30 min, objectif public, traître possible en 3v3)
+	# vivent DANS L'INFOBULLE et non sous le titre : un pavé de trois lignes se lit une fois puis
+	# devient du bruit permanent au-dessus de l'écran, alors que derrière un « i » il reste
+	# disponible sans jamais encombrer. Même principe que le détail des points du Classement.
+	var title_row := HBoxContainer.new()
+	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_row.add_theme_constant_override("separation", 12)
+	_root.add_child(title_row)
+
 	var title := Label.new()
 	title.text = "MODE_BATTLE_ROYALE"  # clé brute -> auto-traduction
 	title.add_theme_font_override("font", _font)
 	title.add_theme_font_size_override("font_size", 34)
 	title.add_theme_color_override("font_color", GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_root.add_child(title)
+	title_row.add_child(title)
 
-	# RÈGLES DU MODE, annoncées AVANT de s'engager. Le joueur doit savoir dans quoi il entre : la
-	# partie dure 30 min, l'objectif est public, et — en 3v3 — quelqu'un à sa table a peut-être
-	# reçu l'ordre de l'abattre. Le découvrir en jeu serait une trahison du joueur, pas du camp.
-	var rules := _muted_label("BR_RULES_HINT", 12)
-	_root.add_child(rules)
+	title_row.add_child(WarzoneUI.make_info_badge(tr("BR_RULES_HINT"), _font, 22.0))
 
 	WarzoneUI.add_filet(_root)
 
@@ -197,14 +206,32 @@ func _build_no_squad_box() -> void:
 	_no_squad_box.add_theme_constant_override("separation", 12)
 	_root.add_child(_no_squad_box)
 
-	var hint := _muted_label("SQUAD_CODE_HINT", 13)
-	_no_squad_box.add_child(hint)
-
+	# ⚠️ Plus de pavé explicatif sous le titre (§8.125) : il décrivait la création d'escouade, qui
+	# n'est plus la voie principale — le lire juste sous « BATTLE ROYALE » envoyait le joueur seul
+	# vers le mauvais bouton. Chaque CTA porte désormais SA propre infobulle, et les règles du mode
+	# vivent derrière le « i » du titre.
 	# Sélecteur de playlist — peuplé DEPUIS LE REGISTRE serveur (aucune carte en dur).
 	_create_playlist_row = HBoxContainer.new()
 	_create_playlist_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	_create_playlist_row.add_theme_constant_override("separation", 10)
 	_no_squad_box.add_child(_create_playlist_row)
+
+	# CTA n° 1 — JOUER AVEC DES INCONNUS. Placé EN PREMIER et en gros, parce que c'est le cas le plus
+	# fréquent : la plupart des joueurs arrivent seuls. Avant lui, un solo n'avait que « CRÉER », se
+	# retrouvait dans un groupe d'une personne que personne ne pouvait rejoindre (il faut un CODE),
+	# et le pool se pulvérisait en salons vides — la boucle signalée en jouant.
+	var quick_btn := Button.new()
+	_style_cta(quick_btn)
+	quick_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	quick_btn.text = "❯ " + tr("SQUAD_QUICKJOIN")
+	quick_btn.custom_minimum_size = Vector2(300, 56)
+	quick_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	quick_btn.tooltip_text = tr("SQUAD_QUICKJOIN_DESC")
+	quick_btn.pressed.connect(_on_quickjoin_pressed)
+	WarzoneUI.wire_button_sfx(quick_btn)
+	_no_squad_box.add_child(quick_btn)
+
+	_no_squad_box.add_child(_muted_label("SQUAD_OR_WITH_FRIENDS", 12))
 
 	var create_btn := Button.new()
 	_style_cta(create_btn)
@@ -212,6 +239,7 @@ func _build_no_squad_box() -> void:
 	create_btn.text = "❯ " + tr("SQUAD_CREATE")
 	create_btn.custom_minimum_size = Vector2(260, 52)
 	create_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	create_btn.tooltip_text = tr("SQUAD_CREATE_DESC")
 	create_btn.pressed.connect(_on_create_pressed)
 	WarzoneUI.wire_button_sfx(create_btn)
 	_no_squad_box.add_child(create_btn)
@@ -646,6 +674,16 @@ func _on_create_pressed() -> void:
 		_set_status("SQUAD_ERR_PLAYLIST_CLOSED")
 		return
 	NetworkManager.squad_create(_selected_playlist)
+
+
+# REJOINDRE UNE ESCOUADE OUVERTE : le serveur cherche un groupe qui a une place libre dans ce
+# format et m'y met ; s'il n'en trouve aucun, il en fonde un OUVERT dont je deviens le point de
+# ralliement. Dans les deux cas je repars avec une escouade — jamais dans une impasse.
+func _on_quickjoin_pressed() -> void:
+	AudioManager.play_sfx("click")
+	if _selected_playlist == "":
+		return
+	NetworkManager.squad_quickjoin(_selected_playlist)
 
 
 func _on_join_pressed() -> void:

@@ -2120,3 +2120,72 @@ capture) ; et l'ancrage se fait après `add_child` (§8.121).
 > ⛔ **NON VÉRIFIÉ VISUELLEMENT** : le groupement par équipe du Roster de Guerre. Le panneau
 > latéral n'était pas déployé dans la capture — le code est en place et l'import passe, mais
 > personne n'a vu le rendu.
+
+### 9. Ajustements d'ergonomie (§8.125 — 3ᵉ passe)
+
+**a) Bouton BATTLE ROYALE — pictogramme retiré.** La carte tire déjà son autorité de sa taille, de
+son or et de sa position ; le symbole y ajoutait du bruit sans rien dire de plus.
+
+**b) Description du mode → INFOBULLE.** Les règles (30 min, objectif public, traître possible en
+3v3) vivaient sous le titre : un pavé de trois lignes se lit UNE fois puis devient du bruit
+permanent en tête d'écran. Elles passent derrière une pastille **« i »** accolée au titre —
+nouveau helper `WarzoneUI.make_info_badge(tooltip, font, diameter)`, réutilisable partout.
+⚠️ La lettre « i » et non un glyphe « ⓘ » : les symboles hors ASCII rendent en TOFU dès que la
+police de repli change. Le pavé `SQUAD_CODE_HINT` sous le titre est **supprimé** — il décrivait la
+création d'escouade, qui n'est plus la voie principale, et envoyait le joueur seul au mauvais bouton.
+
+**c) ⭐ JOINTURE OUVERTE — `POST /squad/quickjoin`.** Le défaut le plus grave signalé : rejoindre
+exigeait un CODE, qu'on n'obtient que d'un ami. Un joueur seul n'avait donc qu'une option — créer
+son escouade — et attendait dans un groupe d'UNE personne que **personne ne pouvait rejoindre**.
+Résultat observé : multiplication de salons d'un membre, pool pulvérisé, impossibilité de jouer.
+
+- Nouvel **annuaire Redis des escouades OUVERTES** par playlist (`mm:squadopen:{playlist}`, SET de
+  codes), réaligné à CHAQUE écriture par `_sync_open_index` → il ne peut pas dériver de l'état réel.
+- L'algorithme complète **la plus REMPLIE** (puis la plus ancienne à égalité) : on finit un groupe
+  prêt à partir plutôt que d'en amorcer un de plus. `created_at` départage de façon déterministe —
+  sans lui, deux escouades également remplies se disputaient les arrivants au hasard de l'ordre du
+  SET, et aucune ne finissait de se remplir.
+- **Si aucune n'existe, on en FONDE une OUVERTE** : le joueur devient le point de ralliement du
+  suivant. C'est CE point qui casse la boucle.
+- Champ `open` : « CRÉER UNE ESCOUADE » produit une escouade **FERMÉE** (ce bouton veut dire « je
+  joue avec MES amis, je leur donne le code » — voir un inconnu débarquer serait une surprise
+  désagréable) ; `quickjoin` fonde des escouades OUVERTES.
+- ⚠️ `in_queue` est désormais marqué **SUR l'escouade** et plus seulement dérivé du ticket du
+  lecteur : sans ce drapeau, un solo pouvait rejoindre un groupe DÉJÀ parti chercher et rester en
+  rade. Levé par `squad_dequeue` / `_destroy_squad` UNIQUEMENT — surtout pas par `_dequeue_squad`,
+  qui est appelée en plein milieu de `squad_queue` (idempotence du 2ᵉ clic).
+- Client : « **REJOINDRE UNE ÉQUIPE** » devient le CTA principal (le cas le plus fréquent), suivi
+  d'un séparateur « — OU, POUR JOUER AVEC VOS AMIS — » puis de « CRÉER UNE ESCOUADE ».
+
+**d) Écran BR élargi** : 680×620 → **820×560**. On gagne en LARGEUR (l'air entre les blocs rend
+l'écran lisible d'un coup d'œil) sans forcer la HAUTEUR — `custom_minimum_size` est un plancher, et
+un plancher trop haut creusait un grand vide sous les boutons.
+
+**e) + f) Deux ONGLETS dans la barre basse** — `HUD_TAB_ORDER` et `HUD_TAB_TEAM`, construits PAR
+CODE (ajouter des nœuds à `main.tscn` pour du contenu 100 % dynamique le ferait grossir sans rien
+gagner, et les fusions de `.tscn` sont la source n° 1 de corruption du dépôt).
+
+| onglet | contenu | disponible |
+|---|---|---|
+| **ORDRE** | la rotation complète dans l'ordre de jeu, chacun à SA couleur de plateau, le joueur courant surligné avec « ❯ », et un état en TEXTE (`EN COURS` / `HORS JEU` / `RETIRÉ`) | **tous les modes** — en FFA aussi, savoir qui joue après soi conditionne chaque attaque |
+| **ÉQUIPE** | PV et barre de vie de chaque coéquipier, mention `(VOUS)`, et surtout `RÉANIMABLE` / `PERDU` sur les morts | mode équipe seulement |
+
+Le Roster de Guerre portait déjà ces informations, mais il vit dans le panneau LATÉRAL, souvent
+replié — alors que le regard du joueur est en permanence sur la barre BASSE, là où il agit. On amène
+l'information là où l'œil est déjà, plutôt que d'espérer qu'il aille la chercher.
+
+⚠️ L'état des morts est dit en TEXTE et pas seulement en couleur (même exigence que les motifs
+daltoniens du plateau, E10).
+
+⚠️⚠️ **L'onglet ÉQUIPE est créé PARESSEUSEMENT**, surtout pas dans `_ready()` : à ce moment-là aucun
+état de partie n'est encore arrivé (il descend par le WS ensuite), donc `GameState.team_mode` vaut
+toujours `""` et **l'onglet n'aurait JAMAIS existé, y compris en Battle Royale**. Bug attrapé en
+capture — aucune erreur, juste un onglet manquant.
+
+> **Validation de la 3ᵉ passe.** `test_squad_flow.py` **93 ✅** (section [8] « jointure ouverte » :
+> 2ᵉ solo qui rejoint le 1ᵉʳ, escouade pleine → nouvelle, groupe d'amis inviolable, escouade en file
+> écartée, annuaires séparés par format, idempotence). `FakeRedis` étendu aux SET
+> (`sadd`/`srem`/`smembers`). Suite backend COMPLÈTE verte hors `test_missions.py` /
+> `test_simulation.py` (échecs **PRÉ-EXISTANTS**). Client : `--import` **0 ERROR**, boot headless de
+> 3 scènes **0 ERROR**, **captures relues** (menu sans pictogramme, écran BR élargi avec « i » et
+> nouveau CTA, onglets ORDRE et ÉQUIPE peuplés).

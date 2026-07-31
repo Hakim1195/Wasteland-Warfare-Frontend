@@ -405,11 +405,12 @@ func _make_battle_royale_card(playlists: Dictionary) -> Dictionary:
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(v)
 
-	# Eyebrow « ☢ MODE » — rythme eyebrow → valeur de la charte (§2). Le ☢ rend dans toutes les
-	# polices de repli, contrairement aux emojis couleur (leçon des tofus §8.117).
+	# Eyebrow — rythme eyebrow → valeur de la charte (§2). AUCUN pictogramme : la carte tire déjà
+	# son autorité de sa taille, de son or et de sa position ; un symbole y ajoutait du bruit sans
+	# rien dire de plus.
 	var eyebrow := Label.new()
 	eyebrow.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	eyebrow.text = "☢  " + tr("MENU_MODE_EYEBROW_TEAM")
+	eyebrow.text = tr("MENU_MODE_EYEBROW_TEAM")
 	eyebrow.add_theme_font_override("font", _font)
 	eyebrow.add_theme_font_size_override("font_size", 12)
 	eyebrow.add_theme_color_override("font_color", GOLD)

@@ -123,6 +123,13 @@ const CHAT_MAX_LENGTH := 500
 const TAB_ACTIONS := 0
 const TAB_CARDS := 1
 const TAB_JOURNAL := 2
+# Onglets AJOUTÉS PAR CODE (§8.125) — la scène n'en connaît que trois. Indices attribués à la
+# construction : ORDRE toujours, ÉQUIPE seulement en mode équipe (d'où deux variables et non deux
+# constantes — l'index d'ÉQUIPE dépend de la présence d'ORDRE).
+var _tab_order := -1
+var _tab_team := -1
+var _order_box: VBoxContainer = null
+var _team_box: VBoxContainer = null
 
 var _log_count := 0
 var _elapsed := 0.0          # secondes écoulées sur le tour courant (affichage MM:SS)
@@ -303,6 +310,7 @@ func _ready() -> void:
 	%CommandsTabs.set_tab_title(TAB_CARDS, tr("HUD_TAB_CARDS"))
 	%CommandsTabs.set_tab_title(TAB_JOURNAL, tr("HUD_TAB_JOURNAL"))
 	%CommandsTabs.tab_changed.connect(_on_command_tab_changed)
+	_build_extra_tabs()
 	_build_confirm_button()
 	_build_operator_zone()
 	_setup_chat_selector()
@@ -1459,6 +1467,218 @@ func set_deploy_confirm(active: bool, total: int = 0, quota: int = 0) -> void:
 	_confirm_btn.text = tr("HUD_DEPLOY_CONFIRM_FMT") % [total, quota]
 
 # =========================================================
+# =========================================================
+# ONGLETS « ORDRE » et « ÉQUIPE » (§8.125) — construits PAR CODE
+# =========================================================
+# Signalés en jouant : on ne voyait NI à qui était le tour, NI l'état de ses coéquipiers. Le Roster
+# de Guerre porte ces informations, mais il vit dans le panneau LATÉRAL, souvent replié — alors que
+# le regard du joueur est en permanence sur la barre BASSE, là où il agit. On amène donc
+# l'information là où l'œil est déjà, plutôt que d'espérer qu'il aille la chercher.
+#
+# Construits par CODE et non dans `main.tscn` : ajouter deux nœuds à une scène de cette taille pour
+# du contenu 100 % dynamique ferait grossir le `.tscn` sans rien y gagner (et les fusions de `.tscn`
+# sont la source n° 1 de corruption du dépôt, cf. §8.44).
+func _build_extra_tabs() -> void:
+	_order_box = VBoxContainer.new()
+	_order_box.name = "HUD_TAB_ORDER"
+	_order_box.add_theme_constant_override("separation", 4)
+	%CommandsTabs.add_child(_order_box)
+	_tab_order = %CommandsTabs.get_tab_count() - 1
+	%CommandsTabs.set_tab_title(_tab_order, tr("HUD_TAB_ORDER"))
+
+
+# Onglet ÉQUIPE : mode équipe UNIQUEMENT — en FFA il n'aurait rien à montrer, et un onglet vide est
+# pire qu'un onglet absent (il promet une information qui n'existe pas).
+#
+# ⚠️ CRÉÉ PARESSEUSEMENT, et surtout PAS dans `_ready()` : à ce moment-là AUCUN état de partie n'est
+# encore arrivé (il descend par le WS, après), donc `GameState.team_mode` vaut toujours "" et
+# l'onglet n'aurait JAMAIS existé — y compris en Battle Royale. Bug attrapé en capture, invisible
+# autrement (aucune erreur, juste un onglet manquant).
+func _ensure_team_tab() -> void:
+	if _team_box != null or GameState.team_mode == "":
+		return
+	_team_box = VBoxContainer.new()
+	_team_box.name = "HUD_TAB_TEAM"
+	_team_box.add_theme_constant_override("separation", 4)
+	%CommandsTabs.add_child(_team_box)
+	_tab_team = %CommandsTabs.get_tab_count() - 1
+	%CommandsTabs.set_tab_title(_tab_team, tr("HUD_TAB_TEAM"))
+
+
+# Rafraîchit les deux onglets. Appelé depuis `update_display()` — donc à chaque état reçu, comme
+# tout le reste du HUD. Reconstruction complète (même patron que `_refresh_cards`).
+func refresh_order_and_team() -> void:
+	_ensure_team_tab()   # l'onglet ÉQUIPE naît au 1er état de partie d'équipe reçu (cf. ci-dessus).
+	if _order_box != null:
+		_fill_order_tab()
+	if _team_box != null:
+		_fill_team_tab()
+
+
+func _clear_box(box: Node) -> void:
+	for c in box.get_children():
+		box.remove_child(c)
+		c.queue_free()
+
+
+# Couleur PLATEAU d'un joueur — source UNIQUE (groupe `game_board`), la même que les territoires et
+# les pastilles. C'est ce qui permet de relier une ligne d'ordre à ce qu'on voit sur la carte.
+func _player_tint(pid: int) -> Color:
+	var board = get_tree().get_first_node_in_group("game_board")
+	if board != null and board.has_method("get_player_color"):
+		return board.get_player_color(pid)
+	return ACCENT_CYAN
+
+
+func _player_label(pid: int) -> String:
+	var p = GameState.players.get(str(int(pid)), {})
+	if typeof(p) != TYPE_DICTIONARY:
+		return "#%d" % pid
+	var name := str(p.get("username", "")).strip_edges()
+	if name == "":
+		name = "#%d" % pid
+	if bool(p.get("is_bot", false)):
+		name = "[IA] " + name
+	return name
+
+
+# ONGLET ORDRE : la rotation complète, dans l'ordre de jeu, chacun à SA couleur de plateau, avec le
+# joueur COURANT surligné et un chevron « ❯ ». Utile dans TOUS les modes — en FFA aussi, savoir qui
+# joue après soi conditionne chaque décision d'attaque.
+func _fill_order_tab() -> void:
+	_clear_box(_order_box)
+	var order: Array = GameState.turn_order if not GameState.turn_order.is_empty() \
+		else GameState.players.keys()
+	for raw in order:
+		var pid := int(raw)
+		var p = GameState.players.get(str(pid), {})
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		var is_current: bool = GameState.stage == "playing" \
+			and int(GameState.current_player_id) == pid
+		var dead: bool = str(p.get("status", "alive")) == "eliminated"
+		var tint := _player_tint(pid)
+
+		var row := PanelContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.set_content_margin_all(3)
+		sb.content_margin_left = 8
+		sb.bg_color = Color(tint, 0.18 if is_current else 0.05)
+		sb.border_width_left = 4
+		sb.border_color = tint if not dead else Color(tint, 0.35)
+		row.add_theme_stylebox_override("panel", sb)
+
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 8)
+		row.add_child(line)
+
+		var who := Label.new()
+		who.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		who.text = ("❯ " if is_current else "  ") + _player_label(pid)
+		who.add_theme_font_size_override("font_size", FS_BODY)
+		who.add_theme_color_override("font_color",
+			Color("eef3f7") if not dead else Color(HERO_MUTED, 0.7))
+		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		line.add_child(who)
+
+		var tag := Label.new()
+		tag.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		# État en TEXTE et pas seulement en couleur : un joueur daltonien doit lire la même chose
+		# (même exigence que les motifs du plateau, E10).
+		if dead:
+			tag.text = tr("ORDER_TAG_DOWN")
+		elif not bool(p.get("is_active", true)):
+			tag.text = tr("ORDER_TAG_LEFT")
+		elif is_current:
+			tag.text = tr("ORDER_TAG_PLAYING")
+		tag.add_theme_font_size_override("font_size", 11)
+		tag.add_theme_color_override("font_color", tint if is_current else HERO_MUTED)
+		line.add_child(tag)
+
+		_order_box.add_child(row)
+
+
+# ONGLET ÉQUIPE : l'état VITAL de mes coéquipiers — PV, mort ou vif, réanimable. C'est ce qu'on
+# regarde pour décider de se sacrifier (réanimer coûte 100 PV) ou de voter la reddition.
+func _fill_team_tab() -> void:
+	_clear_box(_team_box)
+	var me := int(AuthManager.user_id)
+	var mates: Array = [me] + GameState.teammates_of(me)
+	var revived: Array = (GameState.battle_royale.get("revived", []) if
+		typeof(GameState.battle_royale) == TYPE_DICTIONARY else [])
+
+	for raw in mates:
+		var pid := int(raw)
+		var p = GameState.players.get(str(pid), {})
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		var hero: Dictionary = GameState.hero_of(pid)
+		var pv := int(hero.get("pv_current", 0))
+		var pv_max: int = max(1, int(hero.get("pv_max", 1)))
+		var dead: bool = str(p.get("status", "alive")) == "eliminated"
+		var tint := _player_tint(pid)
+
+		var row := PanelContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.set_content_margin_all(4)
+		sb.content_margin_left = 8
+		sb.bg_color = Color(tint, 0.16 if pid == me else 0.06)
+		sb.border_width_left = 4
+		sb.border_color = tint
+		row.add_theme_stylebox_override("panel", sb)
+
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 2)
+		row.add_child(col)
+
+		var head := HBoxContainer.new()
+		head.add_theme_constant_override("separation", 8)
+		col.add_child(head)
+
+		var who := Label.new()
+		who.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		who.text = _player_label(pid) + ("  " + tr("TEAM_TAG_YOU") if pid == me else "")
+		who.add_theme_font_size_override("font_size", FS_BODY)
+		who.add_theme_color_override("font_color", Color("eef3f7"))
+		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		head.add_child(who)
+
+		var state_lbl := Label.new()
+		state_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		if dead:
+			# On DIT si le mort est encore récupérable : c'est la seule information qui change ce
+			# que le joueur va faire de son tour.
+			state_lbl.text = tr("TEAM_TAG_REVIVABLE") if not (pid in revived.map(func(v): return int(v))) \
+				else tr("TEAM_TAG_LOST")
+			state_lbl.add_theme_color_override("font_color", ACCENT_GOLD if state_lbl.text == tr("TEAM_TAG_REVIVABLE") else HERO_DANGER)
+		else:
+			state_lbl.text = "%d / %d" % [pv, pv_max]
+			state_lbl.add_theme_color_override("font_color", HERO_MUTED)
+		state_lbl.add_theme_font_size_override("font_size", 11)
+		head.add_child(state_lbl)
+
+		var bar := ProgressBar.new()
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(0, 6)
+		bar.max_value = pv_max
+		bar.value = 0 if dead else pv
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = tint if not dead else Color(HERO_DANGER, 0.5)
+		fill.set_corner_radius_all(0)
+		var bg := StyleBoxFlat.new()
+		bg.bg_color = Color(0, 0, 0, 0.35)
+		bg.set_corner_radius_all(0)
+		bar.add_theme_stylebox_override("fill", fill)
+		bar.add_theme_stylebox_override("background", bg)
+		col.add_child(bar)
+
+		_team_box.add_child(row)
+
+
 # Carte POUVOIR contextuelle (onglet ACTIONS — lot E)
 # =========================================================
 # `lines` = Array[String] (état vivant du pouvoir, déjà traduit par main.gd) ;
@@ -1979,6 +2199,9 @@ func add_chat_message(channel: String, text: String) -> void:
 
 func update_display() -> void:
 	var stage := str(GameState.stage)
+	# Onglets ORDRE / ÉQUIPE (§8.125) — rafraîchis à CHAQUE état reçu, comme le reste du HUD : ils
+	# affichent qui joue et l'état vital des coéquipiers, deux choses qui changent à chaque action.
+	refresh_order_and_team()
 
 	# Remise à zéro du rebours quand le tour, le joueur actif OU la PHASE change (§8.31, révisé).
 	var key := "%s|%s|%s|%s" % [

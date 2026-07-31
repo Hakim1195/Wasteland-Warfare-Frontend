@@ -89,6 +89,38 @@ static func make_hex_badge(text: String, font: Font, font_size: int, fill: Color
 # Applique le style « ghost » de la charte (§2) à un bouton : fond quasi transparent + fin liseré
 # cyan, fond cyan léger au survol, texte qui s'illumine en cyan. Angulaire (corner_radius 0).
 # Mutualise le style construit en code répété dans le HUD / les écrans (R6).
+# Pastille « i » CLIQUABLE/SURVOLABLE portant une explication longue en INFOBULLE.
+#
+# Sert à sortir les pavés explicatifs du corps des écrans : une règle de jeu de trois lignes posée
+# sous un titre se lit UNE fois puis devient du bruit permanent, alors que la même règle derrière un
+# « i » reste disponible sans jamais encombrer. Même principe que le détail des points du Classement.
+#
+# ⚠️ La lettre « i » et non un glyphe « ⓘ » : les symboles hors ASCII rendent en TOFU dès que la
+# police de repli change (leçon §8.117/§8.121). Le cercle est dessiné par StyleBox, pas par le texte.
+static func make_info_badge(tooltip: String, font: Font = null, diameter: float = 20.0) -> Control:
+	var badge := Button.new()
+	badge.text = "i"
+	badge.tooltip_text = tooltip
+	badge.focus_mode = Control.FOCUS_NONE
+	badge.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	badge.custom_minimum_size = Vector2(diameter, diameter)
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if font != null:
+		badge.add_theme_font_override("font", font)
+	badge.add_theme_font_size_override("font_size", int(diameter * 0.62))
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(ACCENT, 0.22 if state == "hover" else 0.10)
+		sb.set_corner_radius_all(int(diameter / 2.0))
+		sb.set_border_width_all(1)
+		sb.border_color = Color(ACCENT, 0.85 if state == "hover" else 0.55)
+		sb.set_content_margin_all(0.0)
+		badge.add_theme_stylebox_override(state, sb)
+	badge.add_theme_color_override("font_color", ACCENT)
+	badge.add_theme_color_override("font_hover_color", Color.WHITE)
+	return badge
+
+
 static func apply_ghost_button(btn: Button) -> void:
 	if btn == null:
 		return
