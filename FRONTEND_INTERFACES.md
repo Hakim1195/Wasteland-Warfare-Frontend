@@ -2562,3 +2562,172 @@ affiché (accueil, escouade, recherche), qui n'ont pas du tout la même hauteur 
 >
 > `--import` **0 ERROR**, boot headless de 3 scènes **0 ERROR**, captures relues (accueil, escouade,
 > recherche, modal) — l'écran respire et le contenu est centré dans le cadre agrandi.
+
+---
+
+## §8.126 — COMPAGNIES : écran de clan, [TAG] partout, onglet du Classement (volet FRONTEND)
+
+> **Périmètre.** Volet client de `PROMPT_COMPAGNIES.md` (contrat réseau : **§8.126 de
+> `CONTRAT_RESEAU.md`**). Un écran neuf, une carte dans le Profil, un onglet dans le Classement, un
+> préfixe d'identité diffusé partout, et une section d'affichage sur l'écran Escouade.
+>
+> ⚠️ **FRONTIÈRE ESCOUADE / COMPAGNIE.** L'ESCOUADE (`squad_screen`, §8.124-125) est l'objet de MISE
+> EN FILE : éphémère, elle meurt avec la partie. La COMPAGNIE est une IDENTITÉ persistante et **ne se
+> met JAMAIS en file**. Aucun bouton de l'écran Compagnie ne parle de matchmaking.
+>
+> ⚠️ **DÉPLOIEMENT : VPS + CLIENT ENSEMBLE.** Sans serveur redéployé, `/company/*` répond 404 : la
+> carte du Profil affiche « SANS COMPAGNIE », l'onglet COMPAGNIES reste vide, et aucun tag
+> n'apparaît. Dégradation propre, mais chantier invisible.
+
+### 1. `company_screen.tscn` / `company_screen.gd` — UN écran, DEUX modes
+
+Écran **100 % CODE-DRIVEN** (patron `squad_screen` / `salon_screen`) : la scène est un `Control`
+racine nu, toute la hiérarchie est bâtie dans `_build_shell()` + `_render()`.
+
+- `CompanyScreen.target_tag == ""` → **MA compagnie** (`GET /company/mine`) : code d'adhésion,
+  actions de chef, QUITTER.
+- `CompanyScreen.target_tag != ""` → **fiche PUBLIQUE** d'une autre (`GET /company/{tag}`) : ni code,
+  ni actions, ni RP exacts.
+
+`static var target_tag` posé par l'écran appelant juste avant `TransitionManager.change_scene`
+(MÊME mécanique que `public_profile.target_username`, §8.107 — `change_scene` ne transporte aucun
+paramètre) puis **remis à `""` dès sa lecture** dans `_ready`, sinon revenir sur SA compagnie
+rouvrirait la fiche publique consultée juste avant.
+
+**Deux scènes auraient dupliqué** l'en-tête, le panneau d'honneur et le roster — donc trois
+occasions de les laisser diverger. Le mode public RETIRE des éléments, il n'en réinvente aucun.
+
+Trois visages selon l'état (`_view`) :
+1. **SANS COMPAGNIE** — « SANS COMPAGNIE » + badge d'explication + CRÉER / REJOINDRE, plus le
+   cooldown de réadhésion s'il court (**dit AVANT** le clic sur un bouton qui refuserait).
+2. **CRÉATION** — champ TAG (4 lettres, vérification LIVE de disponibilité, **débounce 0,5 s**),
+   champ NOM, grille de 24 emblèmes, FONDER / ANNULER.
+3. **FICHE** — emblème + `[TAG]` + nom + rang inter-compagnies ; code d'adhésion + COPIER
+   (+ RÉGÉNÉRER pour le chef) ; panneau d'honneur (score de saison TOP 10 · victoires de saison ·
+   division moyenne) ; roster défilant ; QUITTER.
+
+**Roster** : pseudo · libellé `CHEF` · division (+ RP en vue membre) · ancienneté · actions du chef
+(TRANSFÉRER / EXCLURE) **avec confirmation modale à chaque fois**. « CHEF » est un **LIBELLÉ, pas un
+pictogramme** — préférence produit actée §8.125 (aucun emoji décoratif dans l'UI de ce chantier).
+
+**Contre-épreuves comportementales (§8.125) intégrées au code :**
+- un **refus serveur NE VIDE PAS** le formulaire (`_draft_tag` / `_draft_name` / `_draft_emblem`
+  survivent au rendu) — un formulaire qui se vide fait recommencer, donc fait abandonner ;
+- le bouton REJOINDRE reste **toujours cliquable** après un échec (aucune désactivation locale : le
+  serveur répond en 200, c'est lui qui décide) ;
+- la ligne de statut **se tait sur succès** — elle est réservée aux refus et à l'attente réseau.
+
+⚠️⚠️ **PIÈGE D'ORDRE DE CONSTRUCTION (défaut vu en CAPTURE, invisible au boot headless).** Sur un
+écran code-driven, le fond plein écran est un enfant ajouté par le script : une `TopNav` ajoutée
+AVANT lui disparaît **DERRIÈRE** (les Control se dessinent dans l'ordre de l'arbre). La nav était
+totalement absente alors que le boot annonçait 0 ERROR. **`_build_shell()` d'abord, `TopNav`
+ensuite.** Les écrans à `.tscn` (profile, leaderboard) n'ont pas ce souci : leur fond vit dans la
+scène.
+
+### 2. `company_emblems.gd` — catalogue avec remplacement AUTOMATIQUE
+
+Registre statique des 24 emblèmes. `make_badge(id, size, font)` rend :
+- `res://resources/companies/emblem_NN.png` **s'il existe** (test par `ResourceLoader.exists`, et
+  **surtout pas** `FileAccess.file_exists` : en build exporté le PNG devient une ressource importée
+  et le fichier source n'existe plus) ;
+- sinon un **PLACEHOLDER procédural** : monogramme sur fond gunmetal, liseré teinté.
+
+**Déposer les fichiers SUFFIT** — aucune ligne de code à toucher (mécanique éprouvée de l'audio
+§8.122). ⚠️ Monogrammes **ASCII A..X uniquement** : la police condensée rend en TOFU tout glyphe hors
+BMP (constat §8.117 sur 📢 ✉ 🎯, puis §8.123 où 🤝 est devenu `↔`).
+
+### 3. Le `[TAG]` PARTOUT — une source, huit sites
+
+`GameState.company_tag_of(pid)` et `GameState.tagged_name(pid, base)` sont le **SEUL endroit du
+client** qui décide de la forme du préfixe. Le serveur diffuse `company_tag` dans chaque
+`PlayerState` ; le champ est ADDITIF, donc `tagged_name` rend le pseudo **INCHANGÉ** quand il est
+absent — aucun écran n'a de garde à écrire.
+
+Sites couverts : `player_chip` (chips, roster, inspecteur, feed) · `main._display_name` (journal,
+toasts, Split-Screen VS, kill feed, Post-Op) · `hud._player_label` + bandeau de tour ·
+`faction_selection` (draft, bandeau d'équipe) · `operation_report` (podium, débriefing, lignes) ·
+`spectator_overlay`.
+
+- Dans `player_chip`, le tag est un **Label DÉDIÉ** (et non un préfixe de chaîne) pour deux raisons :
+  la charte le veut en **teinte atténuée et jamais colorée faction** (une String n'a qu'une couleur),
+  et la troncature compacte ne doit ronger que le pseudo — un tag coupé (« [ALF… ») n'identifie plus
+  rien.
+- ⛔ **PAS de tag sur l'initiale du badge daltonien** (`board._owner_initial`) : ce champ est une
+  LETTRE, pas un nom.
+
+### 4. Carte COMPAGNIE du Profil (onglet APERÇU)
+
+Deux états — et le premier compte autant que le second : « SANS COMPAGNIE » n'est pas un trou, c'est
+l'invitation (le seul endroit du jeu qui la propose). Avec compagnie : emblème + `[TAG]` + nom +
+bouton OUVRIR. Les trois boutons mènent au MÊME écran.
+
+Placée **AVANT la bande de forme**, qui sort de la fonction par un `return` quand l'historique est
+vide : la reléguer après la masquerait pour un joueur neuf — précisément celui qu'une compagnie
+retient le mieux.
+
+⚠️ La carte ne montre **NI score NI roster** : les y amener obligerait `/profile/stats` à recalculer
+un agrégat de compagnie à chaque ouverture, et surtout créerait une DEUXIÈME source du score (la
+divergence que le §8.106 a coûté cher à corriger).
+
+Le **panneau explicatif** « qu'est-ce qu'une compagnie » est un **modal calqué sur le Classement**
+(`WarzoneUI.make_info_badge` → voile plein écran + panneau gunmetal, fermeture au clic n'importe
+où) — référence maison actée §8.125.
+
+### 5. Classement — onglet COMPAGNIES
+
+Bascule **OPÉRATEURS / COMPAGNIES** en tête du panneau, avec la MÊME fabrique de pastilles que les
+onglets d'échelon (`_make_pill_tab`) : un troisième langage visuel pour un troisième sélecteur aurait
+fait de cet écran un patchwork.
+
+En mode COMPAGNIES, l'appareillage du ladder d'opérateurs est **MASQUÉ** (carte VOTRE RANG, bande des
+divisions, onglets d'échelon, podium) : aucun de ces objets ne décrit un clan, les laisser suggérerait
+qu'ils s'y rapportent. À leur place : carte **VOTRE COMPAGNIE** (patron « VOTRE RANG », présente même
+si la compagnie est 300ᵉ) puis les lignes `rang · emblème · [TAG] nom · effectif · score`.
+
+- Ligne **CLIQUABLE** → fiche publique de la compagnie, routée par **TAG** (doctrine §8.107 : aucun
+  identifiant séquentiel énumérable).
+- Le classement est demandé **une fois à l'ouverture de l'écran** (cache serveur 60 s → coût nul), pas
+  au premier clic sur l'onglet : il est peuplé à l'instant où on le touche.
+- Pas de bouton « AFFICHER PLUS » : le serveur sert le top 50 d'un bloc. Le laisser visible
+  promettrait une suite qui n'existe pas.
+
+⚠️ **Deux défauts vus en CAPTURE, pas au boot** : l'eyebrow réutilisait `LEADERBOARD_GLOBAL_RANK`
+(« RANG MONDIAL » sur un rang de clan — deux classements différents), et la ligne de statut
+retombait sur `_season_status_line()`, dont le repli « AUCUN OPÉRATEUR CLASSÉ » se lit comme un bug
+sous une liste de compagnies bien peuplée. D'où `COMPANY_RANK_EYEBROW`, `COMPANY_COL_SCORE` et
+`_company_status_line()`.
+
+### 6. Profil public — ligne compagnie
+
+Ligne cliquable (emblème + `[TAG]` + nom) sous le niveau, ouvrant la fiche publique. **Absente** si le
+serveur ne renvoie pas le bloc — jamais un « COMPAGNIE : AUCUNE » qui affirmerait à tort.
+
+### 7. Pont ESCOUADE — section COMPAGNIE
+
+Sur `squad_screen`, sous la liste des membres : `COMPAGNIE — [TAG] NOM`, un rappel « partagez le code
+ci-dessus », et le roster. **Bloc d'AFFICHAGE, aucun couplage au matchmaking.** Demandé une seule
+fois à l'ouverture (une compagnie ne change pas toutes les 2 s, contrairement à une file).
+
+⛔ **RESTE À FAIRE ASSUMÉ — bouton « INVITER LA COMPAGNIE »** (push du code aux membres EN LIGNE) et
+**statut « en ligne »**. Vérification faite : le serveur n'a **NI canal WebSocket de hub** (le seul WS
+du jeu est `/ws/{room_id}/{player_id}`, il n'existe qu'en partie) **NI notion de présence hors
+partie**. Les inventer aurait été une infrastructure entière greffée sur un bouton. Afficher une
+pastille verte devinée côté client aurait été pire : c'est le genre de mensonge qui fait attendre un
+joueur devant un ami absent.
+
+### 8. i18n (57 clés, FR/EN/IT — AUCUN emoji)
+
+`COMMON_CONFIRM` · `COMMON_CANCEL` · `COMMON_HOURS_SHORT` · `COMMON_MINUTES_SHORT` ·
+`LEADERBOARD_TAB_OPERATORS` · `COMPANY_*` (titre, états, formulaires, roster, actions, les 4
+confirmations, panneau d'honneur, classement, pont escouade, et les 9 `COMPANY_ERR_*`).
+Le serveur n'envoie **jamais de texte affichable** : il rend une `reason`, le client choisit les mots
+(règle R4) — c'est `_reason_text()` qui fait la table.
+
+> **Validation.** `--import` **0 ERROR** ; boot headless **0 ERROR** sur `main_menu`, `profile`,
+> `leaderboard`, `company_screen`, `squad_screen`, `public_profile`. **Captures PNG relues** (fiche,
+> sans-compagnie, création, onglet COMPAGNIES, carte du Profil) — elles ont révélé les **3 défauts**
+> corrigés ci-dessus (§1 nav absente, §5 eyebrow et statut), qu'aucun boot n'aurait signalés.
+>
+> ⛔ **NON VÉRIFIÉ EN JEU** : le `[TAG]` en partie (chips, kill feed, Post-Op) n'est pas observable
+> sans un serveur redéployé ET deux comptes membres d'une même compagnie. Le code est en place et
+> `tagged_name` est couvert côté données, mais le rendu réel reste à constater.

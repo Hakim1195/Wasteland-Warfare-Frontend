@@ -337,5 +337,6 @@ func _first_alive_teammate() -> String:
 		if str(p.get("status", "alive")) == "eliminated" or bool(p.get("is_dead", false)):
 			continue
 		var who := str(p.get("username", ""))
-		return who if who != "" else "#%d" % int(mate)
+		# §8.126 — même identité qu'ailleurs : le tag de compagnie accompagne le pseudo.
+		return GameState.tagged_name(int(mate), who if who != "" else "#%d" % int(mate))
 	return ""

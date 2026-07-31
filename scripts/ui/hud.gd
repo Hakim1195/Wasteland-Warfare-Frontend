@@ -1549,7 +1549,8 @@ func _player_label(pid: int) -> String:
 		name = "#%d" % pid
 	if bool(p.get("is_bot", false)):
 		name = "[IA] " + name
-	return name
+	# §8.126 — préfixe `[TAG]` par la SOURCE UNIQUE (rend le pseudo inchangé sans compagnie).
+	return GameState.tagged_name(pid, name)
 
 
 # ONGLET ORDRE : la rotation complète, dans l'ordre de jeu, chacun à SA couleur de plateau, avec le
@@ -2249,6 +2250,8 @@ func update_display() -> void:
 		who = str(pdata.get("username", ""))
 		if who == "":
 			who = tr("HUD_PLAYER_NUM") % GameState.player_number(GameState.current_player_id)
+		# §8.126 — même identité qu'ailleurs : le bandeau de tour porte le tag lui aussi.
+		who = GameState.tagged_name(GameState.current_player_id, who)
 	%TurnLabel.text = tr("HUD_TURN_OF_FMT") % who.to_upper()
 	%TurnLabel.add_theme_color_override("font_color", _turn_color)
 

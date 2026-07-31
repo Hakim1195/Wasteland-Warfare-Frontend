@@ -31,6 +31,10 @@ const TopNav = preload("res://scripts/ui/top_nav.gd")
 # §8.107 — écran de PROFIL PUBLIC ouvert au clic sur une ligne (le pseudo transite par son
 # `static var target_username`, cf. `_open_public_profile`).
 const PublicProfileScreen = preload("res://scripts/ui/public_profile.gd")
+# §8.126 — volet COMPAGNIES : emblèmes du catalogue client + écran de fiche (porteur du
+# `static var target_tag`, même mécanique de passage de paramètre que le profil public §8.107).
+const CompanyEmblems = preload("res://scripts/ui/company_emblems.gd")
+const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -150,6 +154,22 @@ var _last_rp_delta: int = 0
 # plus affiché « par défaut » mais uniquement hors ligne, étiqueté comme tel.
 var _offline_fallback: bool = false
 
+# --- VOLET COMPAGNIES (§8.126) -------------------------------------------------------------------
+# Le classement a désormais DEUX populations : les OPÉRATEURS (tout le code historique, intouché) et
+# les COMPAGNIES. Une bascule de mode plutôt qu'un second écran : c'est le même geste (« qui est en
+# tête ? »), la même page, et surtout la même barre de navigation — un écran de plus aurait été un
+# écran de plus à trouver.
+# ⚠️ En mode compagnies on MASQUE la carte VOTRE RANG, la bande des divisions, les onglets d'échelon
+# et le podium : aucun de ces objets n'a de sens pour un clan, et les laisser affichés donnerait à
+# croire qu'ils s'y rapportent.
+var _company_mode: bool = false
+var _company_rows: Array = []          # entrées du top (dicts serveur, lus tels quels)
+var _company_mine: Dictionary = {}     # bloc « VOTRE COMPAGNIE » (patron « VOTRE RANG » du ladder)
+var _company_loaded: bool = false      # false = réponse jamais reçue (état « SYNCHRONISATION »)
+var _mode_row: HBoxContainer = null
+var _company_card_slot: VBoxContainer = null
+const COL_COMPANY_MEMBERS := 120.0
+
 func _ready():
 	_font = SystemFont.new()
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
@@ -180,6 +200,8 @@ func _ready():
 	_build_rules_button()
 	# Pied de liste « AFFICHER PLUS » (pagination — masqué tant qu'il n'y a rien de plus à charger).
 	_build_more_button()
+	# §8.126 — bascule OPÉRATEURS / COMPAGNIES, en TÊTE du panneau (elle commande tout le reste).
+	_build_mode_row()
 	# ΔRP du dernier match de la session (chip de la carte VOTRE RANG) — lu du cache NetworkManager.
 	_read_last_rp_delta()
 
@@ -201,6 +223,11 @@ func _ready():
 	# bascule sur le mock. Avant, le mock s'affichait D'EMBLÉE : un classement fictif « flashait »
 	# une fraction de seconde avant d'être remplacé par le vrai — trompeur.
 	NetworkManager.lobby_error.connect(_on_leaderboard_failed)
+	# §8.126 — le classement inter-compagnies est chargé UNE fois, à l'ouverture de l'écran (et non
+	# au premier clic sur l'onglet) : il est mis en cache 60 s côté serveur, donc le demander tout de
+	# suite ne coûte rien et l'onglet est peuplé à l'instant où on le touche.
+	NetworkManager.company_leaderboard_loaded.connect(_on_company_leaderboard)
+	NetworkManager.fetch_company_leaderboard()
 	_queue_fetch("", "", 0)
 
 	# État d'ATTENTE : aucune donnée tant que le serveur n'a pas répondu (ni mock, ni podium fictif).
@@ -980,9 +1007,26 @@ func _showing_mock() -> bool:
 	return _offline_fallback and _server_board.is_empty() and not _browse_mode
 
 func _refresh() -> void:
+	# §8.126 — MODE COMPAGNIES : tout l'appareillage du ladder d'opérateurs (carte VOTRE RANG, bande
+	# des divisions, onglets d'échelon, podium) est MASQUÉ, pas juste vidé. Aucun de ces objets ne
+	# décrit un clan ; les laisser à l'écran suggérerait qu'ils s'y rapportent.
+	_rebuild_mode_row()
+	if _company_mode:
+		_hide_operator_widgets()
+		_rebuild_company_card()
+		_build_columns_header()
+		_populate_company_ranking()
+		_update_more_button()   # ⚠️ AVANT le return : c'est lui qui MASQUE « AFFICHER PLUS ».
+		return
+	if _company_card_slot != null:
+		_clear(_company_card_slot)
+	if podium_box != null:
+		podium_box.visible = true
+
 	_rebuild_rank_card()      # §8.95 — carte « VOTRE RANG » (en tête)
 	_rebuild_divisions_band() # §8.95/§8.98 — bande des 5 divisions (cliquable en navigation)
 	_rebuild_tier_tabs()      # §8.98 — onglets d'échelon I/II/III de la division sélectionnée
+	_build_columns_header()
 	if _browse_mode:
 		_populate_podium(_podium_entries())
 		_populate_ranking(_tier_entries(_selected_division, _selected_tier))
@@ -999,6 +1043,10 @@ func _refresh() -> void:
 func _update_podium_eyebrow() -> void:
 	if _podium_eyebrow == null:
 		return
+	# §8.126 — restaure la visibilité que `_hide_operator_widgets` a pu couper : la bascule de mode
+	# est réversible d'un clic, et un eyebrow resté masqué au retour serait un défaut invisible en
+	# lecture de code (on ne le verrait qu'à l'écran, une fois sur deux).
+	_podium_eyebrow.visible = true
 	if _browse_mode and _selected_division != "":
 		_podium_eyebrow.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 		_podium_eyebrow.text = tr("LEADERBOARD_PODIUM_DIV").format(
@@ -1013,6 +1061,11 @@ func _update_podium_eyebrow() -> void:
 # Visibilité/état du bouton « AFFICHER PLUS » selon le mode (§8.98 : par tranche ; legacy : global).
 func _update_more_button() -> void:
 	if _more_button == null:
+		return
+	# §8.126 — le classement inter-compagnies est servi d'un bloc (top 50, cf. §3.3) : aucune
+	# pagination, donc aucun bouton. Le laisser visible promettrait une suite qui n'existe pas.
+	if _company_mode:
+		_more_button.visible = false
 		return
 	if _browse_mode:
 		var bucket: Dictionary = _tier_cache.get(_cache_key(_selected_division, _selected_tier), {})
@@ -1098,6 +1151,18 @@ func _build_columns_header() -> void:
 	_clear(columns_header)
 	columns_header.add_theme_constant_override("separation", 14)
 	columns_header.add_child(_header_cell(tr("LEADERBOARD_COL_RANK"), COL_RANK, HORIZONTAL_ALIGNMENT_LEFT))
+	# §8.126 — en mode COMPAGNIES : rang · compagnie · effectif · score. Ni niveau (une compagnie n'en
+	# a pas), ni division de ligne (elle vit dans la fiche).
+	if _company_mode:
+		columns_header.add_child(_header_cell(tr("COMPANY_TITLE"), 0.0, HORIZONTAL_ALIGNMENT_LEFT, true))
+		columns_header.add_child(_header_cell(tr("COMPANY_COL_MEMBERS"), COL_COMPANY_MEMBERS,
+			HORIZONTAL_ALIGNMENT_CENTER))
+		# « SCORE » et non « RP » : le score d'une compagnie est un AGRÉGAT (somme des 10 meilleurs
+		# RP du roster), pas le RP d'un joueur — les confondre laisserait croire qu'une compagnie a
+		# une division.
+		columns_header.add_child(_header_cell(tr("COMPANY_COL_SCORE"), COL_WINS,
+			HORIZONTAL_ALIGNMENT_RIGHT))
+		return
 	columns_header.add_child(_header_cell(tr("COMMON_OPERATOR"), 0.0, HORIZONTAL_ALIGNMENT_LEFT, true))
 	# Colonne DIVISION (M6 §8.68) — uniquement sur l'onglet SAISON avec un backend qui la fournit.
 	if _show_division_column():
@@ -1254,6 +1319,211 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 				_open_public_profile(uname))
 
 	return row
+
+
+# =================================================================================================
+# VOLET COMPAGNIES (§8.126)
+# =================================================================================================
+# Bascule OPÉRATEURS / COMPAGNIES : deux pastilles, MÊME fabrique que les onglets d'échelon
+# (`_make_pill_tab`) — un troisième langage visuel pour un troisième sélecteur aurait fait de cet
+# écran un patchwork.
+func _build_mode_row() -> void:
+	var root := podium_box.get_parent()
+	if root == null:
+		return
+	_mode_row = HBoxContainer.new()
+	_mode_row.add_theme_constant_override("separation", 6)
+	root.add_child(_mode_row)
+	# Tout en tête, AVANT la carte VOTRE RANG : c'est ce sélecteur qui décide de ce que sont toutes
+	# les lignes en dessous.
+	root.move_child(_mode_row, 2)
+
+	# Emplacement de la carte « VOTRE COMPAGNIE » — juste sous la bascule, à la place exacte
+	# qu'occupe « VOTRE RANG » en mode opérateurs (même repère pour la même information : « et moi ? »).
+	_company_card_slot = VBoxContainer.new()
+	_company_card_slot.add_theme_constant_override("separation", 8)
+	root.add_child(_company_card_slot)
+	root.move_child(_company_card_slot, 3)
+	_rebuild_mode_row()
+
+
+func _rebuild_mode_row() -> void:
+	if _mode_row == null:
+		return
+	_clear(_mode_row)
+	var ops := _make_pill_tab(tr("LEADERBOARD_TAB_OPERATORS"), not _company_mode)
+	ops.pressed.connect(func() -> void: _set_company_mode(false))
+	_mode_row.add_child(ops)
+	var comp := _make_pill_tab(tr("COMPANY_LEADERBOARD_TAB"), _company_mode)
+	comp.pressed.connect(func() -> void: _set_company_mode(true))
+	_mode_row.add_child(comp)
+
+
+func _set_company_mode(on: bool) -> void:
+	if on == _company_mode:
+		return
+	AudioManager.play_sfx("click")
+	_company_mode = on
+	# Une réponse peut avoir été perdue (échec réseau au démarrage) : on redemande en entrant dans
+	# l'onglet plutôt que de laisser une liste vide sans explication. Le cache serveur (60 s) rend
+	# ce rappel quasi gratuit.
+	if on and not _company_loaded:
+		NetworkManager.fetch_company_leaderboard()
+	_refresh()
+	_set_status(_company_status_line() if on else _season_status_line())
+
+
+# Masque tout l'appareillage du ladder d'OPÉRATEURS. On ne le vide pas : le mode est réversible d'un
+# clic, et reconstruire ces widgets à chaque bascule les ferait clignoter.
+func _hide_operator_widgets() -> void:
+	if _rank_card_slot != null:
+		_clear(_rank_card_slot)
+	if _divisions_slot != null:
+		_clear(_divisions_slot)
+	if _tier_tabs_row != null:
+		_tier_tabs_row.visible = false
+	if podium_box != null:
+		_clear(podium_box)
+		podium_box.visible = false
+	if _podium_eyebrow != null:
+		_podium_eyebrow.visible = false
+	if _ranking_eyebrow != null:
+		_ranking_eyebrow.visible = false
+
+
+func _on_company_leaderboard(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	_company_loaded = true
+	var entries = data.get("entries", [])
+	_company_rows = entries if typeof(entries) == TYPE_ARRAY else []
+	var mine = data.get("mine")
+	_company_mine = mine if typeof(mine) == TYPE_DICTIONARY else {}
+	if _company_mode:
+		_refresh()
+		_set_status(_company_status_line())
+
+
+# Ligne de statut du volet COMPAGNIES. ⚠️ Surtout PAS `_season_status_line()` : son repli est
+# « AUCUN OPÉRATEUR CLASSÉ », un message qui, sous une liste de compagnies bien peuplée, se lit
+# comme un bug (défaut vu en capture PNG, pas au boot headless).
+func _company_status_line() -> String:
+	if not _company_loaded:
+		return tr("COMMON_SYNCING")
+	if _company_rows.is_empty():
+		return tr("COMPANY_LEADERBOARD_EMPTY")
+	return ""
+
+
+# Carte « VOTRE COMPAGNIE » — patron « VOTRE RANG » du ladder : présente même quand la compagnie est
+# 300ᵉ et n'apparaît donc pas dans la page. Absente si le joueur n'a pas de compagnie (le serveur
+# n'envoie alors pas de bloc `mine`) : on ne fabrique pas une carte vide pour occuper l'espace.
+func _rebuild_company_card() -> void:
+	if _company_card_slot == null:
+		return
+	_clear(_company_card_slot)
+	if _company_mine.is_empty():
+		return
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _make_card_style(GOLD))
+	_company_card_slot.add_child(card)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	card.add_child(row)
+	row.add_child(CompanyEmblems.make_badge(int(_company_mine.get("emblem_id", 0)), 52.0, _font))
+
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	left.add_theme_constant_override("separation", 2)
+	row.add_child(left)
+	left.add_child(_mini_label("COMPANY_YOURS_CARD", 12, ACCENT, true))
+	left.add_child(_mini_label("[%s]  %s" % [str(_company_mine.get("tag", "")),
+		str(_company_mine.get("name", "")).to_upper()], 22, TEXT))
+
+	var right := VBoxContainer.new()
+	right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	right.add_theme_constant_override("separation", 2)
+	row.add_child(right)
+	# « RANG INTER-COMPAGNIES » et non « RANG MONDIAL » : ce sont deux classements DIFFÉRENTS, et
+	# réutiliser l'étiquette du ladder d'opérateurs ferait lire à un joueur son rang de clan comme
+	# son rang personnel.
+	right.add_child(_mini_label("COMPANY_RANK_EYEBROW", 12, ACCENT, true, HORIZONTAL_ALIGNMENT_RIGHT))
+	right.add_child(_mini_label("#%d" % int(_company_mine.get("rank", 0)), 26, GOLD,
+		false, HORIZONTAL_ALIGNMENT_RIGHT))
+	right.add_child(_mini_label(_format_thousands(int(_company_mine.get("season_score", 0))),
+		14, MUTED, false, HORIZONTAL_ALIGNMENT_RIGHT))
+
+	WarzoneUI.add_corner_notches(card, 14.0, GOLD)
+
+
+func _populate_company_ranking() -> void:
+	_clear(ranking_box)
+	if _company_rows.is_empty():
+		var empty := Label.new()
+		# Même distinction qu'en mode opérateurs (§8.96) : « on attend le réseau » ≠ « le serveur a
+		# répondu, il n'y a rien ». Les confondre fait passer un serveur muet pour un monde vide.
+		empty.text = tr("COMMON_SYNCING") if not _company_loaded else tr("COMPANY_LEADERBOARD_EMPTY")
+		empty.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		empty.add_theme_font_override("font", _font)
+		empty.add_theme_font_size_override("font_size", 14)
+		empty.add_theme_color_override("font_color", ACCENT if not _company_loaded else MUTED)
+		ranking_box.add_child(empty)
+		return
+	var my_tag := str(_company_mine.get("tag", ""))
+	for e in _company_rows:
+		if typeof(e) == TYPE_DICTIONARY:
+			ranking_box.add_child(_make_company_row(e, str(e.get("tag", "")) == my_tag))
+
+
+func _make_company_row(entry: Dictionary, is_mine: bool) -> PanelContainer:
+	var rank := int(entry.get("rank", 0))
+	var row := PanelContainer.new()
+	row.add_theme_stylebox_override("panel", _make_row_style(is_mine))
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 14)
+	row.add_child(h)
+
+	var rank_label := _mini_label("❯ %d" % rank, 18, GOLD if rank <= 3 else MUTED)
+	rank_label.custom_minimum_size = Vector2(COL_RANK, 0)
+	h.add_child(rank_label)
+
+	h.add_child(CompanyEmblems.make_badge(int(entry.get("emblem_id", 0)), 30.0, _font))
+
+	var tag := str(entry.get("tag", ""))
+	var name_label := _mini_label("[%s]  %s" % [tag, str(entry.get("name", "")).to_upper()],
+		18, ACCENT if is_mine else TEXT)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h.add_child(name_label)
+
+	var members := _mini_label(str(int(entry.get("member_count", 0))), 16, MUTED,
+		false, HORIZONTAL_ALIGNMENT_CENTER)
+	members.custom_minimum_size = Vector2(COL_COMPANY_MEMBERS, 0)
+	h.add_child(members)
+
+	var score := _mini_label(_format_thousands(int(entry.get("season_score", 0))), 18, GOLD,
+		false, HORIZONTAL_ALIGNMENT_RIGHT)
+	score.custom_minimum_size = Vector2(COL_WINS, 0)
+	h.add_child(score)
+
+	# Ligne CLIQUABLE → fiche publique de la compagnie. Routée par TAG (jamais par id) : même
+	# doctrine que le profil public (§8.107), aucun identifiant énumérable ne sort du serveur.
+	if tag != "":
+		row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		row.tooltip_text = tr("COMPANY_VIEW_TOOLTIP")
+		row.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed \
+					and ev.button_index == MOUSE_BUTTON_LEFT:
+				_open_company(tag))
+	return row
+
+
+func _open_company(tag: String) -> void:
+	AudioManager.play_sfx("click")
+	CompanyScreen.target_tag = tag
+	TransitionManager.change_scene("res://scenes/ui/company_screen.tscn")
 
 
 # §8.107 — ouvre le profil public. Le pseudo transite par un `static var` du script de l'écran

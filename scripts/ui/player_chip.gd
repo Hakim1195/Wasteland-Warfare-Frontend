@@ -25,6 +25,9 @@ const FONT_SIZE_COMPACT := 11
 const COMPACT_MAX_CHARS := 12
 
 var _swatch: ColorRect = null
+# TAG de compagnie (§8.126) — Label SÉPARÉ du pseudo : teinte atténuée, jamais colorée faction, et
+# hors du champ de la troncature compacte (cf. `_ensure_built`).
+var _tag: Label = null
 var _pseudo: Label = null
 var _faction_mark: Label = null
 # PACTES (§8.123) : deux marques posées ICI, dans la brique partagée, plutôt que dans chaque écran
@@ -52,6 +55,20 @@ func _ensure_built() -> void:
 	_swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_swatch)
+
+	# TAG DE COMPAGNIE (§8.126) — nœud DÉDIÉ, placé AVANT le pseudo. Deux raisons de ne pas se
+	# contenter d'un préfixe dans la chaîne du pseudo :
+	#  1. la charte veut le tag en TEINTE ATTÉNUÉE et JAMAIS coloré par la faction — une String n'a
+	#     qu'une couleur, un Label voisin en a une autre ;
+	#  2. la troncature COMPACTE ne doit ronger que le pseudo : un tag à moitié coupé (« [ALF… »)
+	#     n'identifie plus rien.
+	_tag = Label.new()
+	_tag.add_theme_font_size_override("font_size", FONT_SIZE_COMPACT)
+	_tag.add_theme_color_override("font_color", NEUTRAL_COLOR)
+	_tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tag.visible = false
+	add_child(_tag)
 
 	_pseudo = Label.new()
 	_pseudo.add_theme_font_size_override("font_size", FONT_SIZE_FULL)
@@ -117,6 +134,16 @@ func setup(pid: int, compact: bool = false) -> void:
 	if compact and label_text.length() > COMPACT_MAX_CHARS:
 		label_text = label_text.substr(0, COMPACT_MAX_CHARS - 1) + "…"
 
+	# TAG de compagnie (§8.126) — teinte ATTÉNUÉE (acier), jamais l'accent de faction : il doit se
+	# lire sans jamais concurrencer le pseudo ni la couleur plateau. Absent → Label masqué, donc
+	# aucune espace fantôme dans une rangée serrée.
+	var company_tag := GameState.company_tag_of(int(pid))
+	_tag.visible = company_tag != ""
+	if _tag.visible:
+		_tag.text = "[%s]" % company_tag
+		_tag.add_theme_font_size_override("font_size",
+			FONT_SIZE_COMPACT - 1 if compact else FONT_SIZE_COMPACT)
+
 	var color := _player_color(int(pid))
 	_swatch.color = color
 	_pseudo.text = label_text
@@ -132,7 +159,10 @@ func setup(pid: int, compact: bool = false) -> void:
 	_faction_mark.visible = has_accent
 	if has_accent:
 		_faction_mark.add_theme_color_override("font_color", accent)
-	tooltip_text = display + (("\n" + (tr("CHIP_FACTION_TOOLTIP") % fid.capitalize())) if fid != "" else "")
+	# Le tooltip, lui, porte le pseudo COMPLET *avec* son tag (le Label voisin peut être coupé par
+	# la mise en page ; le tooltip est le dernier recours pour lire une identité en entier).
+	tooltip_text = GameState.tagged_name(int(pid), display) \
+		+ (("\n" + (tr("CHIP_FACTION_TOOLTIP") % fid.capitalize())) if fid != "" else "")
 	_refresh_pact_marks(int(pid), display)
 
 # PACTES (§8.123) — état PUBLIC relu à chaque `setup()` (donc à chaque rafraîchissement d'état) :

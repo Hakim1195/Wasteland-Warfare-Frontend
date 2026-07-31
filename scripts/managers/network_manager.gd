@@ -62,6 +62,23 @@ signal team_playlists_loaded(playlists: Dictionary)
 # VICTOIRE D'ÉQUIPE (§8.124) — diffusée AVANT le game_over pour la mise en scène du bandeau.
 signal team_victory(team_id: int, member_ids: Array, victory_reason: String)
 
+# --- COMPAGNIES (§8.126) ---
+# ⚠️ FRONTIÈRE ESCOUADE / COMPAGNIE : rien ci-dessous ne met en file. L'escouade (au-dessus) est
+# l'objet de matchmaking ; la compagnie est une IDENTITÉ PERSISTANTE — elle FABRIQUE des escouades,
+# elle n'en est jamais une.
+# Réponse de N'IMPORTE quelle route /company/* qui rend un état (create/join/mine/leave/kick/
+# transfer/rename/emblem/regen_code) : elles partagent la MÊME shape `CompanyStateResponse`, donc
+# UN SEUL signal et UN SEUL callback — un handler par route serait dix occasions d'oublier `reason`
+# (leçon de l'ancien `_join_ok`, cf. §8.125).
+signal company_state_received(ok: bool, data: Dictionary)
+# Fiche PUBLIQUE d'une compagnie (`GET /company/{tag}`) — le tag demandé est rappelé pour que
+# l'écran ignore la réponse d'une demande précédente (patron `public_profile_loaded`).
+signal company_public_loaded(data: Dictionary, tag: String)
+# Classement inter-compagnies (`GET /leaderboard/companies`) : {entries, mine, season}.
+signal company_leaderboard_loaded(data: Dictionary)
+# Vérification LIVE de disponibilité d'un tag pendant la saisie (débounce 0,5 s côté écran).
+signal company_tag_checked(data: Dictionary)
+
 signal salon_state_updated(count: int, max_players: int, is_creator: bool)
 # Salon fermé par l'hôte (WS) : l'écran ramène à la recherche avec un message amical.
 signal salon_closed(reason: String)
@@ -848,6 +865,92 @@ func squad_queue(playlist: String = "") -> void:
 
 func squad_dequeue() -> void:
 	_send_api_request("/squad/dequeue", HTTPClient.METHOD_POST, {}, _on_squad_response)
+
+# --- COMPAGNIES (§8.126) ---
+# ⚠️ AUCUNE de ces routes ne met en file : la compagnie n'est PAS un objet de matchmaking. Le seul
+# pont vers le jeu est l'écran Escouade, qui affiche le roster et le code à partager — un pont
+# d'AFFICHAGE, jamais de couplage.
+#
+# Les neuf routes d'état partagent la MÊME shape (`CompanyStateResponse`) → UN callback unique qui
+# propage le dict COMPLET (`reason`, `until_epoch`, `rules`, compteurs d'échecs…) : c'est l'ÉCRAN qui
+# choisit le message, jamais le manager.
+func company_mine() -> void:
+	_send_api_request("/company/mine", HTTPClient.METHOD_GET, {}, _on_company_response)
+
+func company_create(tag: String, name: String, emblem_id: int) -> void:
+	# Le serveur NORMALISE (strip, majuscules, espaces réduits) avant tout contrôle ; on nettoie
+	# aussi ici pour que l'AFFICHAGE colle à ce qui sera enregistré.
+	_send_api_request("/company/create", HTTPClient.METHOD_POST,
+		{"tag": tag.strip_edges().to_upper(), "name": name.strip_edges(),
+		 "emblem_id": int(emblem_id)}, _on_company_response)
+
+func company_join(code: String) -> void:
+	_send_api_request("/company/join", HTTPClient.METHOD_POST,
+		{"code": code.strip_edges().to_upper()}, _on_company_response)
+
+func company_leave() -> void:
+	_send_api_request("/company/leave", HTTPClient.METHOD_POST, {}, _on_company_response)
+
+func company_kick(user_id: int) -> void:
+	_send_api_request("/company/kick", HTTPClient.METHOD_POST, {"user_id": int(user_id)},
+		_on_company_response)
+
+func company_transfer(user_id: int) -> void:
+	_send_api_request("/company/transfer", HTTPClient.METHOD_POST, {"user_id": int(user_id)},
+		_on_company_response)
+
+func company_regen_code() -> void:
+	_send_api_request("/company/regen_code", HTTPClient.METHOD_POST, {}, _on_company_response)
+
+func company_rename(name: String) -> void:
+	_send_api_request("/company/rename", HTTPClient.METHOD_POST, {"name": name.strip_edges()},
+		_on_company_response)
+
+func company_set_emblem(emblem_id: int) -> void:
+	_send_api_request("/company/emblem", HTTPClient.METHOD_POST, {"emblem_id": int(emblem_id)},
+		_on_company_response)
+
+func _on_company_response(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	company_state_received.emit(response_code == 200, data)
+
+# Disponibilité d'un TAG pendant la saisie. Le tag est IMMUABLE après création : découvrir qu'il est
+# pris APRÈS avoir validé serait le pire moment possible.
+func company_check_tag(tag: String) -> void:
+	_send_api_request("/company/check_tag?tag=" + tag.strip_edges().to_upper().uri_encode(),
+		HTTPClient.METHOD_GET, {}, _on_company_tag_checked)
+
+func _on_company_tag_checked(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	company_tag_checked.emit(data if typeof(data) == TYPE_DICTIONARY else {})
+
+# Fiche PUBLIQUE d'une compagnie. Routée par TAG et non par id — même doctrine que le profil public
+# (§8.107) : aucun identifiant séquentiel énumérable ne sort du serveur.
+func company_public(tag: String) -> void:
+	_send_api_request("/company/" + tag.strip_edges().to_upper().uri_encode(),
+		HTTPClient.METHOD_GET, {}, _on_company_public.bind(tag.strip_edges().to_upper()))
+
+# Ordre des paramètres liés : http_node AVANT l'arg lié (cf. _on_public_profile_fetched).
+func _on_company_public(_result, response_code, _headers, body, http_node, tag):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	company_public_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {}, str(tag))
+
+# Classement inter-compagnies. Le serveur sert le top `limit` + le bloc `mine` (même patron
+# « VOTRE RANG » que le ladder) ; le score et le rang y sont ceux de `GET /company/mine`, calculés
+# une seule fois côté serveur — le client n'a AUCUN classement à recomposer.
+func fetch_company_leaderboard(limit: int = 50) -> void:
+	_send_api_request("/leaderboard/companies?limit=%d" % int(limit), HTTPClient.METHOD_GET, {},
+		_on_company_leaderboard)
+
+func _on_company_leaderboard(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	company_leaderboard_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
 
 # UN SEUL callback pour les six routes : elles rendent toutes la MÊME shape
 # (`SquadStateResponse`). Un handler par route aurait été six occasions d'oublier de propager une

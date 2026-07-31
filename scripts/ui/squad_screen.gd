@@ -60,6 +60,9 @@ var _solo_queue_box: VBoxContainer = null
 var _solo_clock: Label = null
 var _no_squad_actions: Array = []
 var _queued_since: int = 0
+# --- PONT COMPAGNIE (§8.126) : bloc d'AFFICHAGE uniquement, aucun couplage au matchmaking. ---
+var _company_box: VBoxContainer = null
+var _company: Dictionary = {}   # fiche `GET /company/mine` ({} = pas de compagnie)
 
 
 func _ready() -> void:
@@ -84,6 +87,10 @@ func _ready() -> void:
 
 	NetworkManager.fetch_team_playlists()
 	NetworkManager.squad_status()
+	# §8.126 — pont COMPAGNIE : demandé UNE fois à l'ouverture (et non à chaque poll — une compagnie
+	# ne change pas toutes les 2 secondes, contrairement à une file d'attente).
+	NetworkManager.company_state_received.connect(_on_company_state)
+	NetworkManager.company_mine()
 
 	_poll_timer = Timer.new()
 	_poll_timer.wait_time = POLL_INTERVAL
@@ -376,6 +383,22 @@ func _build_squad_box() -> void:
 	_members_box.add_theme_constant_override("separation", 12)
 	_squad_box.add_child(_members_box)
 
+	# --- PONT COMPAGNIE (§8.126) ---------------------------------------------------------------
+	# Une COMPAGNIE ne se met JAMAIS en file : elle FABRIQUE des escouades. Ce bloc est donc un pont
+	# d'AFFICHAGE et rien d'autre — il rappelle qui sont vos camarades de clan pendant que le code
+	# d'escouade est à l'écran, à portée de copier-coller. Aucune ligne ici ne touche au matchmaking.
+	#
+	# ⛔ RESTE À FAIRE ASSUMÉ — bouton « INVITER LA COMPAGNIE » (push du code aux membres EN LIGNE).
+	# Il exigerait deux choses que le serveur n'a PAS aujourd'hui : (1) un canal WebSocket de HUB
+	# (le seul WS du jeu est `/ws/{room_id}/{player_id}` — il n'existe qu'en partie), et (2) une
+	# notion de PRÉSENCE hors partie (rien ne suit qui est connecté au QG). Les inventer pour ce
+	# chantier aurait été une infrastructure entière greffée sur un bouton. La v1 livre donc la
+	# version AFFICHAGE : le roster + le code à partager (chat Steam, vocal…). Cf. §8.126 des docs.
+	_company_box = VBoxContainer.new()
+	_company_box.add_theme_constant_override("separation", 6)
+	_company_box.visible = false
+	_squad_box.add_child(_company_box)
+
 	WarzoneUI.add_filet(_squad_box)
 
 	var actions := HBoxContainer.new()
@@ -536,6 +559,63 @@ func _rebuild_members() -> void:
 		var slot := _muted_label("SQUAD_SLOT_FREE", 15)
 		slot.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_INHERIT
 		_members_box.add_child(slot)
+
+
+# --- PONT COMPAGNIE (§8.126) ---------------------------------------------------------------------
+func _on_company_state(ok: bool, data: Dictionary) -> void:
+	if not is_inside_tree() or not ok:
+		return
+	var c = data.get("company")
+	_company = c if typeof(c) == TYPE_DICTIONARY else {}
+	_rebuild_company_section()
+
+
+# Section « COMPAGNIE » de l'écran Escouade : le clan + son roster, à côté du code d'escouade déjà
+# affiché en héros. Masquée si le joueur n'a pas de compagnie — un bandeau vide n'invite à rien.
+#
+# ⚠️ AUCUN STATUT « EN LIGNE ». Le serveur n'a pas de présence hors partie (cf. le commentaire de
+# `_build_squad_box`) ; afficher une pastille verte devinée côté client serait un mensonge, et c'est
+# précisément le genre de mensonge qui fait attendre un joueur devant un ami absent.
+func _rebuild_company_section() -> void:
+	if _company_box == null:
+		return
+	_clear(_company_box)
+	if _company.is_empty():
+		_company_box.visible = false
+		return
+	_company_box.visible = true
+
+	var head := Label.new()
+	head.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	head.text = "%s  —  [%s] %s" % [tr("COMPANY_TITLE"), str(_company.get("tag", "")),
+		str(_company.get("name", "")).to_upper()]
+	head.add_theme_font_override("font", _font)
+	head.add_theme_font_size_override("font_size", 15)
+	head.add_theme_color_override("font_color", ACCENT)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_company_box.add_child(head)
+
+	# Le code d'escouade est DÉJÀ en héros au-dessus : on ne le répète pas, on dit quoi en faire.
+	var hint := _muted_label("COMPANY_SQUAD_BRIDGE_HINT", 13)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_company_box.add_child(hint)
+
+	var members: Array = _company.get("members", [])
+	var names := PackedStringArray()
+	for m in members:
+		if typeof(m) == TYPE_DICTIONARY:
+			names.append(str(m.get("name", "")).to_upper())
+	if names.is_empty():
+		return
+	var roster := Label.new()
+	roster.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	roster.text = " · ".join(names)
+	roster.add_theme_font_override("font", _font)
+	roster.add_theme_font_size_override("font_size", 13)
+	roster.add_theme_color_override("font_color", MUTED)
+	roster.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	roster.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_company_box.add_child(roster)
 
 
 func _render() -> void:

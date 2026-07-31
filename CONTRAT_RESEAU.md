@@ -2232,3 +2232,172 @@ rafraîchissement ne décide plus de ce que le joueur regarde. Le repli initial
 >
 > ⛔ **NON VÉRIFIÉ** : le non-déploiement de la fiche joueur ne se constate qu'EN JOUANT (il faut un
 > rafraîchissement d'état pour reproduire le défaut). Le code est en place et l'import passe.
+
+---
+
+## §8.126 — COMPAGNIES : clans PERSISTANTS, tag, emblème, classement inter-compagnies (volet RÉSEAU)
+
+> **Une maison, pas un groupe de file.** L'ESCOUADE (§8.124-125) est éphémère : Redis, TTL 24 h,
+> elle meurt avec la partie. La **COMPAGNIE** est persistante (SQL) : un tag de 4 lettres qui préfixe
+> le pseudo PARTOUT, un nom, un emblème, un roster de 20, un chef, et un **classement
+> inter-compagnies saisonnier**. C'est l'anti-churn n° 1 du genre.
+>
+> **Strictement ADDITIF** (règle §1.5) : aucune clé de payload existante n'est renommée ou supprimée,
+> aucune règle de jeu n'est modifiée. Le moteur ne connaît des compagnies QUE le champ d'affichage
+> `PlayerState.company_tag`.
+>
+> ⚠️ **FRONTIÈRE ESCOUADE / COMPAGNIE — l'invariant du chantier.** La compagnie **ne se met JAMAIS
+> en file**. Elle FABRIQUE des escouades. Aucun endpoint `/company/*` ne touche à un bucket, un
+> ticket ou une salle, et le matchmaker ignore jusqu'à l'existence des compagnies.
+>
+> ⚠️ **AUCUN AGRÉGAT N'EST STOCKÉ.** Score, victoires, division moyenne et rang se recalculent À LA
+> LECTURE depuis les RP des membres → une seule source de vérité (aucune divergence possible avec le
+> ladder, piège §8.106) et un reset de saison automatique PAR CONSTRUCTION.
+>
+> ⚠️ **DÉPLOIEMENT : VPS + CLIENT ENSEMBLE.** Sur un serveur non redéployé, `/company/*` répond 404
+> et le client dégrade proprement (carte « SANS COMPAGNIE », onglet COMPAGNIES vide) — mais le
+> chantier est alors invisible.
+
+### 1. Tables (`models/models.py` — archive `backend/migration_companies.sql`)
+
+Tables NEUVES : créées intégralement par `Base.metadata.create_all` au boot. **Aucune action humaine
+sur la prod** (contrairement à `migration_steam_auth.sql`).
+
+| `companies` | type | rôle |
+|---|---|---|
+| `id` | PK | |
+| `tag` | VARCHAR **UNIQUE** | 4 lettres A-Z, **normalisées en MAJUSCULES** par `companies.validate_tag` avant écriture → « alfa » ne peut pas coexister avec « ALFA ». **IMMUABLE** après création. |
+| `name` | VARCHAR | 3-24 caractères alphanumériques + espaces. **NON unique** (c'est le tag qui identifie). |
+| `emblem_id` | INT (déf. 0) | Index dans le catalogue **CLIENT** (0..23). Aucune image ne transite. |
+| `join_code` | VARCHAR **UNIQUE** | Code 5 caractères, MÊME générateur/alphabet que les salons et escouades (`matchmaking.generate_code`). |
+| `leader_user_id` | FK users | Toujours AUSSI membre. |
+| `created_at` | TIMESTAMP | |
+
+⚠️ **`join_code` est stocké EN CLAIR — déviation ASSUMÉE du brief**, qui prévoyait un
+`join_code_hash`. Le hachage suppose un secret qu'on ne relit jamais ; or `GET /company/mine` DOIT
+rendre ce code à ses membres pour qu'ils le partagent. Hacher aurait donc imposé de conserver le
+clair ailleurs, c'est-à-dire de ne rien protéger tout en le prétendant. Ce n'est pas un identifiant
+de connexion : le pire qu'il permette est de rejoindre un clan, et sa défense réelle est
+l'anti-bruteforce PARTAGÉ (table `sanctions`, §8.116).
+
+| `company_members` | type | rôle |
+|---|---|---|
+| `id` | PK | |
+| `company_id` | FK companies **NULLABLE** | Renseigné = adhésion ACTIVE ; **NULL = pierre tombale**. |
+| `user_id` | FK users **UNIQUE** | L'invariant « UN joueur = UNE compagnie au plus », porté par le SGBD. |
+| `joined_at` | TIMESTAMP | Départage la succession automatique du chef. |
+| `left_cooldown_until` | TIMESTAMP NULL | Cooldown de réadhésion (24 h), posé au DÉPART. |
+
+⚠️ **UNE SEULE LIGNE PAR JOUEUR, À VIE.** Quitter est un **UPDATE** (`company_id = NULL`), jamais un
+DELETE : supprimer la ligne effacerait le cooldown avec elle, et l'anti « tag-hopping » n'aurait tenu
+que le temps d'un DELETE.
+
+### 2. Endpoints `/company/*` (convention zéro-4xx §8.112 — shape UNIQUE `CompanyStateResponse`)
+
+Neuf routes rendent la MÊME enveloppe : `{ company: {...} | null, reason?, rules, until_epoch?,
+cooldown_s?, banned_until_epoch?, ban_hours?, failed_attempts?, remaining_attempts? }`.
+`company: null` n'est PAS une erreur : c'est l'état de départ de tout le monde.
+
+- `POST /company/create {tag, name, emblem_id}` — refus `banned` · `already_member` · `cooldown` ·
+  `invalid_tag` · `invalid_name` · `invalid_emblem` · `tag_taken`. **ORDRE STRICT** (du plus
+  structurel au plus corrigeable) : vérifier « tag pris » avant « tag mal formé » répondrait
+  « disponible » à une saisie de trois lettres. Compagnie + adhésion du chef écrites dans la MÊME
+  transaction (`flush` puis `commit`). Le cooldown bloque AUSSI la création — sans quoi on
+  contournerait l'anti tag-hopping en fondant une coquille.
+- `POST /company/join {code}` — refus `banned` · `already_member` · `cooldown` (+ `until_epoch`) ·
+  **`unavailable`**. ⚠️ **AUCUN ORACLE** : format invalide, compagnie inexistante et roster PLEIN
+  rendent une réponse **INDISCERNABLE**. Compteur d'échecs (`mm:fail:{uid}`) et escalade des bans
+  (`sanctions`, kind `search_abuse`) **PARTAGÉS** avec la recherche de salons — pas un second
+  circuit. Un succès purge le compteur.
+- `POST /company/leave` — trois issues : membre simple → départ ; **chef avec des restants →
+  SUCCESSION AUTOMATIQUE au plus ancien** (`companies.next_leader`) ; dernier membre → compagnie
+  SUPPRIMÉE et tag libéré. Contrairement à l'escouade, on ne DISSOUT pas au départ du chef : punir
+  19 personnes parce que le chef arrête de jouer serait absurde.
+- `POST /company/kick {user_id}` (chef) — l'exclu reçoit le MÊME cooldown qu'un départ volontaire.
+  Le chef ne peut pas s'exclure lui-même (`not_member`).
+- `POST /company/transfer {user_id}` (chef) — l'ancien chef RESTE membre.
+- `POST /company/regen_code` · `POST /company/rename {name}` · `POST /company/emblem {emblem_id}`
+  (chef). ⚠️ **Aucune route ne change le TAG** : il est immuable.
+- `GET /company/mine` — fiche + `rules` + cooldown en cours s'il y en a un.
+- `GET /company/check_tag?tag=XXXX` → `{tag, available, reason}` — `reason` distingue `invalid_tag`
+  de `tag_taken` (deux corrections différentes pour le joueur). **Ne consomme AUCUN quota** : un tag
+  est une donnée publique, contrairement à un code.
+- `GET /company/{tag}` (authentifié, doctrine §8.107) — fiche **PUBLIQUE**, routée par TAG et non par
+  id (aucun identifiant séquentiel énumérable). Compagnie dissoute entre le clic et la réponse →
+  `{company: null, reason: "unavailable"}`, pas un 404.
+
+**Fiche (`CompanyResponse`)** : `{tag, name, emblem_id, leader, members[], member_count,
+season_score, season_wins, avg_division, avg_division_label, rank}` — plus, **MEMBRES SEULEMENT** :
+`join_code`, `is_leader`.
+**Membre** : `{user_id, name, division, division_label, season_rp, is_leader, joined_at}`.
+
+⚠️ **FRONTIÈRE DE CONFIDENTIALITÉ** (portée en UN seul endroit, `_company_payload(public=True)`) —
+sur la vue publique : `join_code` **ABSENT**, `user_id` à 0, `season_rp` à 0. Les divisions, elles,
+restent publiques (le Classement les montre déjà). Assertion de non-fuite dédiée dans
+`test_company_flow.py`.
+
+### 3. `GET /leaderboard/companies?limit=50`
+
+`{entries: [{rank, tag, name, emblem_id, season_score, member_count}], mine: {...}|null,
+season: {id, ends_at}}`. `mine` suit le patron « VOTRE RANG » du ladder (présent même hors page).
+
+- **Score de saison** = somme des **`score_top_n` (10) meilleurs RP** du roster — surtout pas la
+  somme des 20 : recruter n'importe qui serait alors strictement optimal, et 20 débutants
+  battraient mécaniquement 8 vétérans. RP lus **BRUTS** (`User.season_points`), exactement comme le
+  tri du ladder.
+- **SOURCE UNIQUE** : `company._standings` sert le classement ET la fiche `/company/mine` ET la page
+  publique. C'est ce qui interdit structurellement qu'une compagnie s'annonce « #3 » sur son écran
+  et apparaisse 5ᵉ dans la liste (leçon §8.106 — contre-épreuve `test_rank_never_diverges`).
+- **Cache mémoire 60 s** (dict de processus). Purgé immédiatement à chaque mutation d'effectif
+  (`invalidate_standings`) : voir « 1/20 » après avoir accueilli quelqu'un passerait pour un bug.
+- **COÛT, dit franchement** : trois requêtes SANS join (compagnies, adhésions, joueurs concernés)
+  puis le top-N en Python — O(nombre total d'adhésions). Le jour où cela pèsera, la bonne réponse
+  sera une fenêtre SQL (`ROW_NUMBER() OVER (PARTITION BY company_id …)`), **pas** un agrégat stocké
+  qui rouvrirait la porte à la divergence.
+
+### 4. Champs ADDITIFS ailleurs
+
+- **`PlayerState.company_tag`** (défaut `""`) — champ **PUBLIC** diffusé en partie, posé UNE FOIS par
+  `launch_room` depuis la base (`company_tags_for` : 2 requêtes pour toute la salle, jamais une par
+  joueur sur le chemin critique). Toujours `""` pour un bot. **C'est la SEULE donnée de compagnie qui
+  entre en partie** : ni nom, ni emblème, ni score. Jamais relu ensuite — quitter sa compagnie en
+  pleine partie ne change pas l'affichage du match en cours (l'identité d'un match est celle du coup
+  d'envoi). Défaut `""` → rétro-compat Redis d'une partie en cours pendant le redéploiement.
+- **`company: {tag, name, emblem_id} | null`** dans `GET /profile/stats` **ET** le profil PUBLIC
+  (`PublicProfileResponse`). Volontairement pauvre : y mettre le score créerait une DEUXIÈME source.
+  L'ajout à la liste blanche publique est DÉLIBÉRÉ (l'appartenance est publique par construction —
+  le tag préfixe déjà le pseudo jusque dans le kill feed d'un inconnu) et acté dans
+  `test_profile_data.py`.
+
+### 5. Module PUR `api/game/companies.py`
+
+`COMPANY_RULES` = **SOURCE UNIQUE** des plafonds (`roster_cap 20`, `tag_len 4`, `name_min/max 3/24`,
+`score_top_n 10`, `rejoin_cooldown_h 24`, `emblem_count 24`), servi tel quel au client via `rules` —
+le client n'en code AUCUNE valeur en dur. Fonctions : `validate_tag` / `validate_name` /
+`validate_emblem` (charset strict, normalisation majuscules), `season_score`, `avg_division`
+(délègue à `seasons.rank_info` — jamais de table de seuils dupliquée), `next_leader`,
+`cooldown_until` / `cooldown_active` / `cooldown_remaining_s`, `roster_has_room`, `public_rules`.
+Zéro I/O ; seul import : `seasons` (PUR).
+
+### 6. Hors périmètre (v1 assumée)
+
+Guerres de clans · chat de compagnie · trésorerie · récompenses de compagnie · candidatures /
+annuaire public · rôles intermédiaires · **filtre de contenu des noms** (backlog modération connu :
+la v1 borne la FORME, pas le propos) · historique inter-saisons.
+
+⛔ **RESTE À FAIRE DOCUMENTÉ — push « INVITER LA COMPAGNIE ».** Le brief prévoyait de pousser le code
+d'escouade aux membres EN LIGNE. **Vérification faite : le serveur n'a NI canal de notification de
+hub** (le seul WebSocket du jeu est `/ws/{room_id}/{player_id}` — il n'existe qu'en partie) **NI
+notion de présence hors partie** (rien ne suit qui est connecté au QG). Les inventer aurait été une
+infrastructure entière greffée sur un bouton. La v1 livre donc la version AFFICHAGE (cf. §8.126 de
+`FRONTEND_INTERFACES.md`), et le champ `online` des membres **n'existe pas** dans les payloads
+ci-dessus.
+
+> **Validation.** `test_companies.py` **94 ✅ / 0 ❌** (module PUR : validation exhaustive, collisions
+> de casse, top-10 exact sur rosters de 3/10/20, division moyenne via `seasons.rank_info`, succession,
+> cooldown). `test_company_flow.py` **136 ✅ / 0 ❌** (endpoints sur faux ORM enforçant les contraintes
+> UNIQUE : cycle création→adhésion→exclusion→transfert→dissolution, sanctions partagées, **non-fuite
+> du code en public**, **absence d'oracle**, **non-divergence des rangs**, cache 60 s). Non-régression :
+> `test_ladder_payload` 32 ✅, `test_profile_data` 85 ✅, `test_squad_flow` 77 ✅, `test_search_sanctions`
+> 23 ✅, `test_private_codes` 33 ✅, `test_teams` 60 ✅, `test_team_flow` 100 ✅. **Suite backend
+> COMPLÈTE verte hors `test_missions.py` / `test_simulation.py` (échecs PRÉ-EXISTANTS).**

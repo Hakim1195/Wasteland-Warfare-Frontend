@@ -1198,6 +1198,11 @@ func _faction_display_name(fid: String) -> String:
 # Nom à afficher pour un joueur : son VRAI pseudo, désormais diffusé par le serveur dans chaque
 # PlayerState (§8.28). Replis successifs : notre pseudo local (AuthManager) si c'est nous, sinon
 # "Joueur N" (numéro séquentiel 1..N) si l'identité n'a pas pu être résolue côté serveur.
+# §8.126 — le TAG DE COMPAGNIE préfixe le pseudo, et il le fait ICI : ce résolveur alimente le
+# journal, les toasts, le kill feed, le Split-Screen VS et le Rapport Post-Op. Le poser une fois à la
+# source, c'est le voir apparaître dans les six d'un coup ; le poser à chaque appelant, c'est en
+# oublier un. `GameState.tagged_name` est la SOURCE UNIQUE de sa forme, et rend le pseudo INCHANGÉ
+# quand le joueur n'a pas de compagnie (bots compris) — aucune garde à écrire ailleurs.
 func _display_name(pid: int) -> String:
 	# Bot de remplissage (G2 §8.72) : id NÉGATIF → préfixe « [IA] » (l'état public porte is_bot ET
 	# l'indicatif dans username ; le préfixe est posé ICI, côté client, comme prévu au contrat).
@@ -1206,12 +1211,13 @@ func _display_name(pid: int) -> String:
 	if typeof(p) == TYPE_DICTIONARY:
 		var uname := str(p.get("username", ""))
 		if uname != "":
-			return (tr("COMMON_AI_PREFIX") + uname) if is_bot else uname
+			return GameState.tagged_name(pid,
+				(tr("COMMON_AI_PREFIX") + uname) if is_bot else uname)
 	if pid == _my_id() and AuthManager.username != "":
-		return AuthManager.username
+		return GameState.tagged_name(pid, AuthManager.username)
 	if is_bot:
 		return tr("COMMON_AI_PREFIX") + tr("CHIP_BOT_FALLBACK") % absi(pid)
-	return tr("WR_PLAYER_FALLBACK") % GameState.player_number(pid)
+	return GameState.tagged_name(pid, tr("WR_PLAYER_FALLBACK") % GameState.player_number(pid))
 
 # Pseudo PRÊT pour le BBCode (journal militaire / chat) — unification E1 §8.73 : résolu
 # (_display_name), échappé « [ » → « [lb] » (anti-injection §8.33 ; le préfixe [IA] des bots

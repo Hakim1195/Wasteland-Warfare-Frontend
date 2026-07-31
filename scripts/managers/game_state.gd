@@ -224,6 +224,38 @@ func player_number(pid) -> int:
 
 
 # =====================================================================
+# COMPAGNIE (§8.126) — le TAG, partout où une identité passe
+# =====================================================================
+# SOURCE UNIQUE du préfixe `[TAG]`. Le serveur diffuse `company_tag` dans chaque `PlayerState`
+# (champ PUBLIC, §8.126) ; ces deux fonctions sont le SEUL endroit du client qui décide de sa forme.
+# Tous les sites d'identité (chips, draft, VS, kill feed, Post-Op, roster, bandeau de tour) appellent
+# `tagged_name` — dupliquer la concaténation ailleurs, c'est se garantir un écran où le tag manque.
+#
+# ⚠️ Champ ADDITIF : absent d'un état antérieur au chantier ou d'un serveur non redéployé → "" →
+# `tagged_name` rend le pseudo INCHANGÉ. Aucun écran n'a de garde à écrire.
+
+# Tag de compagnie d'un joueur, ou "" (bot, sans compagnie, serveur antérieur).
+# Clés de `players` en STR (piège JSON float §5) → str(int(pid)), jamais str(pid) sur un float.
+func company_tag_of(pid) -> String:
+	var p = players.get(str(int(pid)), {})
+	if typeof(p) != TYPE_DICTIONARY:
+		return ""
+	return str(p.get("company_tag", ""))
+
+
+# Pseudo PRÉFIXÉ de son tag : « [ALFA] Pseudo ». Rend `base_name` tel quel si le joueur n'a pas de
+# compagnie — donc sûr à appeler systématiquement, y compris en partie 100 % sans compagnie.
+#
+# La TEINTE ATTÉNUÉE du tag (charte §8.126 : discret, jamais coloré par faction) n'est pas rendue
+# ici : une String n'a pas deux couleurs. Les vues qui PEUVENT la rendre le font avec un nœud dédié
+# (`player_chip`) ou une balise BBCode (`main._bb_pseudo`) ; les autres affichent le préfixe dans le
+# corps du texte, ce que la charte accepte explicitement (« même corps de texte »).
+func tagged_name(pid, base_name: String) -> String:
+	var tag := company_tag_of(pid)
+	return ("[%s] %s" % [tag, base_name]) if tag != "" else base_name
+
+
+# =====================================================================
 # Couche RPG « Héros » (sprint RPG & Survie)
 # =====================================================================
 # Les stats du héros sont sérialisées DANS chaque entrée players[pid] par le serveur (PlayerState) :

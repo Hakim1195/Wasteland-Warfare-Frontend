@@ -713,7 +713,9 @@ func _build_team_standings() -> void:
 		for pid in entry.get("member_ids", []):
 			var p: Dictionary = GameState.players.get(str(int(pid)), {})
 			var who := str(p.get("username", ""))
-			names.append(who if who != "" else "#%d" % int(pid))
+			# §8.126 — le tag de compagnie suit le pseudo jusqu'au podium du Rapport Post-Op.
+			names.append(GameState.tagged_name(int(pid),
+				who if who != "" else "#%d" % int(pid)))
 		var head := Label.new()
 		head.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 		head.text = "%02d  %s — %s" % [int(entry.get("rank", 0)) + 1,
@@ -1109,7 +1111,8 @@ func populate_final_scores(rows: Array, colors: Dictionary = {}, my_id: int = -9
 		sw.color = colors.get(str(pid), TEXT_MUTED)
 		name_box.add_child(sw)
 		var pseudo := Label.new()
-		pseudo.text = str(r.get("username", "")).to_upper()
+		# §8.126 — préfixe `[TAG]` par la source unique (inchangé si le joueur n'a pas de compagnie).
+		pseudo.text = GameState.tagged_name(pid, str(r.get("username", ""))).to_upper()
 		pseudo.add_theme_font_size_override("font_size", 12)
 		pseudo.add_theme_color_override("font_color", tint)
 		name_box.add_child(pseudo)
@@ -1545,7 +1548,10 @@ func _make_debrief_row(r: Dictionary, odd: bool) -> Control:
 	name_box.add_child(sw)
 	var tag := tr("REPORT_BOT_TAG") if bool(r.get("is_bot", false)) else ""
 	var name_lbl := Label.new()
-	name_lbl.text = "%s%s" % [tag, str(r.get("username", "?"))]
+	# §8.126 — `[TAG]` de compagnie devant le pseudo (après l'éventuel marqueur de bot, qui reste la
+	# première information à lire). `player_id` absent (-1) → `tagged_name` rend le pseudo tel quel.
+	name_lbl.text = "%s%s" % [tag, GameState.tagged_name(int(r.get("player_id", -1)),
+		str(r.get("username", "?")))]
 	name_lbl.add_theme_color_override("font_color", tint)
 	name_lbl.add_theme_font_size_override("font_size", 12)
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL

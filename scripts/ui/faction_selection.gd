@@ -421,7 +421,8 @@ func _teammate_holding(fid: String) -> String:
 		if str(_locked.get(int(mate), "")) == fid:
 			var p: Dictionary = GameState.players.get(str(int(mate)), {})
 			var who := str(p.get("username", ""))
-			return who if who != "" else "#%d" % int(mate)
+			# §8.126 — le tag de compagnie accompagne le pseudo jusque dans le DRAFT.
+			return GameState.tagged_name(int(mate), who if who != "" else "#%d" % int(mate))
 	return ""
 
 # Applique l'état d'accès de la faction affichée : bandeau OR « GRATUITE CETTE SEMAINE »
@@ -795,7 +796,8 @@ func _update_status() -> void:
 			if fid == "":
 				continue
 			var p: Dictionary = GameState.players.get(str(int(mate)), {})
-			picks.append("%s ◆ %s" % [str(p.get("username", "#%d" % int(mate))),
+			picks.append("%s ◆ %s" % [
+				GameState.tagged_name(int(mate), str(p.get("username", "#%d" % int(mate)))),
 				_faction_display_name(fid)])
 		var banner := tr("TEAM_BANNER") % my_team
 		if picks.size() > 0:

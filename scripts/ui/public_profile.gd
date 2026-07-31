@@ -25,6 +25,9 @@ extends Control
 
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const TopNav = preload("res://scripts/ui/top_nav.gd")
+# §8.126 — emblèmes + écran Compagnie (porteur du `static var target_tag`).
+const CompanyEmblems = preload("res://scripts/ui/company_emblems.gd")
+const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
@@ -142,6 +145,29 @@ func _build_header() -> void:
 	left.add_child(lvl)
 	lvl.add_child(_mini(tr("COMMON_LEVEL"), 16, ACCENT))
 	lvl.add_child(_mini(str(int(_data.get("level", 1))), 20, GOLD))
+
+	# --- COMPAGNIE (§8.126) : ligne CLIQUABLE vers la fiche publique de la compagnie. -------------
+	# L'appartenance est publique par construction (le tag préfixe déjà ce pseudo partout, jusque
+	# dans le kill feed d'un inconnu) — l'afficher ici ne divulgue rien de neuf, et rend enfin
+	# consultable ce que tout le monde voyait déjà passer.
+	# Absente d'un serveur non redéployé → aucune ligne (jamais un « — COMPAGNIE : AUCUNE — » qui
+	# affirmerait à tort que ce joueur n'en a pas).
+	var company = _data.get("company")
+	if typeof(company) == TYPE_DICTIONARY and str(company.get("tag", "")) != "":
+		var tag := str(company["tag"])
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 8)
+		line.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		line.tooltip_text = tr("COMPANY_VIEW_TOOLTIP")
+		line.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed \
+					and ev.button_index == MOUSE_BUTTON_LEFT:
+				_open_company(tag))
+		left.add_child(line)
+		line.add_child(CompanyEmblems.make_badge(int(company.get("emblem_id", 0)), 26.0, _font))
+		line.add_child(_mini("[%s]" % tag, 15, ACCENT))
+		line.add_child(_mini(str(company.get("name", "")).to_upper(), 15, TEXT))
+
 	# Retour explicite vers le Classement (seul accès à cet écran).
 	var back := Button.new()
 	back.text = tr("PUBLIC_PROFILE_BACK")
@@ -189,6 +215,16 @@ func _build_header() -> void:
 	v.add_child(_mini(tr("PROFILE_GLOBAL_RANK") + "  "
 		+ ("#" + _format_thousands(rank) if rank > 0 else "—"), 14,
 		TEXT if rank > 0 else MUTED))
+
+
+# §8.126 — ouvre la fiche PUBLIQUE d'une compagnie. Même mécanique de passage de paramètre que
+# l'accès à CET écran depuis le Classement (§8.107) : un `static var` sur le script cible, parce que
+# `TransitionManager.change_scene` ne transporte rien. Routé par TAG, jamais par id : aucun
+# identifiant séquentiel énumérable ne sort du serveur.
+func _open_company(tag: String) -> void:
+	AudioManager.play_sfx("click")
+	CompanyScreen.target_tag = tag
+	TransitionManager.change_scene("res://scenes/ui/company_screen.tscn")
 
 
 func _build_content() -> void:

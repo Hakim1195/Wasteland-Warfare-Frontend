@@ -42,6 +42,10 @@ extends Control
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 # Header CANONIQUE partagé (§8.94).
 const TopNav = preload("res://scripts/ui/top_nav.gd")
+# §8.126 — catalogue d'emblèmes (placeholders procéduraux tant qu'aucun asset n'est déposé) et écran
+# Compagnie (porteur du `static var target_tag` — même mécanique que `public_profile`, §8.107).
+const CompanyEmblems = preload("res://scripts/ui/company_emblems.gd")
+const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
 
 # --- Palette canonique (§2) — AUCUNE couleur hors charte ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -125,6 +129,8 @@ var _modes: Dictionary = {}
 var _form: Array = []
 # §8.107 — agrégat PAR CARTE (vide sur un serveur antérieur : la vue affiche son état vide).
 var _maps_stats: Array = []
+# §8.126 — COMPAGNIE d'appartenance ({tag, name, emblem_id}) ; {} = SANS COMPAGNIE.
+var _company: Dictionary = {}
 
 # Repli LEGACY de la carte division : division + points lus de /auth/me (utilisé UNIQUEMENT si le
 # bloc `season` de /profile/stats est absent, c.-à-d. serveur non redéployé).
@@ -256,6 +262,12 @@ func _on_profile_loaded(data: Dictionary):
 		_form = data["form"]
 	if typeof(data.get("maps")) == TYPE_ARRAY:
 		_maps_stats = data["maps"]
+	# §8.126 — COMPAGNIE : `null` (ou clé absente d'un serveur non redéployé) = SANS COMPAGNIE, un
+	# ÉTAT affichable et non une donnée manquante. On écrase donc systématiquement, y compris par
+	# {} — quitter sa compagnie doit faire disparaître la carte au rafraîchissement suivant, sans
+	# quoi le Profil garderait éternellement l'appartenance d'hier.
+	var comp = data.get("company")
+	_company = comp if typeof(comp) == TYPE_DICTIONARY else {}
 
 	_refresh_all()
 	_set_status(tr("PROFILE_STATUS_LOADED"))
@@ -571,6 +583,13 @@ func _populate_overview_tab() -> void:
 	grid.add_child(_make_stat_card(tr("PROFILE_FAVORITE_FACTION"),
 		fav_name if fav_name != "" else "—", fav_color))
 
+	# --- COMPAGNIE (§8.126) : la carte d'appartenance, juste sous les statistiques de campagne. ---
+	# Placée AVANT la bande de forme, qui sort de la fonction par un `return` quand l'historique est
+	# vide : la reléguer après la masquerait pour un joueur neuf — précisément celui qu'une
+	# compagnie retient le mieux.
+	_overview_box.add_child(_spacer(8))
+	_overview_box.add_child(_build_company_card())
+
 	# --- PERSONNAGE GRATUIT DE LA SEMAINE (chantier U) : jauge de parties restantes. -------------
 	# Placé AVANT la bande de forme — celle-ci sort de la fonction par un `return` quand
 	# l'historique est vide, ce qui masquerait le widget pour un nouveau joueur (précisément celui
@@ -596,6 +615,83 @@ func _populate_overview_tab() -> void:
 		if typeof(e) != TYPE_DICTIONARY:
 			continue
 		strip.add_child(_make_form_square(bool(e.get("win", false)), bool(e.get("is_ranked", false))))
+
+
+# =========================================================
+# COMPAGNIE (§8.126) — carte d'appartenance de l'onglet APERÇU
+# =========================================================
+# DEUX états, et le premier compte autant que le second : « SANS COMPAGNIE » n'est pas un trou dans
+# l'écran, c'est l'invitation à en rejoindre une (le seul endroit du jeu qui le propose).
+#
+# ⚠️ La carte ne montre NI score NI roster. Ce n'est pas de la place manquante : les faire venir ici
+# obligerait `/profile/stats` à recalculer un agrégat de compagnie à chaque ouverture du Profil, et
+# surtout créerait une DEUXIÈME source du score — la divergence exacte que le §8.106 a coûté cher à
+# corriger. Le détail vit derrière le bouton OUVRIR, servi par `GET /company/mine`.
+func _build_company_card() -> PanelContainer:
+	var has := not _company.is_empty()
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _make_card_style(ACCENT if has else MUTED))
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	card.add_child(v)
+
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	v.add_child(head)
+	head.add_child(_eyebrow(tr("COMPANY_TITLE")))
+	# Panneau explicatif « qu'est-ce qu'une compagnie » = modal calqué sur le Classement
+	# (référence maison actée §8.125). Toujours présent, y compris quand on en a une : c'est aussi
+	# là qu'on relit la règle du cooldown avant de partir.
+	head.add_child(WarzoneUI.make_info_badge(self, tr("COMPANY_EXPLAIN_TITLE"),
+		tr("COMPANY_EXPLAIN_BODY"), _font, 20.0))
+
+	if not has:
+		v.add_child(_mini(tr("COMPANY_NONE"), 20, MUTED))
+		v.add_child(_muted_note(tr("COMPANY_NONE_HINT")))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		v.add_child(row)
+		row.add_child(_company_button(tr("COMPANY_CREATE")))
+		row.add_child(_company_button(tr("COMPANY_JOIN")))
+		return card
+
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 12)
+	v.add_child(line)
+	line.add_child(CompanyEmblems.make_badge(int(_company.get("emblem_id", 0)), 48.0, _font))
+	var titles := VBoxContainer.new()
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	titles.add_theme_constant_override("separation", 0)
+	line.add_child(titles)
+	titles.add_child(_mini("[%s]" % str(_company.get("tag", "")), 15, ACCENT))
+	titles.add_child(_mini(str(_company.get("name", "")).to_upper(), 20, TEXT))
+	var open_btn := _company_button(tr("COMPANY_OPEN"))
+	open_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(open_btn)
+	return card
+
+
+# Les trois boutons de la carte mènent au MÊME écran : c'est lui qui porte la création, l'adhésion
+# et la gestion. Un formulaire de création dans le Profil aurait été un deuxième endroit à maintenir.
+func _company_button(text: String) -> Button:
+	var btn := Button.new()
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.text = text
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.custom_minimum_size = Vector2(150, 34)
+	WarzoneUI.apply_ghost_button(btn)
+	WarzoneUI.wire_button_feedback(btn)
+	btn.pressed.connect(_open_company_screen)
+	return btn
+
+
+func _open_company_screen() -> void:
+	# `target_tag` vide = MA compagnie (l'écran bascule alors sur `GET /company/mine`).
+	CompanyScreen.target_tag = ""
+	TransitionManager.change_scene("res://scenes/ui/company_screen.tscn")
 
 
 # =========================================================
