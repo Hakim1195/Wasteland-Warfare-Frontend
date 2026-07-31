@@ -81,7 +81,7 @@ func _try_auto_login() -> void:
 	AuthManager.profile_loaded.connect(_on_auto_login_ok)
 	AuthManager.try_restore_session()
 
-# Session valide : l'opérateur entre directement au menu (pas de re-saisie d'identifiants).
+# Session valide : le joueur entre directement au menu (pas de re-saisie d'identifiants).
 func _on_auto_login_ok(_data: Dictionary) -> void:
 	if not _auto_login:
 		return

@@ -581,7 +581,7 @@ func _card_style(selected: bool, ranked: bool) -> StyleBoxFlat:
 func _build_leaderboard_widget() -> void:
 	if leaderboard_content == null:
 		return
-	leaderboard_content.add_child(_card_title("MENU_TOP_OPERATORS"))
+	leaderboard_content.add_child(_card_title("MENU_TOP_PLAYERS"))
 	WarzoneUI.add_filet(leaderboard_content)
 	_lb_rows = VBoxContainer.new()
 	_lb_rows.add_theme_constant_override("separation", 4)

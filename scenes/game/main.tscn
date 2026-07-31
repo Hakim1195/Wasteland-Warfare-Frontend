@@ -578,20 +578,20 @@ autowrap_mode = 3
 [node name="ObjectivesSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 layout_mode = 2
 
-[node name="OperatorZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
+[node name="PlayerZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.27
 theme_override_constants/separation = 6
 
-[node name="OperatorTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/OperatorZone"]
+[node name="PlayerTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/PlayerZone"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 16
-text = "HUD_OPERATOR_TITLE"
+text = "HUD_PLAYER_TITLE"
 
-[node name="OperatorSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
+[node name="PlayerSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 layout_mode = 2
 
 [node name="CommandsTabs" type="TabContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow" unique_id=842572558]

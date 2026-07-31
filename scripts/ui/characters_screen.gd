@@ -891,7 +891,7 @@ func _on_favorite_pressed(fid: String) -> void:
 	if fid == "":
 		return
 	# Re-clic sur le favori courant = on le RETIRE ("" = aucun choix explicite, cf. SettingsManager) :
-	# sans ça le joueur ne pourrait jamais annuler son choix depuis cet écran.
+	# sans çau joueur ne pourrait jamais annuler son choix depuis cet écran.
 	var already := SettingsManager.get_selected_faction() == fid
 	SettingsManager.set_selected_faction("" if already else fid)
 	# La grille porte le badge ★ : elle doit refléter le nouveau favori dès le retour au roster.

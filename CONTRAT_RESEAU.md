@@ -78,7 +78,7 @@ sont TOUJOURS des `string`**. Conséquences **NORMATIVES** côté client :
     }
   ],
   "me": {                           // null si la requête n'est PAS authentifiée
-    "rank": 137,                    // int  — rang GLOBAL de l'opérateur courant (même hors page)
+    "rank": 137,                    // int  — rang GLOBAL du joueur courant (même hors page)
     "username": "Hakim", "level": 4, "wins": 12
   }
 }
@@ -671,7 +671,7 @@ Réponse (les 10 clés historiques sont **INCHANGÉES** ; les 4 blocs sont ADDIT
 ```
 > ⚠️ `final_rank` est **1-based** ici, alors que `MatchParticipant.rank` (télémétrie G6) est **0-based**. Conventions volontairement différentes : le 0 est réservé au « inconnu ». Ne pas les confondre.
 
-#### `GET /profile/public/{username}` — profil PUBLIC d'un autre opérateur **(NOUVEAU §8.107)**
+#### `GET /profile/public/{username}` — profil PUBLIC d'un autre joueur **(NOUVEAU §8.107)**
 Palmarès consultable **uniquement depuis le Classement** (demande produit). **Authentifié** — contrairement à `GET /leaderboard` qui est public : l'écran n'est atteignable que depuis le jeu, et l'exiger limite le moissonnage. `404` si le pseudo est inconnu.
 ```jsonc
 { "username": "RAVAGEUR_PRIME", "level": 58,
@@ -734,7 +734,7 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
   "me": { "rank": 137, "username": "HAKIM", "level": 23, "wins": 118 }  // null si non authentifié
 }
 ```
-- **Consommé par :** `scripts/ui/leaderboard.gd`. Quand le serveur répond avec des rangs (forme §9.2), le client **respecte l'ordre et les rangs serveur** et surligne l'opérateur courant (ajouté en bas via `me` s'il est hors page). Repli **mock/legacy** : tant que le serveur est muet/hors-ligne **ou** sur l'ancienne forme « liste plate » (avant redéploiement VPS), le client trie/range côté client. Clés `wins`/`level` = mêmes alias qu'en §9.1. *(Détail mock : §8.41.)*
+- **Consommé par :** `scripts/ui/leaderboard.gd`. Quand le serveur répond avec des rangs (forme §9.2), le client **respecte l'ordre et les rangs serveur** et surligne le joueur courant (ajouté en bas via `me` s'il est hors page). Repli **mock/legacy** : tant que le serveur est muet/hors-ligne **ou** sur l'ancienne forme « liste plate » (avant redéploiement VPS), le client trie/range côté client. Clés `wins`/`level` = mêmes alias qu'en §9.1. *(Détail mock : §8.41.)*
 
 ### 9.3. R1 — Boutique / Inventaire / Économie
 - **`GET /shop/catalog`** → `Array<ShopItem>` (PUBLIC ; catalogue **persistant** en base `shop_items`, **seedé au démarrage** depuis `api/game/shop_catalog.py`). **§8.102 : paramètre optionnel `?include_all=1`** → renvoie AUSSI les articles `purchasable=false` (skins exclusifs de saison) — le client n'affiche ces articles que **possédés**, sans CTA d'achat. Sans le paramètre : filtre `purchasable == True` historique (rétro-compat des clients déployés ; un serveur ANTÉRIEUR ignore simplement le paramètre) :

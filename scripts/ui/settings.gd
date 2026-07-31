@@ -16,6 +16,13 @@ extends Control
 
 # Nœuds câblés via @export + NodePath (drag-drop éditeur) — cf. conventions CLAUDE.md.
 @export var panel: Control
+# Onglets (§8.127) : l'écran empilait TOUT (audio + affichage + langue + confort + déconnexion) dans
+# un seul VBox, qui débordait de l'écran en 1080p et plus bas. Le contenu est désormais réparti sur
+# deux PAGES exclusives — `PageMain` (audio / affichage / langue / déconnexion) et `PageComfort`
+# (confort & accessibilité) — pilotées par la barre de boutons `TabsBar`, construite en code.
+@export var tabs_bar: HBoxContainer
+@export var page_main: VBoxContainer
+@export var comfort_page: VBoxContainer
 @export var master_slider: HSlider
 @export var master_value: Label
 @export var music_slider: HSlider
@@ -42,6 +49,14 @@ const TEXT := Color(0.933333, 0.952941, 0.968627, 1)    # blanc froid
 const MUTED := Color(0.541176, 0.592157, 0.647059, 1)   # acier (muet / inactif)
 const DANGER := Color(0.839216, 0.270588, 0.247059, 1)  # rouge danger #D6453F (action destructrice)
 
+# --- Onglets (§8.127) ---
+# Data-driven comme la barre du Shop (§8.102) : `key` est une clé i18n BRUTE posée telle quelle sur
+# le bouton → Godot la traduit ET la re-traduit tout seul au changement de langue.
+const TAB_DEFS := [
+	{"id": "general", "key": "SETTINGS_TAB_GENERAL"},
+	{"id": "comfort", "key": "SETTINGS_TAB_COMFORT"},
+]
+
 # Police condensée de la charte (§2), pour les nœuds générés/restylés en code.
 var _font: SystemFont
 # Poignée de slider : petit carré cyan plein (ADN angulaire §2), partagée par les 3 sliders.
@@ -53,6 +68,12 @@ var _resolution_buttons: Array[Button] = []
 # changement de langue (i18n 2026-07-18 : les libellés posés par tr() en code ne se re-traduisent
 # pas tout seuls, contrairement aux nœuds .tscn).
 var _comfort_nodes: Array[Node] = []
+# Onglet affiché (§8.127) — "general" au premier affichage, comme dans la maquette.
+var _active_tab := "general"
+# id d'onglet -> bouton de la TabsBar, pour restyler la sélection sans re-chercher les nœuds.
+var _tab_buttons: Dictionary = {}
+# Plancher de hauteur de la zone de pages (px), mesuré à l'exécution — cf. _measure_pages_floor().
+var _pages_floor := 0.0
 
 func _ready() -> void:
 	_font = SystemFont.new()
@@ -101,8 +122,12 @@ func _ready() -> void:
 	_mount_language_selector()
 
 	# Section CONFORT (E10 §8.82) : réglages d'accessibilité construits PAR CODE (aucune retouche
-	# .tscn) et appendus au RootVBox — pilotés par SettingsManager.get_comfort/set_comfort.
+	# .tscn) et appendus à la page CONFORT — pilotés par SettingsManager.get_comfort/set_comfort.
 	_build_comfort_section()
+
+	# Barre d'onglets (§8.127) — construite APRÈS les deux pages : `_show_tab()` masque celle qui
+	# n'est pas active, et on veut qu'elle soit déjà peuplée quand on la cache.
+	_build_tabs()
 
 	_set_status(tr("SETTINGS_STATUS"))
 
@@ -112,6 +137,104 @@ func _ready() -> void:
 	LocaleManager.locale_changed.connect(_on_locale_changed_rebuild)
 	# §8.122 (LOT G) : `reduced_motion` conditionne l'état de la rangée CARTE VIVANTE → relayout.
 	SettingsManager.comfort_changed.connect(_on_comfort_changed_relayout)
+
+# --- Onglets (§8.127) -------------------------------------------------------
+# Deux pages EXCLUSIVES au lieu d'un empilement unique : l'écran ne tenait plus en hauteur (il
+# débordait déjà en 1080p une fois la section CONFORT et le 4ᵉ volume ajoutés par code). Les pages
+# sont deux VBox sœurs sous `Pages` dont on bascule `visible` — un enfant masqué ne prend aucune
+# place dans un VBoxContainer, donc le panneau se recalcule tout seul.
+# ⚠️ La ligne de STATUT et le filet du bas restent HORS des pages (pied de page commun) : ils
+# décrivent l'écran entier (« réglages appliqués et enregistrés localement »), pas un onglet.
+func _build_tabs() -> void:
+	if tabs_bar == null:
+		return
+	for def in TAB_DEFS:
+		var btn := Button.new()
+		btn.text = str(def.get("key"))   # clé BRUTE -> auto-traduction (et re-traduction) par Godot
+		btn.custom_minimum_size = Vector2(0, 46)
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_on_tab_pressed.bind(str(def.get("id"))))
+		tabs_bar.add_child(btn)
+		_tab_buttons[str(def.get("id"))] = btn
+	WarzoneUI.wire_buttons_sfx(_tab_buttons.values())   # SFX d'interface (survol/clic — R6)
+	_show_tab(_active_tab)
+
+func _on_tab_pressed(id: String) -> void:
+	if id == _active_tab:
+		return
+	_show_tab(id)
+
+func _show_tab(id: String) -> void:
+	_active_tab = id
+	for tab_id in _tab_buttons:
+		_style_tab(_tab_buttons[tab_id], tab_id == _active_tab)
+	if page_main:
+		page_main.visible = (id == "general")
+	if comfort_page:
+		comfort_page.visible = (id == "comfort")
+	_measure_pages_floor()
+
+# Le panneau est centré verticalement (CenterContainer) : sans plancher commun, passer sur la page
+# la plus courte le ferait REMONTER de la moitié de l'écart — l'écran « sauterait » de ~58 px à
+# chaque clic d'onglet. On impose donc à la zone de pages la hauteur de la plus haute page déjà
+# affichée. Le plancher ne fait que CROÎTRE, ce qui absorbe aussi les reconstructions de la page
+# CONFORT (changement de langue, ou MOUVEMENT RÉDUIT qui fait apparaître la mention CARTE VIVANTE).
+#
+# ⚠️ Mesuré sur la taille RÉELLE (après tri des enfants), surtout PAS via
+# `get_combined_minimum_size()` : les deux mentions muettes de la page CONFORT sont en autowrap, et
+# la taille minimale d'un Label enroulé se calcule sur sa largeur COURANTE — hors layout elle
+# explose (mesuré : 2543 px au lieu de 387). D'où l'attente d'une frame avant de lire `size`.
+# Rien n'est figé en dur non plus : les métriques dépendent de la police réellement présente sur la
+# machine (la chaîne Bahnschrift → … → Arial ne donne pas les mêmes hauteurs partout).
+func _measure_pages_floor() -> void:
+	await get_tree().process_frame
+	if not is_inside_tree() or page_main == null or comfort_page == null:
+		return
+	var pages := page_main.get_parent() as Control
+	if pages == null:
+		return
+	# Aucune des deux pages n'a de drapeau EXPAND : dans un VBoxContainer elles gardent leur hauteur
+	# naturelle et le plancher laisse simplement du vide sous la plus courte — on mesure donc bien
+	# le contenu, pas le plancher déjà posé.
+	var active: Control = page_main if _active_tab == "general" else comfort_page
+	_pages_floor = maxf(_pages_floor, active.size.y)
+	pages.custom_minimum_size.y = _pages_floor
+
+# Onglet : actif = fond cyan + soulignement, inactif = ghost. Même style que la barre du Shop (§2),
+# volontairement DISTINCT de `_style_segment` (segments de réglage) pour ne pas confondre les deux
+# niveaux de sélection présents à l'écran.
+func _style_tab(btn: Button, active: bool) -> void:
+	if btn == null:
+		return
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(0)
+	sb.content_margin_left = 16.0
+	sb.content_margin_top = 10.0
+	sb.content_margin_right = 16.0
+	sb.content_margin_bottom = 10.0
+	if active:
+		sb.bg_color = Color(ACCENT, 0.20)
+		sb.border_width_bottom = 3
+		sb.border_color = ACCENT
+	else:
+		sb.bg_color = Color(1, 1, 1, 0.03)
+		sb.border_width_bottom = 1
+		sb.border_color = Color(ACCENT, 0.35)
+
+	var hover := sb.duplicate() as StyleBoxFlat
+	if not active:
+		hover.bg_color = Color(ACCENT, 0.10)
+
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 18)
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", sb)
+	btn.add_theme_stylebox_override("focus", sb)
+	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
+	btn.add_theme_color_override("font_hover_color", TEXT)
 
 # --- Audio : sliders de volume ---------------------------------------------
 func _setup_volume_slider(slider: HSlider, value_label: Label, bus: String) -> void:
@@ -337,8 +460,12 @@ func _style_logout_button(btn: Button) -> void:
 # Section CONFORT (E10 §8.82) — accessibilité, construite par code
 # =========================================================
 func _build_comfort_section() -> void:
-	# RootVBox = ancêtre commun des rows (via un nœud @export fiable).
-	var root := resolution_box.get_parent().get_parent()
+	# Page CONFORT = 2ᵉ onglet (§8.127), câblée en @export EXPLICITE. Avant, la section devinait son
+	# parent en remontant l'arbre (`resolution_box.get_parent().get_parent()`), ce qui la collait
+	# forcément en queue du RootVBox — donc dans le même empilement que le reste.
+	var root: Node = comfort_page
+	if root == null:
+		return
 	var sep := HSeparator.new()
 	root.add_child(sep)
 	var eyebrow := Label.new()
@@ -488,14 +615,14 @@ func _set_status(text: String) -> void:
 		status_label.text = text
 
 # DÉCONNEXION (migrée du lobby) : coupe le tunnel temps réel s'il est ouvert, purge le token JWT +
-# l'identité (mémoire ET disque, §P1) via AuthManager.clear_session(), puis renvoie l'opérateur vers
+# l'identité (mémoire ET disque, §P1) via AuthManager.clear_session(), puis renvoie le joueur vers
 # l'écran d'authentification — toujours via le fondu gunmetal du TransitionManager.
 func _on_logout_pressed() -> void:
 	# 1. Coupure du WebSocket (défensif : hors d'une partie aucun tunnel n'est ouvert). leave_room()
 	#    (revue §8.116) ferme ET recrée le peer (fix STATE_CLOSING) + purge current_room_id — plus
 	#    aucune Vue ne manipule NetworkManager.socket directement (Règle d'Or §6.1).
 	NetworkManager.leave_room()
-	# 2. Purge complète de la session (sinon la reconnexion auto §P1 relogguerait l'opérateur au
+	# 2. Purge complète de la session (sinon la reconnexion auto §P1 relogguerait le joueur au
 	#    prochain lancement malgré sa déconnexion volontaire).
 	AuthManager.clear_session()
 	# 3. Redirection vers l'écran d'authentification (fondu gunmetal entrant/sortant).

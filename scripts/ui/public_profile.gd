@@ -1,7 +1,7 @@
 extends Control
 
 # =========================================================================
-# Profil PUBLIC d'un autre opérateur (§8.107) — charte « Warzone Command » §2
+# Profil PUBLIC d'un autre joueur (§8.107) — charte « Warzone Command » §2
 # =========================================================================
 # Écran NEUF, atteignable UNIQUEMENT en cliquant une ligne du Classement (demande produit).
 # Règle d'Or §6.1 : VUE PURE — le serveur calcule, le client formate.
@@ -67,7 +67,7 @@ const FALLBACK_PATHS := [
 	"res://resources/factions/chasseurs_ombres.tres",
 ]
 
-# Pseudo de l'opérateur à afficher, posé par l'écran APPELANT (le Classement) JUSTE AVANT le
+# Pseudo du joueur à afficher, posé par l'écran APPELANT (le Classement) JUSTE AVANT le
 # changement de scène. `static var` plutôt qu'un autoload : `TransitionManager.change_scene` ne
 # transporte aucun paramètre, et un porteur statique sur CE script évite d'ajouter un champ
 # étranger à un autoload existant (aucune modification de l'existant).
@@ -110,7 +110,7 @@ func _ready() -> void:
 
 
 func _on_public_profile_loaded(data: Dictionary, username: String) -> void:
-	# Réponse d'une AUTRE demande (l'opérateur peut enchaîner deux lignes du classement) : ignorée.
+	# Réponse d'une AUTRE demande (le joueur peut enchaîner deux lignes du classement) : ignorée.
 	if str(username) != _username:
 		return
 	_data = data

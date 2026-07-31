@@ -130,7 +130,7 @@ signal pact_response_received(pact_id: int, accept: bool, proposer_id: int, targ
 signal chat_message_received(tab: String, sender_id: int, sender_name: String, text: String, target_id: int)
 # Classement mondial (R3 — §9.2) : réponse à fetch_leaderboard. `entries` = liste d'objets triés par
 # le serveur (clés canoniques rank/username/level/wins + alias historiques niveau/stats_victoires…).
-# `me` = bloc {rank, username, level, wins} de l'opérateur courant si la requête est authentifiée,
+# `me` = bloc {rank, username, level, wins} du joueur courant si la requête est authentifiée,
 # sinon dict VIDE. Le client reste tolérant à l'ancienne forme (liste plate sans `me`).
 signal leaderboard_loaded(entries: Array, me: Dictionary)
 # --- Profil & statistiques joueur (R2 — CONTRAT_RESEAU.md §9.1) ---
@@ -153,13 +153,13 @@ signal profile_history_page_loaded(entries: Array, request: Dictionary)
 signal profile_finance_loaded(data: Dictionary, request: Dictionary)
 # Réponse à fetch_profile_pass : dict {active, expires_at, tier_id, tiers[], granted_items[], gains}.
 signal profile_pass_loaded(data: Dictionary)
-# §8.107 — PROFIL PUBLIC d'un autre opérateur (palmarès consultable depuis le Classement) :
+# §8.107 — PROFIL PUBLIC d'un autre joueur (palmarès consultable depuis le Classement) :
 # dict {username, level, games_played, wins, losses, heaviest_toll, favorite_faction, season,
 # factions[], modes, form[], maps[]}. `username` échoué pour que l'écran ignore une réponse
 # obsolète (l'utilisateur peut cliquer deux lignes de suite). {} = introuvable / serveur ancien.
 signal public_profile_loaded(data: Dictionary, username: String)
 # --- Héros / Roster (sprint RPG & Survie — écran « Personnages ») ---
-# Réponse à fetch_heroes : liste des 10 héros de l'opérateur (1 par faction), chacun avec stats
+# Réponse à fetch_heroes : liste des 10 héros du joueur (1 par faction), chacun avec stats
 # détaillées (au niveau courant ET au niveau 100), progression XP et paliers (GET /api/v1/heroes,
 # authentifié). Lue défensivement par characters_screen.gd (int() sur les nombres, piège float §5).
 signal heroes_loaded(heroes: Array)
@@ -1129,11 +1129,11 @@ func _on_profile_pass_fetched(_result, response_code, _headers, body, http_node)
 
 
 # 9. PROFIL PUBLIC (§8.107) : GET /profile/public/{username} (authentifié). Palmarès d'un AUTRE
-# opérateur — ni finances ni pass (le serveur ne les calcule même pas pour un tiers).
+# joueur — ni finances ni pass (le serveur ne les calcule même pas pour un tiers).
 # L'identifiant est le PSEUDO : le classement n'expose délibérément aucun id technique, et router
 # par pseudo évite d'introduire un identifiant séquentiel énumérable. `uri_encode` est
 # indispensable (un pseudo peut contenir des caractères réservés d'URL).
-# 404 (opérateur inconnu) / serveur ancien → dict VIDE : l'écran affiche un état « introuvable ».
+# 404 (joueur inconnu) / serveur ancien → dict VIDE : l'écran affiche un état « introuvable ».
 func fetch_public_profile(username: String):
 	_send_api_request("/profile/public/" + username.uri_encode(),
 		HTTPClient.METHOD_GET, {}, _on_public_profile_fetched.bind(username))
@@ -1148,7 +1148,7 @@ func _on_public_profile_fetched(_result, response_code, _headers, body, http_nod
 # PARTIE 3bis : HÉROS / ROSTER (sprint RPG & Survie — écran « Personnages »)
 # =========================================================
 
-# Roster des héros de l'opérateur : GET /api/v1/heroes (authentifié). Relaie la liste brute via
+# Roster des héros du joueur : GET /api/v1/heroes (authentifié). Relaie la liste brute via
 # heroes_loaded ; l'écran « Personnages » la lit défensivement (clés canoniques + int() sur les
 # nombres, piège float §5). Forme : { "heroes": [ { faction_id, faction_name, hero_power, level,
 # xp_total, xp_in_level, xp_for_level, xp_to_next, stats{}, stats_max{}, milestones[], owned } ] }.

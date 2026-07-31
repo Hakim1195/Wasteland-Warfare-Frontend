@@ -923,7 +923,7 @@ func _make_wind(dur: float = 8.0) -> AudioStreamWAV:
 
 # RADIO MILITAIRE DU QG — souffle de porteuse + bips épars + fragments de « voix » (deux formants
 # sinusoïdaux sous enveloppe courte). Volontairement INDISTINCT : on doit croire entendre un
-# opérateur au loin, jamais comprendre un mot (aucune langue → aucun problème d'i18n).
+# joueur au loin, jamais comprendre un mot (aucune langue → aucun problème d'i18n).
 func _make_radio_hub(dur: float = 10.0) -> AudioStreamWAV:
 	var n := int(MIX_RATE * dur)
 	var s := PackedFloat32Array()

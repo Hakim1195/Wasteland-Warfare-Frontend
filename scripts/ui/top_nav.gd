@@ -47,7 +47,7 @@ const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 0.95)  # fond pastille ongl
 const SURFACE := Color(0.058824, 0.07451, 0.094118, 0.85)   # fond cadre identité (= card_panel du menu)
 
 # --- Onglets CANONIQUES (§8.94, révisé §8.97) : STRICTEMENT alignés sur l'ancien menu principal. ---
-# `profile` (OPÉRATEUR) est REVENU à sa place historique, la 4ᵉ — entre BOUTIQUE et CLASSEMENT.
+# `profile` (JOUEUR) est REVENU à sa place historique, la 4ᵉ — entre BOUTIQUE et CLASSEMENT.
 # §8.94 l'avait retiré au motif que le Profil s'ouvre par la jauge XP cliquable (mini-profil, §8.58)
 # et y avait mis `missions` à sa place exacte. Retour d'usage de Hakim : le chemin restant
 # (jauge XP → mini-profil → « VOIR LE PROFIL COMPLET ») est FONCTIONNEL mais INDÉCOUVRABLE — deux
@@ -97,7 +97,7 @@ var active_tab: String = "lobby"
 
 var _font: Font
 var _xp_bar: PanelContainer = null
-var _operator_name: Label = null
+var _player_name: Label = null
 # Avatar Steam (§8.114) : le cadre porte la bordure de charte et la VISIBILITÉ, la texture vit dans
 # le TextureRect. Séparer les deux évite d'afficher un carré cyan vide avant l'arrivée de l'image.
 var _avatar_frame: PanelContainer = null
@@ -333,7 +333,7 @@ func _build_right_cluster() -> Control:
 	box.add_child(_build_icon_button("⏻", DANGER, _on_quit_requested))
 	return box
 
-# Cadre identité encadré (= IdentityFrame du menu principal) : eyebrow OPÉRATEUR + pseudo + jauge XP/Coins.
+# Cadre identité encadré (= IdentityFrame du menu principal) : eyebrow JOUEUR + pseudo + jauge XP/Coins.
 func _build_identity_frame() -> Control:
 	var frame := PanelContainer.new()
 	frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -382,19 +382,19 @@ func _build_identity_frame() -> Control:
 	row.add_child(idbox)
 
 	var eyebrow := Label.new()
-	eyebrow.text = "COMMON_OPERATOR"
+	eyebrow.text = "COMMON_PLAYER_LABEL"
 	eyebrow.add_theme_font_override("font", _font)
 	eyebrow.add_theme_font_size_override("font_size", 13)
 	eyebrow.add_theme_color_override("font_color", ACCENT)
 	idbox.add_child(eyebrow)
 
-	_operator_name = Label.new()
-	_operator_name.text = "—"
-	_operator_name.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	_operator_name.add_theme_font_override("font", _font)
-	_operator_name.add_theme_font_size_override("font_size", 22)
-	_operator_name.add_theme_color_override("font_color", TEXT)
-	idbox.add_child(_operator_name)
+	_player_name = Label.new()
+	_player_name.text = "—"
+	_player_name.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_player_name.add_theme_font_override("font", _font)
+	_player_name.add_theme_font_size_override("font_size", 22)
+	_player_name.add_theme_color_override("font_color", TEXT)
+	idbox.add_child(_player_name)
 
 	_xp_bar = XpCoinsBarScript.new()
 	_xp_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -552,7 +552,7 @@ func _on_locale_changed(_code: String) -> void:
 # MINI-PROFIL FLOTTANT (§8.58 — déplacé du menu principal en §8.94)
 # =========================================================
 # Le Profil n'a plus d'onglet : un clic sur la jauge XP/Coins ouvre ce menu déroulant à la charte
-# (résumé express de l'opérateur + CTA vers le profil complet), depuis N'IMPORTE QUEL écran hub.
+# (résumé express du joueur + CTA vers le profil complet), depuis N'IMPORTE QUEL écran hub.
 # Construit À LA DEMANDE. Se ferme au clic extérieur, sur ÉCHAP, ou au re-clic sur la jauge.
 func _on_profile_widget_clicked() -> void:
 	AudioManager.play_sfx("click")
@@ -640,8 +640,8 @@ func _populate_profile_flyout() -> void:
 		return
 	_clear(_flyout_body)
 
-	# --- En-tête : eyebrow OPÉRATEUR + pseudo (rythme eyebrow → valeur §2) ---
-	_flyout_body.add_child(_card_title("COMMON_OPERATOR"))
+	# --- En-tête : eyebrow JOUEUR + pseudo (rythme eyebrow → valeur §2) ---
+	_flyout_body.add_child(_card_title("COMMON_PLAYER_LABEL"))
 	var name_lbl := Label.new()
 	name_lbl.text = str(_profile_data.get("username", tr("COMMON_PLAYER"))).to_upper()
 	name_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
@@ -974,8 +974,8 @@ func _on_profile_loaded(data: Dictionary) -> void:
 		var xp_next := int(data.get("xp_to_next_level", _xp_bar._xp_required_for_level(level) - xp))
 		var coins := int(data.get("coins_balance", data.get("coins", 0)))
 		_xp_bar.set_profile(level, xp, maxi(0, xp_next), coins)
-	if _operator_name:
-		_operator_name.text = str(data.get("username", tr("COMMON_PLAYER"))).to_upper()
+	if _player_name:
+		_player_name.text = str(data.get("username", tr("COMMON_PLAYER"))).to_upper()
 	# Si le mini-profil est ouvert au moment où le profil (re)charge, on rafraîchit son résumé.
 	if _profile_flyout != null and _profile_flyout.visible:
 		_populate_profile_flyout()

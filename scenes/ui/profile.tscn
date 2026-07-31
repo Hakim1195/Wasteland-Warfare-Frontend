@@ -32,11 +32,11 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_prof")
 panel = NodePath("CenterContainer/MainPanel")
-username_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/UsernameValue")
-level_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader/LevelInfo/LevelValue")
-xp_bar = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/XpBar")
-xp_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader/XpValue")
-coins_slot = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader/CoinsSlot")
+username_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/UsernameValue")
+level_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader/LevelInfo/LevelValue")
+xp_bar = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/XpBar")
+xp_value = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader/XpValue")
+coins_slot = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader/CoinsSlot")
 division_slot = NodePath("CenterContainer/MainPanel/RootVBox/IdentityHeader/DivisionSlot")
 tabs_slot = NodePath("CenterContainer/MainPanel/RootVBox/TabsSlot")
 status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
@@ -73,38 +73,38 @@ theme_override_constants/separation = 14
 layout_mode = 2
 theme_override_constants/separation = 28
 
-[node name="OperatorBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader"]
+[node name="PlayerBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
-[node name="TitleEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox"]
+[node name="TitleEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 13
 text = "PROFILE_EYEBROW"
 
-[node name="UsernameValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox"]
+[node name="UsernameValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 36
 text = "—"
 
-[node name="LevelBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox"]
+[node name="LevelBox" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox"]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="LevelHeader" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox"]
+[node name="LevelHeader" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="LevelInfo" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader"]
+[node name="LevelInfo" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="LevelEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader/LevelInfo"]
+[node name="LevelEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader/LevelInfo"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
@@ -112,7 +112,7 @@ theme_override_font_sizes/font_size = 18
 text = "COMMON_LEVEL"
 vertical_alignment = 1
 
-[node name="LevelValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader/LevelInfo"]
+[node name="LevelValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader/LevelInfo"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.878431, 0.698039, 0.286275, 1)
 theme_override_fonts/font = SubResource("font_warzone")
@@ -120,7 +120,7 @@ theme_override_font_sizes/font_size = 22
 text = "1"
 vertical_alignment = 1
 
-[node name="XpValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader"]
+[node name="XpValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
 theme_override_fonts/font = SubResource("font_warzone")
@@ -128,16 +128,16 @@ theme_override_font_sizes/font_size = 16
 text = "— / — XP"
 vertical_alignment = 1
 
-[node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader"]
+[node name="Spacer" type="Control" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="CoinsSlot" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox/LevelHeader"]
+[node name="CoinsSlot" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox/LevelHeader"]
 layout_mode = 2
 alignment = 2
 theme_override_constants/separation = 8
 
-[node name="XpBar" type="ProgressBar" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/OperatorBox/LevelBox"]
+[node name="XpBar" type="ProgressBar" parent="CenterContainer/MainPanel/RootVBox/IdentityHeader/PlayerBox/LevelBox"]
 custom_minimum_size = Vector2(0, 16)
 layout_mode = 2
 value = 0.0

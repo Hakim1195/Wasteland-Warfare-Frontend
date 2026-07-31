@@ -66,7 +66,7 @@ static func find_active_between(pacts, a: int, b: int) -> Dictionary:
 	return {}
 
 
-# Tous MES pactes actifs, dans l'ordre de l'historique (liste compacte de la zone opérateur).
+# Tous MES pactes actifs, dans l'ordre de l'historique (liste compacte de la zone joueur).
 static func my_active(pacts, pid: int) -> Array:
 	var out: Array = []
 	for e in _entries(pacts):

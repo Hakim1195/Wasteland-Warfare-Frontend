@@ -745,7 +745,7 @@ func _on_company_state(ok: bool, data: Dictionary) -> void:
 
 
 func _on_company_public(data: Dictionary, tag: String) -> void:
-	# Réponse d'une AUTRE demande (l'opérateur peut enchaîner deux lignes du classement) : ignorée.
+	# Réponse d'une AUTRE demande (le joueur peut enchaîner deux lignes du classement) : ignorée.
 	if not is_inside_tree() or tag != _public_tag:
 		return
 	var c = data.get("company")

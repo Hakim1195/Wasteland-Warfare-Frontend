@@ -176,7 +176,7 @@ var _blind_expected: int = 0
 
 const FACTIONS_DIR := "res://resources/factions/"
 # Cache des infos de faction (id -> {name, description, power, hero_path, leader}) lues des
-# resources/factions/*.tres — SOURCE UNIQUE consommée par la zone OPÉRATEUR, la fiche joueur et le
+# resources/factions/*.tres — SOURCE UNIQUE consommée par la zone JOUEUR, la fiche joueur et le
 # Rapport Post-Op (chargée une fois par faction : elle ne change pas en cours de partie).
 var _faction_full_cache: Dictionary = {}
 # Cache des MODIFICATEURS de faction (id -> Dictionary), miroir du registre backend §4.3 lu des
@@ -1230,7 +1230,7 @@ func _bb_pseudo(pid) -> String:
 
 # NB (lot A) : l'ancien tooltip « Pouvoir de Faction » de la TopBar (et son cache dédié
 # _local_faction_info / _faction_desc_text) est SUPPRIMÉ — le pouvoir de MA faction s'affiche
-# désormais en clair dans la zone OPÉRATEUR de la barre basse, et celui de chaque adversaire dans
+# désormais en clair dans la zone JOUEUR de la barre basse, et celui de chaque adversaire dans
 # la fiche joueur. Tout passe par _faction_info(fid), source unique déjà en cache.
 
 # Infos de faction par id (nom + description + résumé du pouvoir passif), lues du .tres et mises en
@@ -1409,15 +1409,15 @@ func _push_sheet_players() -> void:
 			alive.append(int(pid))
 	hud.set_sheet_players(alive + down)
 
-# Zone OPÉRATEUR de la barre basse (lot A) : MOI — identité, pouvoir de faction (libellé + ligne
+# Zone JOUEUR de la barre basse (lot A) : MOI — identité, pouvoir de faction (libellé + ligne
 # d'état vivante résolue au lot E) et 4 barres PV/PA/PB/PP. View pure §6.1.
-func _push_operator_panel() -> void:
+func _push_player_panel() -> void:
 	var fid := str(_my_state().get("faction", ""))
 	var finfo := _faction_info(fid)
 	var fname := str(finfo.get("name", ""))
 	if fname == "":
 		fname = fid.capitalize() if fid != "" else tr("GAME_FACTION_UNKNOWN")
-	hud.set_operator_panel({
+	hud.set_player_panel({
 		"pid": _my_id(),
 		"pseudo": _display_name(_my_id()),
 		"color": board.get_player_color(_my_id()),
@@ -1535,11 +1535,11 @@ func _current_global_round() -> int:
 	var history = stats.get("territory_history", [])
 	return (history.size() if typeof(history) == TYPE_ARRAY else 0) + 1
 
-# Ligne compacte de MES pactes pour la zone opérateur ("" = aucun).
+# Ligne compacte de MES pactes pour la zone joueur ("" = aucun).
 func _my_pacts_line() -> String:
 	var parts: PackedStringArray = []
 	for e in PactState.my_active(GameState.pacts, _my_id()):
-		parts.append(tr("PACT_OPERATOR_ENTRY_FMT") % [
+		parts.append(tr("PACT_PLAYER_ENTRY_FMT") % [
 			_display_name(PactState.partner_of(e, _my_id())).to_upper(),
 			int(e.get("expires_at_round", 0))])
 	return " · ".join(parts)
@@ -1641,13 +1641,13 @@ func _sync_pact_toast() -> void:
 	hud.show_pact_offer(pact_id, _display_name(proposer), board.get_player_color(proposer))
 
 # =========================================================
-# Carte POUVOIR vivante (lot E) — zone OPÉRATEUR + onglet ACTIONS
+# Carte POUVOIR vivante (lot E) — zone JOUEUR + onglet ACTIONS
 # =========================================================
 # POURQUOI : les 10 pouvoirs sont appliqués côté serveur depuis longtemps, mais RIEN ne les rendait
 # perceptibles en jeu (aucun compteur, aucun état, aucune relance de fenêtre). Ici, chaque faction
 # expose une ligne d'ÉTAT lue de son propre état serveur — jamais une valeur en dur.
 
-# Ligne d'état COURTE du pouvoir de MA faction (zone OPÉRATEUR).
+# Ligne d'état COURTE du pouvoir de MA faction (zone JOUEUR).
 func _power_state_line() -> String:
 	var mods := _faction_modifiers(str(_my_state().get("faction", "")))
 	var me := _my_state()
@@ -3098,8 +3098,8 @@ func _refresh():
 	# Noms de faction affichables (le HUD n'affiche jamais l'id snake_case brut).
 	_push_faction_names()
 	hud.update_display()
-	# Zone OPÉRATEUR de la barre basse (lot A) : moi — identité, pouvoir, PV/PA/PB/PP en barres.
-	_push_operator_panel()
+	# Zone JOUEUR de la barre basse (lot A) : moi — identité, pouvoir, PV/PA/PB/PP en barres.
+	_push_player_panel()
 	# Carte POUVOIR de l'onglet ACTIONS (lot E) : compteur de mouvements + fenêtres en attente
 	# + capacités de héros (§8.119 : RATIONNER et pouvoir de faction, grisés avec raison).
 	_push_power_card()

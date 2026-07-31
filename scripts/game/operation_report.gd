@@ -1034,7 +1034,7 @@ func populate_debrief(rows: Array) -> void:
 	var heads := HBoxContainer.new()
 	heads.add_theme_constant_override("separation", 0)
 	heads.add_child(_spacer(ROW_PAD_L))
-	heads.add_child(_fixed_cell(tr("COMMON_OPERATOR"), DBF_NAME_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_LEFT))
+	heads.add_child(_fixed_cell(tr("COMMON_PLAYER_LABEL"), DBF_NAME_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_LEFT))
 	for h in ["REPORT_DBF_COL_TERR", "REPORT_DBF_COL_CONQ", "REPORT_DBF_COL_KILLS",
 			"REPORT_DBF_COL_ELIM", "REPORT_DBF_COL_HEROES"]:
 		heads.add_child(_fixed_cell(tr(h), DBF_COL_W, TEXT_MUTED, 10, HORIZONTAL_ALIGNMENT_RIGHT))
@@ -1068,12 +1068,12 @@ func populate_final_scores(rows: Array, colors: Dictionary = {}, my_id: int = -9
 		return
 	_scores_wrap.visible = true
 
-	# En-têtes : OPÉRATEUR · OBJECTIF · PV HÉROS · KILLS — dans l'ordre EXACT du barème, pour que la
+	# En-têtes : JOUEUR · OBJECTIF · PV HÉROS · KILLS — dans l'ordre EXACT du barème, pour que la
 	# lecture de gauche à droite soit la lecture du départage.
 	var heads := HBoxContainer.new()
 	heads.add_theme_constant_override("separation", 0)
 	heads.add_child(_spacer(ROW_PAD_L))
-	heads.add_child(_fixed_cell(tr("COMMON_OPERATOR"), DBF_NAME_W, TEXT_MUTED, 10,
+	heads.add_child(_fixed_cell(tr("COMMON_PLAYER_LABEL"), DBF_NAME_W, TEXT_MUTED, 10,
 		HORIZONTAL_ALIGNMENT_LEFT))
 	for h in ["SCOREBOARD_COL_OBJECTIVE", "SCOREBOARD_COL_HP", "SCOREBOARD_COL_KILLS"]:
 		heads.add_child(_fixed_cell(tr(h), DBF_COL_W + 24.0, TEXT_MUTED, 10,

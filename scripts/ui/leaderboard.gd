@@ -51,7 +51,7 @@ const COL_WINS := 140.0
 
 # --- Données MOCK (remplacées par l'endpoint classement quand il sera spécifié) ---
 # Classement mondial fictif (déjà trié desc. par victoires, comme le ferait le serveur).
-# Chaque entrée : { name, level, wins }. L'opérateur local est inséré à part (_build_entries).
+# Chaque entrée : { name, level, wins }. Le joueur local est inséré à part (_build_entries).
 var _mock_board: Array = [
 	{"name": "RAVAGEUR_PRIME", "level": 58, "wins": 412},
 	{"name": "VDV_KOZLOV", "level": 51, "wins": 377},
@@ -67,7 +67,7 @@ var _mock_board: Array = [
 	{"name": "NOMADE_ERRANT", "level": 25, "wins": 131},
 ]
 
-# Valeurs de l'opérateur local (lues défensivement du profil ; sinon mock).
+# Valeurs du joueur local (lues défensivement du profil ; sinon mock).
 var _local_name: String = ""
 var _local_level: int = 23
 var _local_wins: int = 118
@@ -76,8 +76,8 @@ var _local_wins: int = 118
 # ou hors-ligne), l'écran affiche le mock ci-dessus en prévisualisation ; dès qu'il répond, il le REMPLACE.
 # Chaque entrée : { name, level, wins, rank } (rank = position GLOBALE serveur, 0 si forme legacy).
 var _server_board: Array = []
-# Bloc « me » (§9.2) : { rank, level, wins } de l'opérateur courant, rang GLOBAL fiable même hors page.
-# Vide si non authentifié ou ancien backend. Sert à surligner / ajouter l'opérateur au classement réel.
+# Bloc « me » (§9.2) : { rank, level, wins } du joueur courant, rang GLOBAL fiable même hors page.
+# Vide si non authentifié ou ancien backend. Sert à surligner / ajouter le joueur au classement réel.
 var _me: Dictionary = {}
 
 # Police condensée de la charte (§2), construite en code pour les nœuds générés dynamiquement.
@@ -155,7 +155,7 @@ var _last_rp_delta: int = 0
 var _offline_fallback: bool = false
 
 # --- VOLET COMPAGNIES (§8.126) -------------------------------------------------------------------
-# Le classement a désormais DEUX populations : les OPÉRATEURS (tout le code historique, intouché) et
+# Le classement a désormais DEUX populations : les JOUEURS (tout le code historique, intouché) et
 # les COMPAGNIES. Une bascule de mode plutôt qu'un second écran : c'est le même geste (« qui est en
 # tête ? »), la même page, et surtout la même barre de navigation — un écran de plus aurait été un
 # écran de plus à trouver.
@@ -200,14 +200,14 @@ func _ready():
 	_build_rules_button()
 	# Pied de liste « AFFICHER PLUS » (pagination — masqué tant qu'il n'y a rien de plus à charger).
 	_build_more_button()
-	# §8.126 — bascule OPÉRATEURS / COMPAGNIES, en TÊTE du panneau (elle commande tout le reste).
+	# §8.126 — bascule JOUEURS / COMPAGNIES, en TÊTE du panneau (elle commande tout le reste).
 	_build_mode_row()
 	# ΔRP du dernier match de la session (chip de la carte VOTRE RANG) — lu du cache NetworkManager.
 	_read_last_rp_delta()
 
 	# Identité locale : connue dès le login (AuthManager.username) ; le niveau/victoires arrivent
 	# via /auth/me (le code ne pousse que les valeurs ; les intitulés statiques vivent dans la scène).
-	# Repli NEUTRE « Joueur » (COMMON_PLAYER) — COMMON_OPERATOR est un libellé, pas un nom (§8.102).
+	# Repli NEUTRE « Joueur » (COMMON_PLAYER) — COMMON_PLAYER_LABEL est un libellé, pas un nom (§8.102).
 	_local_name = AuthManager.username if AuthManager.username != "" else tr("COMMON_PLAYER")
 	AuthManager.profile_loaded.connect(_on_profile_loaded)
 	AuthManager.get_profile()
@@ -295,7 +295,7 @@ func _podium_tier(division: String) -> String:
 # --- Classement serveur (R3 — §9.2) -----------------------------------------
 # Mappe les entrées backend vers le format d'affichage ({name, level, wins, rank}) puis redessine.
 # Lecture défensive : clés canoniques §9.2 (level/wins/rank) en priorité, repli sur les alias
-# historiques (niveau/stats_victoires). Le bloc `me` fixe l'identité + le rang global de l'opérateur.
+# historiques (niveau/stats_victoires). Le bloc `me` fixe l'identité + le rang global du joueur.
 func _on_leaderboard_loaded(entries: Array, me: Dictionary) -> void:
 	if not is_inside_tree():
 		return  # garde défensive : signal GLOBAL (partagé avec le top-3 du menu) reçu hors arbre.
@@ -310,7 +310,7 @@ func _on_leaderboard_loaded(entries: Array, me: Dictionary) -> void:
 	# Bloc saison { id, ends_at, divisions?, rules? } (M6/§8.95) — stocké par NetworkManager à côté du
 	# signal (sa signature (entries, me) reste inchangée pour ses écouteurs existants).
 	_season_info = NetworkManager.last_leaderboard_season
-	# Identité/valeurs locales depuis le bloc me (rang global fiable même si l'opérateur est hors page).
+	# Identité/valeurs locales depuis le bloc me (rang global fiable même si le joueur est hors page).
 	if not _me.is_empty():
 		if _me.has("username") and str(_me["username"]) != "":
 			_local_name = str(_me["username"])
@@ -536,7 +536,7 @@ func _on_tier_tab_pressed(tier: String) -> void:
 		_queue_fetch(_selected_division, tier, 0)
 	_refresh()
 
-# Entrées de la tranche affichée (depuis le cache). Marque l'opérateur local à la volée (le pseudo
+# Entrées de la tranche affichée (depuis le cache). Marque le joueur local à la volée (le pseudo
 # peut arriver APRÈS la tranche, via /auth/me) — pas d'ajout artificiel de `me` hors de sa tranche :
 # son rang global n'aurait aucun sens dans un classement de sous-division.
 func _tier_entries(division: String, tier: String) -> Array:
@@ -926,7 +926,7 @@ func _on_profile_loaded(data: Dictionary):
 	_local_wins = _read_int(data, ["stats_victoires", "victoires", "wins"], _local_wins)
 	_refresh()
 	# §8.96 : /auth/me répond souvent AVANT le classement — ne pas écraser l'état d'attente par
-	# « OPÉRATEUR LOCALISÉ » alors qu'aucun classement n'est encore affiché.
+	# « JOUEUR LOCALISÉ » alors qu'aucun classement n'est encore affiché.
 	if not _server_board.is_empty() or _offline_fallback:
 		_set_status(tr("LEADERBOARD_STATUS_LOCATED"))
 
@@ -939,14 +939,14 @@ func _read_int(data: Dictionary, keys: Array, fallback: int) -> int:
 
 # --- Construction du classement (Règle d'Or §6.1, VUE pure) ----------------
 # Deux chemins : (1) classement serveur §9.2 (entries avec rang global) → on RESPECTE l'ordre et les
-# rangs serveur, on surligne/ajoute l'opérateur via le bloc `me` ; (2) repli (mock de prévisualisation
+# rangs serveur, on surligne/ajoute le joueur via le bloc `me` ; (2) repli (mock de prévisualisation
 # OU ancien backend « liste plate » sans rang) → tri & rang calculés côté client.
 func _build_entries() -> Array:
 	if not _server_board.is_empty() and int(_server_board[0].get("rank", 0)) > 0:
 		return _build_server_entries()
 	return _build_ranked_locally()
 
-# Chemin SERVEUR §9.2 : ordre et rangs du serveur respectés tels quels. L'opérateur courant est
+# Chemin SERVEUR §9.2 : ordre et rangs du serveur respectés tels quels. Le joueur courant est
 # surligné s'il figure dans la page ; sinon il est AJOUTÉ en bas avec son rang GLOBAL réel (bloc me).
 func _build_server_entries() -> Array:
 	var rows: Array = _server_board.duplicate(true)
@@ -957,7 +957,7 @@ func _build_server_entries() -> Array:
 			r["is_local"] = true   # on NE touche PAS à level/wins/rank : le serveur fait foi.
 			present = true
 			break
-	# Opérateur hors de la page renvoyée : on l'ajoute distinctement avec son rang global (si connu).
+	# Joueur hors de la page renvoyée : on l'ajoute distinctement avec son rang global (si connu).
 	if not present and not _me.is_empty():
 		rows.append({"name": _local_name, "level": _local_level, "wins": _local_wins,
 			"rank": int(_me.get("rank", 0)), "is_local": true,
@@ -966,7 +966,7 @@ func _build_server_entries() -> Array:
 			"division_tier": str(_me.get("division_tier", ""))})
 	return rows
 
-# Chemin REPLI : fusionne la source (mock, ou liste plate legacy) + l'opérateur local, trie desc.
+# Chemin REPLI : fusionne la source (mock, ou liste plate legacy) + le joueur local, trie desc.
 # par victoires (départage par niveau), attribue les rangs côté client.
 # §8.96 : le mock n'est utilisé QU'APRÈS un échec réseau avéré (_offline_fallback) — tant qu'on
 # attend la réponse, on ne rend RIEN (état « SYNCHRONISATION… »).
@@ -1007,12 +1007,12 @@ func _showing_mock() -> bool:
 	return _offline_fallback and _server_board.is_empty() and not _browse_mode
 
 func _refresh() -> void:
-	# §8.126 — MODE COMPAGNIES : tout l'appareillage du ladder d'opérateurs (carte VOTRE RANG, bande
+	# §8.126 — MODE COMPAGNIES : tout l'appareillage du ladder de joueurs (carte VOTRE RANG, bande
 	# des divisions, onglets d'échelon, podium) est MASQUÉ, pas juste vidé. Aucun de ces objets ne
 	# décrit un clan ; les laisser à l'écran suggérerait qu'ils s'y rapportent.
 	_rebuild_mode_row()
 	if _company_mode:
-		_hide_operator_widgets()
+		_hide_player_widgets()
 		_rebuild_company_card()
 		_build_columns_header()
 		_populate_company_ranking()
@@ -1043,7 +1043,7 @@ func _refresh() -> void:
 func _update_podium_eyebrow() -> void:
 	if _podium_eyebrow == null:
 		return
-	# §8.126 — restaure la visibilité que `_hide_operator_widgets` a pu couper : la bascule de mode
+	# §8.126 — restaure la visibilité que `_hide_player_widgets` a pu couper : la bascule de mode
 	# est réversible d'un clic, et un eyebrow resté masqué au retour serait un défaut invisible en
 	# lecture de code (on ne le verrait qu'à l'écran, une fois sur deux).
 	_podium_eyebrow.visible = true
@@ -1110,7 +1110,7 @@ func _make_podium_card(entry: Dictionary) -> PanelContainer:
 	badge_holder.add_child(badge)
 	v.add_child(badge_holder)
 
-	# Pseudo (cyan si c'est l'opérateur local).
+	# Pseudo (cyan si c'est le joueur local).
 	var name_label := Label.new()
 	name_label.text = str(entry.get("name", "—")).to_upper()
 	name_label.add_theme_font_override("font", _font)
@@ -1163,7 +1163,7 @@ func _build_columns_header() -> void:
 		columns_header.add_child(_header_cell(tr("COMPANY_COL_SCORE"), COL_WINS,
 			HORIZONTAL_ALIGNMENT_RIGHT))
 		return
-	columns_header.add_child(_header_cell(tr("COMMON_OPERATOR"), 0.0, HORIZONTAL_ALIGNMENT_LEFT, true))
+	columns_header.add_child(_header_cell(tr("COMMON_PLAYER_LABEL"), 0.0, HORIZONTAL_ALIGNMENT_LEFT, true))
 	# Colonne DIVISION (M6 §8.68) — uniquement sur l'onglet SAISON avec un backend qui la fournit.
 	if _show_division_column():
 		columns_header.add_child(_header_cell(tr("LEADERBOARD_COL_DIVISION"), COL_DIVISION, HORIZONTAL_ALIGNMENT_CENTER))
@@ -1204,7 +1204,7 @@ func _populate_ranking(entries: Array) -> void:
 	if entries.is_empty():
 		var empty := Label.new()
 		# §8.96 : distinguer « on attend le réseau » (SYNCHRONISATION…) de « le serveur a répondu, il
-		# n'y a personne » (AUCUN OPÉRATEUR CLASSÉ) — avant, les deux affichaient le même message.
+		# n'y a personne » (AUCUN JOUEUR CLASSÉ) — avant, les deux affichaient le même message.
 		# §8.98 : en navigation, « on attend » = la tranche affichée n'est pas encore au cache.
 		var waiting: bool
 		if _browse_mode:
@@ -1224,7 +1224,7 @@ func _populate_ranking(entries: Array) -> void:
 func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	var rank := int(entry.get("rank", 0))
 	var is_local := bool(entry.get("is_local", false))
-	# Ligne de l'opérateur local : surface accentuée + liseré cyan plus épais (repère visuel §2).
+	# Ligne du joueur local : surface accentuée + liseré cyan plus épais (repère visuel §2).
 	var row := PanelContainer.new()
 	row.add_theme_stylebox_override("panel", _make_row_style(is_local))
 
@@ -1242,7 +1242,7 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(rank_label)
 
-	# Pseudo (cyan + suffixe « (VOUS) » pour l'opérateur local).
+	# Pseudo (cyan + suffixe « (VOUS) » pour le joueur local).
 	var name_label := Label.new()
 	var who := str(entry.get("name", "—")).to_upper()
 	if is_local:
@@ -1295,7 +1295,7 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(value_label)
 
-	# §8.107 — la ligne ouvre le PROFIL PUBLIC de l'opérateur. AJOUT PUR : le rendu construit
+	# §8.107 — la ligne ouvre le PROFIL PUBLIC du joueur. AJOUT PUR : le rendu construit
 	# ci-dessus n'est pas touché, on ne fait que rendre la ligne cliquable (curseur + infobulle +
 	# gestionnaire d'entrée). Le Classement reste le SEUL accès à cet écran (demande produit).
 	# On route par PSEUDO : `LeaderboardEntry` n'expose délibérément aucun id technique (« Données
@@ -1324,7 +1324,7 @@ func _make_ranking_row(entry: Dictionary) -> PanelContainer:
 # =================================================================================================
 # VOLET COMPAGNIES (§8.126)
 # =================================================================================================
-# Bascule OPÉRATEURS / COMPAGNIES : deux pastilles, MÊME fabrique que les onglets d'échelon
+# Bascule JOUEURS / COMPAGNIES : deux pastilles, MÊME fabrique que les onglets d'échelon
 # (`_make_pill_tab`) — un troisième langage visuel pour un troisième sélecteur aurait fait de cet
 # écran un patchwork.
 func _build_mode_row() -> void:
@@ -1339,7 +1339,7 @@ func _build_mode_row() -> void:
 	root.move_child(_mode_row, 2)
 
 	# Emplacement de la carte « VOTRE COMPAGNIE » — juste sous la bascule, à la place exacte
-	# qu'occupe « VOTRE RANG » en mode opérateurs (même repère pour la même information : « et moi ? »).
+	# qu'occupe « VOTRE RANG » en mode joueurs (même repère pour la même information : « et moi ? »).
 	_company_card_slot = VBoxContainer.new()
 	_company_card_slot.add_theme_constant_override("separation", 8)
 	root.add_child(_company_card_slot)
@@ -1351,7 +1351,7 @@ func _rebuild_mode_row() -> void:
 	if _mode_row == null:
 		return
 	_clear(_mode_row)
-	var ops := _make_pill_tab(tr("LEADERBOARD_TAB_OPERATORS"), not _company_mode)
+	var ops := _make_pill_tab(tr("LEADERBOARD_TAB_PLAYERS"), not _company_mode)
 	ops.pressed.connect(func() -> void: _set_company_mode(false))
 	_mode_row.add_child(ops)
 	var comp := _make_pill_tab(tr("COMPANY_LEADERBOARD_TAB"), _company_mode)
@@ -1373,9 +1373,9 @@ func _set_company_mode(on: bool) -> void:
 	_set_status(_company_status_line() if on else _season_status_line())
 
 
-# Masque tout l'appareillage du ladder d'OPÉRATEURS. On ne le vide pas : le mode est réversible d'un
+# Masque tout l'appareillage du ladder d'JOUEURS. On ne le vide pas : le mode est réversible d'un
 # clic, et reconstruire ces widgets à chaque bascule les ferait clignoter.
-func _hide_operator_widgets() -> void:
+func _hide_player_widgets() -> void:
 	if _rank_card_slot != null:
 		_clear(_rank_card_slot)
 	if _divisions_slot != null:
@@ -1405,7 +1405,7 @@ func _on_company_leaderboard(data: Dictionary) -> void:
 
 
 # Ligne de statut du volet COMPAGNIES. ⚠️ Surtout PAS `_season_status_line()` : son repli est
-# « AUCUN OPÉRATEUR CLASSÉ », un message qui, sous une liste de compagnies bien peuplée, se lit
+# « AUCUN JOUEUR CLASSÉ », un message qui, sous une liste de compagnies bien peuplée, se lit
 # comme un bug (défaut vu en capture PNG, pas au boot headless).
 func _company_status_line() -> String:
 	if not _company_loaded:
@@ -1447,7 +1447,7 @@ func _rebuild_company_card() -> void:
 	right.add_theme_constant_override("separation", 2)
 	row.add_child(right)
 	# « RANG INTER-COMPAGNIES » et non « RANG MONDIAL » : ce sont deux classements DIFFÉRENTS, et
-	# réutiliser l'étiquette du ladder d'opérateurs ferait lire à un joueur son rang de clan comme
+	# réutiliser l'étiquette du ladder de joueurs ferait lire à un joueur son rang de clan comme
 	# son rang personnel.
 	right.add_child(_mini_label("COMPANY_RANK_EYEBROW", 12, ACCENT, true, HORIZONTAL_ALIGNMENT_RIGHT))
 	right.add_child(_mini_label("#%d" % int(_company_mine.get("rank", 0)), 26, GOLD,
@@ -1462,7 +1462,7 @@ func _populate_company_ranking() -> void:
 	_clear(ranking_box)
 	if _company_rows.is_empty():
 		var empty := Label.new()
-		# Même distinction qu'en mode opérateurs (§8.96) : « on attend le réseau » ≠ « le serveur a
+		# Même distinction qu'en mode joueurs (§8.96) : « on attend le réseau » ≠ « le serveur a
 		# répondu, il n'y a rien ». Les confondre fait passer un serveur muet pour un monde vide.
 		empty.text = tr("COMMON_SYNCING") if not _company_loaded else tr("COMPANY_LEADERBOARD_EMPTY")
 		empty.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED

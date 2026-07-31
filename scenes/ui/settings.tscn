@@ -23,7 +23,7 @@ border_color = Color(0.211765, 0.772549, 0.85098, 1)
 color = Color(0.211765, 0.772549, 0.85098, 0.5)
 thickness = 2
 
-[node name="SettingsScreen" type="Control" node_paths=PackedStringArray("panel", "master_slider", "master_value", "music_slider", "music_value", "sfx_slider", "sfx_value", "fullscreen_button", "windowed_button", "resolution_box", "language_box", "status_label", "logout_button")]
+[node name="SettingsScreen" type="Control" node_paths=PackedStringArray("panel", "tabs_bar", "page_main", "comfort_page", "master_slider", "master_value", "music_slider", "music_value", "sfx_slider", "sfx_value", "fullscreen_button", "windowed_button", "resolution_box", "language_box", "status_label", "logout_button")]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -32,18 +32,21 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_set")
 panel = NodePath("CenterContainer/MainPanel")
-master_slider = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow/MasterSlider")
-master_value = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow/MasterValue")
-music_slider = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow/MusicSlider")
-music_value = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow/MusicValue")
-sfx_slider = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow/SfxSlider")
-sfx_value = NodePath("CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow/SfxValue")
-fullscreen_button = NodePath("CenterContainer/MainPanel/RootVBox/WindowModeRow/FullscreenButton")
-windowed_button = NodePath("CenterContainer/MainPanel/RootVBox/WindowModeRow/WindowedButton")
-resolution_box = NodePath("CenterContainer/MainPanel/RootVBox/ResolutionRow/ResolutionBox")
-language_box = NodePath("CenterContainer/MainPanel/RootVBox/LanguageRow/LanguageBox")
+tabs_bar = NodePath("CenterContainer/MainPanel/RootVBox/TabsBar")
+page_main = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain")
+comfort_page = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageComfort")
+master_slider = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MasterRow/MasterSlider")
+master_value = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MasterRow/MasterValue")
+music_slider = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MusicRow/MusicSlider")
+music_value = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MusicRow/MusicValue")
+sfx_slider = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/SfxRow/SfxSlider")
+sfx_value = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/SfxRow/SfxValue")
+fullscreen_button = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/WindowModeRow/FullscreenButton")
+windowed_button = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/WindowModeRow/WindowedButton")
+resolution_box = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/ResolutionRow/ResolutionBox")
+language_box = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/LanguageRow/LanguageBox")
 status_label = NodePath("CenterContainer/MainPanel/RootVBox/StatusLabel")
-logout_button = NodePath("CenterContainer/MainPanel/RootVBox/LogoutButton")
+logout_button = NodePath("CenterContainer/MainPanel/RootVBox/Pages/PageMain/LogoutButton")
 
 [node name="Background" type="TextureRect" parent="."]
 layout_mode = 1
@@ -103,22 +106,34 @@ size_flags_horizontal = 3
 layout_mode = 2
 theme_override_styles/separator = SubResource("filet_cyan")
 
-[node name="AudioEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="TabsBar" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Pages" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="PageMain" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="AudioEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 14
 text = "SETTINGS_AUDIO"
 
-[node name="AudioRows" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="AudioRows" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="MasterRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/AudioRows"]
+[node name="MasterRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows"]
 layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="MasterLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow"]
+[node name="MasterLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MasterRow"]
 custom_minimum_size = Vector2(230, 0)
 layout_mode = 2
 size_flags_vertical = 1
@@ -128,7 +143,7 @@ theme_override_font_sizes/font_size = 16
 text = "SETTINGS_VOL_MASTER"
 vertical_alignment = 1
 
-[node name="MasterSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow"]
+[node name="MasterSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MasterRow"]
 custom_minimum_size = Vector2(360, 28)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -136,7 +151,7 @@ size_flags_vertical = 4
 max_value = 1.0
 step = 0.01
 
-[node name="MasterValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MasterRow"]
+[node name="MasterValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MasterRow"]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
@@ -146,11 +161,11 @@ text = "—"
 horizontal_alignment = 2
 vertical_alignment = 1
 
-[node name="MusicRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/AudioRows"]
+[node name="MusicRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows"]
 layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="MusicLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow"]
+[node name="MusicLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MusicRow"]
 custom_minimum_size = Vector2(230, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
@@ -159,7 +174,7 @@ theme_override_font_sizes/font_size = 16
 text = "SETTINGS_VOL_MUSIC"
 vertical_alignment = 1
 
-[node name="MusicSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow"]
+[node name="MusicSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MusicRow"]
 custom_minimum_size = Vector2(360, 28)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -167,7 +182,7 @@ size_flags_vertical = 4
 max_value = 1.0
 step = 0.01
 
-[node name="MusicValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/MusicRow"]
+[node name="MusicValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/MusicRow"]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
@@ -177,11 +192,11 @@ text = "—"
 horizontal_alignment = 2
 vertical_alignment = 1
 
-[node name="SfxRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/AudioRows"]
+[node name="SfxRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows"]
 layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="SfxLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow"]
+[node name="SfxLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/SfxRow"]
 custom_minimum_size = Vector2(230, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
@@ -190,7 +205,7 @@ theme_override_font_sizes/font_size = 16
 text = "SETTINGS_VOL_SFX"
 vertical_alignment = 1
 
-[node name="SfxSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow"]
+[node name="SfxSlider" type="HSlider" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/SfxRow"]
 custom_minimum_size = Vector2(360, 28)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -198,7 +213,7 @@ size_flags_vertical = 4
 max_value = 1.0
 step = 0.01
 
-[node name="SfxValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/AudioRows/SfxRow"]
+[node name="SfxValue" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/AudioRows/SfxRow"]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
@@ -208,22 +223,22 @@ text = "—"
 horizontal_alignment = 2
 vertical_alignment = 1
 
-[node name="FiletMid" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="FiletMid" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_styles/separator = SubResource("filet_cyan")
 
-[node name="DisplayEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="DisplayEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 14
 text = "SETTINGS_DISPLAY"
 
-[node name="WindowModeRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="WindowModeRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="WindowModeLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/WindowModeRow"]
+[node name="WindowModeLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/WindowModeRow"]
 custom_minimum_size = Vector2(230, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
@@ -232,21 +247,21 @@ theme_override_font_sizes/font_size = 16
 text = "SETTINGS_WINDOW_MODE"
 vertical_alignment = 1
 
-[node name="FullscreenButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/WindowModeRow"]
+[node name="FullscreenButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/WindowModeRow"]
 custom_minimum_size = Vector2(170, 38)
 layout_mode = 2
 text = "SETTINGS_FULLSCREEN"
 
-[node name="WindowedButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/WindowModeRow"]
+[node name="WindowedButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/WindowModeRow"]
 custom_minimum_size = Vector2(170, 38)
 layout_mode = 2
 text = "SETTINGS_WINDOWED"
 
-[node name="ResolutionRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="ResolutionRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="ResolutionLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/ResolutionRow"]
+[node name="ResolutionLabel" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/ResolutionRow"]
 custom_minimum_size = Vector2(230, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.933333, 0.952941, 0.968627, 1)
@@ -255,29 +270,39 @@ theme_override_font_sizes/font_size = 16
 text = "SETTINGS_RESOLUTION"
 vertical_alignment = 1
 
-[node name="ResolutionBox" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/ResolutionRow"]
+[node name="ResolutionBox" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/ResolutionRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
-[node name="FiletMid2" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="FiletMid2" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_styles/separator = SubResource("filet_cyan")
 
-[node name="LanguageEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="LanguageEyebrow" type="Label" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 14
 text = "SETTINGS_LANGUAGE"
 
-[node name="LanguageRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox"]
+[node name="LanguageRow" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="LanguageBox" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/LanguageRow"]
+[node name="LanguageBox" type="HBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain/LanguageRow"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="LogoutButton" type="Button" parent="CenterContainer/MainPanel/RootVBox/Pages/PageMain"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+text = "SETTINGS_LOGOUT"
+
+[node name="PageComfort" type="VBoxContainer" parent="CenterContainer/MainPanel/RootVBox/Pages"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 16
 
 [node name="FiletBottom" type="HSeparator" parent="CenterContainer/MainPanel/RootVBox"]
 layout_mode = 2
@@ -290,8 +315,3 @@ theme_override_fonts/font = SubResource("font_warzone")
 theme_override_font_sizes/font_size = 16
 text = "SETTINGS_STATUS"
 horizontal_alignment = 1
-
-[node name="LogoutButton" type="Button" parent="CenterContainer/MainPanel/RootVBox"]
-custom_minimum_size = Vector2(0, 48)
-layout_mode = 2
-text = "SETTINGS_LOGOUT"

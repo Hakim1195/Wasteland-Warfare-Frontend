@@ -9,10 +9,10 @@ extends Control
 #                        situation, territoire cliqué) + navigation ◀ ▶ entre belligérants.
 #   SidePanelWidget    : COMMS — le chat SEUL (le Journal a déménagé dans la barre basse).
 #   BottomCenterWidget : BARRE BASSE PLEINE LARGEUR rétractable, 3 zones —
-#                        OBJECTIFS | OPÉRATEUR (moi) | COMMANDES (onglets ACTIONS/CARTES/JOURNAL).
+#                        OBJECTIFS | JOUEUR (moi) | COMMANDES (onglets ACTIONS/CARTES/JOURNAL).
 # POURQUOI : l'ancien layout empilait 3 tiroirs INTEL à gauche, un War Roster en haut-droite et un
 # bloc central bas étroit → écran illisible et infos redondantes (constat Hakim 2026-07-26). Les
-# informations de pouvoir de faction vivent désormais dans la FICHE JOUEUR et la zone OPÉRATEUR.
+# informations de pouvoir de faction vivent désormais dans la FICHE JOUEUR et la zone JOUEUR.
 # AUCUNE logique de jeu ici (Règle d'Or §6.1) : tout remonte à main.gd par signaux.
 
 signal pass_pressed
@@ -49,7 +49,7 @@ signal pact_offer_requested(target_player_id: int)
 # Émis par les boutons ACCEPTER / REFUSER du toast d'offre — répondre est possible HORS TOUR.
 signal pact_response_requested(pact_id: int, accept: bool)
 
-# Brique identité joueur (E1 §8.73) : réutilisée par la fiche joueur, la zone opérateur et le
+# Brique identité joueur (E1 §8.73) : réutilisée par la fiche joueur, la zone joueur et le
 # bandeau de combat compact.
 const PlayerChipScene := preload("res://scenes/components/player_chip.tscn")
 # Kill feed (E4 §8.76) : surimpression des entrées majeures, coin haut-droit hors panneaux.
@@ -86,7 +86,7 @@ const FS_DISPLAY := 26    # bandeau haut, cartes, bandeaux de combat
 # les panneaux de l'arène sont plus grands, une encoche de 18 px s'y perdait.
 const NOTCH_SIZE := 24.0
 
-# --- Couleurs des barres de stats (SOURCE UNIQUE partagée fiche joueur / opérateur / VS, lot A) :
+# --- Couleurs des barres de stats (SOURCE UNIQUE partagée fiche joueur / joueur / VS, lot A) :
 #     PV = dégradé santé (RosterHelpers.pv_color, vert→or→rouge) · PA = or · PB = cyan ·
 #     PP = violet tactique. Chaque barre affiche « valeur / max » en clair. ---
 const STAT_PA_COLOR := Color("e0b249")
@@ -275,10 +275,10 @@ var _combat_banner_tween: Tween = null
 const HERO_DANGER := Color("d6453f")
 const HERO_MUTED := Color("8a97a5")
 
-# --- Zone OPÉRATEUR (barre basse) : identité + pouvoir + 4 barres de stats du héros LOCAL. ---
+# --- Zone JOUEUR (barre basse) : identité + pouvoir + 4 barres de stats du héros LOCAL. ---
 var _op_chip: Control = null
 var _op_identity: Label = null
-var _op_power_title: Label = null
+var _player_power_title: Label = null
 var _op_power_state: Label = null
 var _op_stats_box: VBoxContainer = null
 # PACTES (§8.123) : rappel compact de MES engagements en cours (masqué si je n'en ai aucun).
@@ -312,7 +312,7 @@ func _ready() -> void:
 	%CommandsTabs.tab_changed.connect(_on_command_tab_changed)
 	_build_extra_tabs()
 	_build_confirm_button()
-	_build_operator_zone()
+	_build_player_zone()
 	_setup_chat_selector()
 	_build_chat_input()
 	_build_feed_filters()
@@ -342,10 +342,10 @@ func _apply_charter_ornaments() -> void:
 			%ToggleBottomPanelButton.get_parent().get_node("GlassBody")]:
 		if panel is Control:
 			WarzoneUI.add_corner_notches(panel, NOTCH_SIZE)
-	# Filet cyan sous CHAQUE titre de bloc (OBJECTIFS, OPÉRATEUR, COMMS, FICHE JOUEUR) : le titre
+	# Filet cyan sous CHAQUE titre de bloc (OBJECTIFS, JOUEUR, COMMS, FICHE JOUEUR) : le titre
 	# ne flotte plus au-dessus du contenu, il le COIFFE (structure lisible d'un coup d'œil).
 	for title in [%ObjectiveLabel.get_parent().get_child(0),
-			%OperatorZone.get_child(0),
+			%PlayerZone.get_child(0),
 			%ChatLog.get_parent().get_parent().get_child(0),
 			%SheetVBox.get_child(0)]:
 		if title is Control:
@@ -756,7 +756,7 @@ func pulse_next_phase(on: bool) -> void:
 		%NextPhaseButton.tooltip_text = tr("CMD_NO_ACTION")
 
 # =========================================================
-# Barres de stats PV/PA/PB/PP (lot A) — SOURCE UNIQUE partagée fiche joueur / opérateur
+# Barres de stats PV/PA/PB/PP (lot A) — SOURCE UNIQUE partagée fiche joueur / joueur
 # =========================================================
 # Chaque barre : eyebrow (PV/PA/PB/PP) + ProgressBar teintée + valeur « n / max » en clair.
 # `ratio_color` null → couleur fixe ; sinon dégradé de santé (RosterHelpers.pv_color).
@@ -845,7 +845,7 @@ func _fill_hero_stats(box: VBoxContainer, hero: Dictionary) -> void:
 	# §8.119 — TOOLTIP UNIFIÉ `PP_TOOLTIP` (et non plus `CHAR_STAT_PP_DESC`, qui décrivait des PP
 	# purement passifs) : les PP sont désormais aussi une MONNAIE (RATIONNER + pouvoir de héros).
 	# `_fill_hero_stats` étant la source UNIQUE des barres de stats, cette seule ligne met le
-	# tooltip à jour sur TOUS les écrans qui l'utilisent (fiche joueur ET zone opérateur).
+	# tooltip à jour sur TOUS les écrans qui l'utilisent (fiche joueur ET zone joueur).
 	var pp := int(hero.get("pp_current", 0))
 	var pp_min := int(hero.get("pp_min", 0))
 	var pp_max := int(hero.get("pp_max", 0))
@@ -860,11 +860,11 @@ const PA_DISPLAY_MAX := 30.0
 const PB_DISPLAY_MAX := 0.60
 
 # =========================================================
-# Zone OPÉRATEUR (barre basse) — moi : identité, pouvoir de faction, stats en barres
+# Zone JOUEUR (barre basse) — moi : identité, pouvoir de faction, stats en barres
 # =========================================================
 
-func _build_operator_zone() -> void:
-	var zone: VBoxContainer = %OperatorZone
+func _build_player_zone() -> void:
+	var zone: VBoxContainer = %PlayerZone
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 6)
 	zone.add_child(head)
@@ -878,11 +878,11 @@ func _build_operator_zone() -> void:
 	_op_identity.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	head.add_child(_op_identity)
 
-	_op_power_title = Label.new()
-	_op_power_title.add_theme_font_size_override("font_size", FS_BODY)
-	_op_power_title.add_theme_color_override("font_color", ACCENT_GOLD)
-	_op_power_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	zone.add_child(_op_power_title)
+	_player_power_title = Label.new()
+	_player_power_title.add_theme_font_size_override("font_size", FS_BODY)
+	_player_power_title.add_theme_color_override("font_color", ACCENT_GOLD)
+	_player_power_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	zone.add_child(_player_power_title)
 
 	_op_power_state = Label.new()
 	_op_power_state.add_theme_font_size_override("font_size", FS_SMALL)
@@ -905,10 +905,10 @@ func _build_operator_zone() -> void:
 	zone.add_child(_op_stats_box)
 	_op_built = true
 
-# Alimente la zone OPÉRATEUR. data = {
+# Alimente la zone JOUEUR. data = {
 #   pid, pseudo, color, faction_name, leader, power_label, power_state, hero } — TOUT est résolu
 # par main.gd (View pure §6.1).
-func set_operator_panel(data: Dictionary) -> void:
+func set_player_panel(data: Dictionary) -> void:
 	if not _op_built:
 		return
 	var pid := int(data.get("pid", -9999))
@@ -918,8 +918,8 @@ func set_operator_panel(data: Dictionary) -> void:
 	var faction := str(data.get("faction_name", ""))
 	_op_identity.text = ("%s · %s" % [leader, faction]) if leader != "" else faction
 	var power := str(data.get("power_label", ""))
-	_op_power_title.text = (tr("HUD_OPERATOR_POWER_FMT") % power) if power != "" else ""
-	_op_power_title.visible = power != ""
+	_player_power_title.text = (tr("HUD_PLAYER_POWER_FMT") % power) if power != "" else ""
+	_player_power_title.visible = power != ""
 	var state := str(data.get("power_state", ""))
 	_op_power_state.text = state
 	_op_power_state.visible = state != ""
@@ -932,7 +932,7 @@ func set_operator_panel(data: Dictionary) -> void:
 	# §8.119 — FLUCTUATION VISIBLE DES PP hors Split-Screen VS. Les PP bougeaient à chaque assaut
 	# sans que rien ne le signale en dehors du VS (donc jamais pour les combats des AUTRES, ni après
 	# un rationnement) : le joueur voyait une jauge sauter sans cause. On compare la valeur reçue à
-	# la précédente et on fait flotter une flèche ▲/▼ furtive sur la zone opérateur.
+	# la précédente et on fait flotter une flèche ▲/▼ furtive sur la zone joueur.
 	if typeof(hero) == TYPE_DICTIONARY and int(hero.get("pv_max", 0)) > 0:
 		_track_pp_fluctuation(int(hero.get("pp_current", 0)))
 
@@ -948,7 +948,7 @@ func _track_pp_fluctuation(pp: int) -> void:
 	var delta := pp - int(previous)
 	_spawn_pp_arrow(delta)
 
-# Flèche ▲/▼ + delta chiffré, flottant 0,9 s au-dessus de la zone opérateur. Glyphes ▲/▼ : mêmes
+# Flèche ▲/▼ + delta chiffré, flottant 0,9 s au-dessus de la zone joueur. Glyphes ▲/▼ : mêmes
 # blocs Unicode que les ☢/⚠ déjà rendus par le jeu (aucun emoji — cf. tofu constaté en capture).
 func _spawn_pp_arrow(delta: int) -> void:
 	if not _op_built:
@@ -956,7 +956,7 @@ func _spawn_pp_arrow(delta: int) -> void:
 	# reduced_motion (E10 §8.82) : pas d'animation, mais l'information reste lisible — on n'a pas
 	# le droit de la SUPPRIMER (ce serait cacher une donnée de jeu), seulement de la figer.
 	var still: bool = bool(SettingsManager.get_comfort("reduced_motion"))
-	var zone: Control = %OperatorZone
+	var zone: Control = %PlayerZone
 	var lbl := Label.new()
 	lbl.text = ("▲ +%d PP" % delta) if delta > 0 else ("▼ %d PP" % delta)
 	lbl.add_theme_font_size_override("font_size", FS_VALUE)
@@ -976,12 +976,12 @@ func _spawn_pp_arrow(delta: int) -> void:
 	tw.tween_property(lbl, "modulate:a", 0.0, 0.9).set_delay(0.25)
 	tw.chain().tween_callback(lbl.queue_free)
 
-# §8.119 — Flotteur VERT « +N PV » sur la zone opérateur quand NOTRE héros se soigne (RATIONNER).
+# §8.119 — Flotteur VERT « +N PV » sur la zone joueur quand NOTRE héros se soigne (RATIONNER).
 # Pendant exact de `pulse_hero_pain` : le soin doit être aussi lisible que les dégâts.
 func float_hero_heal(amount: int) -> void:
 	if not _op_built or amount <= 0:
 		return
-	var zone: Control = %OperatorZone
+	var zone: Control = %PlayerZone
 	var lbl := Label.new()
 	lbl.text = tr("ABILITY_HEAL_FLOAT_FMT") % amount
 	lbl.add_theme_font_size_override("font_size", FS_BODY)
@@ -1001,11 +1001,11 @@ func float_hero_heal(amount: int) -> void:
 	tw.tween_property(lbl, "modulate:a", 0.0, 1.0).set_delay(0.35)
 	tw.chain().tween_callback(lbl.queue_free)
 
-# Douleur du héros (E9 §8.81) : pulse rouge 0,3 s sur la zone OPÉRATEUR quand NOTRE héros encaisse.
+# Douleur du héros (E9 §8.81) : pulse rouge 0,3 s sur la zone JOUEUR quand NOTRE héros encaisse.
 func pulse_hero_pain() -> void:
 	if not _op_built:
 		return
-	var zone: Control = %OperatorZone
+	var zone: Control = %PlayerZone
 	zone.modulate = Color(1.0, 0.55, 0.5, 1.0)
 	var tw := zone.create_tween()
 	tw.tween_property(zone, "modulate", Color(1, 1, 1, 1), 0.3)
@@ -1747,7 +1747,7 @@ func set_power_card(lines: Array, buttons: Array = []) -> void:
 	box.visible = not box.get_children().is_empty()
 
 # §8.119 — BANDEAU furtif d'état de capacité (« PROCHAINE ATTAQUE : PORTÉE ILLIMITÉE » tant que
-# `airborne_attacks_left > 0`). Chip discret inséré en TÊTE de la zone opérateur, sur le modèle du
+# `airborne_attacks_left > 0`). Chip discret inséré en TÊTE de la zone joueur, sur le modèle du
 # chip de télégraphe de zone (G1 §8.62) : créé paresseusement, masqué dès que le texte est vide.
 var _ability_banner: Label = null
 
@@ -1760,7 +1760,7 @@ func set_ability_banner(text: String) -> void:
 		_ability_banner.add_theme_color_override("font_color", ACCENT_GOLD)
 		_ability_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_ability_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var zone: VBoxContainer = %OperatorZone
+		var zone: VBoxContainer = %PlayerZone
 		zone.add_child(_ability_banner)
 		zone.move_child(_ability_banner, 0)
 	_ability_banner.text = text

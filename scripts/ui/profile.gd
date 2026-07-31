@@ -1,14 +1,14 @@
 extends Control
 
 # =========================================================================
-# Profil opérateur — HUB À ONGLETS (refonte chantiers K→O) — charte « Warzone Command » §2
+# Profil joueur — HUB À ONGLETS (refonte chantiers K→O) — charte « Warzone Command » §2
 # =========================================================================
-# Écran accessible depuis la nav (onglet OPÉRATEUR) et par la jauge d'XP cliquable.
+# Écran accessible depuis la nav (onglet JOUEUR) et par la jauge d'XP cliquable.
 # Règle d'Or §6.1 : VUE PURE — le SERVEUR calcule, le client formate. Aucun agrégat n'est
 # recalculé ici (winrates, places moyennes, totaux : tout arrive prêt à l'emploi), aucune valeur
 # n'est écrite en dur (les barèmes de Coins viennent du bloc `constants` de /profile/finance).
 #
-# Structure : un EN-TÊTE D'IDENTITÉ permanent (opérateur + carte DIVISION précise) surmontant
+# Structure : un EN-TÊTE D'IDENTITÉ permanent (joueur + carte DIVISION précise) surmontant
 # CINQ onglets — APERÇU · STATISTIQUES · HISTORIQUE · FINANCES · PASS.
 #
 # Sources réseau (R2 — CONTRAT_RESEAU.md §9.1), via NetworkManager :
@@ -183,7 +183,7 @@ func _ready():
 	_font.font_names = PackedStringArray(["Bahnschrift", "Oswald", "Saira Condensed", "Arial Narrow", "Arial"])
 	_font.font_weight = 700
 
-	# Nav PARTAGÉE (§8.94) — onglet OPÉRATEUR actif ; ÉCHAP (nav) remplace l'ex-bouton RETOUR.
+	# Nav PARTAGÉE (§8.94) — onglet JOUEUR actif ; ÉCHAP (nav) remplace l'ex-bouton RETOUR.
 	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
 	var nav := TopNav.new()
 	nav.active_tab = "profile"
@@ -356,7 +356,7 @@ func _fetch_history(reset: bool) -> void:
 func _refresh_all() -> void:
 	if username_value and username_value.text.strip_edges() in ["", "—"]:
 		# Le pseudo arrive via /auth/me ; on n'écrase pas s'il a déjà été poussé. Repli NEUTRE
-		# « Joueur » (COMMON_PLAYER) — COMMON_OPERATOR est un LIBELLÉ d'eyebrow, pas un nom.
+		# « Joueur » (COMMON_PLAYER) — COMMON_PLAYER_LABEL est un LIBELLÉ d'eyebrow, pas un nom.
 		_set_username(AuthManager.username if AuthManager.username != "" else tr("COMMON_PLAYER"))
 	_update_level_xp()
 	_build_coins_badge()
@@ -1012,7 +1012,7 @@ func _make_mode_card(title: String, data: Dictionary, accent: Color, show_rp: bo
 	return card
 
 
-# --- Vue PAR CARTE (§8.107) : sur quelle carte l'opérateur performe le mieux ---
+# --- Vue PAR CARTE (§8.107) : sur quelle carte le joueur performe le mieux ---
 func _build_stats_by_map() -> void:
 	if _maps_stats.is_empty():
 		_stats_box.add_child(_muted_note(tr("PROFILE_STATS_EMPTY")))
