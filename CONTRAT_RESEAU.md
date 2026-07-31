@@ -2401,3 +2401,84 @@ ci-dessus.
 > `test_ladder_payload` 32 ✅, `test_profile_data` 85 ✅, `test_squad_flow` 77 ✅, `test_search_sanctions`
 > 23 ✅, `test_private_codes` 33 ✅, `test_teams` 60 ✅, `test_team_flow` 100 ✅. **Suite backend
 > COMPLÈTE verte hors `test_missions.py` / `test_simulation.py` (échecs PRÉ-EXISTANTS).**
+
+---
+
+## §8.126.1 — COMPAGNIES : PRÉSENCE (« qui est en ligne ») + journal d'activité (volet RÉSEAU)
+
+> **Ce que le §8.126 laissait ouvert.** Il documentait deux manques comme reste-à-faire : le serveur
+> ne savait **pas qui était connecté** (le seul WebSocket du jeu, `/ws/{room_id}/{player_id}`,
+> n'existe qu'en partie) et n'avait **aucune matière à notification**. Une compagnie dont on ne voit
+> ni qui est disponible ni ce qu'on a manqué ne sert à rien : c'est pourtant l'écran qu'on ouvre
+> pour savoir avec qui jouer. Ce complément livre les deux — **sans ajouter le moindre WebSocket**.
+>
+> **Strictement ADDITIF** (règle §1.5). ⚠️ **VPS + CLIENT ENSEMBLE** : sur un serveur non redéployé,
+> `/company/badge` répond 404 → la pastille reste muette et tous les membres s'affichent « hors
+> ligne ». Dégradation propre.
+
+### 1. PRÉSENCE — deux signaux, parce qu'un seul mentirait
+
+Module PUR `api/game/presence.py` : `should_touch` · `is_online` · `status_of`.
+
+| signal | source | couvre | ne couvre pas |
+|---|---|---|---|
+| **au QG** | `users.last_seen_at`, rafraîchi par `auth.get_current_user` | tout le hub | les joueurs EN PARTIE (plus aucune requête REST) |
+| **en partie** | registre MÉMOIRE du `ConnectionManager` | les joueurs en match | les joueurs au hub |
+
+- `PRESENCE_WINDOW_S = 120` (en ligne si vu depuis moins de 2 min) · `TOUCH_THROTTLE_S = 60`.
+  ⚠️ **La fenêtre est DÉLIBÉRÉMENT plus large que le throttle** : à valeurs égales, un joueur bien
+  présent clignoterait entre deux rafraîchissements.
+- ⚠️ **`status_of` teste « en partie » EN PREMIER.** Un joueur en match ne fait plus une seule
+  requête REST : son `last_seen_at` vieillit pendant qu'il joue, et l'ordre inverse l'aurait
+  déclaré hors ligne au bout de deux minutes de partie — au pire moment.
+- `users.last_seen_at` : colonne ADDITIVE **nullable** → auto-migrée au boot. NULL = jamais vu =
+  **hors ligne**, jamais une supposition optimiste.
+- `_touch_presence` **ne lève JAMAIS** : c'est une dépendance d'AUTHENTIFICATION, une panne
+  d'écriture ne doit pas rendre le jeu entier inaccessible. Pire effet : un joueur affiché absent.
+- ⚠️ Le registre WS est un état de **PROCESSUS** (contrainte de worker unique déjà assumée par le
+  ConnectionManager §8.31 et le matchmaker §8.116). Limite connue, pas régression silencieuse.
+
+**Exposition** : `CompanyMemberEntry.status` ∈ `"offline"` | `"online"` | `"in_game"` — une CHAÎNE
+(trois états) et non un booléen, et **aucun texte affichable** (règle R4). `CompanyResponse.
+online_count` compte les présents. **Figés à `offline` / absents sur la vue PUBLIQUE** : les
+habitudes de connexion des membres d'un clan tiers ne regardent pas un visiteur.
+
+### 2. JOURNAL D'ACTIVITÉ — la matière des notifications
+
+Table `company_events {id, company_id FK, kind, actor_name, target_name, created_at}`.
+`kind` ∈ `created` · `joined` · `left` · `kicked` · `transferred` · `renamed`.
+
+- Les pseudos sont **SNAPSHOTÉS** (pas de FK) : la trace d'une exclusion doit survivre au compte
+  exclu, et une jointure sur un compte disparu rendrait la ligne illisible.
+- **Croissance bornée** : purge PARESSEUSE à l'écriture (`EVENT_KEEP_DAYS = 30`, aucun cron — même
+  discipline que le reset de saison). La dissolution d'une compagnie emporte son journal.
+- `company_members.events_seen_at` = **accusé de lecture PAR MEMBRE** ; non-lus =
+  `created_at > events_seen_at`. Posé à `now` à l'adhésion (sinon un arrivant hériterait de tout
+  l'historique en non lu) ; NULL (ligne pré-migration) = **tout lu**, jamais « tout neuf ».
+- ⚠️ **`_log_event(..., at=now)` partage l'INSTANT LOGIQUE du handler** avec l'accusé de lecture
+  posé dans la même transaction. Sans ce partage, le fondateur serait notifié de la création de SA
+  PROPRE compagnie et chaque arrivant de sa propre arrivée — et le comportement aurait **différé
+  entre le poste de dev et la prod** : `datetime.utcnow()` rend plusieurs appels consécutifs
+  IDENTIQUES sous Windows, distincts sous Linux.
+
+### 3. Endpoints ADDITIFS
+
+- `GET /company/badge` → `{company: bool, online: int, unread: int}`. Route **volontairement
+  minuscule** : appelée par la barre de navigation, donc sur TOUS les écrans du hub, à chaque
+  changement d'écran. Ni roster, ni journal, ni score. ⚠️ `online` **EXCLUT l'appelant** — se
+  compter soi-même afficherait « 1 » en permanence à un joueur seul, l'exact contraire du signal
+  « quelqu'un t'attend ».
+- `POST /company/seen` → `{seen: true}`. Accusé de lecture, appelé à l'OUVERTURE de l'écran.
+  Réponse minimale : le client vient de recevoir la fiche complète.
+- `GET /company/mine` s'enrichit de `online_count`, `events[]` (`{kind, actor, target, at}`, 20 max,
+  du plus récent au plus ancien) et `unread_events` — **membres uniquement**.
+
+⚠️ **ORDRE DE DÉCLARATION** : `/badge` et `/seen` sont déclarés AVANT `/{tag}`. `seen` fait quatre
+lettres et matcherait le motif de la route paramétrée — c'est l'ordre (et la méthode POST) qui
+tranche, comme pour `/mine`.
+
+> **Validation.** `test_company_flow.py` **178 ✅ / 0 ❌** (+42) : trois états de présence dont
+> « EN PARTIE prime sur un `last_seen` périmé », vue publique muette, throttle et fenêtre du module
+> pur, journal (6 types), non-lus **par membre** avec preuve d'indépendance des accusés, pastille
+> qui ne se compte pas soi-même, purge du journal à la dissolution. Suite backend COMPLÈTE verte
+> hors `test_missions.py` / `test_simulation.py` (**PRÉ-EXISTANTS**).

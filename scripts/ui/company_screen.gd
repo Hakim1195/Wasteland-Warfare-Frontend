@@ -46,6 +46,12 @@ const COPY_FLASH_DURATION := 1.6
 # Débounce de la vérification LIVE du tag : 0,5 s après la dernière frappe. Interroger le serveur à
 # CHAQUE caractère inonderait l'API pour un résultat qu'on jette aussitôt.
 const TAG_CHECK_DEBOUNCE := 0.5
+# Largeur de la colonne de droite. 340 px : de quoi lire un pseudo entier + son état sans troncature
+# (« EN PARTIE » est le libellé le plus long), sans rogner la colonne de gestion.
+const SIDE_PANEL_W := 340.0
+# Activités affichées dans le panneau. 6 : ce qui tient sans faire défiler — le journal complet
+# n'est pas l'objet, le signal « il s'est passé quelque chose » l'est.
+const SIDE_EVENTS := 6
 
 # Tag de la compagnie à consulter, posé par l'écran APPELANT juste avant le changement de scène.
 # `static var` plutôt qu'un autoload : `TransitionManager.change_scene` ne transporte aucun
@@ -61,6 +67,8 @@ var _font: SystemFont
 var _panel: PanelContainer
 var _root: VBoxContainer
 var _content: VBoxContainer
+# Colonne de DROITE (§8.126.1) : résumé + qui est en ligne + activité récente.
+var _side: VBoxContainer
 var _status_label: Label
 var _copy_button: Button = null
 var _copy_flash_timer: Timer = null
@@ -79,6 +87,7 @@ var _draft_tag: String = ""
 var _draft_name: String = ""
 var _draft_emblem: int = 0
 var _tag_check: Dictionary = {}     # dernière réponse de /company/check_tag
+var _seen_sent: bool = false        # accusé de lecture des activités : UNE fois par visite
 
 
 func _ready() -> void:
@@ -96,11 +105,12 @@ func _ready() -> void:
 	# ce souci : leur fond vit dans la scène, donc avant tout ce que le script ajoute.
 	_build_shell()
 
-	# Nav PARTAGÉE (§8.94). Onglet OPÉRATEUR : la compagnie est une donnée d'identité, et c'est du
-	# Profil qu'on y arrive le plus souvent.
+	# Nav PARTAGÉE (§8.94). §8.126.1 : la section a désormais SON onglet — il doit donc se surligner
+	# lui-même. Tant qu'il n'existait pas, l'écran empruntait celui du Profil ; le laisser aurait
+	# affiché « PROFIL » actif alors qu'on est sur COMPAGNIE (défaut vu en capture).
 	# ⚠️ active_tab réglé AVANT add_child (lu au _ready du composant).
 	var nav := TopNav.new()
-	nav.active_tab = "profile"
+	nav.active_tab = "company"
 	add_child(nav)
 	AudioManager.start_menu_ambient()
 
@@ -150,7 +160,7 @@ func _build_shell() -> void:
 	add_child(center)
 
 	_panel = PanelContainer.new()
-	_panel.custom_minimum_size = Vector2(940, 700)
+	_panel.custom_minimum_size = Vector2(1300, 700)
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(GUNMETAL, 0.92)
 	st.set_corner_radius_all(0)
@@ -165,10 +175,27 @@ func _build_shell() -> void:
 	_root.add_theme_constant_override("separation", 14)
 	_panel.add_child(_root)
 
+	# Corps en DEUX COLONNES : la gestion à gauche, le RÉSUMÉ VIVANT à droite. La colonne de droite
+	# répond à une question différente de celle de gauche — « qui est là, et qu'est-ce que j'ai
+	# manqué ? » plutôt que « comment j'administre ». Les mélanger aurait noyé la première, qui est
+	# pourtant celle qu'on vient consulter tous les jours.
+	var body := HBoxContainer.new()
+	body.add_theme_constant_override("separation", 20)
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_root.add_child(body)
+
 	_content = VBoxContainer.new()
 	_content.add_theme_constant_override("separation", 14)
+	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_root.add_child(_content)
+	body.add_child(_content)
+
+	_side = VBoxContainer.new()
+	_side.add_theme_constant_override("separation", 12)
+	_side.custom_minimum_size = Vector2(SIDE_PANEL_W, 0)
+	_side.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_side.visible = false
+	body.add_child(_side)
 
 	WarzoneUI.add_filet(_root)
 
@@ -188,6 +215,7 @@ func _build_shell() -> void:
 func _render() -> void:
 	_clear(_content)
 	_copy_button = null
+	_render_side()
 	if _view == "create":
 		_build_create_form()
 		return
@@ -348,7 +376,25 @@ func _member_row(m: Dictionary) -> PanelContainer:
 	h.add_theme_constant_override("separation", 12)
 	row.add_child(h)
 
-	var who := _label(str(m.get("name", "—")).to_upper(), 17, TEXT, HORIZONTAL_ALIGNMENT_LEFT)
+	# PRÉSENCE (§8.126.1) — pastille avant le pseudo : pleine et or = en partie, creuse et cyan = au
+	# QG, absente = hors ligne. Un ROND ASCII, jamais un pictogramme (tofu avec la police condensée).
+	var status := str(m.get("status", "offline"))
+	if status != "offline":
+		var in_game := status == "in_game"
+		var dot := _label("●" if in_game else "○", 13, GOLD if in_game else ACCENT,
+			HORIZONTAL_ALIGNMENT_CENTER, 16.0)
+		dot.tooltip_text = tr("COMPANY_STATUS_IN_GAME") if in_game else tr("COMPANY_STATUS_ONLINE")
+		h.add_child(dot)
+	else:
+		# Gouttière RÉSERVÉE même hors ligne : sans elle, les pseudos danseraient horizontalement
+		# d'un rafraîchissement à l'autre au gré des connexions.
+		var gap := Control.new()
+		gap.custom_minimum_size = Vector2(16, 0)
+		gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		h.add_child(gap)
+
+	var who := _label(str(m.get("name", "—")).to_upper(), 17,
+		TEXT if status != "offline" else MUTED, HORIZONTAL_ALIGNMENT_LEFT)
 	who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(who)
 
@@ -383,6 +429,160 @@ func _member_row(m: Dictionary) -> PanelContainer:
 				func() -> void: _confirm(tr("COMPANY_CONFIRM_KICK") % who_name,
 					func() -> void: NetworkManager.company_kick(uid)), DANGER))
 	return row
+
+
+# =========================================================
+# COLONNE DE DROITE (§8.126.1) — résumé vivant de la compagnie
+# =========================================================
+# Trois blocs, dans l'ordre où on les lit : ce qu'EST la compagnie · qui est LÀ · ce qui s'est PASSÉ.
+# Masquée sans compagnie (il n'y aurait rien à résumer) et sur la vue PUBLIQUE (le serveur ne
+# renvoie ni présence ni journal pour un clan tiers — et ne doit pas).
+func _render_side() -> void:
+	if _side == null:
+		return
+	_clear(_side)
+	var show := not _company.is_empty() and not _is_public() and _view == "main"
+	_side.visible = show
+	if not show:
+		return
+
+	_side.add_child(_side_card_summary())
+	_side.add_child(_side_card_online())
+	_side.add_child(_side_card_activity())
+
+
+func _side_card(title: String, accent: Color) -> Array:
+	"""Carte de colonne : renvoie [PanelContainer, VBoxContainer de contenu]. Fabrique commune —
+	trois cartes qui se ressemblent doivent se ressembler par construction, pas par recopie."""
+	var card := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = SURFACE
+	sb.set_corner_radius_all(0)
+	sb.border_width_left = 3
+	sb.border_color = accent
+	sb.set_content_margin_all(12.0)
+	card.add_theme_stylebox_override("panel", sb)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	card.add_child(v)
+	v.add_child(_label(title, 12, ACCENT))
+	return [card, v]
+
+
+func _side_card_summary() -> PanelContainer:
+	var built := _side_card(tr("COMPANY_SIDE_SUMMARY"), ACCENT)
+	var v: VBoxContainer = built[1]
+
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	v.add_child(head)
+	head.add_child(Emblems.make_badge(int(_company.get("emblem_id", 0)), 40.0, _font))
+	var titles := VBoxContainer.new()
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	titles.add_theme_constant_override("separation", 0)
+	head.add_child(titles)
+	titles.add_child(_label("[%s]" % str(_company.get("tag", "")), 13, ACCENT))
+	var name_lbl := _label(str(_company.get("name", "")).to_upper(), 17, TEXT)
+	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	titles.add_child(name_lbl)
+
+	v.add_child(_side_row(tr("COMPANY_RANK_EYEBROW"),
+		"#%d" % int(_company.get("rank", 0)) if int(_company.get("rank", 0)) > 0 else "—", GOLD))
+	v.add_child(_side_row(tr("COMPANY_COL_SCORE"),
+		_format_thousands(int(_company.get("season_score", 0))), GOLD))
+	v.add_child(_side_row(tr("COMPANY_COL_MEMBERS"),
+		"%d/%d" % [int(_company.get("member_count", 0)), int(_rules.get("roster_cap", 20))], TEXT))
+	v.add_child(_side_row(tr("COMPANY_AVG_DIVISION"),
+		str(_company.get("avg_division_label", "—")),
+		DIVISION_COLORS.get(str(_company.get("avg_division", "")), MUTED)))
+	return built[0]
+
+
+func _side_card_online() -> PanelContainer:
+	# Les PRÉSENTS d'abord : c'est la raison d'être de ce panneau. Un joueur ouvre sa compagnie pour
+	# savoir avec qui jouer MAINTENANT, pas pour relire un palmarès.
+	var members: Array = _company.get("members", [])
+	var present := []
+	for m in members:
+		if typeof(m) == TYPE_DICTIONARY and str(m.get("status", "offline")) != "offline":
+			present.append(m)
+
+	var built := _side_card("%s  %d/%d" % [tr("COMPANY_ONLINE_TITLE"), present.size(),
+		members.size()], ACCENT if present.is_empty() else GOLD)
+	var v: VBoxContainer = built[1]
+	if present.is_empty():
+		v.add_child(_label(tr("COMPANY_ONLINE_NONE"), 13, MUTED))
+		return built[0]
+
+	for m in present:
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 8)
+		v.add_child(line)
+		var in_game := str(m.get("status", "")) == "in_game"
+		# Pastille pleine = en partie (or), creuse = au QG (cyan). Un ROND, pas un pictogramme :
+		# tout glyphe hors ASCII rend en tofu avec la police condensée de la charte.
+		var dot := _label("●" if in_game else "○", 12, GOLD if in_game else ACCENT)
+		dot.custom_minimum_size = Vector2(14, 0)
+		line.add_child(dot)
+		var who := _label(str(m.get("name", "")).to_upper(), 14, TEXT)
+		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		who.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		line.add_child(who)
+		line.add_child(_label(tr("COMPANY_STATUS_IN_GAME") if in_game
+			else tr("COMPANY_STATUS_ONLINE"), 11, GOLD if in_game else MUTED,
+			HORIZONTAL_ALIGNMENT_RIGHT))
+	return built[0]
+
+
+func _side_card_activity() -> PanelContainer:
+	var events: Array = _company.get("events", [])
+	var unread := int(_company.get("unread_events", 0))
+	var title := tr("COMPANY_ACTIVITY_TITLE")
+	if unread > 0:
+		title += "  ●%d" % unread
+	var built := _side_card(title, GOLD if unread > 0 else ACCENT)
+	var v: VBoxContainer = built[1]
+	if events.is_empty():
+		v.add_child(_label(tr("COMPANY_ACTIVITY_NONE"), 13, MUTED))
+		return built[0]
+	for i in min(SIDE_EVENTS, events.size()):
+		var e = events[i]
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		# Les `unread` premières lignes sont les NOUVEAUTÉS (le journal est servi du plus récent au
+		# plus ancien) : teintées, le reste en muet. Le joueur voit d'un coup d'œil ce qu'il a manqué.
+		var fresh: bool = i < unread
+		var line := _label(_event_text(e), 12, TEXT if fresh else MUTED)
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		v.add_child(line)
+	return built[0]
+
+
+func _side_row(label: String, value: String, color: Color) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	var l := _label(label, 12, MUTED)
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(l)
+	row.add_child(_label(value, 15, color, HORIZONTAL_ALIGNMENT_RIGHT))
+	return row
+
+
+# Phrase d'une activité, COMPOSÉE CÔTÉ CLIENT depuis `kind` + les deux pseudos. Le serveur n'envoie
+# jamais de texte affichable (règle R4) : c'est ce qui permet à la même ligne de journal de se lire
+# en trois langues sans qu'aucune ne transite par le réseau.
+func _event_text(e: Dictionary) -> String:
+	var actor := str(e.get("actor", "")).to_upper()
+	var target := str(e.get("target", "")).to_upper()
+	match str(e.get("kind", "")):
+		"created": return tr("COMPANY_EV_CREATED") % actor
+		"joined": return tr("COMPANY_EV_JOINED") % actor
+		"left": return tr("COMPANY_EV_LEFT") % actor
+		"kicked": return tr("COMPANY_EV_KICKED") % [target, actor]
+		"transferred": return tr("COMPANY_EV_TRANSFERRED") % [actor, target]
+		"renamed": return tr("COMPANY_EV_RENAMED") % [actor, target]
+		_: return ""
 
 
 # --- Formulaire de CRÉATION ---------------------------------------------------------------------
@@ -523,6 +723,7 @@ func _on_company_state(ok: bool, data: Dictionary) -> void:
 		_rules = data["rules"]
 	_reason = str(data.get("reason", ""))
 	_cooldown_s = int(data.get("cooldown_s", 0))
+	_mark_seen_once()
 
 	# Un succès ramène TOUJOURS à la fiche (ou à l'état « sans compagnie ») ; un refus LAISSE le
 	# formulaire tel qu'il est, avec la saisie du joueur intacte — contre-épreuve §8.125 : un
@@ -552,6 +753,24 @@ func _on_company_public(data: Dictionary, tag: String) -> void:
 	_render()
 	# Idem : silence sur succès, message SEULEMENT si la compagnie est introuvable.
 	_set_status("" if not _company.is_empty() else tr("COMPANY_NOT_FOUND"), MUTED)
+
+
+# ACCUSÉ DE LECTURE (§8.126.1) — UNE fois par visite, à la première fiche reçue. Le refaire à chaque
+# action (exclure, renommer…) enverrait une requête d'écriture pour rien : on a déjà tout lu.
+func _mark_seen_once() -> void:
+	if _seen_sent or _company.is_empty():
+		return
+	_seen_sent = true
+	NetworkManager.company_mark_seen()
+	# La pastille de la nav est mise à jour LOCALEMENT plutôt que par un second aller-retour : on
+	# connaît déjà les deux nombres, et deux requêtes concurrentes n'auraient aucun ordre garanti
+	# (le badge aurait pu répondre AVANT que l'accusé ne soit enregistré, et rester allumé).
+	# `online_count` inclut l'appelant ; la pastille, elle, ne se compte jamais soi-même.
+	NetworkManager.company_badge_loaded.emit({
+		"company": true,
+		"online": maxi(0, int(_company.get("online_count", 0)) - 1),
+		"unread": 0,
+	})
 
 
 func _on_tag_checked(data: Dictionary) -> void:

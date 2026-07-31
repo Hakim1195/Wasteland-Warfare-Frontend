@@ -78,6 +78,9 @@ signal company_public_loaded(data: Dictionary, tag: String)
 signal company_leaderboard_loaded(data: Dictionary)
 # Vérification LIVE de disponibilité d'un tag pendant la saisie (débounce 0,5 s côté écran).
 signal company_tag_checked(data: Dictionary)
+# §8.126.1 — pastille de l'onglet COMPAGNIE : {company, online, unread}. Émis par la barre de
+# navigation sur CHAQUE écran hub, d'où une route serveur volontairement minuscule.
+signal company_badge_loaded(data: Dictionary)
 
 signal salon_state_updated(count: int, max_players: int, is_creator: bool)
 # Salon fermé par l'hôte (WS) : l'écran ramène à la recherche avec un message amical.
@@ -876,6 +879,24 @@ func squad_dequeue() -> void:
 # choisit le message, jamais le manager.
 func company_mine() -> void:
 	_send_api_request("/company/mine", HTTPClient.METHOD_GET, {}, _on_company_response)
+
+# Pastille de l'onglet COMPAGNIE (§8.126.1). Deux nombres, rien d'autre : appelée depuis TOUS les
+# écrans hub à chaque navigation, elle ne doit jamais coûter le prix d'une fiche complète.
+func fetch_company_badge() -> void:
+	_send_api_request("/company/badge", HTTPClient.METHOD_GET, {}, _on_company_badge)
+
+func _on_company_badge(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	# Serveur non redéployé → 404 : on émet un badge VIDE plutôt que rien. L'onglet existe déjà côté
+	# client, il doit simplement rester muet au lieu de garder un compteur d'une session précédente.
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	company_badge_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
+
+# Accusé de lecture des activités (§8.126.1) : appelé à l'OUVERTURE de l'écran Compagnie. Réponse
+# ignorée — le client vient de recevoir la fiche, la relire n'apprendrait rien.
+func company_mark_seen() -> void:
+	_send_api_request("/company/seen", HTTPClient.METHOD_POST, {},
+		func(_r, _rc, _h, _b, http_node): http_node.queue_free())
 
 func company_create(tag: String, name: String, emblem_id: int) -> void:
 	# Le serveur NORMALISE (strip, majuscules, espaces réduits) avant tout contrôle ; on nettoie

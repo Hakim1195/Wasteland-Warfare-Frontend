@@ -28,6 +28,8 @@ extends Control
 
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const XpCoinsBarScript = preload("res://scripts/ui/xp_coins_bar.gd")
+# §8.126.1 — porteur du `static var target_tag` de l'écran Compagnie (purgé au clic sur l'onglet).
+const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
 const LOGO_TEX = preload("res://assets/images/logo_mark.svg")  # marque hex-nœuds (§8.57)
 
 # Hauteur de la bande de navigation (marges + barre + filet) — calquée sur la top-bar du menu.
@@ -61,6 +63,10 @@ const TABS := [
 	{"id": "profile", "key": "MENU_TAB_PROFILE", "scene": "res://scenes/ui/profile.tscn"},
 	{"id": "missions", "key": "MENU_TAB_MISSIONS", "scene": "res://scenes/ui/missions.tscn"},
 	{"id": "leaderboard", "key": "MENU_TAB_LEADERBOARD", "scene": "res://scenes/ui/leaderboard.tscn"},
+	# §8.126.1 — COMPAGNIE. Placée APRÈS le Classement, dans la continuité : les deux répondent à
+	# « où est-ce que je me situe ? », l'une seul, l'autre avec les siens. Avant cet onglet, l'écran
+	# n'était atteignable que depuis une carte du Profil — autant dire invisible.
+	{"id": "company", "key": "MENU_TAB_COMPANY", "scene": "res://scenes/ui/company_screen.tscn"},
 ]
 
 const LOBBY_SCENE := "res://scenes/ui/main_menu.tscn"
@@ -102,6 +108,14 @@ var _avatar_rect: TextureRect = null
 var _missions_tab_btn: Button = null
 var _missions_claimable: int = 0
 
+# --- Pastille COMPAGNIE (§8.126.1) : « COMPAGNIE ●N » (non-lus, or) ou « COMPAGNIE ◦N » (camarades
+# en ligne, cyan). DEUX signaux, UN emplacement, priorité aux non-lus : une notification se traite,
+# une présence s'observe. Le second glyphe est un `◦` ASCII-safe (les emoji rendent en TOFU avec la
+# police condensée de la charte — constat §8.117/§8.123). ---
+var _company_tab_btn: Button = null
+var _company_unread: int = 0
+var _company_online: int = 0
+
 # --- Mini-profil flottant (§8.58, déplacé du menu en §8.94) ---
 var _profile_flyout: Control = null
 var _flyout_panel: PanelContainer = null
@@ -142,6 +156,9 @@ func _ready() -> void:
 	# double fetch qu'aurait produit « chacun son appel ».
 	NetworkManager.missions_loaded.connect(_on_missions_loaded)
 	NetworkManager.profile_history_loaded.connect(_on_history_loaded)
+	# §8.126.1 — pastille COMPAGNIE. Route VOLONTAIREMENT minuscule (`/company/badge` : deux
+	# nombres), justement parce qu'elle part depuis TOUS les écrans hub à chaque navigation.
+	NetworkManager.company_badge_loaded.connect(_on_company_badge)
 	# Session expirée (§AC.5) : top_nav est l'en-tête COMMUN de tous les écrans hub → un seul point de
 	# redirection vers l'auth, quel que soit l'écran affiché quand le token expire.
 	NetworkManager.session_expired.connect(_on_session_expired)
@@ -150,6 +167,7 @@ func _ready() -> void:
 	AuthManager.get_profile()
 	NetworkManager.fetch_missions()
 	NetworkManager.fetch_profile_history(1)
+	NetworkManager.fetch_company_badge()
 
 func _make_font() -> Font:
 	var f := SystemFont.new()
@@ -249,6 +267,9 @@ func _build_nav_pill() -> Control:
 		# Mémorise l'onglet Défis : sa pastille « ●N » est un texte COMPOSÉ, re-rendu à la volée.
 		if str(t.get("id")) == "missions":
 			_missions_tab_btn = btn
+		# §8.126.1 — même mécanique pour la pastille COMPAGNIE.
+		elif str(t.get("id")) == "company":
+			_company_tab_btn = btn
 	return pill
 
 # --- Un onglet (Button stylé, transparent + soulignement cyan si actif — comme main_menu) ---
@@ -290,6 +311,12 @@ func _on_tab_pressed(id: String, scene: String) -> void:
 	if id == active_tab:
 		return  # déjà sur cette section.
 	AudioManager.play_sfx("click")
+	# §8.126.1 — l'onglet mène TOUJOURS à MA compagnie. On purge explicitement le porteur statique :
+	# sans ça, un joueur qui vient de consulter la fiche publique d'un autre clan (Classement, profil
+	# public) rouvrirait CELLE-LÀ en cliquant sur son propre onglet. `company_screen` le remet déjà à
+	# "" à la lecture — cette ligne est la ceinture qui rend le raisonnement inutile.
+	if id == "company":
+		CompanyScreen.target_tag = ""
 	TransitionManager.change_scene(scene)
 
 # --- Cluster de droite : CADRE IDENTITÉ ▸ ⚙ Paramètres ▸ ⏻ Quitter (comme main_menu) ---
@@ -469,6 +496,42 @@ func _update_missions_badge() -> void:
 		else:
 			_missions_tab_btn.remove_theme_color_override("font_color")
 
+# =========================================================
+# PASTILLE COMPAGNIE (§8.126.1) — deux signaux, un emplacement
+# =========================================================
+# Priorité aux NON-LUS (or, `●N`) : une notification se traite, alors qu'une présence s'observe. À
+# zéro non-lu, on retombe sur les CAMARADES EN LIGNE (cyan, `◦N`) — c'est le signal qui fait revenir
+# jouer. Aucun des deux → clé BRUTE, l'onglet redevient un onglet.
+func _on_company_badge(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return  # garde défensive : signal global reçu pendant un changement de scène.
+	_company_unread = int(data.get("unread", 0))
+	_company_online = int(data.get("online", 0))
+	_update_company_badge()
+
+func _update_company_badge() -> void:
+	if _company_tab_btn == null or not is_instance_valid(_company_tab_btn):
+		return
+	if _company_unread > 0:
+		# Texte COMPOSÉ → auto-traduction désactivée, re-rendu manuel sur locale_changed.
+		_company_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		_company_tab_btn.text = "%s ●%d" % [tr("MENU_TAB_COMPANY"), _company_unread]
+		_company_tab_btn.add_theme_color_override("font_color", GOLD)
+		return
+	if _company_online > 0:
+		_company_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		_company_tab_btn.text = "%s ◦%d" % [tr("MENU_TAB_COMPANY"), _company_online]
+		_company_tab_btn.add_theme_color_override("font_color", ACCENT)
+		return
+	# Retour à la clé BRUTE : Godot reprend l'auto-traduction.
+	_company_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_INHERIT
+	_company_tab_btn.text = "MENU_TAB_COMPANY"
+	if active_tab == "company":
+		_company_tab_btn.add_theme_color_override("font_color", TEXT)
+	else:
+		_company_tab_btn.remove_theme_color_override("font_color")
+
+
 # Session expirée (§AC.5) : purge le token mort, laisse un message et renvoie à l'écran d'auth.
 # AUCUN retry — l'utilisateur se reconnecte. NetworkManager n'émet le signal qu'UNE fois.
 func _on_session_expired() -> void:
@@ -479,6 +542,7 @@ func _on_session_expired() -> void:
 
 func _on_locale_changed(_code: String) -> void:
 	_update_missions_badge()
+	_update_company_badge()
 	# Le mini-profil, s'il est ouvert, contient des valeurs formatées → re-rendu.
 	if _profile_flyout != null and _profile_flyout.visible:
 		_populate_profile_flyout()

@@ -2731,3 +2731,84 @@ Le serveur n'envoie **jamais de texte affichable** : il rend une `reason`, le cl
 > ⛔ **NON VÉRIFIÉ EN JEU** : le `[TAG]` en partie (chips, kill feed, Post-Op) n'est pas observable
 > sans un serveur redéployé ET deux comptes membres d'une même compagnie. Le code est en place et
 > `tagged_name` est couvert côté données, mais le rendu réel reste à constater.
+
+---
+
+## §8.126.1 — COMPAGNIES : l'onglet de nav, la pastille et le panneau latéral (volet FRONTEND)
+
+> **Le défaut corrigé.** Le §8.126 livrait l'écran Compagnie sans **aucune porte d'entrée** : on n'y
+> arrivait que par une carte de l'onglet APERÇU du Profil. Une section entière du jeu, invisible.
+> Ce complément lui donne son onglet, sa pastille, et la colonne qui répond à la vraie question
+> quotidienne : *qui est là, et qu'est-ce que j'ai manqué ?*
+
+### 1. Onglet COMPAGNIE dans `top_nav` (§8.94)
+
+Ajouté à `TABS` **après CLASSEMENT**, dans la continuité : les deux répondent à « où est-ce que je
+me situe ? », l'un seul, l'autre avec les siens.
+
+⚠️ `_on_tab_pressed` **purge `CompanyScreen.target_tag`** avant de naviguer. Sans cela, un joueur qui
+vient de consulter la fiche publique d'un autre clan (Classement, profil public) rouvrirait
+CELLE-LÀ en cliquant sur son propre onglet. L'écran remet déjà le porteur statique à `""` à la
+lecture — cette ligne est la ceinture qui rend le raisonnement inutile.
+
+⚠️ `company_screen` passe son `active_tab` de `"profile"` à `"company"`. Tant que l'onglet n'existait
+pas, l'écran empruntait celui du Profil ; le laisser aurait surligné « PROFIL » alors qu'on est sur
+COMPAGNIE (**défaut vu en capture**, invisible au boot).
+
+### 2. Pastille — deux signaux, un emplacement
+
+| priorité | condition | rendu |
+|---|---|---|
+| 1 | `unread > 0` | `COMPAGNIE ●N` en **or** |
+| 2 | `online > 0` | `COMPAGNIE ◦N` en **cyan** |
+| 3 | sinon | clé BRUTE, l'onglet redevient un onglet |
+
+Les non-lus priment parce qu'**une notification se traite, une présence s'observe**. Glyphes
+`●` / `◦` **ASCII-safe** : tout pictogramme hors BMP rend en TOFU avec la police condensée de la
+charte (constat §8.117 sur 📢 ✉ 🎯, puis §8.123 où 🤝 est devenu `↔`).
+
+Alimentée par `GET /company/badge`, demandée par la nav elle-même — donc **une fois par écran hub**,
+comme les missions (§8.94 : la nav est le seul déclencheur, les écrans écoutent).
+
+⚠️ À l'ouverture de l'écran Compagnie, le client **ré-émet `company_badge_loaded` LOCALEMENT**
+(`unread: 0`, `online: online_count − 1`) plutôt que de redemander la route. Deux requêtes
+concurrentes (`POST /seen` puis `GET /badge`) n'ont **aucun ordre garanti** : la pastille aurait pu
+répondre avant l'enregistrement de l'accusé et rester allumée. On connaît déjà les deux nombres.
+
+### 3. Panneau latéral droit de `company_screen`
+
+Le corps de l'écran passe en **deux colonnes** (`HBoxContainer`) : gestion à gauche (expand), résumé
+vivant à droite (`SIDE_PANEL_W = 340`). Les deux répondent à des questions différentes — « comment
+j'administre » vs « qui est là » — et les mélanger aurait noyé la seconde, qui est pourtant celle
+qu'on vient consulter tous les jours. Panneau **masqué** sans compagnie, en vue publique et pendant
+les formulaires (il n'y aurait rien à résumer).
+
+Trois cartes, dans l'ordre de lecture :
+1. **RÉSUMÉ** — emblème, `[TAG]` nom, rang inter-compagnies, score, effectif `n/20`, division moyenne.
+2. **EN LIGNE `n/N`** — les présents seulement, pastille pleine or = `EN PARTIE`, creuse cyan =
+   `AU QG`. Vide → « Personne en ligne pour le moment. » Bordure **or dès qu'il y a quelqu'un**.
+3. **ACTIVITÉ ●N** — les 6 dernières activités ; les `unread` premières en **texte clair**, le reste
+   en muet : le joueur voit d'un coup d'œil ce qu'il a manqué.
+
+Le **roster principal** porte lui aussi la pastille de présence, avec une **gouttière réservée même
+hors ligne** — sans elle, les pseudos danseraient horizontalement à chaque rafraîchissement au gré
+des connexions. Tri : chef, puis **les présents**, puis les RP.
+
+⚠️ Les phrases d'activité sont **composées CÔTÉ CLIENT** depuis `kind` + les deux pseudos
+(`COMPANY_EV_*`). Le serveur n'envoie jamais de texte affichable (règle R4) : c'est ce qui permet à
+la même ligne de journal de se lire en trois langues sans qu'aucune ne transite par le réseau.
+
+### 4. i18n (+14 clés)
+
+`MENU_TAB_COMPANY` · `COMPANY_SIDE_SUMMARY` · `COMPANY_ONLINE_TITLE` / `_NONE` ·
+`COMPANY_STATUS_ONLINE` / `_IN_GAME` · `COMPANY_ACTIVITY_TITLE` / `_NONE` · `COMPANY_EV_*` (6).
+
+> **Validation.** `--import` **0 ERROR** ; boot headless **0 ERROR** sur 8 écrans hub. **Captures PNG
+> relues** : panneau latéral peuplé (résumé + 4 présents dont 2 en partie + activité à ●2), onglet
+> « COMPAGNIE ●2 » en or dans la nav du menu principal, onglet correctement surligné sur l'écran
+> Compagnie (le défaut du §1 a été vu et corrigé là).
+>
+> ⛔ **NON VÉRIFIÉ EN CONDITIONS RÉELLES** : la présence repose sur deux comptes joués en parallèle
+> contre un serveur redéployé. Les trois états sont couverts côté données
+> (`test_company_flow.py`, 178 ✅) et rendus en capture avec des données injectées, mais la bascule
+> « au QG → en partie » d'un vrai joueur reste à constater.
