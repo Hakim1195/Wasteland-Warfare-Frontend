@@ -38,10 +38,10 @@ const PULSE_HZ := 2.2
 # Opacités du clignotant. Le VOILE plein reste dérisoire (le plateau doit rester lisible) ; c'est la
 # VIGNETTE de bord qui porte l'alerte. Ne pas remonter `VEIL_MAX` : c'est exactement l'erreur que
 # cette version corrige.
-const VEIL_MIN := 0.02
-const VEIL_MAX := 0.10
-const VIGNETTE_MIN := 0.20
-const VIGNETTE_MAX := 0.85
+const VEIL_MIN := 0.01
+const VEIL_MAX := 0.05
+const VIGNETTE_MIN := 0.14
+const VIGNETTE_MAX := 0.62
 # Épaisseur de la vignette, en fraction de l'écran. 0,22 laisse plus des deux tiers de la carte
 # parfaitement nets.
 const VIGNETTE_RATIO := 0.22
@@ -143,10 +143,23 @@ func _ready() -> void:
 	add_child(_vignette)
 
 	# 3) Plaque DANGER, centrée haut (pas au milieu : le centre de l'écran, c'est la carte).
-	var anchor := Control.new()
+	# ⚠️ CENTRAGE PAR CONTENEUR, pas par ancres — défaut CONSTATÉ EN CAPTURE : un
+	# `set_anchors_preset(PRESET_CENTER_TOP)` sur un PanelContainer qui se dimensionne sur son
+	# CONTENU laisse les offsets périmés, et la plaque sortait par la gauche de l'écran. Un
+	# VBoxContainer plein écran + `SIZE_SHRINK_CENTER` recentre à chaque passe de layout, quelle que
+	# soit la largeur du texte (qui change au verdict !).
+	var anchor := VBoxContainer.new()
 	anchor.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	anchor.alignment = BoxContainer.ALIGNMENT_BEGIN
+	anchor.add_theme_constant_override("separation", 0)
 	anchor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(anchor)
+
+	# Marge haute : la plaque descend sous le bandeau de tour du HUD au lieu de le recouvrir.
+	var top_gap := Control.new()
+	top_gap.custom_minimum_size = Vector2(0, 118)
+	top_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	anchor.add_child(top_gap)
 
 	_plate = PanelContainer.new()
 	_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -158,12 +171,8 @@ func _ready() -> void:
 	_plate_style.shadow_color = Color(DANGER, 0.6)
 	_plate_style.shadow_size = 22
 	_plate.add_theme_stylebox_override("panel", _plate_style)
+	_plate.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	anchor.add_child(_plate)
-	# ⚠️ ANCRAGE APRÈS `add_child`, JAMAIS avant : `set_anchors_preset` sur un Control encore
-	# DÉTACHÉ DOUBLE sa taille (piège §8.121, déjà payé une fois sur la carte de partage).
-	_plate.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_plate.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_plate.position.y = 118.0
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 0)

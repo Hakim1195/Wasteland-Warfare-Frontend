@@ -184,8 +184,85 @@ func _rebuild_order_band(order: Array) -> void:
 func _rebuild_rows(order: Array) -> void:
 	for c in _rows_box.get_children():
 		c.queue_free()
+	# BATTLE ROYALE (§8.125) : en mode ÉQUIPE, le roster est GROUPÉ PAR CAMP, MON équipe en tête.
+	#
+	# Défaut signalé après essai : « je ne vois pas les membres de mon équipe ». C'était exact — le
+	# roster listait tout le monde dans l'ordre du TOUR, qui alterne les camps par construction. La
+	# seule différence entre un coéquipier et un ennemi était une nuance de couleur, à comparer de
+	# mémoire d'une ligne à l'autre. Impossible à lire dans une partie à six.
+	#
+	# ⚠️ L'ordre du TOUR est préservé À L'INTÉRIEUR de chaque camp : il reste l'information n° 1 du
+	# jeu (qui joue après qui). Le groupement s'ajoute par-dessus, il ne le remplace pas.
+	if GameState.team_mode == "":
+		for pid in order:
+			_rows_box.add_child(_make_row(int(pid)))
+		return
+
+	var my_team := GameState.team_of(AuthManager.user_id)
+	var by_team := {}
+	var loners: Array = []
 	for pid in order:
+		var t := GameState.team_of(pid)
+		if t == 0:
+			loners.append(int(pid))   # joueur sans camp (état incohérent) : jamais perdu, mis à part.
+			continue
+		if not by_team.has(t):
+			by_team[t] = []
+		by_team[t].append(int(pid))
+
+	var team_ids := by_team.keys()
+	team_ids.sort()
+	# MON équipe d'abord : c'est celle dont j'ai besoin en permanence (qui est encore debout, qui
+	# est réanimable, à qui je peux parler). L'ennemi vient après.
+	if my_team != 0 and team_ids.has(my_team):
+		team_ids.erase(my_team)
+		team_ids.push_front(my_team)
+
+	for t in team_ids:
+		_rows_box.add_child(_make_team_header(int(t), int(t) == my_team))
+		for pid in by_team[t]:
+			_rows_box.add_child(_make_row(int(pid)))
+	for pid in loners:
 		_rows_box.add_child(_make_row(int(pid)))
+
+
+# En-tête de camp : « ▬ VOTRE ÉQUIPE » / « ▬ ÉQUIPE 2 », au liseré de la couleur du camp (celle du
+# plateau, source unique §8.97/§8.124). Le libellé DIT « VOTRE » plutôt que le numéro pour mon
+# propre camp : un joueur ne retient pas son numéro d'équipe, il retient que c'est le sien.
+func _make_team_header(team_id: int, is_mine: bool) -> Control:
+	var wrap := PanelContainer.new()
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var members: Array = GameState.teams_map().get(team_id, [])
+	# Couleur du PREMIER membre : en mode équipe, la palette est APPARIÉE par camp (nuances
+	# voisines d'une même teinte), donc n'importe quel membre porte la teinte du camp.
+	var tint: Color = ACCENT_CYAN
+	var board_node = get_tree().get_first_node_in_group("game_board")
+	if board_node != null and not members.is_empty() and board_node.has_method("get_player_color"):
+		tint = board_node.get_player_color(int(members[0]))
+
+	var style := StyleBoxFlat.new()
+	style.set_corner_radius_all(0)
+	style.set_content_margin_all(2)
+	style.content_margin_left = 6
+	style.bg_color = Color(tint, 0.14 if is_mine else 0.06)
+	style.border_width_left = 3
+	style.border_color = tint
+	wrap.add_theme_stylebox_override("panel", style)
+
+	var lbl := Label.new()
+	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	var alive := 0
+	for pid in members:
+		var p = GameState.players.get(str(int(pid)), {})
+		if typeof(p) == TYPE_DICTIONARY and str(p.get("status", "alive")) == "alive":
+			alive += 1
+	lbl.text = "%s   %d/%d" % [
+		tr("ROSTER_MY_TEAM") if is_mine else (tr("TEAM_BANNER") % team_id),
+		alive, members.size()]
+	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", tint)
+	wrap.add_child(lbl)
+	return wrap
 
 # Une carte de belligérant sur DEUX lignes (E-visuel) — « qui est qui » d'un coup d'œil :
 #   Ligne 1 (identité) : [état][chip qui s'étire][🏴 territoires][🃏 cartes][NIV n]

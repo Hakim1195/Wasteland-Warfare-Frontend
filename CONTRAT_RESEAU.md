@@ -2027,7 +2027,96 @@ c'est désormais la TRAHISON qui le détient.
 > absent du poste). Client : `--import` **0 ERROR**, boot headless de 4 scènes **0 ERROR**,
 > **captures PNG relues** (menu, écran BR, caisse, alarme, verdict).
 >
-> ⚠️ **NON VÉRIFIÉ** : aucune partie Battle Royale réelle jouée de bout en bout. Les boutons
-> RÉANIMER / SE RENDRE / COUP D'ÉTAT ne sont pas encore posés dans le HUD — les actions existent et
-> sont testées côté serveur, mais **rien ne les déclenche depuis l'interface**. C'est le premier
-> reste à faire.
+### 6. Actions au HUD — carte POUVOIR (onglet ACTIONS)
+
+Les trois actions vivent dans la **même carte que les capacités de héros** plutôt que dans un
+panneau à part : du point de vue du joueur, « rationner », « réanimer mon coéquipier » et « lancer
+le coup d'État » répondent à la même question — *que puis-je faire d'autre que déplacer des
+troupes ?*. Les séparer aurait obligé à chercher à deux endroits.
+
+| bouton | visible | grisé si | note |
+|---|---|---|---|
+| **RÉANIMER — *pseudo*** | mon tour, phases 1-4, un coéquipier mort réanimable | déjà réanimé, ou PV insuffisants | **UN bouton par mort** (au plus deux en 3v3) : deux boutons nommés se lisent plus vite qu'une liste déroulante |
+| **COUP D'ÉTAT** | **le traître SEUL**, tant qu'il est vivant | round < 4, hors phase 3, hors mon tour, victime morte, déjà joué | **rouge danger** + **confirmation en deux temps** |
+| **SE RENDRE** | tout membre vivant | round < 3, ou déjà voté | sous-titre = compteur de voix (`1/3`) |
+
+- **L'ORDRE SECRET du traître** s'affiche en **rouge** en tête de la carte (extension additive de
+  `hud.set_power_card`, qui accepte désormais `{text, color}` en plus d'une chaîne). C'est
+  l'information la plus lourde que le jeu confie à un joueur : la laisser en cyan la faisait lire
+  comme un compteur de renforts.
+- **Confirmation en deux temps du Coup d'État** : le 1ᵉʳ clic ARME (le bouton devient
+  « ⚠ CONFIRMER »), le 2ᵉ envoie. L'idempotence serveur protège du double-envoi, pas du clic
+  MALHEUREUX — et ici le clic malheureux tue son auteur et clôt la partie. **L'armement ne survit
+  pas au changement de tour** (`_coup_armed` remis à false) : une confirmation qui traverserait le
+  tour suivant serait un piège.
+- Refus traduits par `BR_ERROR_KEYS` (`BR_ERR_*`), aiguillés par `_last_coded_action == "br"` — les
+  jeux de codes des capacités, des pactes et du Battle Royale partagent des noms
+  (`already_used`, `invalid_target`, `not_your_turn`) et seul le contexte les distingue.
+
+### 7. Alarme de trahison — « on doit voir le plateau à travers »
+
+⚠️ **Contrainte n° 1, et elle a coûté une première version** : un voile rouge PLEIN à 0,40 d'alpha
+noyait la carte et transformait l'évènement le plus spectaculaire du jeu en écran de chargement
+rouge. Le clignotant vit donc dans une **VIGNETTE de bord** (périphérie saturée, **centre libre**)
+plus un voile résiduel quasi nul (0,02 → 0,10) — l'œil lit « alerte » par la périphérie, comme
+devant un vrai gyrophare, et le regard reste sur l'action.
+
+**Style « CAUTION / DANGER » assumé** : plaque noire à bordure jaune épaisse, encadrée de deux
+**rubans de danger** (diagonales jaune-noir) qui DÉFILENT, titre capitale blanc à contour noir.
+Ce n'est pas de la décoration — c'est le vocabulaire visuel universel du danger imminent, et il se
+lit sans être lu.
+
+⚠️ Deux pièges payés ici : (1) le défilement des bandes passe par un **décalage dans `_draw()`**,
+jamais par `position` — elles vivent dans un `VBoxContainer` qui les repositionne à chaque passe de
+layout, l'animation aurait été un **no-op silencieux** ; (2) `set_anchors_preset` est appelé
+**APRÈS** `add_child` (piège §8.121 : sur un Control détaché, il double la taille).
+
+> ⚠️ **NON VÉRIFIÉ** : aucune partie Battle Royale réelle jouée de bout en bout (2 humains + bots).
+
+### 8. Correctifs après le premier essai (§8.125 — 2ᵉ passe)
+
+Trois défauts signalés en jouant, tous corrigés et revérifiés en capture :
+
+**a) « Impossible de choisir le 2v2 dans le menu Battle Royale ».** `squad_screen._render()`
+réécrivait `_selected_playlist` depuis l'escouade à CHAQUE rendu : le chef cliquait « DUO 2v2 »,
+`_on_playlist_selected` posait son choix, le rendu suivant le REMPLAÇAIT par l'ancien format, et le
+bouton se ré-allumait sur le précédent. Le clic semblait mort et le format était **figé dès la
+création de l'escouade**.
+
+Correctif en deux temps, parce que le bug en cachait un second :
+- côté client, **le choix local du chef fait autorité** tant qu'il n'a pas lancé la recherche (un
+  MEMBRE, lui, reflète toujours l'escouade — il n'édite rien) ; le rendu est en outre **différé**
+  (`call_deferred`), la reconstruction de la rangée libérant le bouton qui émet `pressed` ;
+- côté serveur, **nouvelle route `POST /squad/playlist`** (CHEF seul, shape `SquadStateResponse`).
+  Sans elle, le format ne partait qu'avec `POST /squad/queue` : **les coéquipiers continuaient de
+  lire l'ANCIEN format**, ils attendaient un 3v3 pendant que le chef cherchait un 2v2. Le format est
+  une donnée de GROUPE, il doit vivre côté serveur comme le code et les membres. Refusée si
+  l'escouade est EN FILE (le matchmaker planifierait sur des tailles périmées) ou si l'escouade ne
+  tient pas dans le nouveau format (`full`, dit AVANT la file où le chef peut encore agir).
+
+**b) « Je ne vois pas les membres de mon équipe ».** Exact : le Roster de Guerre listait tout le
+monde dans l'ordre du TOUR, qui **alterne les camps par construction**. La seule différence entre un
+coéquipier et un ennemi était une nuance de couleur, à comparer de mémoire d'une ligne à l'autre —
+illisible à six. Le roster est désormais **GROUPÉ PAR CAMP, le mien en tête**, avec un en-tête au
+liseré de la couleur d'équipe (« ▬ VOTRE ÉQUIPE  2/3 » — vivants / total). ⚠️ L'ordre du TOUR est
+préservé À L'INTÉRIEUR de chaque camp : il reste l'information n° 1 du jeu.
+
+**c) « L'alarme doit être transparente et plus alarmiste ».** Le voile plein à 0,40 noyait la carte.
+Refonte complète (cf. §7 ci-dessus) : voile résiduel 0,01→0,05, **vignette de bord** qui laisse le
+centre libre, plaque **CAUTION/DANGER** à rubans diagonaux défilants.
+⚠️ Trois pièges payés : le défilement des bandes passe par un décalage **dans `_draw()`** (elles
+vivent dans un `VBoxContainer` qui les repositionnerait → no-op silencieux) ; le centrage passe par
+un **conteneur**, pas par `set_anchors_preset` (sur un `PanelContainer` dimensionné par son contenu,
+les offsets restent périmés et **la plaque sortait par la gauche de l'écran** — constaté en
+capture) ; et l'ancrage se fait après `add_child` (§8.121).
+
+> **Validation de la 2ᵉ passe.** `test_squad_flow.py` **77 ✅** (section [7] « changement de
+> format » ajoutée : bascule par le chef, persistance vue par le membre, refus membre / playlist
+> fermée / escouade trop grande / en file). Suite backend COMPLÈTE verte hors `test_missions.py` et
+> `test_simulation.py` (échecs **PRÉ-EXISTANTS**). Client : `--import` **0 ERROR** ; captures relues
+> — bascule 2v2 (le bouton s'allume), actions BR dans le HUD **avec de vraies données** (RÉANIMER
+> cible bien le coéquipier mort, REDDITION 0/2), alarme par-dessus l'arène (plateau lisible).
+>
+> ⛔ **NON VÉRIFIÉ VISUELLEMENT** : le groupement par équipe du Roster de Guerre. Le panneau
+> latéral n'était pas déployé dans la capture — le code est en place et l'import passe, mais
+> personne n'a vu le rendu.

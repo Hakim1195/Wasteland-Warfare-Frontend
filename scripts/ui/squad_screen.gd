@@ -458,8 +458,23 @@ func _render() -> void:
 		return
 
 	_code_label.text = _spaced(str(_squad.get("code", "")))
-	_selected_playlist = str(_squad.get("playlist", _selected_playlist))
 	var is_leader := bool(_squad.get("is_leader", false))
+	# ⚠️ LE CHOIX LOCAL DU CHEF FAIT AUTORITÉ TANT QU'IL N'A PAS LANCÉ LA RECHERCHE.
+	#
+	# Défaut corrigé (signalé après essai : « impossible de choisir le 2v2 ») — cette ligne écrasait
+	# `_selected_playlist` par la valeur de l'escouade à CHAQUE rendu. Le chef cliquait « DUO 2v2 »,
+	# `_on_playlist_selected` posait son choix, `_render()` le REMPLAÇAIT aussitôt par l'ancien
+	# format, et le bouton se ré-allumait sur le précédent : le clic semblait mort. Le format était
+	# donc figé dès la création de l'escouade — exactement le symptôme observé.
+	#
+	# POURQUOI le choix local doit gagner : il n'existe AUCUN endpoint « changer la playlist » côté
+	# serveur (décision §8.124 — le format part avec `POST /squad/queue`). Entre le clic et la mise
+	# en file, la seule source de vérité EST donc le client. Un MEMBRE, lui, n'édite rien : il
+	# reflète toujours l'escouade, sinon il lirait un format que le chef n'a pas choisi.
+	if not is_leader or _in_queue:
+		_selected_playlist = str(_squad.get("playlist", _selected_playlist))
+	elif _selected_playlist == "":
+		_selected_playlist = str(_squad.get("playlist", ""))
 	# Seul le CHEF change le format et lance la recherche. Les boutons du membre sont DÉSACTIVÉS
 	# plutôt que cachés : il doit VOIR le format choisi, sinon il ne sait pas ce qu'il attend.
 	_rebuild_playlist_buttons(_playlist_row, is_leader and not _in_queue)
@@ -615,7 +630,15 @@ func _on_session_expired() -> void:
 # =========================================================
 func _on_playlist_selected(playlist_id: String) -> void:
 	_selected_playlist = playlist_id
-	_render()
+	# Escouade FORMÉE → on PERSISTE le format côté serveur : c'est une donnée de GROUPE, et sans cet
+	# appel les coéquipiers continueraient de lire l'ancien (§8.125). Sans escouade, le choix reste
+	# local jusqu'à la création — il n'y a encore rien à persister.
+	if bool(_squad.get("squad", false)) and bool(_squad.get("is_leader", false)):
+		NetworkManager.squad_set_playlist(playlist_id)
+	# ⚠️ RENDU DIFFÉRÉ : `_render()` reconstruit la rangée de boutons, donc LIBÈRE celui qui est en
+	# train d'émettre `pressed`. Le faire dans la foulée revient à détruire un nœud depuis son
+	# propre signal — `call_deferred` attend la fin de la passe d'évènements.
+	call_deferred("_render")
 
 
 func _on_create_pressed() -> void:

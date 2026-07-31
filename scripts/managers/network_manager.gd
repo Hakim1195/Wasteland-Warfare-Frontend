@@ -833,6 +833,13 @@ func squad_leave() -> void:
 func squad_status() -> void:
 	_send_api_request("/squad/status", HTTPClient.METHOD_GET, {}, _on_squad_response)
 
+# Change le FORMAT de l'escouade sans lancer la recherche (§8.125) — CHEF uniquement. Le format est
+# une donnée de GROUPE : sans cette route, le choix du chef restait dans son seul client et ses
+# coéquipiers lisaient encore l'ancien.
+func squad_set_playlist(playlist: String) -> void:
+	_send_api_request("/squad/playlist", HTTPClient.METHOD_POST, {"playlist": playlist},
+		_on_squad_response)
+
 func squad_queue(playlist: String = "") -> void:
 	var payload := {}
 	if playlist != "":

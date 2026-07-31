@@ -2317,3 +2317,51 @@ c'est désormais la TRAHISON qui le détient.
 > RÉANIMER / SE RENDRE / COUP D'ÉTAT ne sont pas encore posés dans le HUD — les actions existent et
 > sont testées côté serveur, mais **rien ne les déclenche depuis l'interface**. C'est le premier
 > reste à faire.
+
+### 8. Correctifs après le premier essai (§8.125 — 2ᵉ passe)
+
+Trois défauts signalés en jouant, tous corrigés et revérifiés en capture :
+
+**a) « Impossible de choisir le 2v2 dans le menu Battle Royale ».** `squad_screen._render()`
+réécrivait `_selected_playlist` depuis l'escouade à CHAQUE rendu : le chef cliquait « DUO 2v2 »,
+`_on_playlist_selected` posait son choix, le rendu suivant le REMPLAÇAIT par l'ancien format, et le
+bouton se ré-allumait sur le précédent. Le clic semblait mort et le format était **figé dès la
+création de l'escouade**.
+
+Correctif en deux temps, parce que le bug en cachait un second :
+- côté client, **le choix local du chef fait autorité** tant qu'il n'a pas lancé la recherche (un
+  MEMBRE, lui, reflète toujours l'escouade — il n'édite rien) ; le rendu est en outre **différé**
+  (`call_deferred`), la reconstruction de la rangée libérant le bouton qui émet `pressed` ;
+- côté serveur, **nouvelle route `POST /squad/playlist`** (CHEF seul, shape `SquadStateResponse`).
+  Sans elle, le format ne partait qu'avec `POST /squad/queue` : **les coéquipiers continuaient de
+  lire l'ANCIEN format**, ils attendaient un 3v3 pendant que le chef cherchait un 2v2. Le format est
+  une donnée de GROUPE, il doit vivre côté serveur comme le code et les membres. Refusée si
+  l'escouade est EN FILE (le matchmaker planifierait sur des tailles périmées) ou si l'escouade ne
+  tient pas dans le nouveau format (`full`, dit AVANT la file où le chef peut encore agir).
+
+**b) « Je ne vois pas les membres de mon équipe ».** Exact : le Roster de Guerre listait tout le
+monde dans l'ordre du TOUR, qui **alterne les camps par construction**. La seule différence entre un
+coéquipier et un ennemi était une nuance de couleur, à comparer de mémoire d'une ligne à l'autre —
+illisible à six. Le roster est désormais **GROUPÉ PAR CAMP, le mien en tête**, avec un en-tête au
+liseré de la couleur d'équipe (« ▬ VOTRE ÉQUIPE  2/3 » — vivants / total). ⚠️ L'ordre du TOUR est
+préservé À L'INTÉRIEUR de chaque camp : il reste l'information n° 1 du jeu.
+
+**c) « L'alarme doit être transparente et plus alarmiste ».** Le voile plein à 0,40 noyait la carte.
+Refonte complète (cf. §7 ci-dessus) : voile résiduel 0,01→0,05, **vignette de bord** qui laisse le
+centre libre, plaque **CAUTION/DANGER** à rubans diagonaux défilants.
+⚠️ Trois pièges payés : le défilement des bandes passe par un décalage **dans `_draw()`** (elles
+vivent dans un `VBoxContainer` qui les repositionnerait → no-op silencieux) ; le centrage passe par
+un **conteneur**, pas par `set_anchors_preset` (sur un `PanelContainer` dimensionné par son contenu,
+les offsets restent périmés et **la plaque sortait par la gauche de l'écran** — constaté en
+capture) ; et l'ancrage se fait après `add_child` (§8.121).
+
+> **Validation de la 2ᵉ passe.** `test_squad_flow.py` **77 ✅** (section [7] « changement de
+> format » ajoutée : bascule par le chef, persistance vue par le membre, refus membre / playlist
+> fermée / escouade trop grande / en file). Suite backend COMPLÈTE verte hors `test_missions.py` et
+> `test_simulation.py` (échecs **PRÉ-EXISTANTS**). Client : `--import` **0 ERROR** ; captures relues
+> — bascule 2v2 (le bouton s'allume), actions BR dans le HUD **avec de vraies données** (RÉANIMER
+> cible bien le coéquipier mort, REDDITION 0/2), alarme par-dessus l'arène (plateau lisible).
+>
+> ⛔ **NON VÉRIFIÉ VISUELLEMENT** : le groupement par équipe du Roster de Guerre. Le panneau
+> latéral n'était pas déployé dans la capture — le code est en place et l'import passe, mais
+> personne n'a vu le rendu.
