@@ -1785,6 +1785,29 @@ func _br_state() -> Dictionary:
 	return data if typeof(data) == TYPE_DICTIONARY else {}
 
 
+# SUIVI DES PRIMES (2026-08-01) — kills cumulés de MON équipe et caisses déjà ouvertes.
+# ⚠️ MÊME agrégat que le serveur (`engine._open_pending_crates`) : la somme porte sur TOUS les
+# membres de l'équipe, MORTS COMPRIS. Exclure les morts ferait CHUTER le compteur au moment précis
+# où l'équipe vient de perdre quelqu'un — et le joueur croirait avoir reculé vers sa caisse.
+func _push_bounty_progress() -> void:
+	if GameState.team_mode == "":
+		return
+	var stats: Dictionary = GameState.statistics if 		typeof(GameState.statistics) == TYPE_DICTIONARY else {}
+	var ck = stats.get("combat_kills_by_player", {})
+	if typeof(ck) != TYPE_DICTIONARY:
+		ck = {}
+	var me := _my_id()
+	var total := 0
+	for pid in ([me] + GameState.teammates_of(me)):
+		total += int(ck.get(str(int(pid)), ck.get(int(pid), 0)))
+	var crates = _br_state().get("crates", {})
+	var opened := 0
+	if typeof(crates) == TYPE_DICTIONARY:
+		var team := GameState.team_of(me)
+		opened = int(crates.get(str(team), crates.get(team, 0)))
+	hud.set_bounty_progress(total, opened, BR_CRATE_KILL_STEP, BR_CRATE_MAX)
+
+
 # Coéquipiers MORTS, réanimables (ni déjà réanimés, ni hors partie).
 func _revivable_teammates() -> Array:
 	var out: Array = []
@@ -2038,6 +2061,11 @@ const ABILITY_ERROR_KEYS := {
 const BR_REVIVE_COST := 100
 const BR_SURRENDER_MIN_ROUND := 3
 const BR_COUP_MIN_ROUND := 4
+# Caisses de ravitaillement : palier de kills d'ÉQUIPE et plafond par partie
+# (`BR_RULES["crate_kill_step"]` / `["crate_max_per_team"]`). Recopiés au même titre que les
+# précédents : ils n'alimentent QUE l'affichage du suivi des primes, jamais une décision.
+const BR_CRATE_KILL_STEP := 50
+const BR_CRATE_MAX := 4
 
 # Refus CODÉS des actions Battle Royale. Jeu de codes DISTINCT de celui des capacités et des
 # pactes bien que plusieurs noms coïncident (`already_used`, `invalid_target`, `not_your_turn`) :
@@ -2527,9 +2555,18 @@ func _play_battle_royale_feedback(event) -> void:
 			# Une caisse ne concerne QUE l'équipe qui l'a méritée : la montrer à l'adversaire
 			# serait lui annoncer que l'autre camp vient de se renforcer.
 			if int(crate.get("team_id", 0)) == GameState.team_of(_my_id()):
+				var shares: Dictionary = crate.get("shares", {}) if 					typeof(crate.get("shares")) == TYPE_DICTIONARY else {}
 				var named := {}
-				for pid in (crate.get("shares", {}) as Dictionary):
-					named[_display_name(int(pid))] = int(crate["shares"][pid])
+				for pid in shares:
+					named[_display_name(int(pid))] = int(shares[pid])
+				# SUIVI DES PRIMES (2026-08-01) : on ARCHIVE la caisse avant de l'animer. Le
+				# détail (`shares`) ne vit QUE dans cet évènement — l'état de partie, lui, ne
+				# transporte que le compteur de caisses ouvertes. Sans cette capture, la part
+				# revenue au joueur serait définitivement perdue au bout de trois secondes.
+				hud.push_crate_record(str(crate.get("reward_id", "")),
+					int(crate.get("total", 0)),
+					int(shares.get(str(_my_id()), shares.get(_my_id(), 0))),
+					int(crate.get("team_kills", 0)))
 				_show_br_overlay(CrateRevealScript, func(node):
 					node.play(str(crate.get("reward_id", "")), int(crate.get("total", 0)), named,
 						int(crate.get("team_kills", 0))))
@@ -3162,6 +3199,8 @@ func _refresh():
 	_push_zone_forecast()
 	# Rebours GLOBAL de partie + mini-classement de départage (chantier « Tension », LOT F).
 	_push_match_countdown()
+	# SUIVI DES PRIMES (2026-08-01) : kills cumulés de MON équipe + caisses déjà ouvertes.
+	_push_bounty_progress()
 	# INTENSITÉ DE GUERRE (§8.122, LOT A) : nouvelle CIBLE. Le lissage et la propagation (musique,
 	# ambiance, shader) se font en `_process` — ici on ne fait que recalculer la destination.
 	_update_war_intensity_target()

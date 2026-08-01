@@ -3000,6 +3000,143 @@ OBJECTIFS / JOURNAL / ORDRE / ÉQUIPE **réutilisent** `HUD_OBJECTIVES_TITLE`, `
 > recentrage caméra au clic d'une entrée du Journal et la mise à jour du roster ÉQUIPE après une
 > réanimation sont **structurellement intacts** (aucun code touché) mais n'ont pas été rejoués.
 
+### Correctif 🐛 — « le panneau du bas a disparu complètement » (2026-08-01, signalé en jouant)
+
+Défaut **PRÉ-EXISTANT** (il date de la refonte UI arène §8.117), mis au jour par une partie réelle
+et corrigé ici : la barre basse pouvait sortir de l'écran **avec son propre bouton de repli**, ce qui
+la rendait **irrécupérable jusqu'à la fin de la partie**.
+
+`_toggle_bottom_panel()` MÉMORISAIT la position déployée au moment du repli
+(`_bottom_shown_y = wrapper.position.y`) sans regarder si le Tween PRÉCÉDENT tournait encore. En
+re-cliquant pendant le glissement, on capturait donc une position **intermédiaire** comme si c'était
+la position déployée, puis on lui ré-ajoutait la hauteur du panneau : chaque aller-retour rapide
+descendait la barre un peu plus bas. Mesures instrumentées (1920×1080, partie à 5 joueurs) :
+
+| geste | `wrapper.position.y` | bouton ▲ |
+|---|---|---|
+| 1 clic (sain) | 1037 | 1037 → 1063 : **visible** |
+| 3 clics rapides — **avant** | **1109** | 1109 → 1135 : **hors écran, définitif** |
+| 3 clics rapides — **après** | 1037 | **visible** |
+| 12 clics martelés — **après** | 1037 | **visible**, aucune dérive |
+
+**Correctif de fond** : les deux positions ne sont plus mémorisées, elles sont **CALCULÉES** par une
+fonction PURE `_bottom_panel_y()`. La barre est ancrée en bas (`anchor_top = anchor_bottom = 1`,
+`grow_vertical = BEGIN`) : sa position déployée vaut donc toujours `hauteur du HUD − hauteur de la
+barre`. Le résultat ne dépend plus ni du nombre de clics, ni de l'instant du clic, ni d'un
+redimensionnement survenu entre-temps. La variable `_bottom_shown_y` est **supprimée**.
+S'y ajoute un **garde-fou** (`minf(..., hud_h − hauteur du bouton)`) : la conséquence d'un
+dépassement étant irrécupérable, elle mérite une borne dure et pas seulement un calcul juste.
+
+⚠️ **Les panneaux latéraux (COMMS, FICHE JOUEUR) n'ont JAMAIS eu ce défaut** — vérifié : ils
+mettent leur géométrie en cache **une seule fois** (`_side_metrics_ready` / `_sheet_metrics_ready`),
+donc un clic en plein glissement ne peut rien y corrompre. Seule la barre basse relisait sa position
+à chaque repli.
+
+**2ᵉ passe — la barre est aussi partie VERS LE HAUT.** Second signalement en jouant : « le panneau
+part très vite en haut, introuvable en bas ». Le correctif ci-dessus avait changé la DIRECTION de la
+panne sans en supprimer la cause profonde, mise au jour par un watchdog frame-par-frame :
+
+> ⚠️⚠️ **LA BARRE BASSE N'A AUCUN PLAFOND DE HAUTEUR.** Sa taille est entièrement pilotée par son
+> contenu. Mesures (streamer OFF, partie à 6, italien, `ui_scale` 130 % ⇒ écran LOGIQUE de 831 px) :
+>
+> | contenu | hauteur de la barre |
+> |---|---|
+> | au repos | 315 px |
+> | + tracker d'objectif à 2 volets + renseignement d'espionnage | 372 px |
+> | **+ carte POUVOIR chargée (Battle Royale : 6 boutons + ordre secret)** | **602 px — 72 % de l'écran** |
+>
+> Le moteur de la croissance est **`HUD_TAB_ACTIONS` (min 489 px)**, dans le compartiment DROIT —
+> donc INDÉPENDANT du LOT 0, qui est neutre en hauteur (mesuré). Dès que la barre dépasse la
+> hauteur du HUD, `hud_h − wrapper_h` devient NÉGATIF et le glissement emporte tout par le haut.
+
+**Correctif** : `_bottom_panel_y()` borne désormais **des DEUX côtés** —
+`shown_y = maxf(0, hud_h − wrapper_h)` (jamais au-dessus du bord haut) et
+`minf(shown_y + glass_h, hud_h − toggle_h)` (jamais sous le bord bas). Contre-épreuve sur quatre
+cas dont une barre de **900 px sur un écran de 831** et une explosion simulée à **3000 px** :
+position toujours dans l'écran, bouton toujours saisissable.
+
+**PLAFOND DE HAUTEUR** (arbitrage Hakim, 2026-08-01 : *hauteur fixe + défilement*). Le garde-fou
+empêchait de PERDRE la barre, pas de la voir GROSSIR jusqu'à 72 % de l'écran. La barre redevient
+donc la **bande de 272 px** prévue par la scène, et c'est le contenu qui déborde qui DÉFILE :
+
+| zone | traitement | pourquoi |
+|---|---|---|
+| onglet OBJECTIFS | contenu entier dans un `ScrollContainer` | plaque INTEL + objectif + tracker à 2 volets (autowrap) s'empilent sans borne |
+| onglet ACTIONS | **`%PowerBox` SEUL** enveloppé | ⚠️ `ActionRow` porte `size_flags_vertical = SHRINK_END` : c'est lui qui ÉPINGLE « FIN DE PHASE », « RÉ-ASSAUT » et « CONFIRMER LE DÉPLOIEMENT » en bas. Faire défiler la page entière aurait fait sortir le bouton de fin de tour du champ |
+| onglets ORDRE / ÉQUIPE | `ScrollContainer` autour du VBox de lignes | une rotation à 6 joueurs empile 6 lignes |
+
+Un `ScrollContainer` annonce une taille minimale quasi nulle : le minimum cesse donc de remonter
+jusqu'à la barre, dont la hauteur retombe sur le plancher de la scène.
+
+⚠️⚠️ **PIÈGE PAYÉ EN ROUTE — `remove_child` + `add_child` fait PERDRE son `owner` au nœud, et un
+nœud sans owner ne répond PLUS à son `%NomUnique`.** `%ObjectiveLabel` devenait `null` et tout le
+HUD s'effondrait (`Cannot call method 'get_parent' on a null value`). Les deux helpers utilisent
+donc **`Node.reparent()`**, qui préserve l'owner. Piège déjà consigné au dépôt (PLAN_EXPERIENCE),
+re-payé ici : à relire avant tout re-parentage.
+
+⚠️⚠️ **2ᵉ PIÈGE PAYÉ — un `TabContainer` masque ses pages NON COURANTES.** Envelopper une PAGE
+dans un ScrollContainer lui fait emporter son `visible = false` À L'INTÉRIEUR du scroll, où plus
+personne ne le remet à `true` : le TabContainer affiche désormais le SCROLL, pas le contenu.
+Constaté en jouant — **les onglets ORDRE et ÉQUIPE s'ouvraient VIDES** alors que leurs lignes
+existaient bel et bien (`HUD_TAB_ORDER min = 167×164`, six lignes construites, `visible = false`).
+`_scroll_wrap()` force donc `node.visible = true` après le re-parentage : l'affichage de l'onglet
+est porté par le ScrollContainer, le contenu est toujours visible.
+
+**Contre-épreuve du plafond** (partie à 6 en Battle Royale, italien, `ui_scale` 130 % ⇒ écran
+logique 831 px, carte POUVOIR à 6 boutons + ordre secret, les 4 onglets INFOS parcourus) :
+**315 px dans TOUS les cas**, contre 602 avant. 0 SCRIPT ERROR. Capture relue : barre de défilement
+présente dans AZIONI, **« FIN DE PHASE » toujours épinglée en bas**, carte intacte.
+
+**Contre-épreuve des ONGLETS** (même pire cas) : les quatre onglets INFOS ouverts un par un,
+contenu mesuré `visible_in_tree = true` et hauteur > 0 — OBJECTIFS 169 px · JOURNAL 32 · **ORDRE
+164** · **ÉQUIPE 107**. Captures relues : ORDRE affiche bien ses six lignes à la couleur de plateau
+avec la marque « EN COURS », ÉQUIPE ses trois membres avec leurs barres de PV.
+
+⚠️ **Ce que le correctif ne couvre pas** (constaté, jugé cosmétique) : redimensionner la fenêtre
+alors que la barre est repliée la fait ré-apparaître (le système d'ancrage reprend la main) tandis
+que le bouton affiche encore ▲ — il faut alors un clic de plus. Aucune perte de panneau.
+
+### Ajouts du 2026-08-01 (demande Hakim) — santé dans ORDRE, et onglet PRIMES
+
+**a) `ORDRE` affiche désormais les PV du héros de CHAQUE belligérant** (valeur + mini-barre de 52×5,
+dégradé de santé `RosterHelpers.pv_color` — MÊME source que le Roster et la fiche joueur, pour qu'un
+héros n'ait jamais deux couleurs selon l'endroit où on le lit ; un mort affiche `—`). L'information
+était DÉJÀ publique (Roster de Guerre E1 §8.73, départage du PROTOCOLE FINAL) : on ne dévoile rien de
+neuf, on l'amène là où l'œil est déjà. Rendu compact à dessein — six lignes doivent continuer à
+tenir dans la bande, et l'ORDRE DU TOUR reste l'information n° 1.
+
+**b) 5ᵉ onglet `PRIMES`** (mode ÉQUIPE uniquement, création paresseuse comme `ÉQUIPE`).
+
+> ⚠️ **RAPPEL DE RÈGLE — une caisse n'est PAS à réclamer, et ne l'a jamais été.**
+> `engine._open_pending_crates()` s'exécute juste après l'attaque qui franchit le palier et applique
+> le contenu **immédiatement**, réparti entre les membres VIVANTS :
+> **caisse PV** → héros soigné sur place (plafonné au max) · **caisse UNITÉS** → versées dans
+> `units_in_stock`, à placer à la prochaine phase 2. **Rien ne se perd** : le moteur fait
+> `units_in_stock += renforts` (ligne 1908, `+=` et NON une affectation) — la caisse s'ADDITIONNE
+> aux renforts du tour suivant.
+>
+> Le défaut signalé (« on voit le message, on ne sait pas où passent les primes ») n'était donc pas
+> une perte mais un **trou de traçabilité** : trois secondes d'animation, puis plus aucune trace, et
+> des unités indiscernables des renforts.
+
+L'onglet PRIMES comble exactement ce trou, **sans toucher à la mécanique** :
+- **compteur de KILLS D'ÉQUIPE** (somme sur TOUS les membres, **morts compris** — même agrégat que
+  le serveur ; les exclure ferait CHUTER le compteur au moment où l'équipe perd quelqu'un) ;
+- **jauge vers la prochaine caisse** (`kills % palier`), remplacée par une mention explicite au
+  plafond plutôt qu'une jauge qui n'aboutira jamais ;
+- **caisses ouvertes N/max** ;
+- **historique de ce que le joueur a RÉELLEMENT reçu**, chaque ligne disant **OÙ** la prime est
+  passée (« déjà soignés sur votre héros » / « déjà versées dans votre réserve : placez-les à votre
+  prochaine phase DÉPLOIEMENT »).
+
+⚠️ Le DÉTAIL d'une caisse (`shares`) ne vit QUE dans l'évènement d'attaque qui la porte — l'état de
+partie ne transporte que le compteur. `main.gd` l'ARCHIVE donc (`hud.push_crate_record`) avant de
+lancer l'animation, sinon la part du joueur serait perdue au bout de trois secondes. Pastille « • »
+sur l'onglet quand une caisse tombe pendant qu'on regarde ailleurs (même contrat que le JOURNAL).
+
+**Contre-épreuves** : Battle Royale → 5 onglets, PRIMES `h = 215 px`, compteur/jauge/historique
+justes, barre toujours à **315 px** · **FFA → 3 onglets seulement** (`_bounty_box` et `_team_box`
+restent `null`), santé présente dans ORDRE, barre à 315 px · 0 SCRIPT ERROR · captures relues.
 ---
 
 ## §8.129 — TUTORIEL & PREMIÈRE OPÉRATION (FTUE) : volet CLIENT

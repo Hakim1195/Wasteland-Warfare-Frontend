@@ -142,8 +142,21 @@ const TAB_INFO_JOURNAL := 1
 # seul ÉQUIPE dépend de `GameState.team_mode != ""`. Le déplacement ne devait rien retirer à personne.
 var _tab_order := -1
 var _tab_team := -1
+var _tab_bounty := -1
 var _order_box: VBoxContainer = null
 var _team_box: VBoxContainer = null
+# ONGLET PRIMES (2026-08-01, demande Hakim) — suivi des CAISSES DE RAVITAILLEMENT (§8.125).
+# POURQUOI : le contenu d'une caisse est crédité AUTOMATIQUEMENT par le serveur (PV du héros
+# soignés sur place, unités versées dans `units_in_stock` et déployables à la phase 2 suivante).
+# Rien à réclamer, donc — mais RIEN ne le disait non plus : le joueur voyait trois secondes
+# d'animation puis plus aucune trace, et les unités se noyaient dans le tas des renforts. Cet
+# onglet est la TRAÇABILITÉ manquante : combien de kills, combien il en reste avant la prochaine
+# caisse, et ce que chacune a RÉELLEMENT rapporté au joueur.
+var _bounty_box: VBoxContainer = null
+# Historique local des caisses reçues : [{reward_id, total, mine, team_kills}]. Local et non
+# serveur — l'état ne transporte que le COMPTEUR de caisses ouvertes, pas leur détail, et le
+# détail arrive dans l'évènement d'attaque qui les a déclenchées (cf. `push_crate_record`).
+var _crate_log: Array = []
 
 var _log_count := 0
 var _elapsed := 0.0          # secondes écoulées sur le tour courant (affichage MM:SS)
@@ -217,10 +230,12 @@ var _last_tick_second := -1
 # Time Bank (§8.33) : cumul (s) crédité à la phase d'Attaque COURANTE par add_time_to_timer.
 var _turn_bonus: float = 0.0
 var _timer_urgent := false   # évite de réécrire la couleur du timer à chaque frame.
-# Barre basse rétractable (slide vertical, Tween natif).
+# Barre basse rétractable (slide vertical, Tween natif). ⚠️ Il n'y a VOLONTAIREMENT plus de
+# position déployée mémorisée (`_bottom_shown_y`, retirée le 2026-08-01) : c'est ce cache qui
+# faisait disparaître la barre sous l'écran quand on re-cliquait pendant le glissement — voir
+# `_bottom_panel_y()`, qui la RECALCULE à chaque fois.
 var _bottom_tween: Tween
 var _bottom_hidden := false
-var _bottom_shown_y := 0.0
 # Nom de faction AFFICHABLE par joueur (player_id str → nom EN invariant du .tres), poussé par
 # main.gd — le bandeau de tour ne montre plus l'id snake_case brut.
 var faction_name_by_pid: Dictionary = {}
@@ -327,6 +342,10 @@ func _ready() -> void:
 	%InfoTabs.tab_changed.connect(_on_info_tab_changed)
 	# Même SFX de changement d'onglet des deux côtés (parité de ressenti entre les compartiments).
 	%CommandsTabs.tab_changed.connect(func(_t: int) -> void: AudioManager.play_sfx("click"))
+	# PLAFOND DE HAUTEUR (§8.128, 2ᵉ passe) — posé AVANT tout le reste : les constructions qui
+	# suivent (plaque INTEL, tracker, boutons de capacité) s'insèrent via `%X.get_parent()`, elles
+	# doivent donc voir DÉJÀ la nouvelle arborescence.
+	_cap_growing_zones()
 	_build_extra_tabs()
 	_build_confirm_button()
 	_build_player_zone()
@@ -1522,6 +1541,9 @@ func _build_extra_tabs() -> void:
 	_order_box.name = "HUD_TAB_ORDER"
 	_order_box.add_theme_constant_override("separation", 4)
 	%InfoTabs.add_child(_order_box)
+	# Plafond de hauteur (§8.128, 2ᵉ passe) : une rotation à 6 joueurs empile 6 lignes — au-delà de
+	# la bande, elles défilent au lieu de pousser la barre.
+	_scroll_wrap(_order_box)
 	_tab_order = %InfoTabs.get_tab_count() - 1
 	%InfoTabs.set_tab_title(_tab_order, tr("HUD_TAB_ORDER"))
 
@@ -1540,18 +1562,38 @@ func _ensure_team_tab() -> void:
 	_team_box.name = "HUD_TAB_TEAM"
 	_team_box.add_theme_constant_override("separation", 4)
 	%InfoTabs.add_child(_team_box)
+	_scroll_wrap(_team_box)   # même plafond que l'onglet ORDRE (§8.128, 2ᵉ passe)
 	_tab_team = %InfoTabs.get_tab_count() - 1
 	%InfoTabs.set_tab_title(_tab_team, tr("HUD_TAB_TEAM"))
+
+
+# Onglet PRIMES : mode équipe UNIQUEMENT, comme ÉQUIPE — les caisses sont une mécanique de Battle
+# Royale, et un onglet vide en chacun-pour-soi promettrait une information qui n'existe pas.
+# Créé PARESSEUSEMENT pour la même raison que l'onglet ÉQUIPE : au `_ready`, aucun état de partie
+# n'est encore arrivé et `GameState.team_mode` vaut toujours "".
+func _ensure_bounty_tab() -> void:
+	if _bounty_box != null or GameState.team_mode == "":
+		return
+	_bounty_box = VBoxContainer.new()
+	_bounty_box.name = "HUD_TAB_BOUNTY"
+	_bounty_box.add_theme_constant_override("separation", 6)
+	%InfoTabs.add_child(_bounty_box)
+	_scroll_wrap(_bounty_box)   # même plafond que les autres onglets (§8.128, 2ᵉ passe)
+	_tab_bounty = %InfoTabs.get_tab_count() - 1
+	%InfoTabs.set_tab_title(_tab_bounty, tr("HUD_TAB_BOUNTY"))
 
 
 # Rafraîchit les deux onglets. Appelé depuis `update_display()` — donc à chaque état reçu, comme
 # tout le reste du HUD. Reconstruction complète (même patron que `_refresh_cards`).
 func refresh_order_and_team() -> void:
 	_ensure_team_tab()   # l'onglet ÉQUIPE naît au 1er état de partie d'équipe reçu (cf. ci-dessus).
+	_ensure_bounty_tab()
 	if _order_box != null:
 		_fill_order_tab()
 	if _team_box != null:
 		_fill_team_tab()
+	if _bounty_box != null:
+		_fill_bounty_tab()
 
 
 func _clear_box(box: Node) -> void:
@@ -1637,6 +1679,47 @@ func _fill_order_tab() -> void:
 		tag.add_theme_color_override("font_color", tint if is_current else HERO_MUTED)
 		line.add_child(tag)
 
+		# --- ÉTAT DE SANTÉ (2026-08-01, demande Hakim) : les PV du héros de CHAQUE belligérant.
+		# L'information est déjà PUBLIQUE (le Roster de Guerre l'affiche depuis E1 §8.73, et le
+		# départage du PROTOCOLE FINAL s'appuie dessus) — on ne dévoile donc rien de neuf, on
+		# l'amène simplement là où l'œil est déjà. C'est ce qui dit d'un coup d'œil qui est une
+		# CIBLE (héros bas) et qui est un DANGER.
+		# ⚠️ Rendu COMPACT (barre de 5 px + valeur en 11 px) : l'onglet doit continuer à tenir six
+		# lignes dans la bande, et c'est l'ORDRE DU TOUR qui reste l'information n° 1.
+		var hero: Dictionary = GameState.hero_of(pid)
+		var pv := int(hero.get("pv_current", 0))
+		var pv_max: int = maxi(1, int(hero.get("pv_max", 1)))
+		if pv_max > 1 or pv > 0:
+			var pv_lbl := Label.new()
+			pv_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+			pv_lbl.text = "—" if dead else ("%d" % pv)
+			pv_lbl.add_theme_font_size_override("font_size", 11)
+			# Dégradé de santé partagé (vert → or → rouge) : MÊME source que le Roster et la fiche
+			# joueur, pour qu'un même héros n'ait jamais deux couleurs selon l'endroit où on le lit.
+			pv_lbl.add_theme_color_override("font_color",
+				Color(HERO_DANGER, 0.6) if dead else RosterHelpers.pv_color(float(pv) / float(pv_max)))
+			pv_lbl.custom_minimum_size = Vector2(34, 0)
+			pv_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			pv_lbl.tooltip_text = tr("ORDER_HP_TOOLTIP") % [pv, pv_max]
+			line.add_child(pv_lbl)
+
+			var bar := ProgressBar.new()
+			bar.show_percentage = false
+			bar.custom_minimum_size = Vector2(52, 5)
+			bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			bar.max_value = pv_max
+			bar.value = 0 if dead else pv
+			bar.tooltip_text = pv_lbl.tooltip_text
+			var fill := StyleBoxFlat.new()
+			fill.set_corner_radius_all(0)
+			fill.bg_color = RosterHelpers.pv_color(float(pv) / float(pv_max))
+			var bg := StyleBoxFlat.new()
+			bg.set_corner_radius_all(0)
+			bg.bg_color = Color(0, 0, 0, 0.35)
+			bar.add_theme_stylebox_override("fill", fill)
+			bar.add_theme_stylebox_override("background", bg)
+			line.add_child(bar)
+
 		_order_box.add_child(row)
 
 
@@ -1717,6 +1800,149 @@ func _fill_team_tab() -> void:
 		col.add_child(bar)
 
 		_team_box.add_child(row)
+
+
+# =========================================================
+# ONGLET PRIMES — suivi des CAISSES DE RAVITAILLEMENT (2026-08-01)
+# =========================================================
+# ⚠️ RAPPEL DE RÈGLE, parce que l'écran doit le DIRE et pas seulement le montrer : une caisse
+# n'est PAS à réclamer. Le serveur l'ouvre tout seul (`engine._open_pending_crates`, juste après
+# l'attaque qui franchit le palier) et RÉPARTIT son contenu entre les membres VIVANTS :
+#   • caisse « PV »     → les PV du héros sont soignés SUR PLACE, plafonnés au maximum ;
+#   • caisse « UNITÉS » → les unités tombent dans la RÉSERVE DE DÉPLOIEMENT (`units_in_stock`),
+#     à placer à la prochaine phase 2. Elles ne se perdent JAMAIS : le moteur fait
+#     `units_in_stock += renforts` (et non une affectation), la caisse s'ADDITIONNE aux renforts.
+# Cet onglet ne change donc RIEN à la mécanique — il rend visible ce qui se passait en silence.
+
+# Enregistre une caisse reçue (appelé par main.gd depuis l'évènement d'attaque qui la porte).
+# `mine` = la part revenant AU JOUEUR LOCAL, la seule qui l'intéresse vraiment.
+func push_crate_record(reward_id: String, total: int, mine: int, team_kills: int) -> void:
+	_crate_log.append({"reward_id": reward_id, "total": total, "mine": mine,
+		"team_kills": team_kills})
+	if _bounty_box != null:
+		_fill_bounty_tab()
+	# Pastille sur l'onglet : une caisse tombée pendant qu'on regardait ailleurs ne doit pas
+	# passer inaperçue — même contrat que le badge du JOURNAL.
+	if _tab_bounty >= 0 and int(%InfoTabs.current_tab) != _tab_bounty:
+		%InfoTabs.set_tab_title(_tab_bounty, tr("HUD_TAB_BOUNTY") + " •")
+
+
+# Alimenté par main.gd : kills cumulés de MON équipe, caisses déjà ouvertes, palier et plafond
+# (recopiés du registre SERVEUR — le HUD n'invente aucune valeur d'équilibrage).
+var _bounty_kills := 0
+var _bounty_opened := 0
+var _bounty_step := 0
+var _bounty_max := 0
+
+func set_bounty_progress(team_kills: int, crates_opened: int, step: int, cap: int) -> void:
+	_bounty_kills = maxi(0, team_kills)
+	_bounty_opened = maxi(0, crates_opened)
+	_bounty_step = maxi(1, step)
+	_bounty_max = maxi(0, cap)
+	# On RE-REMPLIT ici et pas seulement dans `refresh_order_and_team` : celui-ci s'exécute en TÊTE
+	# d'`update_display()`, alors que main.gd ne pousse ces chiffres qu'ensuite. Sans ce rappel, le
+	# tout premier affichage de l'onglet accuserait un état de retard.
+	if _bounty_box != null:
+		_fill_bounty_tab()
+
+
+func _fill_bounty_tab() -> void:
+	_clear_box(_bounty_box)
+	if _bounty_step <= 0:
+		return
+	var capped: bool = _bounty_max > 0 and _bounty_opened >= _bounty_max
+
+	# --- Compteur de KILLS D'ÉQUIPE : l'information réclamée en premier. ---
+	_bounty_box.add_child(_bounty_eyebrow("BOUNTY_TEAM_KILLS"))
+	var count := Label.new()
+	count.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	count.text = str(_bounty_kills)
+	count.add_theme_font_size_override("font_size", FS_DISPLAY)
+	count.add_theme_color_override("font_color", ACCENT_GOLD)
+	_bounty_box.add_child(count)
+
+	# --- Jauge vers la PROCHAINE caisse : « 37 / 50 ». Au plafond, on le DIT plutôt que
+	# d'afficher une jauge qui n'arrivera jamais à son terme. ---
+	var progress := Label.new()
+	progress.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	if capped:
+		progress.text = tr("BOUNTY_CAPPED")
+		progress.add_theme_color_override("font_color", HERO_MUTED)
+	else:
+		var into := _bounty_kills % _bounty_step
+		progress.text = tr("BOUNTY_NEXT_FMT") % [into, _bounty_step]
+		progress.add_theme_color_override("font_color", Color("c8cdd6"))
+		var bar := ProgressBar.new()
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(0, 10)
+		bar.max_value = _bounty_step
+		bar.value = into
+		_style_bar(bar, ACCENT_GOLD)
+		_bounty_box.add_child(progress)
+		_bounty_box.add_child(bar)
+		progress = null
+	if progress != null:
+		progress.add_theme_font_size_override("font_size", FS_SMALL)
+		_bounty_box.add_child(progress)
+
+	var opened := Label.new()
+	opened.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	opened.text = tr("BOUNTY_OPENED_FMT") % [_bounty_opened, _bounty_max]
+	opened.add_theme_font_size_override("font_size", FS_EYEBROW)
+	opened.add_theme_color_override("font_color", HERO_MUTED)
+	_bounty_box.add_child(opened)
+
+	# --- HISTORIQUE : ce que chaque caisse m'a RÉELLEMENT rapporté, et où c'est allé. ---
+	_bounty_box.add_child(_bounty_eyebrow("BOUNTY_HISTORY"))
+	if _crate_log.is_empty():
+		var empty := Label.new()
+		empty.text = tr("BOUNTY_EMPTY")
+		empty.add_theme_font_size_override("font_size", FS_SMALL)
+		empty.add_theme_color_override("font_color", HERO_MUTED)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_bounty_box.add_child(empty)
+		return
+	for i in range(_crate_log.size() - 1, -1, -1):   # la plus récente en tête
+		var rec: Dictionary = _crate_log[i]
+		var is_hp: bool = str(rec.get("reward_id", "")) == "hp"
+		var row := PanelContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.set_corner_radius_all(0)
+		sb.set_content_margin_all(4)
+		sb.content_margin_left = 8
+		sb.bg_color = Color(ACCENT_GOLD, 0.08)
+		sb.border_width_left = 3
+		sb.border_color = ACCENT_GOLD
+		row.add_theme_stylebox_override("panel", sb)
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 1)
+		row.add_child(col)
+		var head := Label.new()
+		head.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		head.text = tr("BOUNTY_ROW_FMT") % [i + 1, int(rec.get("team_kills", 0)),
+			int(rec.get("mine", 0)),
+			tr("BOUNTY_KIND_HP") if is_hp else tr("BOUNTY_KIND_UNITS")]
+		head.add_theme_font_size_override("font_size", FS_SMALL)
+		head.add_theme_color_override("font_color", Color("eef3f7"))
+		head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(head)
+		# LA ligne qui manquait : OÙ est passée la prime.
+		var dest := Label.new()
+		dest.text = tr("BOUNTY_DEST_HP") if is_hp else tr("BOUNTY_DEST_UNITS")
+		dest.add_theme_font_size_override("font_size", FS_EYEBROW)
+		dest.add_theme_color_override("font_color", HERO_MUTED)
+		dest.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(dest)
+		_bounty_box.add_child(row)
+
+
+func _bounty_eyebrow(key: String) -> Label:
+	var l := Label.new()
+	l.text = tr(key)
+	l.add_theme_font_size_override("font_size", FS_EYEBROW)
+	l.add_theme_color_override("font_color", ACCENT_CYAN)
+	return l
 
 
 # Carte POUVOIR contextuelle (onglet ACTIONS — lot E)
@@ -1898,6 +2124,9 @@ func get_deploy_confirm_button() -> Button:
 
 func _on_info_tab_changed(tab: int) -> void:
 	AudioManager.play_sfx("click")
+	# Pastille de l'onglet PRIMES : effacée à l'ouverture, comme celle du JOURNAL.
+	if tab == _tab_bounty and _tab_bounty >= 0:
+		%InfoTabs.set_tab_title(_tab_bounty, tr("HUD_TAB_BOUNTY"))
 	if tab == TAB_INFO_JOURNAL:
 		_set_journal_badge(false)
 		# Le journal a continué d'accumuler pendant que l'onglet était caché : `scroll_following`
@@ -2691,18 +2920,137 @@ func _collapse_player_sheet_initially() -> void:
 	_cache_sheet_metrics()
 	_set_player_sheet_hidden(true)
 
-# Replie (vers le BAS) / déploie la barre basse. On mémorise la position déployée juste AVANT un
-# repli (robuste si la hauteur du panneau change).
+# =========================================================
+# Barre basse — PLAFOND DE HAUTEUR (§8.128, 2ᵉ passe — 2026-08-01)
+# =========================================================
+# 🐛 DÉFAUT CORRIGÉ : la barre basse n'avait AUCUN plafond — sa hauteur suivait son contenu, sans
+# limite. Mesuré au watchdog (partie à 6, italien, `ui_scale` 130 % ⇒ écran LOGIQUE de 831 px) :
+# 315 px au repos, mais **602 px (72 % de l'écran)** dès que la carte POUVOIR est chargée en
+# Battle Royale (6 boutons à sous-titre + ordre secret). Deux conséquences, toutes deux vues en
+# jouant : la barre mange la carte, et au-delà de la hauteur du HUD elle finit hors de l'écran.
+#
+# Décision produit (Hakim, 2026-08-01) : **hauteur FIXE + défilement du contenu qui déborde**. La
+# barre redevient la bande de 272 px prévue par la scène (`GlassBody.custom_minimum_size`), et
+# c'est le contenu trop haut qui glisse — jamais la carte qui rétrécit.
+#
+# ⚠️ MÉTHODE : on ne DÉPLACE aucun nœud nommé et on ne touche pas à `main.tscn`. On glisse un
+# `ScrollContainer` autour du contenu qui grandit. Un ScrollContainer annonce une taille minimale
+# quasi nulle (il sait défiler) : le minimum cesse donc de remonter jusqu'à la barre. Les nœuds
+# gardent leur `%NomUnique` et leurs enfants — tout le code qui fait `%X.get_parent().add_child()`
+# continue de fonctionner à l'identique, à condition d'appeler ceci AVANT lui (cf. `_ready`).
+func _cap_growing_zones() -> void:
+	# ONGLET OBJECTIFS : la plaque INTEL, le libellé d'objectif et le tracker (jusqu'à deux volets
+	# en autowrap + le rappel « dernier survivant ») s'empilent sans borne.
+	_scroll_content(%ObjectiveLabel.get_parent())
+	# ONGLET ACTIONS : c'est LA source mesurée du débordement (`HUD_TAB_ACTIONS` min = 489 px).
+	# ⚠️ On enveloppe UNIQUEMENT `%PowerBox`, pas la page entière : `ActionRow` porte
+	# `size_flags_vertical = SHRINK_END`, c'est ce qui épingle « FIN DE PHASE » (et RÉ-ASSAUT, et
+	# CONFIRMER LE DÉPLOIEMENT, tous insérés dans cette rangée) en bas du panneau. Faire défiler la
+	# page entière ferait sortir le bouton de fin de tour du champ — exactement le genre de
+	# régression qu'on vient de corriger.
+	_scroll_wrap(%PowerBox)
+
+
+# Enveloppe UN nœud dans un ScrollContainer, à sa place exacte dans la fratrie. Le nœud garde son
+# nom et ses enfants ; seul son PARENT change (il devient le ScrollContainer).
+func _scroll_wrap(node: Control) -> void:
+	var parent := node.get_parent()
+	if parent == null or parent is ScrollContainer:
+		return
+	var idx := node.get_index()
+	var scroll := ScrollContainer.new()
+	scroll.name = str(node.name) + "Scroll"
+	# Défilement VERTICAL seul : la largeur reste celle du compartiment (sinon le contenu se
+	# tasserait sur sa largeur minimale et une barre horizontale apparaîtrait pour rien).
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	parent.add_child(scroll)
+	parent.move_child(scroll, idx)
+	# ⚠️⚠️ `reparent()` et SURTOUT PAS `remove_child` + `add_child` : ce dernier fait perdre son
+	# `owner` au nœud, et un nœud sans owner ne répond PLUS à son `%NomUnique` — `%ObjectiveLabel`
+	# devenait `null` et tout le HUD tombait. Piège connu du dépôt, payé une fois de plus ici.
+	node.reparent(scroll, false)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# ⚠️⚠️ INDISPENSABLE quand `node` était une PAGE de TabContainer (onglets ORDRE et ÉQUIPE) :
+	# un TabContainer pose `visible = false` sur toutes ses pages sauf la courante. Au moment de
+	# l'enveloppement, la page était donc DÉJÀ masquée — et elle emportait ce `false` à l'intérieur
+	# du ScrollContainer, où plus personne ne le remet à `true`. Résultat constaté : les onglets
+	# ORDRE et ÉQUIPE s'ouvraient VIDES alors que leurs lignes existaient bel et bien
+	# (`min = 167×164`, six lignes construites, `visible = false`). C'est désormais le
+	# ScrollContainer qui porte l'affichage de l'onglet ; le contenu, lui, est toujours visible.
+	node.visible = true
+
+
+# Rend le CONTENU d'un conteneur défilant : ses enfants migrent dans un VBox interne, placé dans un
+# ScrollContainer qui devient l'unique enfant du conteneur. Utilisé quand du code ajoutera ENCORE
+# des enfants plus tard via `get_parent()` — ils atterrissent alors dans le VBox interne, donc
+# DANS la zone défilante (un ScrollContainer n'accepte qu'un seul enfant utile).
+func _scroll_content(host: Control) -> void:
+	if host == null or host.get_child_count() == 0:
+		return
+	if host.get_child(0) is ScrollContainer:
+		return
+	var scroll := ScrollContainer.new()
+	scroll.name = str(host.name) + "Scroll"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var inner := VBoxContainer.new()
+	inner.name = "Content"
+	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# On recopie l'espacement du conteneur d'origine : le VBox interne le REMPLACE visuellement.
+	inner.add_theme_constant_override("separation",
+		host.get_theme_constant("separation") if host is BoxContainer else 6)
+	scroll.add_child(inner)
+	var moving := host.get_children()
+	host.add_child(scroll)
+	# `reparent()` — cf. l'avertissement de `_scroll_wrap` : les enfants déplacés ici portent des
+	# `%NomUnique` (%ObjectiveLabel) dont dépend tout le reste du fichier.
+	for child in moving:
+		child.reparent(inner, false)
+
+
+# =========================================================
+# Barre basse rétractable — position DÉTERMINISTE (correctif 2026-08-01)
+# =========================================================
+# 🐛 DÉFAUT CORRIGÉ : « le panneau du bas a disparu complètement, sans même son bouton ».
+# L'ancienne version MÉMORISAIT la position déployée au moment du repli
+# (`_bottom_shown_y = wrapper.position.y`). Or ce relevé se fait sans regarder si le Tween
+# PRÉCÉDENT tourne encore : en re-cliquant pendant le glissement, on capturait une position
+# INTERMÉDIAIRE comme si c'était la position déployée, puis on lui ré-ajoutait la hauteur du
+# panneau. Chaque aller-retour rapide descendait donc la barre un peu plus bas — deux cycles
+# suffisaient à faire passer le bouton ▲ SOUS le bord de l'écran, et le joueur n'avait alors plus
+# AUCUN moyen de rouvrir la barre de toute la partie. Mesuré : 1037 px (sain) → 1109 px (perdu).
+#
+# Correctif : les deux positions ne sont plus mémorisées, elles sont CALCULÉES. La barre est ancrée
+# en bas (`anchor_top = anchor_bottom = 1`, `grow_vertical = BEGIN`) : sa position déployée vaut
+# donc TOUJOURS `hauteur du HUD − hauteur de la barre`. Le résultat ne dépend plus ni du nombre de
+# clics, ni de l'instant du clic, ni d'un redimensionnement de fenêtre survenu entre-temps.
+#
+# Fonction PURE (testable sans arbre de scène, patron G4) : elle ne lit aucun nœud.
+static func _bottom_panel_y(wrapper_h: float, glass_h: float, hidden: bool,
+		hud_h: float, toggle_h: float) -> float:
+	# GARDE-FOU HAUT — mesuré : la barre n'a AUCUN plafond de hauteur (jusqu'à 602 px sur un écran
+	# logique de 831 en italien à 130 %, à cause de l'onglet ACTIONS chargé). Le jour où elle
+	# dépasse la hauteur du HUD, `hud_h − wrapper_h` devient NÉGATIF et le glissement emporte toute
+	# la barre PAR LE HAUT, hors de l'écran. On borne donc à 0 : la barre reste toujours accrochée.
+	var shown_y := maxf(0.0, hud_h - wrapper_h)
+	if not hidden:
+		return shown_y
+	# GARDE-FOU BAS — quoi qu'il arrive, on ne descend jamais plus bas que « le bouton affleure le
+	# bord inférieur ». La conséquence d'un dépassement est IRRÉCUPÉRABLE (plus de bouton à
+	# cliquer), elle mérite une borne dure et pas seulement un calcul juste.
+	return minf(shown_y + glass_h, hud_h - toggle_h)
+
+
+# Replie (vers le BAS) / déploie la barre basse.
 func _toggle_bottom_panel() -> void:
 	var wrapper: Control = %ToggleBottomPanelButton.get_parent()  # BottomCenterWidget (VBox)
 	var glass: Control = wrapper.get_node("GlassBody")
 	_bottom_hidden = not _bottom_hidden
-	var target_y: float
-	if _bottom_hidden:
-		_bottom_shown_y = wrapper.position.y
-		target_y = _bottom_shown_y + glass.size.y
-	else:
-		target_y = _bottom_shown_y
+	var target_y: float = _bottom_panel_y(wrapper.size.y, glass.size.y, _bottom_hidden,
+		size.y, %ToggleBottomPanelButton.size.y)
 	%ToggleBottomPanelButton.text = "▲" if _bottom_hidden else "▼"
 	if _bottom_tween and _bottom_tween.is_valid():
 		_bottom_tween.kill()
