@@ -172,7 +172,19 @@ func _build_bets_panel() -> void:
 	hint.text = tr("BETS_HINT")
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", MUTED)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(hint)
+
+	# OÙ VA LA PRIME (correctif 2026-08-01) — le panneau annonçait « +15 XP +10 ¢ » par pari sans
+	# jamais dire où cela atterrissait, ni QUAND. C'est ici que le joueur regarde : la mention y va.
+	# Elle dit aussi que le règlement n'a lieu QU'À LA FIN — un pari gagné en cours de partie ne
+	# crédite rien tout de suite, et ce silence passait pour une perte.
+	var dest := Label.new()
+	dest.text = tr("BETS_DEST")
+	dest.add_theme_font_size_override("font_size", 10)
+	dest.add_theme_color_override("font_color", MUTED)
+	dest.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(dest)
 
 	for bet_type in BET_TYPES:
 		box.add_child(_build_bet_row(bet_type))

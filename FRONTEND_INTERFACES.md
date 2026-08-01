@@ -3137,6 +3137,38 @@ sur l'onglet quand une caisse tombe pendant qu'on regarde ailleurs (même contra
 **Contre-épreuves** : Battle Royale → 5 onglets, PRIMES `h = 215 px`, compteur/jauge/historique
 justes, barre toujours à **315 px** · **FFA → 3 onglets seulement** (`_bounty_box` et `_team_box`
 restent `null`), santé présente dans ORDRE, barre à 315 px · 0 SCRIPT ERROR · captures relues.
+### Correctif 🐛 — PARIS D'OBSERVATEUR : le verdict pouvait DISPARAÎTRE, et ne disait pas où va la prime
+
+Signalé en jouant : « on ne voit pas du tout où ça va, et dans le rapport ce n'est cité nulle part ».
+Vérification faite dans le code : **le serveur crédite bel et bien**
+(`router._settle_observer_bets` → `apply_xp_and_levels` sur la progression du compte +
+`record_coins(REASON_OBSERVER_BET)` au livre de comptes, la prime pouvant même faire franchir un
+palier de niveau). **DEUX défauts CLIENT** empêchaient de le voir — les deux mesurés :
+
+1. **Le bloc vivait DANS le conteneur du DÉPARTAGE.** `populate_bet_results()` faisait
+   `_scores_wrap.add_child(box)`, or `_scores_wrap` est masqué tant que `final_scores` est vide :
+   le verdict des paris disparaissait avec un tableau qui n'a rien à voir avec lui.
+   Mesuré : `final_scores` vide → `_scores_wrap.visible = false`, bloc construit mais invisible.
+   → Conteneur **`_bets_wrap` DÉDIÉ**, frère de `_scores_wrap`, visibilité pilotée par lui seul.
+   Après correctif : `final_scores` vide → `_bets_wrap.visible = true`, 6 enfants.
+2. **Le bloc se DUPLIQUAIT.** Le rapport est repeuplé plusieurs fois (§8.100 : « BILAN rafraîchi
+   INCONDITIONNELLEMENT ») et la fonction se contentait d'AJOUTER. Mesuré : 3 enfants → 4 au 2ᵉ
+   appel. → Purge avant reconstruction ; après correctif, le compte reste stable.
+
+**Et surtout, la ligne qui manquait — OÙ va la prime.** Le bloc annonçait « +25 XP +15 ¢ » sans
+jamais dire où cela atterrissait, exactement le même trou de traçabilité que les caisses de Battle
+Royale. Nouvelle mention `BETS_DEST`, posée **aux DEUX endroits** où le joueur regarde : le panneau
+de paris de l'overlay spectateur **et** le BILAN du Rapport Post-Op —
+« Réglés à la FIN de la partie : l'XP part dans votre progression de compte, les Coins dans votre
+solde — relevé détaillé dans PROFIL, onglet FINANCES (source « PARIS D'OBSERVATEUR ») ».
+Le « réglés à la FIN » est important : un pari gagné en cours de partie ne crédite rien tout de
+suite, et ce silence-là passait pour une perte. Un palier de niveau franchi grâce aux paris est
+annoncé en plus (`BETS_LEVELS_FMT`, depuis `totals.levels_gained` que le serveur renvoyait déjà
+sans que personne ne l'affiche).
+
+**Contre-épreuves** : `final_scores` vide → bloc paris toujours visible · double appel → aucun
+doublon · captures relues (BILAN du rapport ET panneau de l'overlay spectateur) · boot de
+`main`, `operation_report`, `spectator_overlay`, `main_menu` **0 ERROR**.
 ---
 
 ## §8.129 — TUTORIEL & PREMIÈRE OPÉRATION (FTUE) : volet CLIENT

@@ -84,6 +84,10 @@ var _debrief_rows_box: VBoxContainer = null
 #     `game_over.final_scores`, rendu dans l'onglet BILAN sous le tableau comparatif. Masqué si le
 #     serveur ne l'envoie pas (antérieur au chantier, §9.2). ---
 var _scores_wrap: VBoxContainer = null
+# Bloc PARIS D'OBSERVATEUR : conteneur PROPRE, indépendant du tableau de départage (cf. sa
+# construction). Vidé puis reconstruit à chaque appel — le rapport est repeuplé plusieurs fois
+# (§8.100 : « BILAN rafraîchi INCONDITIONNELLEMENT »), et l'ancien code EMPILAIT un second bloc.
+var _bets_wrap: VBoxContainer = null
 var _scores_rows: VBoxContainer = null
 # --- Onglet 5 : TRAHISONS (§8.121, LOT B) — le RÉCIT de la partie, tiré du JOURNAL D'ATTAQUES.
 #     Index constant : l'onglet se masque/démasque (set_tab_hidden) selon la présence du journal,
@@ -452,6 +456,17 @@ func _build_tabs() -> void:
 	_scores_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scores_wrap.add_child(_scores_rows)
 	_debrief_tab.add_child(_scores_wrap)
+
+	# PARIS D'OBSERVATEUR — conteneur DÉDIÉ (correctif 2026-08-01).
+	# 🐛 Avant, `populate_bet_results` accrochait son bloc À L'INTÉRIEUR de `_scores_wrap`. Or ce
+	# dernier est masqué tant que le serveur n'a pas envoyé de `final_scores` : le verdict des paris
+	# DISPARAISSAIT avec le tableau de départage, alors qu'il n'a rien à voir avec lui. Mesuré :
+	# `final_scores` vide → `_scores_wrap.visible = false`, et le bloc paris (pourtant construit)
+	# devenait invisible. Il a désormais sa propre visibilité, pilotée par LUI SEUL.
+	_bets_wrap = VBoxContainer.new()
+	_bets_wrap.visible = false
+	_bets_wrap.add_theme_constant_override("separation", 2)
+	_debrief_tab.add_child(_bets_wrap)
 
 	# Timeline de domination (DÉPLACÉE depuis l'onglet CLASSEMENT) — MASQUÉE par défaut (serveur
 	# antérieur / historique vide, §9.2).
@@ -1132,21 +1147,31 @@ func populate_final_scores(rows: Array, colors: Dictionary = {}, my_id: int = -9
 # Rendu en UNE ligne synthétique dans l'onglet BILAN (« PARIS D'OBSERVATEUR : 2/3 corrects ·
 # +25 XP +15 ¢ »), suivie du détail par pari. {} (n'a pas parié / serveur antérieur) → rien.
 func populate_bet_results(data: Dictionary) -> void:
-	if _scores_wrap == null or data.is_empty():
+	if _bets_wrap == null:
 		return
-	var results = data.get("results", [])
+	# IDEMPOTENCE : on vide AVANT de reconstruire. Le rapport est repeuplé plusieurs fois (§8.100),
+	# et l'ancienne version ajoutait un bloc de plus à chaque passage — le joueur pouvait donc voir
+	# son verdict de paris affiché EN DOUBLE (mesuré : 3 enfants → 4 au 2ᵉ appel).
+	for c in _bets_wrap.get_children():
+		_bets_wrap.remove_child(c)
+		c.queue_free()
+	var results = data.get("results", []) if not data.is_empty() else []
 	if typeof(results) != TYPE_ARRAY or results.is_empty():
+		_bets_wrap.visible = false
 		return
+	_bets_wrap.visible = true
 	var totals: Dictionary = data.get("totals", {}) if typeof(data.get("totals")) == TYPE_DICTIONARY else {}
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 2)
-	box.add_child(_eyebrow(tr("BETS_TITLE")))
+	var won_count := int(totals.get("won", 0))
+	var xp_total := int(totals.get("xp", 0))
+	var coins_total := int(totals.get("coins", 0))
+
+	_bets_wrap.add_child(_eyebrow(tr("BETS_TITLE")))
 	var head := Label.new()
-	head.text = tr("BETS_SUMMARY_FMT") % [int(totals.get("won", 0)), int(totals.get("total", 0)),
-		int(totals.get("xp", 0)), int(totals.get("coins", 0))]
+	head.text = tr("BETS_SUMMARY_FMT") % [won_count, int(totals.get("total", 0)),
+		xp_total, coins_total]
 	head.add_theme_font_size_override("font_size", 13)
-	head.add_theme_color_override("font_color", ACCENT_GOLD if int(totals.get("won", 0)) > 0 else TEXT_MUTED)
-	box.add_child(head)
+	head.add_theme_color_override("font_color", ACCENT_GOLD if won_count > 0 else TEXT_MUTED)
+	_bets_wrap.add_child(head)
 	for r in results:
 		if typeof(r) != TYPE_DICTIONARY:
 			continue
@@ -1156,8 +1181,32 @@ func populate_bet_results(data: Dictionary) -> void:
 			tr("BET_WON") % int(r.get("xp", 0)) if won else tr("BET_LOST")]
 		line.add_theme_font_size_override("font_size", 11)
 		line.add_theme_color_override("font_color", ACCENT_GOLD if won else TEXT_MUTED)
-		box.add_child(line)
-	_scores_wrap.add_child(box)
+		_bets_wrap.add_child(line)
+
+	# --- OÙ VA LA PRIME (correctif 2026-08-01) -------------------------------------------------
+	# Le bloc annonçait « +25 XP +15 ¢ » sans jamais dire OÙ cela atterrissait — même trou de
+	# traçabilité que les caisses de Battle Royale. Le serveur crédite pourtant les deux pour de
+	# bon (`router._settle_observer_bets` : `apply_xp_and_levels` sur la progression du compte, et
+	# `record_coins(REASON_OBSERVER_BET)` au livre de comptes). On le DIT, plutôt que de laisser le
+	# joueur chercher.
+	if xp_total > 0 or coins_total > 0:
+		var dest := Label.new()
+		dest.text = tr("BETS_DEST")
+		dest.add_theme_font_size_override("font_size", 10)
+		dest.add_theme_color_override("font_color", TEXT_MUTED)
+		dest.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_bets_wrap.add_child(dest)
+		# Une prime de pari suit la MÊME courbe de niveaux que l'XP de match : elle peut donc faire
+		# franchir un palier. Quand c'est le cas, le serveur le dit (`levels_gained`) et on l'affiche
+		# — c'est la conséquence la plus concrète d'un bon pari.
+		var levels := int(totals.get("levels_gained", 0))
+		if levels > 0:
+			var lvl := Label.new()
+			lvl.text = tr("BETS_LEVELS_FMT") % levels
+			lvl.add_theme_font_size_override("font_size", 11)
+			lvl.add_theme_color_override("font_color", ACCENT_GOLD)
+			lvl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_bets_wrap.add_child(lvl)
 
 
 # =========================================================
