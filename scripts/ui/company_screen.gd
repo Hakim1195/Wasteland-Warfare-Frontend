@@ -95,6 +95,9 @@ func _ready() -> void:
 	# Lecture PUIS purge immédiate du porteur statique (cf. sa déclaration).
 	_public_tag = str(target_tag)
 	target_tag = ""
+	# §8.129 — première visite de l'onglet COMPAGNIE : ce qu'est un clan persistant, et l'invariant
+	# qui surprend le plus (une compagnie ne se met JAMAIS en file).
+	TutorialManager.hint_once("first_company_tab")
 
 	WarzoneUI.animate_screen_enter(self)
 	# ⚠️ LA COQUILLE D'ABORD, LA NAV ENSUITE — et l'ordre est un vrai piège, pas une préférence.

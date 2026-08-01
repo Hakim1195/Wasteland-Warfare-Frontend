@@ -2917,3 +2917,268 @@ get_tree().process_frame` de `_measure_pages_floor()`.
 >
 > ⛔ **Non vérifié : le RENDU.** Aucune capture n'a été prise — la validation est structurelle et
 > métrique (arbre, tailles, positions), pas visuelle.
+
+---
+
+## §8.128 — BARRE BASSE DE L'ARÈNE : le compartiment « INFOS » (lecture à gauche, action à droite)
+
+> Demande produit (Hakim, 2026-08-01). Le compartiment de GAUCHE était un simple bloc OBJECTIFS
+> pendant que celui de DROITE empilait **l'agir** (ACTIONS, CARTES) **et le lire** (JOURNAL, puis
+> ORDRE et ÉQUIPE ajoutés en §8.125) : cinq onglets de deux natures différentes dans la même boîte.
+> Les onglets de LECTURE migrent donc à gauche, qui devient **INFOS** ; la droite ne garde que ce
+> sur quoi on clique pour jouer.
+
+### Avant → après
+
+| | avant | après |
+|---|---|---|
+| Compartiment GAUCHE | `ObjectivesZone` (VBox) : titre + `%ObjectiveLabel` + tracker | **`InfoZone`** : titre « INFOS » + **`%InfoTabs`** (TabContainer) — **OBJECTIFS · JOURNAL · ORDRE · ÉQUIPE** |
+| Compartiment DROIT | `%CommandsTabs` : ACTIONS · CARTES · JOURNAL (+ ORDRE/ÉQUIPE par code) | **`%CommandsTabs` : ACTIONS · CARTES**, rien d'autre |
+| Ratios (`size_flags_stretch_ratio`) | 0,28 / 0,27 / 0,45 | **0,40 / 0,24 / 0,36** |
+
+### Méthode : RE-PARENTER, jamais reconstruire
+
+**Aucune logique n'a été réécrite.** Les nœuds de contenu existants ont changé de parent :
+`%ObjectiveLabel` et `%LogText` (avec sa rangée de filtres, son numérotage, ses `[url=<tid>]`)
+vivent désormais dans deux pages de `%InfoTabs` ; `_build_extra_tabs()` / `_ensure_team_tab()`
+ajoutent ORDRE et ÉQUIPE au même TabContainer au lieu de `%CommandsTabs`. Les `%NomUnique` sont
+conservés — c'est ce qui rend le déplacement invisible pour le reste de `hud.gd`.
+
+**Points de rupture traités un par un :**
+- `_apply_charter_ornaments()` cherchait le titre du bloc par `%ObjectiveLabel.get_parent().get_child(0)`.
+  Le label vit maintenant DANS une page d'onglet : le filet cyan part de `%InfoTabs.get_parent()`.
+- `custom_minimum_size = (300, 0)` sur `%InfoTabs` : la rangée de filtres du Journal (5 chips de
+  52 px) doit tenir dans le compartiment gauche sans rogner.
+- **Animations hors-vue** : le pulse OR du tracker d'objectif (≥ 80 %) est **SUSPENDU** dès que la
+  page n'est plus `is_visible_in_tree()`, et la teinte remise à blanc — à la réouverture de
+  l'onglet, la première frame est déjà correcte (plus d'animation orpheline).
+- **Journal hors-vue** : il continue d'accumuler, mais `scroll_following` ne suit pas de façon
+  fiable un `RichTextLabel` de taille nulle. `_on_info_tab_changed` **recale le défilement en fin
+  de flux** (`call_deferred`, après la frame de layout) — sans quoi on retrouvait le journal figé
+  sur une vieille ligne.
+- **Badge « • »** du Journal : porté par l'onglet de `%InfoTabs`, effacé à son ouverture (parité).
+- **SFX** : les DEUX barres d'onglets jouent le même `click` au changement (parité de ressenti ;
+  auparavant aucune des deux n'en jouait, les onglets n'étant pas des `Button`).
+- **Mode streamer** : la plaque « INTEL CLASSIFIÉ » est insérée avant `%ObjectiveLabel` — elle a
+  donc suivi dans l'onglet OBJECTIFS **sans une ligne de code**, et ne masque QUE cet onglet.
+
+### ⚠️ Conditions d'existence : INCHANGÉES (et le prompt se trompait)
+
+Le brief supposait qu'ORDRE et ÉQUIPE n'existaient qu'en mode équipe. **C'est faux pour ORDRE** :
+depuis §8.125 il est construit dans `_ready()` et présent dans **TOUS** les modes, parce que savoir
+qui joue après soi conditionne chaque attaque, y compris en FFA. Seul ÉQUIPE dépend de
+`GameState.team_mode != ""` (créé paresseusement au 1ᵉʳ état d'équipe reçu).
+
+L'instruction opérante étant « conditions d'existence conservées **À L'IDENTIQUE** », le
+comportement réel a été préservé : **FFA → OBJECTIFS · JOURNAL · ORDRE** ; **Battle Royale → +
+ÉQUIPE**. Retirer ORDRE en FFA aurait supprimé une information à tous les joueurs solo, ce qu'un
+lot d'ergonomie n'a pas à faire.
+
+### Nouvelle API du HUD
+
+- `open_journal_tab(filter_key)` — inchangée d'appelant (le chip de zone), cible désormais `%InfoTabs`.
+- **`open_objectives_tab()`** — NOUVEAU. Le coach du tutoriel (§8.129) l'appelle **avant** de
+  surligner le tracker : désigner un contrôle rangé derrière un onglet fermé ne montrerait rien.
+- **`get_deploy_confirm_button()`** — NOUVEAU. Accesseur du bouton « CONFIRMER LE DÉPLOIEMENT »
+  (construit par code, donc sans `%NomUnique`), utilisé comme ancre de surlignage.
+
+### i18n
+
+Une seule clé neuve : **`TAB_INFOS`** (« INFOS » / « INFO » / « INFO »). Les libellés
+OBJECTIFS / JOURNAL / ORDRE / ÉQUIPE **réutilisent** `HUD_OBJECTIVES_TITLE`, `HUD_TAB_JOURNAL`,
+`HUD_TAB_ORDER`, `HUD_TAB_TEAM` — aucun doublon de clé.
+
+> **Fichiers.** MODIFIÉS : `scenes/game/main.tscn` (re-parentage), `scripts/ui/hud.gd`,
+> `translations/ui_strings.csv`.
+>
+> **Validation.** `--import` **0 ERROR** ; boot headless de `main.tscn` **0 ERROR** ;
+> **captures PNG relues** en FFA (3 onglets, badge « • », journal filtrable) **et** en Battle Royale
+> (4 onglets, roster ÉQUIPE), plus `ui_scale` **0,9 et 1,3** — aucun débordement des deux
+> compartiments, tracker d'objectif entier et lisible aux deux échelles.
+>
+> ⚠️ **NON VÉRIFIÉ** : aucune partie réelle jouée de bout en bout après le déplacement. Le
+> recentrage caméra au clic d'une entrée du Journal et la mise à jour du roster ÉQUIPE après une
+> réanimation sont **structurellement intacts** (aucun code touché) mais n'ont pas été rejoués.
+
+---
+
+## §8.129 — TUTORIEL & PREMIÈRE OPÉRATION (FTUE) : volet CLIENT
+
+> Volet RÉSEAU (drapeau, 2 routes, raison de ledger) : **§8.129 de
+> [`CONTRAT_RESEAU.md`](CONTRAT_RESEAU.md)**. Source de vérité du CONTENU :
+> `ARCHITECTURE_ET_REGLES.md` §4 et §8.125 — **chaque phrase du coach et du Manuel s'y vérifie**.
+> Un tutoriel qui ment coûte plus cher que pas de tutoriel : si une règle change, c'est ici qu'il
+> faut repasser.
+
+### Le problème
+
+Le jeu alignait une douzaine de systèmes simultanés (draft asymétrique, déploiement aveugle,
+phases, dés + duel de héros, PP dépensables, zone croissante ET téléportée, objectifs secrets à cinq
+types, timer + PROTOCOLE FINAL, pactes, Battle Royale, Coup d'État, paris d'observateur) et
+**aucune explication nulle part**. Un compte neuf tombait de l'authentification Steam au QG, puis
+dans un carrousel de dix factions, sans un mot.
+
+### Trois étages DÉCOUPLÉS
+
+| Étage | Portée | Persistance | Fichier |
+|---|---|---|---|
+| **PREMIÈRE OPÉRATION** — 13 étapes de coach sur une VRAIE partie | une fois par COMPTE | `users.tutorial_done` (**serveur**) | `scripts/managers/tutorial_manager.gd` |
+| **AIDES CONTEXTUELLES** — 14 bulles « première rencontre » | une fois par MACHINE | `user://tutorial_hints.json` (**local**) | idem |
+| **MANUEL DE GUERRE** — 8 sections consultables à froid | toujours | — | `scripts/ui/war_manual.gd` |
+
+Chacun fonctionne si les deux autres n'existaient pas.
+
+### ⛔ AUCUNE modification du moteur
+
+La Première Opération est une **partie NORMALE** : salon privé auto-créé + LANCER AVEC BOTS (§8.116,
+API inchangée), **3 joueurs sur `skirmish_atlantic`** (≈ 20 territoires → une partie complète en
+moins de dix minutes ; sur `classic_42` le briefing aurait duré une demi-heure avant le premier
+enseignement), règles standard, XP et missions crédités comme d'habitude. Le `TutorialManager`
+**observe** (il écoute les mêmes signaux que le HUD) et **affiche** ; il ne truque rien, ne bloque
+rien, ne désactive rien. **« PASSER LE BRIEFING » est accessible à CHAQUE étape** et la partie
+continue normalement.
+
+### `TutorialManager` — autoload `CanvasLayer` (layer 120)
+
+Patron `TransitionManager` : l'autoload **héberge** la vue du coach, parce qu'elle doit SURVIVRE aux
+changements de scène (draft → arène → Rapport Post-Op). Layer 120, donc **sous** le fondu de
+`TransitionManager` (128) : une bascule de scène le couvre comme le reste.
+
+Points d'entrée : `should_offer_first_operation()` · `start_first_operation()` ·
+`decline_first_operation()` · `bind_draft/bind_arena/bind_report` · `notify_faction_locked()` ·
+`notify_game_over()` · `register_anchor(id, control)` · `hint_once(id, target)` · `reset_hints()` ·
+`open_manual(section_id)`.
+
+### La machine à étapes — pilotée par les ÉVÈNEMENTS RÉELS
+
+**Aucune minuterie nulle part.** Chaque étape attend le fait de jeu qui la rend pertinente :
+
+| # | Étape | Déclencheur RÉEL | Sortie |
+|---|---|---|---|
+| 1 | BIENVENUE | `bind_draft` | COMPRIS |
+| 2 | LE DRAFT | après 1 (ancre : bouton CONFIRMER) | `notify_faction_locked()` |
+| 3 | DÉPLOIEMENT AVEUGLE | `stage == "placement"` | évènement `units_deployed` (moi) |
+| 4 | RENFORTS | code système **`reinforcements_granted`** (moi) | COMPRIS |
+| 5 | DÉPLOYER | phase 2, mon tour | `units_deployed` (moi) |
+| 6 | ATTAQUER | phase 3, mon tour | `attack_result` où je suis attaquant |
+| 7 | LIRE UN COMBAT | premier `attack_result` (moi attaquant) | COMPRIS |
+| 8 | CONQUÉRIR | `attack_result` avec `conquered` | `conquer_move_resolved` (moi) |
+| 9 | TON HÉROS | `attack_result` où je suis attaquant **OU** défenseur | COMPRIS |
+| 10 | L'OBJECTIF | après 8 | COMPRIS (**force l'onglet OBJECTIFS** puis surligne INFOS) |
+| 11 | LA ZONE | code système `zone_forecast` **ou** `zone_grew` | COMPRIS |
+| 12 | MOUVEMENT & CARTE | phase 4 ou 5, mon tour | `turn_passed` / `turn_timeout` (moi) |
+| 13 | DÉBRIEF | Rapport Post-Op (`bind_report`) | COMPRIS → `POST /profile/tutorial/complete` → « BRIEFING TERMINÉ — 150 COINS » |
+
+⚠️ **Correction de brief** : `reinforcements_granted`, `zone_forecast` et `zone_grew` ne sont **pas**
+des `event_type` mais des **codes de `system_events`** imbriqués (cf. `engine._push_system_event`).
+La machine inspecte donc les deux niveaux.
+
+**Trois propriétés portées par le code, pas par la chance :**
+- **FILE D'ATTENTE** — un seul panneau à l'écran (règle §8.125). Les évènements qui se bousculent
+  s'empilent ; `_pump()` en sort un à la fois.
+- **SAUT SILENCIEUX** — un joueur plus rapide que le coach (il a déjà attaqué quand l'étape
+  s'arme) voit l'étape **soldée sans jamais s'afficher** (`_close_step`).
+- **RECONNEXION** — `_sync_from_state()` **DÉDUIT** de l'état courant (stage, tour, phase) les
+  étapes forcément dépassées. Rien n'est stocké côté serveur, et `guided` est persisté localement :
+  le briefing survit même à une fermeture du client en cours de partie.
+
+### `coach_panel.gd` — Vue PURE (§6.1)
+
+Un seul composant pour les étapes ET les bulles — deux scènes auraient été deux occasions de violer
+la règle « jamais deux panneaux ». Panneau bas, largeur 460, gunmetal **quasi-opaque (0,97)** +
+liseré cyan porteur à gauche, encoches biseautées, ombre portée. Rythme eyebrow → texte :
+**COMMANDEMENT** pour une étape, **AIDE** pour une bulle. Boutons : `COMPRIS` (cyan) ·
+`EN SAVOIR PLUS` (or, bulles seulement) · `PASSER LE BRIEFING` (muet, 2ᵉ rangée, étapes seulement).
+**Aucun emoji** (§8.125).
+
+**Surlignage** : liseré cyan PULSANT tracé AUTOUR du contrôle cible (jamais par-dessus), avec quatre
+équerres de coin, rect relu à chaque frame (un contrôle de la barre basse bouge quand elle se
+rétracte). `reduced_motion` → liseré **FIXE** : l'information reste, le mouvement disparaît.
+
+**Marges de sécurité** : `set_safe_margins()`. Menus 32/32 ; **arène 400/316** — la barre basse
+(26 + 272) et le panneau COMMS (382) occupent précisément ce coin, et sans ces marges le coach
+s'assiérait sur les contrôles qu'il explique.
+
+### Ancres de surlignage
+
+`register_anchor(id, control)` déclaré par les écrans. Un id inconnu ou un contrôle mort ne
+surligne **rien** — jamais d'erreur, jamais de rectangle orphelin.
+Ancres posées : `draft_recommended` (draft) · `hud_root`, `next_phase`, `player_zone`,
+`objective_tracker`, `deploy_confirm` (arène) · `roster_order_band`, `roster_rows` (Roster de Guerre).
+
+⚠️ Les **deux ancres `# TUTO:`** laissées par PLAN_EXPERIENCE dans `war_roster.gd` (l'ordre du tour,
+l'état des belligérants) ont été **converties en vraies bulles** — le commentaire a été REMPLACÉ par
+l'appel, jamais laissé en double.
+
+### 14 aides contextuelles (registre `TutorialManager.HINTS`)
+
+`first_pact_received` · `first_pact_button` · `first_pp_spend` · `first_power_ready` · `first_card` ·
+`first_final_protocol` · `first_spectator` · `first_br_queue` · `first_coup_order` ·
+`first_company_tab` · `first_ranked_queue` · `first_shop_visit` · `first_roster_order` ·
+`first_roster_enemy`.
+
+Chacune : 2 lignes + « EN SAVOIR PLUS » vers **la** bonne section du Manuel. `hint_once()` est un
+**NO-OP** si la bulle a déjà été vue, si les aides sont coupées, **ou si une partie guidée est en
+cours** (le coach a la parole — deux voix simultanées seraient illisibles). Marquée vue **à
+l'armement** : la promesse est « une fois proposée », pas « une fois lue ».
+
+Deux bulles sont volontairement pauvres : `first_coup_order` **ne nomme jamais la victime** (une
+bulle se lit par-dessus l'épaule) et ne dit rien du nombre de traîtres à la table.
+
+### MANUEL DE GUERRE — modal calqué Classement
+
+8 sections, navigation LATÉRALE (huit sections lues d'affilée seraient un mur, alors qu'on vient
+toujours pour une) : LES PHASES D'UN TOUR · LE COMBAT · TON HÉROS · LES FACTIONS · LA ZONE
+RADIOACTIVE · LES OBJECTIFS SECRETS · PACTES & TRAHISONS · BATTLE ROYALE. Corps en puces « ❯ »
+posées à la lecture (le traducteur n'écrit qu'un texte, une ligne par idée ; séparateur `\n`
+littéral dans le CSV).
+
+⚠️ **BATTLE ROYALE est volontairement incomplète** : elle ne donne PAS les seuils du Coup d'État
+(« la puissance décide » suffit). Le mystère est un ingrédient du mode, pas un oubli.
+
+**Trois chemins d'accès** : PARAMÈTRES → CONFORT → « MANUEL DE GUERRE » · « EN SAVOIR PLUS » d'une
+bulle (ouvre à la bonne section) · **ÉCHAP dans l'arène quand rien n'est sélectionné**.
+⚠️ Adaptation assumée : l'arène **n'a pas** de menu ÉCHAP (le brief en supposait un) — ESC n'y
+faisait strictement rien hors ciblage/sélection. On occupe ce geste mort plutôt que d'ajouter un
+bouton dans un HUD déjà dense ; ESC referme aussi le Manuel.
+
+### CTA du QG
+
+Si `tutorial_done_known && !tutorial_done` : panneau OR **« BRIEFING RECOMMANDÉ / PREMIÈRE
+OPÉRATION »** inséré au-dessus du CTA START, qui perd sa surbrillance (`modulate.a = 0.55`) sans
+jamais cesser d'être cliquable — la hiérarchie visuelle a un seul sommet, pas un verrou.
+Deux issues : **LANCER LE BRIEFING**, ou **JE CONNAIS LA GUERRE** → **confirmation modale** qui dit
+noir sur blanc ce qu'on perd (la prime de 150 ¢) avant de poser le drapeau.
+
+### Réglages (PARAMÈTRES → CONFORT)
+
+`context_hints` (bascule, défaut **ON**) + mention muette · **REVOIR LES AIDES** (remet la mémoire
+locale à zéro) · **MANUEL DE GUERRE** (bouton or). Couper les aides et réarmer leur mémoire sont
+**deux gestes distincts** à dessein : se taire n'est pas la même chose que tout recommencer.
+
+### i18n
+
+**66 clés neuves** FR/EN/IT, **aucun emoji** : 5 de châssis, 13 étapes, 14 bulles, 9 de CTA +
+confirmation + toast de prime, 19 pour le Manuel (3 + 8 titres + 8 corps), 6 de réglages.
+
+> **Fichiers.** NOUVEAUX : `scripts/managers/tutorial_manager.gd`, `scripts/ui/coach_panel.gd`,
+> `scripts/ui/war_manual.gd`. MODIFIÉS : `project.godot` (autoload `TutorialManager`, après
+> `MatchConfig`), `scripts/managers/auth_manager.gd` (drapeau + signal), `network_manager.gd`
+> (2 routes + `tutorial_settled`), `settings_manager.gd` (`context_hints`), `main_menu.gd` (CTA),
+> `faction_selection.gd`, `game/main.gd` (ancres, débrief, ESC, 3 bulles), `hud.gd`
+> (2 accesseurs + 2 bulles), `war_roster.gd`, `settings.gd`, `shop.gd`, `company_screen.gd`,
+> `search_screen.gd`, `squad_screen.gd`, `translations/ui_strings.csv`.
+>
+> **Validation.** `--import` **0 ERROR** ; boot headless de `main_menu` / `main` /
+> `faction_selection` / `settings` **0 ERROR** ; **captures PNG relues** : CTA du QG, coach au
+> DRAFT (avec surlignage du bouton CONFIRMER), coach en ARÈNE (surlignage de FIN DE PHASE, marges
+> respectées), bulle contextuelle (eyebrow AIDE + EN SAVOIR PLUS), MANUEL sections PACTES et
+> BATTLE ROYALE.
+>
+> ⚠️ **NON VÉRIFIÉ** : aucune Première Opération jouée de bout en bout contre le serveur. Le
+> chaînage `private_create` → `connect_to_server` → `private_start_bots` → `game_started`, les 13
+> déclencheurs sur évènements réels, la reprise après reconnexion et le crédit des 150 ¢ sont
+> testés **côté serveur** (`test_tutorial.py`) et **structurellement** côté client, mais la boucle
+> complète demande une recette manuelle sur un compte neuf.
+>
+> ⚠️ **VPS + client ENSEMBLE** (le client se tait si `/auth/me` n'émet pas `tutorial_done`).

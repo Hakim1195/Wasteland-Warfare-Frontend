@@ -9,7 +9,14 @@ extends Control
 #                        situation, territoire cliqué) + navigation ◀ ▶ entre belligérants.
 #   SidePanelWidget    : COMMS — le chat SEUL (le Journal a déménagé dans la barre basse).
 #   BottomCenterWidget : BARRE BASSE PLEINE LARGEUR rétractable, 3 zones —
-#                        OBJECTIFS | JOUEUR (moi) | COMMANDES (onglets ACTIONS/CARTES/JOURNAL).
+#                        INFOS (onglets OBJECTIFS/JOURNAL/ORDRE/ÉQUIPE) | JOUEUR (moi) |
+#                        COMMANDES (onglets ACTIONS/CARTES).
+# RÉORGANISATION « LECTURE À GAUCHE, ACTION À DROITE » (LOT 0 du chantier TUTORIEL, 2026-08-01) :
+# le compartiment de gauche était un simple bloc OBJECTIFS pendant que celui de droite empilait
+# l'agir (ACTIONS, CARTES) ET le lire (JOURNAL, puis ORDRE et ÉQUIPE ajoutés en §8.125) — cinq
+# onglets de deux natures différentes dans la même boîte. Les onglets de LECTURE ont donc migré
+# vers la gauche, qui devient le compartiment « INFOS » ; la droite ne garde que ce sur quoi on
+# clique pour jouer. Aucune logique déplacée : les nœuds de contenu ont été RE-PARENTÉS tels quels.
 # POURQUOI : l'ancien layout empilait 3 tiroirs INTEL à gauche, un War Roster en haut-droite et un
 # bloc central bas étroit → écran illisible et infos redondantes (constat Hakim 2026-07-26). Les
 # informations de pouvoir de faction vivent désormais dans la FICHE JOUEUR et la zone JOUEUR.
@@ -120,12 +127,19 @@ const TIMER_URGENT_SECONDS := 10
 const CHAT_MAX_LENGTH := 500
 
 # Index des onglets de la zone COMMANDES (barre basse, lot A) — ordre figé par la scène.
+# Depuis le LOT 0 (2026-08-01) ce compartiment ne porte plus que l'ACTION.
 const TAB_ACTIONS := 0
 const TAB_CARDS := 1
-const TAB_JOURNAL := 2
-# Onglets AJOUTÉS PAR CODE (§8.125) — la scène n'en connaît que trois. Indices attribués à la
-# construction : ORDRE toujours, ÉQUIPE seulement en mode équipe (d'où deux variables et non deux
-# constantes — l'index d'ÉQUIPE dépend de la présence d'ORDRE).
+# Index des onglets de la zone INFOS (compartiment GAUCHE, LOT 0) — les deux premiers viennent de
+# la scène, les suivants sont ajoutés par code (ci-dessous).
+const TAB_INFO_OBJECTIVES := 0
+const TAB_INFO_JOURNAL := 1
+# Onglets AJOUTÉS PAR CODE (§8.125, déplacés dans INFOS au LOT 0) — la scène n'en connaît que deux.
+# Indices attribués à la construction : ORDRE toujours, ÉQUIPE seulement en mode équipe (d'où deux
+# variables et non deux constantes — l'index d'ÉQUIPE dépend de la présence d'ORDRE).
+# ⚠️ CONDITIONS D'EXISTENCE INCHANGÉES par le LOT 0 : ORDRE est utile dans TOUS les modes (savoir
+# qui joue après soi conditionne chaque attaque, y compris en FFA) et reste donc TOUJOURS présent ;
+# seul ÉQUIPE dépend de `GameState.team_mode != ""`. Le déplacement ne devait rien retirer à personne.
 var _tab_order := -1
 var _tab_team := -1
 var _order_box: VBoxContainer = null
@@ -304,12 +318,15 @@ func _ready() -> void:
 			%TogglePlayerSheetButton, %SheetPrevButton, %SheetNextButton]:
 		b.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
 		b.pressed.connect(func() -> void: AudioManager.play_sfx("click"))
-	# Titres TRADUITS des onglets COMMANDES (le nom de nœud sert de clé, mais on ne dépend pas de
+	# Titres TRADUITS des onglets (le nom de nœud sert de clé, mais on ne dépend pas de
 	# l'auto-traduction du TabBar : on pose explicitement les libellés en langue courante).
 	%CommandsTabs.set_tab_title(TAB_ACTIONS, tr("HUD_TAB_ACTIONS"))
 	%CommandsTabs.set_tab_title(TAB_CARDS, tr("HUD_TAB_CARDS"))
-	%CommandsTabs.set_tab_title(TAB_JOURNAL, tr("HUD_TAB_JOURNAL"))
-	%CommandsTabs.tab_changed.connect(_on_command_tab_changed)
+	%InfoTabs.set_tab_title(TAB_INFO_OBJECTIVES, tr("HUD_OBJECTIVES_TITLE"))
+	%InfoTabs.set_tab_title(TAB_INFO_JOURNAL, tr("HUD_TAB_JOURNAL"))
+	%InfoTabs.tab_changed.connect(_on_info_tab_changed)
+	# Même SFX de changement d'onglet des deux côtés (parité de ressenti entre les compartiments).
+	%CommandsTabs.tab_changed.connect(func(_t: int) -> void: AudioManager.play_sfx("click"))
 	_build_extra_tabs()
 	_build_confirm_button()
 	_build_player_zone()
@@ -342,9 +359,11 @@ func _apply_charter_ornaments() -> void:
 			%ToggleBottomPanelButton.get_parent().get_node("GlassBody")]:
 		if panel is Control:
 			WarzoneUI.add_corner_notches(panel, NOTCH_SIZE)
-	# Filet cyan sous CHAQUE titre de bloc (OBJECTIFS, JOUEUR, COMMS, FICHE JOUEUR) : le titre
+	# Filet cyan sous CHAQUE titre de bloc (INFOS, JOUEUR, COMMS, FICHE JOUEUR) : le titre
 	# ne flotte plus au-dessus du contenu, il le COIFFE (structure lisible d'un coup d'œil).
-	for title in [%ObjectiveLabel.get_parent().get_child(0),
+	# ⚠️ LOT 0 : le titre du compartiment gauche n'est plus le frère de %ObjectiveLabel (qui vit
+	# maintenant DANS une page d'onglet) — on part de %InfoTabs, dont il est le frère aîné.
+	for title in [%InfoTabs.get_parent().get_child(0),
 			%PlayerZone.get_child(0),
 			%ChatLog.get_parent().get_parent().get_child(0),
 			%SheetVBox.get_child(0)]:
@@ -364,9 +383,16 @@ func _process(delta: float) -> void:
 	# reduced_motion (E10 §8.82) : coupe les pulses d'UI (objectif E6, phase E7) — état figé lisible.
 	var still: bool = bool(SettingsManager.get_comfort("reduced_motion"))
 	# Tracker d'objectif (E6 §8.78) : pulse OR discret quand on est à ≥ 80 % de la victoire.
-	if _objective_pulse and not still and _objective_tracker != null and is_instance_valid(_objective_tracker):
+	# ⚠️ LOT 0 : le tracker vit désormais dans une PAGE D'ONGLET, donc invisible dès que le joueur
+	# regarde JOURNAL/ORDRE/ÉQUIPE. On SUSPEND le pulse hors-vue (animation orpheline) et on rend la
+	# teinte neutre : à la réouverture de l'onglet, la première frame est déjà correcte.
+	var tracker_shown: bool = _objective_tracker != null and is_instance_valid(_objective_tracker) \
+		and _objective_tracker.is_visible_in_tree()
+	if _objective_pulse and not still and tracker_shown:
 		var g := 0.72 + 0.28 * absf(sin(float(Time.get_ticks_msec()) / 340.0))
 		_objective_tracker.modulate = Color(1.0, 1.0, g)
+	elif not tracker_shown and _objective_tracker != null and is_instance_valid(_objective_tracker):
+		_objective_tracker.modulate = Color(1, 1, 1)
 	# Coup de pouce de phase (E7 §8.79) : pulse OR de « Fin de Phase » quand rien n'est jouable.
 	if _next_phase_pulse and not still:
 		var p := 0.7 + 0.3 * absf(sin(float(Time.get_ticks_msec()) / 300.0))
@@ -1172,6 +1198,9 @@ func _build_pact_block(body: VBoxContainer, d: Dictionary) -> void:
 		else:
 			btn.tooltip_text = tr("PACT_OFFER_TOOLTIP")
 			btn.pressed.connect(func() -> void: pact_offer_requested.emit(target_pid))
+			# §8.129 — première fois que PROPOSER UN PACTE est réellement ACTIVABLE (et non
+			# simplement affiché en grisé) : on explique ce qu'on s'apprête à engager.
+			TutorialManager.hint_once("first_pact_button", btn)
 	body.add_child(btn)
 
 func _sheet_eyebrow(key: String) -> Label:
@@ -1492,9 +1521,9 @@ func _build_extra_tabs() -> void:
 	_order_box = VBoxContainer.new()
 	_order_box.name = "HUD_TAB_ORDER"
 	_order_box.add_theme_constant_override("separation", 4)
-	%CommandsTabs.add_child(_order_box)
-	_tab_order = %CommandsTabs.get_tab_count() - 1
-	%CommandsTabs.set_tab_title(_tab_order, tr("HUD_TAB_ORDER"))
+	%InfoTabs.add_child(_order_box)
+	_tab_order = %InfoTabs.get_tab_count() - 1
+	%InfoTabs.set_tab_title(_tab_order, tr("HUD_TAB_ORDER"))
 
 
 # Onglet ÉQUIPE : mode équipe UNIQUEMENT — en FFA il n'aurait rien à montrer, et un onglet vide est
@@ -1510,9 +1539,9 @@ func _ensure_team_tab() -> void:
 	_team_box = VBoxContainer.new()
 	_team_box.name = "HUD_TAB_TEAM"
 	_team_box.add_theme_constant_override("separation", 4)
-	%CommandsTabs.add_child(_team_box)
-	_tab_team = %CommandsTabs.get_tab_count() - 1
-	%CommandsTabs.set_tab_title(_tab_team, tr("HUD_TAB_TEAM"))
+	%InfoTabs.add_child(_team_box)
+	_tab_team = %InfoTabs.get_tab_count() - 1
+	%InfoTabs.set_tab_title(_tab_team, tr("HUD_TAB_TEAM"))
 
 
 # Rafraîchit les deux onglets. Appelé depuis `update_display()` — donc à chaque état reçu, comme
@@ -1795,7 +1824,7 @@ func add_feed_entries(entries: Array) -> void:
 		if _feed_matches(e):
 			%LogText.append_text(_feed_line(e) + "\n")
 	# Badge « • » sur l'onglet JOURNAL quand des entrées arrivent alors qu'il n'est pas ouvert.
-	if added and int(%CommandsTabs.current_tab) != TAB_JOURNAL:
+	if added and int(%InfoTabs.current_tab) != TAB_INFO_JOURNAL:
 		_set_journal_badge(true)
 
 func _feed_matches(e: Dictionary) -> bool:
@@ -1849,22 +1878,44 @@ func _build_feed_filters() -> void:
 
 # Ouvre l'onglet JOURNAL (optionnellement sur un filtre précis) — appelé par le chip de zone.
 func open_journal_tab(filter_key: String = "") -> void:
-	%CommandsTabs.current_tab = TAB_JOURNAL
+	%InfoTabs.current_tab = TAB_INFO_JOURNAL
 	if filter_key != "" and _feed_filter_buttons.has(filter_key):
 		var b: Button = _feed_filter_buttons[filter_key]
 		b.button_pressed = true
 		_feed_filter = filter_key
 		_rerender_feed()
 
-func _on_command_tab_changed(tab: int) -> void:
-	if tab == TAB_JOURNAL:
+# Ouvre l'onglet OBJECTIFS du compartiment INFOS. Utilisé par le coach du tutoriel avant de
+# surligner le tracker : surligner un contrôle rangé dans un onglet fermé ne montrerait RIEN.
+func open_objectives_tab() -> void:
+	%InfoTabs.current_tab = TAB_INFO_OBJECTIVES
+
+# Bouton « CONFIRMER LE DÉPLOIEMENT », construit par code : le coach du tutoriel (§8.129) le désigne
+# aux étapes DÉPLOIEMENT AVEUGLE et DÉPLOYER. Accesseur plutôt qu'un `%NomUnique` — ce bouton n'est
+# pas dans la scène, il naît de `_build_confirm_button()`.
+func get_deploy_confirm_button() -> Button:
+	return _confirm_btn
+
+func _on_info_tab_changed(tab: int) -> void:
+	AudioManager.play_sfx("click")
+	if tab == TAB_INFO_JOURNAL:
 		_set_journal_badge(false)
+		# Le journal a continué d'accumuler pendant que l'onglet était caché : `scroll_following`
+		# ne suit pas de façon fiable un RichTextLabel de taille nulle (page d'onglet masquée), et
+		# le joueur retrouverait le flux figé sur une vieille ligne. On recale APRÈS la frame de
+		# mise en page — avant, `max_value` vaut encore l'ancienne hauteur.
+		call_deferred("_scroll_journal_to_end")
+
+func _scroll_journal_to_end() -> void:
+	var bar := (%LogText as RichTextLabel).get_v_scroll_bar()
+	if bar != null:
+		bar.value = bar.max_value
 
 func _set_journal_badge(on: bool) -> void:
 	if on == _feed_unread:
 		return
 	_feed_unread = on
-	%CommandsTabs.set_tab_title(TAB_JOURNAL,
+	%InfoTabs.set_tab_title(TAB_INFO_JOURNAL,
 		tr("HUD_TAB_JOURNAL") + (" •" if on else ""))
 
 # Kill feed (E4) : instancié coin haut-droit, À GAUCHE du panneau COMMS — hors panneaux.
@@ -2686,6 +2737,8 @@ func _refresh_cards() -> void:
 		lbl.add_theme_color_override("font_color", Color("8a8f7a"))
 		box.add_child(lbl)
 		return
+	# §8.129 — première CARTE de la carrière : on explique ce qu'elle vaut et le plafond de cinq.
+	TutorialManager.hint_once("first_card")
 	# Main TOUJOURS INSPECTABLE, jouable UNIQUEMENT pendant SON tour de jeu (G3 §8.70 explicité).
 	var playable := GameState.stage == "playing" \
 		and int(GameState.current_player_id) == int(AuthManager.user_id) \

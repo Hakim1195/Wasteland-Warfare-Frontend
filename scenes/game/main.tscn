@@ -555,19 +555,33 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_bottombar")
 layout_mode = 2
 theme_override_constants/separation = 22
 
-[node name="ObjectivesZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
+[node name="InfoZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.28
+size_flags_stretch_ratio = 0.4
 theme_override_constants/separation = 6
 
-[node name="ObjectivesTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/ObjectivesZone"]
+[node name="InfoTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/InfoZone"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.211765, 0.772549, 0.85098, 1)
 theme_override_font_sizes/font_size = 16
-text = "HUD_OBJECTIVES_TITLE"
+text = "TAB_INFOS"
 
-[node name="ObjectiveLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/ObjectivesZone" unique_id=431373405]
+[node name="InfoTabs" type="TabContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/InfoZone"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 17
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+current_tab = 0
+
+[node name="HUD_TAB_OBJECTIVES" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/InfoZone/InfoTabs"]
+layout_mode = 2
+theme_override_constants/separation = 6
+metadata/_tab_index = 0
+
+[node name="ObjectiveLabel" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/InfoZone/InfoTabs/HUD_TAB_OBJECTIVES" unique_id=431373405]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.541176, 0.592157, 0.647059, 1)
@@ -575,14 +589,29 @@ theme_override_font_sizes/font_size = 15
 text = "HUD_OBJECTIVE_PLACEHOLDER"
 autowrap_mode = 3
 
-[node name="ObjectivesSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
+[node name="HUD_TAB_JOURNAL" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/InfoZone/InfoTabs"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 4
+metadata/_tab_index = 1
+
+[node name="LogText" type="RichTextLabel" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/InfoZone/InfoTabs/HUD_TAB_JOURNAL" unique_id=723422796]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/normal_font_size = 17
+theme_override_constants/line_separation = 4
+bbcode_enabled = true
+scroll_following = true
+
+[node name="InfoSep" type="VSeparator" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 layout_mode = 2
 
 [node name="PlayerZone" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.27
+size_flags_stretch_ratio = 0.24
 theme_override_constants/separation = 6
 
 [node name="PlayerTitle" type="Label" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/PlayerZone"]
@@ -598,7 +627,7 @@ layout_mode = 2
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.45
+size_flags_stretch_ratio = 0.36
 theme_override_font_sizes/font_size = 17
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 current_tab = 0
@@ -667,21 +696,6 @@ layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 10
 alignment = 1
-
-[node name="HUD_TAB_JOURNAL" type="VBoxContainer" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs"]
-visible = false
-layout_mode = 2
-theme_override_constants/separation = 4
-metadata/_tab_index = 2
-
-[node name="LogText" type="RichTextLabel" parent="HUD/BottomCenterWidget/GlassBody/BottomRow/CommandsTabs/HUD_TAB_JOURNAL" unique_id=723422796]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_font_sizes/normal_font_size = 17
-theme_override_constants/line_separation = 4
-bbcode_enabled = true
-scroll_following = true
 
 [node name="Button" type="Button" parent="." unique_id=947914248]
 offset_left = 50.0

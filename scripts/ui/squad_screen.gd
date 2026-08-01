@@ -883,6 +883,9 @@ func _on_queue_pressed() -> void:
 	if _in_queue:
 		NetworkManager.squad_dequeue()
 	else:
+		# §8.129 — première mise en file BATTLE ROYALE : objectif public, réanimation, caisses. Les
+		# règles du mode sont déjà annoncées dans l'écran ; la bulle rappelle ce qui SURPREND.
+		TutorialManager.hint_once("first_br_queue")
 		NetworkManager.squad_queue(_selected_playlist)
 
 

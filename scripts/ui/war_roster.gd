@@ -61,7 +61,8 @@ func _ready() -> void:
 	col.add_child(title)
 
 	# Bandeau d'ordre de tour (Initiative §4.1) : chips compactes, retour à la ligne automatique.
-	# TUTO: emplacement candidat pour un tooltip d'onboarding « l'ordre du tour se lit ici ».
+	# §8.129 — ANCRE de la bulle « l'ordre du tour se lit ici » (l'emplacement avait été marqué
+	# `# TUTO:` par PLAN_EXPERIENCE ; il devient un vrai point d'ancrage du dispositif d'aides).
 	_order_band = HFlowContainer.new()
 	_order_band.add_theme_constant_override("h_separation", 3)
 	_order_band.add_theme_constant_override("v_separation", 1)
@@ -84,6 +85,14 @@ func refresh() -> void:
 	var order := sorted_pids(GameState.players, GameState.turn_order)
 	_rebuild_order_band(order)
 	_rebuild_rows(order)
+	# AIDES CONTEXTUELLES (§8.129) : deux bulles à la PREMIÈRE lecture d'un roster réellement
+	# peuplé — l'ordre du tour, puis l'état des belligérants. Elles ne sortent qu'une fois à vie,
+	# et le manager les met en file (jamais deux panneaux à l'écran).
+	if order.size() >= 2:
+		TutorialManager.register_anchor("roster_order_band", _order_band)
+		TutorialManager.register_anchor("roster_rows", _rows_box)
+		TutorialManager.hint_once("first_roster_order", "roster_order_band")
+		TutorialManager.hint_once("first_roster_enemy", "roster_rows")
 
 # =========================================================
 # Helpers PURS (statiques — testables par asserts, pattern G4)
@@ -269,7 +278,8 @@ func _make_team_header(team_id: int, is_mine: bool) -> Control:
 #   Ligne 2 (vitals héros, indentée) : [barre PV][PV n/max][🗡 PA n][🛡 PB p%][PP ±n]
 # Les compteurs restent sur la ligne d'identité (compacts) pour laisser toute la largeur aux
 # vitals ÉTIQUETÉS de la ligne 2 (anti « soupe d'emojis » — chaque valeur porte un libellé).
-# TUTO: emplacement candidat pour un tooltip d'onboarding « lisez ici l'état de chaque ennemi ».
+# §8.129 — ANCRE de la bulle « lisez ici l'état de chaque belligérant » (emplacement marqué
+# `# TUTO:` par PLAN_EXPERIENCE, devenu un vrai point d'ancrage du dispositif d'aides).
 func _make_row(pid: int) -> Control:
 	var p = GameState.players.get(str(pid), {})
 	if typeof(p) != TYPE_DICTIONARY:

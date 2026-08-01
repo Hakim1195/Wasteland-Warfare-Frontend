@@ -190,6 +190,13 @@ func _ready() -> void:
 
 	_set_status("MENU_STATUS_LOADING")
 
+	# --- PREMIÈRE OPÉRATION (§8.129) : mise en avant du BRIEFING pour un compte qui ne l'a pas
+	# encore soldé. Le drapeau vient du SERVEUR et peut arriver APRÈS ce _ready (il descend avec
+	# /auth/me), d'où l'abonnement en plus de la lecture immédiate. ---
+	AuthManager.tutorial_state_changed.connect(_on_tutorial_state_changed)
+	TutorialManager.notify_hub_entered()
+	_refresh_briefing_cta()
+
 	# --- Nav PARTAGÉE (§8.94) : header canonique, monté en dernier (au-dessus du Hud). `active_tab`
 	# est réglé AVANT add_child (il est lu au _ready du composant). ---
 	_mount_top_nav()
@@ -854,6 +861,191 @@ func _on_locale_changed(_code: String) -> void:
 
 func _go(path: String) -> void:
 	TransitionManager.change_scene(path)
+
+# =========================================================
+# PREMIÈRE OPÉRATION — CTA de briefing (§8.129)
+# =========================================================
+# Un compte neuf tombait de l'authentification Steam au QG, puis dans un draft à dix factions
+# asymétriques, sans un mot. On met donc le BRIEFING en avant à la place de la mise en avant du
+# START — sans jamais le rendre obligatoire : START reste cliquable, il perd seulement sa
+# surbrillance le temps que le briefing soit soldé.
+var _briefing_panel: PanelContainer = null
+
+func _refresh_briefing_cta() -> void:
+	var show_it: bool = TutorialManager.should_offer_first_operation()
+	if show_it and _briefing_panel == null:
+		_build_briefing_cta()
+	if _briefing_panel != null:
+		_briefing_panel.visible = show_it
+	if play_button != null:
+		# La hiérarchie visuelle a UN seul sommet : quand le briefing est proposé, c'est lui.
+		play_button.modulate = Color(1, 1, 1, 0.55) if show_it else Color(1, 1, 1, 1)
+
+
+func _on_tutorial_state_changed(_done: bool) -> void:
+	if is_inside_tree():
+		_refresh_briefing_cta()
+
+
+func _build_briefing_cta() -> void:
+	if play_button == null:
+		return
+	var column := play_button.get_parent()
+	if column == null:
+		return
+	_briefing_panel = PanelContainer.new()
+	_briefing_panel.name = "BriefingCta"
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(GOLD, 0.10)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(1)
+	st.border_width_left = 4
+	st.border_color = GOLD
+	st.set_content_margin_all(16)
+	_briefing_panel.add_theme_stylebox_override("panel", st)
+	column.add_child(_briefing_panel)
+	column.move_child(_briefing_panel, play_button.get_index())
+	WarzoneUI.add_corner_notches(_briefing_panel, 14.0, GOLD)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	_briefing_panel.add_child(col)
+
+	var eyebrow := Label.new()
+	eyebrow.text = "TUTO_CTA_EYEBROW"   # clé brute -> auto-traduction
+	eyebrow.add_theme_font_override("font", _font)
+	eyebrow.add_theme_font_size_override("font_size", 13)
+	eyebrow.add_theme_color_override("font_color", GOLD)
+	col.add_child(eyebrow)
+
+	var title := Label.new()
+	title.text = "TUTO_CTA_TITLE"
+	title.add_theme_font_override("font", _font)
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color("eef3f7"))
+	col.add_child(title)
+
+	var body := Label.new()
+	body.text = "TUTO_CTA_BODY"
+	body.add_theme_font_override("font", _font)
+	body.add_theme_font_size_override("font_size", 14)
+	body.add_theme_color_override("font_color", Color("8a97a5"))
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(420, 0)
+	col.add_child(body)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	col.add_child(row)
+
+	var start_btn := Button.new()
+	start_btn.text = "TUTO_CTA_START"
+	start_btn.add_theme_font_override("font", _font)
+	start_btn.add_theme_font_size_override("font_size", 17)
+	start_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	WarzoneUI.apply_ghost_button(start_btn)
+	start_btn.add_theme_color_override("font_color", GOLD)
+	WarzoneUI.wire_button_sfx(start_btn)
+	start_btn.pressed.connect(_on_briefing_start_pressed)
+	row.add_child(start_btn)
+
+	var known_btn := Button.new()
+	known_btn.text = "TUTO_CTA_KNOWN"
+	known_btn.add_theme_font_override("font", _font)
+	known_btn.add_theme_font_size_override("font_size", 13)
+	known_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	WarzoneUI.apply_ghost_button(known_btn)
+	known_btn.add_theme_color_override("font_color", Color("8a97a5"))
+	WarzoneUI.wire_button_sfx(known_btn)
+	known_btn.pressed.connect(_on_briefing_known_pressed)
+	row.add_child(known_btn)
+
+
+func _on_briefing_start_pressed() -> void:
+	_set_status("MM_SEARCH_STARTING")
+	TutorialManager.start_first_operation()
+
+
+# « JE CONNAIS LA GUERRE » : CONFIRMATION avant de renoncer — le clic est irréversible (le briefing
+# ne sera plus proposé) et il coûte la prime. On le DIT, plutôt que de laisser le joueur le
+# découvrir après coup.
+func _on_briefing_known_pressed() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.62)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dim.add_child(center)
+
+	var pan := PanelContainer.new()
+	pan.custom_minimum_size = Vector2(520, 0)
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(2)
+	st.border_color = GOLD
+	st.set_content_margin_all(24)
+	pan.add_theme_stylebox_override("panel", st)
+	center.add_child(pan)
+	WarzoneUI.add_corner_notches(pan, 18.0, GOLD)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	pan.add_child(col)
+
+	var t := Label.new()
+	t.text = "TUTO_CTA_CONFIRM_TITLE"
+	t.add_theme_font_override("font", _font)
+	t.add_theme_font_size_override("font_size", 22)
+	t.add_theme_color_override("font_color", GOLD)
+	col.add_child(t)
+
+	var b := Label.new()
+	b.text = "TUTO_CTA_CONFIRM_BODY"
+	b.add_theme_font_override("font", _font)
+	b.add_theme_font_size_override("font_size", 15)
+	b.add_theme_color_override("font_color", Color("c8cdd6"))
+	b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(b)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	col.add_child(row)
+
+	var no_btn := Button.new()
+	no_btn.text = "TUTO_CTA_CONFIRM_NO"
+	no_btn.add_theme_font_override("font", _font)
+	no_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	no_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	WarzoneUI.apply_ghost_button(no_btn)
+	WarzoneUI.wire_button_sfx(no_btn)
+	no_btn.pressed.connect(func() -> void: dim.queue_free())
+	row.add_child(no_btn)
+
+	var yes_btn := Button.new()
+	yes_btn.text = "TUTO_CTA_CONFIRM_YES"
+	yes_btn.add_theme_font_override("font", _font)
+	yes_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	yes_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	WarzoneUI.apply_ghost_button(yes_btn)
+	yes_btn.add_theme_color_override("font_color", GOLD)
+	WarzoneUI.wire_button_sfx(yes_btn)
+	yes_btn.pressed.connect(func() -> void:
+		dim.queue_free()
+		TutorialManager.decline_first_operation()
+		# On retire la mise en avant IMMÉDIATEMENT : la confirmation du serveur remettra la même
+		# valeur, mais faire patienter le joueur devant un panneau qu'il vient de refuser serait
+		# exactement le contraire de ce qu'il a demandé.
+		if _briefing_panel != null:
+			_briefing_panel.visible = false
+		if play_button != null:
+			play_button.modulate = Color(1, 1, 1, 1))
+	row.add_child(yes_btn)
+
 
 func _on_play_pressed() -> void:
 	# Transporte le mode sélectionné jusqu'à l'écran de RECHERCHE (effectif + intention classée) via

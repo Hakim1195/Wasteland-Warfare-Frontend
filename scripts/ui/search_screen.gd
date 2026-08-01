@@ -796,6 +796,9 @@ func _on_cancel_pressed() -> void:
 
 func _on_search_cta_pressed() -> void:
 	if _required_ranked:
+		# §8.129 — première mise en file CLASSÉE : RP, divisions, remise à zéro saisonnière. La
+		# bulle part AVANT l'appel réseau : elle explique un choix, elle ne commente pas un résultat.
+		TutorialManager.hint_once("first_ranked_queue")
 		NetworkManager.mm_queue_join("ranked")
 	else:
 		NetworkManager.mm_queue_join("casual", _selected_map_id, _required_players)

@@ -132,6 +132,12 @@ func _ready():
 	confirm_button.pressed.connect(func() -> void: AudioManager.play_sfx("confirm"))
 	AudioManager.start_menu_ambient()  # nappe d'ambiance des menus (idempotente, R6)
 
+	# PREMIÈRE OPÉRATION (§8.129) : le coach ouvre le briefing ICI (étapes BIENVENUE et LE DRAFT).
+	# `confirm_button` sert d'ancre de surlignage — le carrousel bouge à chaque flèche, le bouton
+	# de verrouillage, lui, ne bouge jamais. NO-OP hors partie guidée.
+	TutorialManager.register_anchor("draft_recommended", confirm_button)
+	TutorialManager.bind_draft(self)
+
 	# Réseau : on écoute les verrouillages des autres joueurs.
 	NetworkManager.faction_locked.connect(_on_faction_locked)
 	# Resynchronisation du Draft (G2 durci) : les faction_locked des BOTS partent juste après
@@ -696,6 +702,8 @@ func _on_confirm_pressed() -> void:
 
 	# Envoi du choix au serveur.
 	NetworkManager.send_faction_choice(f.id)
+	# §8.129 — condition de sortie de l'étape LE DRAFT : le choix est VERROUILLÉ (pas « survolé »).
+	TutorialManager.notify_faction_locked()
 	# Optimiste : on s'enregistre soi-même immédiatement (au cas où le serveur n'écho pas
 	# notre propre choix dans le broadcast faction_locked).
 	_register_lock(AuthManager.user_id, f.id)

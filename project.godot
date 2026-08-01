@@ -29,6 +29,7 @@ SettingsManager="*res://scripts/managers/settings_manager.gd"
 TransitionManager="*res://scripts/managers/transition_manager.gd"
 AudioManager="*res://scripts/managers/audio_manager.gd"
 MatchConfig="*res://scripts/managers/match_config.gd"
+TutorialManager="*res://scripts/managers/tutorial_manager.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]

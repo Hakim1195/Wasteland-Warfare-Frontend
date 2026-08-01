@@ -8,6 +8,10 @@ signal user_id_loaded(user_id: int)
 # à chaque `ensure_avatar()` d'une Vue qui arrive après coup — `top_nav` est reconstruit à chaque
 # changement d'écran, il doit pouvoir récupérer l'avatar sans re-télécharger.
 signal avatar_loaded(texture: Texture2D)
+# TUTORIEL / FTUE (§8.129) — le drapeau de briefing du COMPTE vient de changer (chargé par /auth/me,
+# ou posé localement après un complete/skip réussi). Le QG s'y abonne pour retirer sa mise en avant
+# de la PREMIÈRE OPÉRATION sans avoir à recharger l'écran.
+signal tutorial_state_changed(done: bool)
 
 var base_url = "https://api.wasteland-warfare.com"
 var jwt_token: String = ""
@@ -31,6 +35,14 @@ var avatar_url: String = ""
 # à chaque écran, un cache disque n'économiserait qu'un seul téléchargement par lancement pour le
 # prix d'une invalidation à gérer. Volontairement pas de persistance.
 var avatar_texture: Texture2D = null
+# --- TUTORIEL / FTUE (§8.129) : drapeau de briefing du COMPTE ---------------------------------
+# `tutorial_done` : le joueur a-t-il soldé son briefing d'entrée (fait OU refusé) ?
+# `tutorial_done_known` : le serveur a-t-il RÉELLEMENT renvoyé la clé ? Distinction indispensable —
+# un serveur ANTÉRIEUR à ce chantier n'émet pas `tutorial_done`, et lire `false` par défaut ferait
+# proposer la Première Opération à toute la population, y compris aux vétérans, à chaque lancement.
+# Tant que ce drapeau est faux, le QG se tait : additif strict côté client comme côté serveur (§1.5).
+var tutorial_done := false
+var tutorial_done_known := false
 var _avatar_http: HTTPRequest
 # URL du téléchargement EN COURS ("" = aucun) — évite d'empiler deux requêtes sur le même avatar.
 var _avatar_pending_url: String = ""
@@ -137,6 +149,9 @@ func _on_id_request_completed(_result, response_code, _headers, body):
 			# …et l'avatar Steam (§8.114) : c'est ICI qu'il arrive le plus tôt après un login,
 			# `_fetch_user_id` étant lancé dès l'obtention du token.
 			_capture_avatar_url(data)
+			# …et le drapeau de briefing (§8.129), pour la même raison : c'est le tout premier
+			# aller-retour authentifié du lancement, donc le plus tôt où le QG peut savoir.
+			_capture_tutorial_flag(data)
 			emit_signal("user_id_loaded", user_id)
 			print("AuthManager : player_id récupéré = ", user_id)
 
@@ -157,6 +172,32 @@ func _capture_avatar_url(data) -> void:
 	avatar_texture = null
 	if url != "":
 		_download_avatar()
+
+# =========================================================
+# TUTORIEL / FTUE (§8.129) — drapeau de briefing du COMPTE
+# =========================================================
+
+# Mémorise `tutorial_done` s'il est RÉELLEMENT présent dans la réponse. Une clé absente laisse
+# `tutorial_done_known` à faux : le client se tait plutôt que de supposer (serveur pas encore
+# redéployé — le réseau est additif dans les DEUX sens, §1.5).
+func _capture_tutorial_flag(data) -> void:
+	if typeof(data) != TYPE_DICTIONARY or not data.has("tutorial_done"):
+		return
+	var done := bool(data["tutorial_done"])
+	var changed := (not tutorial_done_known) or done != tutorial_done
+	tutorial_done = done
+	tutorial_done_known = true
+	if changed:
+		emit_signal("tutorial_state_changed", tutorial_done)
+
+# Posé par `TutorialManager` après un `complete`/`skip` accepté par le serveur : on évite un
+# aller-retour /auth/me supplémentaire, et le QG se met à jour dans la foulée.
+func mark_tutorial_done() -> void:
+	if tutorial_done and tutorial_done_known:
+		return
+	tutorial_done = true
+	tutorial_done_known = true
+	emit_signal("tutorial_state_changed", true)
 
 # Point d'entrée des Vues : « donne-moi l'avatar dès que possible ». À appeler APRÈS s'être connecté
 # au signal. Ne re-télécharge jamais un avatar déjà en cache.
@@ -383,6 +424,7 @@ func _on_request_completed(_result, response_code, _headers, body):
 					user_id = int(data["id"])
 					emit_signal("user_id_loaded", user_id)
 				_capture_avatar_url(data)
+				_capture_tutorial_flag(data)
 				emit_signal("profile_loaded", data)
 			elif data.has("message"):
 				emit_signal("auth_success", tr("AUTHM_SUCCESS_DETAIL") % str(data["message"]))

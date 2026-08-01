@@ -114,6 +114,8 @@ func _ready():
 	var nav := TopNav.new()
 	nav.active_tab = "shop"
 	add_child(nav)
+	# §8.129 — première visite de la BOUTIQUE : d'où viennent les coins, et où lire son relevé.
+	TutorialManager.hint_once("first_shop_visit")
 	_nav = nav   # §8.122 (LOT F) : porte le compteur de Coins que l'on fait DÉCOMPTER après achat.
 	# Ambiance sonore : à la charge de l'écran HÔTE (la nav ne la lance jamais) — R6, idempotent.
 	AudioManager.start_menu_ambient()

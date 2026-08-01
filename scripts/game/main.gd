@@ -270,6 +270,17 @@ func _ready():
 	# Commandement fluide (E7 §8.79) : ré-assaut + raccourcis de quantité.
 	hud.reassault_pressed.connect(_on_reassault_pressed)
 	hud.amount_quick.connect(_on_amount_quick)
+	# --- TUTORIEL / FTUE (§8.129) : ancres de surlignage + prise en main du coach. Purement
+	# déclaratif — hors PREMIÈRE OPÉRATION, `bind_arena` est un no-op et rien ne s'affiche. Le HUD
+	# lui-même est enregistré (`hud_root`) : le coach a besoin de lui appeler `open_objectives_tab`
+	# avant de désigner le tracker, rangé dans une page d'onglet depuis le LOT 0. ---
+	TutorialManager.register_anchor("hud_root", hud)
+	TutorialManager.register_anchor("next_phase", hud.get_node_or_null("%NextPhaseButton"))
+	TutorialManager.register_anchor("player_zone", hud.get_node_or_null("%PlayerZone"))
+	TutorialManager.register_anchor("objective_tracker", hud.get_node_or_null("%InfoTabs"))
+	TutorialManager.register_anchor("deploy_confirm", hud.get_deploy_confirm_button())
+	TutorialManager.bind_arena(self, hud)
+
 	# Bandeau de tour/phase (E3) : stinger haut-centre, déclenché par _maybe_show_banner().
 	_phase_banner = PhaseBannerScene.instantiate()
 	add_child(_phase_banner)
@@ -318,6 +329,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif _source != "":
 		_clear_source()
 		_update_instruction()
+		get_viewport().set_input_as_handled()
+	else:
+		# §8.129 — TROISIÈME chemin d'accès au MANUEL DE GUERRE (les deux autres : PARAMÈTRES et
+		# « EN SAVOIR PLUS » d'une bulle). L'arène n'a PAS de menu ÉCHAP — ESC n'y faisait
+		# strictement rien quand aucune sélection n'était en cours. On occupe donc ce geste mort
+		# plutôt que d'ajouter un bouton dans un HUD déjà dense, et ESC referme le Manuel : le
+		# même geste ouvre et ferme, il n'y a rien à apprendre.
+		TutorialManager.open_manual("")
 		get_viewport().set_input_as_handled()
 
 func _my_id() -> int:
@@ -1570,6 +1589,9 @@ func _on_pact_offer_received(pact_id: int, proposer_id: int, target_id: int, _du
 	AudioManager.play_sfx("chat_ping")
 	hud.add_feed_entries([{"category": "system", "icon": "↔", "major": true,
 		"rich_text": tr("PACT_OFFER_LOG") % _bb_pseudo(int(proposer_id))}])
+	# §8.129 — première offre de pacte REÇUE de toute la carrière : on explique en deux lignes ce
+	# qu'un pacte fait (et surtout ce qu'il NE fait PAS). Une seule fois, jamais répétée.
+	TutorialManager.hint_once("first_pact_received")
 
 # Refus reçu (message PRIVÉ, jamais diffusé) : une ligne de journal sobre pour les deux concernés.
 # Volontairement DISCRET — un refus n'est pas un évènement de partie, et l'ébruiter en ferait une
@@ -1726,6 +1748,15 @@ func _push_power_card() -> void:
 	# --- BATTLE ROYALE (§8.125) : réanimation, reddition, coup d'État. ---
 	_append_battle_royale_actions(lines, buttons)
 	hud.set_power_card(lines, buttons)
+	# --- AIDES CONTEXTUELLES (§8.129) : première fois qu'une capacité est réellement ACTIVABLE.
+	# On teste `disabled == false` et non la simple présence : un bouton grisé n'apprend rien à
+	# expliquer, il porte déjà sa raison en infobulle. Chaque bulle ne sort qu'UNE fois à vie. ---
+	for b in buttons:
+		if typeof(b) != TYPE_DICTIONARY or bool(b.get("disabled", false)):
+			continue
+		match str(b.get("action", "")):
+			"ability_ration": TutorialManager.hint_once("first_pp_spend")
+			"ability_power": TutorialManager.hint_once("first_power_ready")
 
 # =========================================================
 # BATTLE ROYALE (§8.125) — actions d'équipe dans la carte POUVOIR
@@ -1789,6 +1820,10 @@ func _append_battle_royale_actions(lines: Array, buttons: Array) -> void:
 		# jeu confie à un joueur, et elle ne doit surtout pas se lire comme un compteur de renforts.
 		lines.append({"text": "⚠ " + tr("BR_COUP_ORDER") % _display_name(my_victim),
 			"color": Color("d6453f")})
+		# §8.129 — bulle DISCRÈTE : elle dit seulement où lire son ordre et que personne d'autre ne
+		# le voit. Elle ne nomme JAMAIS la victime (une bulle est un panneau, et un panneau se lit
+		# par-dessus l'épaule) et ne dit rien du nombre de traîtres à la table.
+		TutorialManager.hint_once("first_coup_order")
 
 	# --- RÉANIMER ------------------------------------------------------------------------------
 	# UN BOUTON PAR MORT plutôt qu'un sélecteur : en 3v3 il y a au plus deux coéquipiers, et deux
@@ -2351,6 +2386,9 @@ func _push_match_countdown() -> void:
 		AudioManager.duck_music()
 		hud.add_feed_entries([{"category": "zone", "icon": "☢", "major": true, "tid": "",
 			"rich_text": tr("FINAL_PROTOCOL_LOG")}])
+		# §8.129 — premier PROTOCOLE FINAL de la carrière : le bandeau dit QU'IL se passe quelque
+		# chose, la bulle dit QUOI (zone doublée, diplomatie fermée, victoire au score).
+		TutorialManager.hint_once("first_final_protocol")
 	if not active:
 		hud.set_tiebreak_board([])
 		return
@@ -3402,6 +3440,9 @@ func _maybe_show_spectator() -> void:
 	# PARIS D'OBSERVATEUR (chantier « Tension », LOT E/F) : la vue émet, le contrôleur envoie.
 	_spectator_overlay = overlay
 	overlay.bet_placed.connect(_on_spectator_bet)
+	# §8.129 — première élimination de la carrière : on explique que la partie n'est pas finie pour
+	# autant (paris d'observateur). La bulle passe APRÈS le bandeau K.I.A., jamais à sa place.
+	TutorialManager.hint_once("first_spectator")
 	if not NetworkManager.observer_bet_accepted.is_connected(_on_observer_bet_accepted):
 		NetworkManager.observer_bet_accepted.connect(_on_observer_bet_accepted)
 	_refresh_bet_panel()
@@ -3498,6 +3539,10 @@ func _show_victory():
 func _show_operation_report() -> void:
 	# Efface le HUD flottant (comme le combat) pour que le flou ne porte que sur le plateau gelé.
 	hud.fade_ui_for_combat(true)
+	# §8.129 — DÉBRIEF du briefing : la partie guidée est finie (victoire OU défaite, finir suffit).
+	# Le coach solde le briefing et la prime au clic sur COMPRIS. No-op hors Première Opération.
+	TutorialManager.notify_game_over()
+	TutorialManager.bind_report(self)
 	var win := int(GameState.winner_id)
 	var title := ""
 	var title_color := Color("e0b249")  # or (victoire)

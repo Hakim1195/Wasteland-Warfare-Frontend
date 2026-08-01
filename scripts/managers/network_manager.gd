@@ -153,6 +153,10 @@ signal profile_history_page_loaded(entries: Array, request: Dictionary)
 signal profile_finance_loaded(data: Dictionary, request: Dictionary)
 # Réponse à fetch_profile_pass : dict {active, expires_at, tier_id, tiers[], granted_items[], gains}.
 signal profile_pass_loaded(data: Dictionary)
+# TUTORIEL / FTUE (§8.129) — réponse de `/profile/tutorial/{complete,skip}`.
+# ok = false → serveur ancien (404) ou incident réseau : le client referme le coach SANS annoncer
+# de prime. data = { tutorial_done, already, coins_awarded, coins }.
+signal tutorial_settled(ok: bool, data: Dictionary)
 # §8.107 — PROFIL PUBLIC d'un autre joueur (palmarès consultable depuis le Classement) :
 # dict {username, level, games_played, wins, losses, heaviest_toll, favorite_faction, season,
 # factions[], modes, form[], maps[]}. `username` échoué pour que l'écran ignore une réponse
@@ -1126,6 +1130,29 @@ func _on_profile_pass_fetched(_result, response_code, _headers, body, http_node)
 	http_node.queue_free()
 	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
 	profile_pass_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
+
+
+# 8-bis. TUTORIEL / FTUE (§8.129) : solder le briefing d'entrée.
+#   POST /profile/tutorial/complete → drapeau + prime de 150 ¢ (une seule fois à vie) ;
+#   POST /profile/tutorial/skip     → drapeau SEUL.
+# Réponse : { tutorial_done, already, coins_awarded, coins }. Les deux routes sont IDEMPOTENTES
+# côté serveur ; le client n'a donc AUCUNE garde à poser (un double-clic est inoffensif).
+# ⚠️ Un serveur ANTÉRIEUR à ce chantier répond 404 : on émet alors `ok = false` et le
+# `TutorialManager` se contente de refermer le coach SANS annoncer de prime — jamais de toast
+# « +150 ¢ » qui mentirait sur un solde inchangé.
+func tutorial_complete() -> void:
+	_send_api_request("/profile/tutorial/complete", HTTPClient.METHOD_POST, {},
+		_on_tutorial_settled)
+
+func tutorial_skip() -> void:
+	_send_api_request("/profile/tutorial/skip", HTTPClient.METHOD_POST, {}, _on_tutorial_settled)
+
+func _on_tutorial_settled(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	tutorial_settled.emit(response_code == 200, data)
 
 
 # 9. PROFIL PUBLIC (§8.107) : GET /profile/public/{username} (authentifié). Palmarès d'un AUTRE

@@ -50,6 +50,12 @@ const COMFORT_DEFAULTS := {
 	# ici : le réglage doit conserver la valeur choisie par le joueur pour la retrouver s'il coupe
 	# `reduced_motion` — un forçage écrit sur disque lui ferait perdre son choix.
 	"living_map": true,
+	# AIDES CONTEXTUELLES (§8.129) — les bulles « première rencontre » qui expliquent UNE FOIS
+	# chaque système avancé (pacte, PP, carte, PROTOCOLE FINAL, ordre secret…). Défaut ON : ce
+	# chantier existe précisément parce que rien n'était expliqué nulle part. Couper le réglage
+	# n'efface PAS la mémoire des bulles déjà vues — c'est « REVOIR LES AIDES » qui la remet à zéro,
+	# et les deux gestes sont distincts à dessein (se taire ≠ tout recommencer).
+	"context_hints": true,
 }
 var _comfort := {}
 

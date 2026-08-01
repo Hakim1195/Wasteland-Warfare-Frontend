@@ -2482,3 +2482,99 @@ tranche, comme pour `/mine`.
 > pur, journal (6 types), non-lus **par membre** avec preuve d'indépendance des accusés, pastille
 > qui ne se compte pas soi-même, purge du journal à la dissolution. Suite backend COMPLÈTE verte
 > hors `test_missions.py` / `test_simulation.py` (**PRÉ-EXISTANTS**).
+
+---
+
+## §8.129 — TUTORIEL & PREMIÈRE OPÉRATION (FTUE) : volet RÉSEAU
+
+> Volet RÈGLES/CONTENU et rendu client : **§8.129 de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md).**
+> Le backend de ce chantier est **minuscule et strictement ADDITIF** (§1.5) : **une colonne, deux
+> routes, une raison de ledger**. Rien d'autre. C'est une décision, pas une économie de moyens — la
+> PREMIÈRE OPÉRATION est une **partie NORMALE** (salon privé + LANCER AVEC BOTS, §8.116, API
+> inchangée), le moteur ne sait même pas qu'un didacticiel est en cours.
+
+### 1. `users.tutorial_done` — le drapeau de briefing
+
+| Colonne | Type | Défaut | Migration |
+|---|---|---|---|
+| `users.tutorial_done` | `BOOLEAN NOT NULL` | `FALSE` | **AUTO** (`sync_missing_columns`, elle porte un `server_default`) — archive de parité `migration_tutorial.sql`, **aucune action humaine sur la prod** |
+
+- **SERVEUR et non local**, à dessein : la vérité suit le **COMPTE**, pas la machine. Un joueur qui
+  change de PC ne doit pas revoir un didacticiel déjà fait.
+- **Impossible à DÉDUIRE** de `stats_parties_jouees == 0` : on peut avoir quitté sa première partie
+  sans avoir rien vu du jeu. D'où un drapeau explicite plutôt qu'une heuristique.
+- Les comptes EXISTANTS passent à `FALSE` et se verront donc proposer la Première Opération **une**
+  fois. Assumé : personne n'a jamais eu la moindre explication, et 150 ¢ n'est pas une somme.
+
+### 2. `GET /auth/me` — champ additif
+
+`UserResponse` gagne **`tutorial_done: bool`** (défaut `false`, validateur `_tutorial_not_null`
+identique à celui de `coins`). Aucune clé existante ne bouge.
+
+⚠️ **Additif dans les DEUX sens.** Un serveur ANTÉRIEUR n'émet pas la clé, et un client qui lirait
+`false` par défaut proposerait le briefing à **toute la population, vétérans compris**. Le client
+porte donc un second drapeau, `AuthManager.tutorial_done_known` : tant que la clé n'a pas été
+RÉELLEMENT reçue, le QG **se tait**.
+
+### 3. `POST /profile/tutorial/complete` et `POST /profile/tutorial/skip`
+
+Deux routes authentifiées, sans corps, **même réponse** :
+
+```json
+{ "tutorial_done": true, "already": false, "coins_awarded": 150, "coins": 1150 }
+```
+
+| Route | Drapeau | Prime | Quand |
+|---|---|---|---|
+| `/profile/tutorial/complete` | posé | **+150 ¢** (`economy.TUTORIAL_REWARD_COINS`) | Rapport Post-Op de la partie guidée, **victoire OU défaite** — finir suffit |
+| `/profile/tutorial/skip` | posé | **aucune** | « JE CONNAIS LA GUERRE » au QG, ou « PASSER LE BRIEFING » en cours de partie |
+
+- **Convention zéro-4xx nominal (§8.112)** : rappeler une route déjà soldée n'est pas une erreur du
+  client (double-clic, reprise de session, retour arrière) → **200** + `already: true`,
+  `coins_awarded: 0`.
+- **IDEMPOTENCE** — les deux routes partagent `_settle_tutorial()`, **seul point d'écriture du
+  drapeau du dépôt** : il est LU avant d'être écrit, et un compte déjà soldé ressort sans un seul
+  mouvement de ledger. Conséquence voulue et testée : **`skip` PUIS `complete` ne crédite RIEN**.
+  L'ordre des clics ne fabrique pas de coins ; qui a dit « je connais la guerre » a renoncé à la
+  prime. Le cas inverse est protégé par la même lecture.
+- **Un seul `commit`** pour le drapeau ET le mouvement : un crash entre les deux laisserait soit un
+  compte payé qu'on repaierait, soit un compte soldé jamais payé.
+- La prime passe par `economy.record_coins` — **UNIQUE point de mutation de `User.coins`** (§8.106) ;
+  `user.coins` n'est jamais touché à la main, sinon le relevé FINANCES mentirait.
+
+### 4. `tutorial` — 10ᵉ raison canonique du livre de comptes
+
+`economy.REASON_TUTORIAL = "tutorial"`, ajoutée à `ALL_REASONS` **entre `mission_claim` et
+`observer_bet`** (c'est un GAIN, il se lit avant les dépenses). Le client en dérive sa clé i18n
+`PROFILE_FIN_SRC_TUTORIAL` comme pour les neuf autres ; une raison inconnue d'un client ancien
+retombe proprement sur un libellé muet.
+
+Montant : **`TUTORIAL_REWARD_COINS = 150`**, source UNIQUE — ni l'endpoint ni le client ne
+l'écrivent en dur (le client affiche le `coins_awarded` que la route lui renvoie).
+
+### 5. Ce que le backend NE fait PAS
+
+- **Aucune route de matchmaking neuve.** La partie guidée est un `POST /private/rooms` +
+  `POST /private/rooms/start` ordinaires (§8.116). Le client enchaîne les deux sans montrer l'écran
+  salon ; côté serveur, c'est une partie privée comme une autre.
+- **Aucune mémoire serveur de la progression du briefing.** Les 13 étapes sont **DÉDUITES** de
+  l'état de partie côté client (phase, tour, compteurs) — c'est ce qui les rend tolérantes à une
+  reconnexion sans ajouter un octet au contrat.
+- **Aucune persistance des bulles contextuelles** : elles vivent dans `user://tutorial_hints.json`
+  (local). Un aller-retour réseau par bulle aurait coûté plus cher que le service rendu.
+
+> **Fichiers.** NOUVEAUX : `backend/migration_tutorial.sql`, `backend/test_tutorial.py`.
+> MODIFIÉS : `models/models.py` (1 colonne), `models/schemas.py` (1 champ + 1 validateur),
+> `api/game/economy.py` (1 raison + 1 constante), `api/v1/endpoints/profile.py` (2 routes + le
+> helper partagé), `test_economy.py` (compteur de raisons 9 → 10).
+>
+> **Validation.** `test_tutorial.py` **48 ✅ / 0 ❌** (dont les trois tests porteurs : crédit UNIQUE,
+> `skip`→`complete` sans prime, cohérence `balance_after`). Non-régression : `test_economy.py`
+> **82 ✅**, `test_profile_data.py` **85 ✅**, `test_pacts.py` **113 ✅**, `test_teams.py` **60 ✅**,
+> `test_battle_royale.py` **74 ✅**, `test_hero_abilities.py` **91 ✅**, `test_companies.py` **94 ✅**,
+> `test_team_flow.py` **100 ✅**, `test_company_flow.py` **178 ✅** — **0 ❌**.
+> `test_missions.py` / `test_simulation.py` restent en échec **PRÉ-EXISTANT** (`fastapi` absent du
+> poste).
+>
+> ⚠️ **VPS + client ENSEMBLE** : sans le serveur à jour, `/auth/me` n'émet pas `tutorial_done` et le
+> client se tait (dégradation propre, mais le chantier est alors invisible).

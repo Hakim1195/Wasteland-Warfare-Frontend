@@ -48,6 +48,7 @@ const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
 const TEXT := Color(0.933333, 0.952941, 0.968627, 1)    # blanc froid
 const MUTED := Color(0.541176, 0.592157, 0.647059, 1)   # acier (muet / inactif)
 const DANGER := Color(0.839216, 0.270588, 0.247059, 1)  # rouge danger #D6453F (action destructrice)
+const GOLD := Color(0.878431, 0.698039, 0.286275, 1)    # or (§8.129 : accès au MANUEL DE GUERRE)
 
 # --- Onglets (§8.127) ---
 # Data-driven comme la barre du Shop (§8.102) : `key` est une clé i18n BRUTE posée telle quelle sur
@@ -522,8 +523,49 @@ func _build_comfort_section() -> void:
 				child.disabled = true
 	else:
 		map_hint.visible = false   # la mention n'a de sens que quand l'option est neutralisée
+	# --- AIDES CONTEXTUELLES & MANUEL DE GUERRE (TUTORIEL & FTUE §8.129) ------------------------
+	# Rangés dans CONFORT et non dans GÉNÉRAL : ce sont des réglages d'ASSISTANCE, exactement de la
+	# même famille que le mouvement réduit ou les chiffres de dégâts.
+	var t6 := _comfort_toggle("SETTINGS_CONTEXT_HINTS", "context_hints")
+	root.add_child(t6)
+	var hints_hint := Label.new()
+	hints_hint.text = tr("SETTINGS_CONTEXT_HINTS_HINT")
+	hints_hint.add_theme_font_override("font", _font)
+	hints_hint.add_theme_font_size_override("font_size", 12)
+	hints_hint.add_theme_color_override("font_color", MUTED)
+	hints_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(hints_hint)
+	# Deux BOUTONS, pas deux bascules : « revoir les aides » et « ouvrir le manuel » sont des
+	# ACTIONS ponctuelles. Couper les aides et remettre leur mémoire à zéro sont deux gestes
+	# distincts à dessein — se taire n'est pas la même chose que tout recommencer.
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 10)
+	root.add_child(actions)
+	var reset_btn := Button.new()
+	reset_btn.text = tr("SETTINGS_HINTS_RESET")
+	reset_btn.add_theme_font_override("font", _font)
+	reset_btn.add_theme_font_size_override("font_size", 14)
+	reset_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	WarzoneUI.apply_ghost_button(reset_btn)
+	WarzoneUI.wire_button_sfx(reset_btn)
+	reset_btn.pressed.connect(func() -> void:
+		TutorialManager.reset_hints()
+		_set_status(tr("SETTINGS_HINTS_RESET_DONE")))
+	actions.add_child(reset_btn)
+	var manual_btn := Button.new()
+	manual_btn.text = tr("SETTINGS_MANUAL")
+	manual_btn.add_theme_font_override("font", _font)
+	manual_btn.add_theme_font_size_override("font_size", 14)
+	manual_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	WarzoneUI.apply_ghost_button(manual_btn)
+	manual_btn.add_theme_color_override("font_color", GOLD)
+	WarzoneUI.wire_button_sfx(manual_btn)
+	manual_btn.pressed.connect(func() -> void: TutorialManager.open_manual(""))
+	actions.add_child(manual_btn)
+
 	# Mémorisés pour la reconstruction au changement de langue (_on_locale_changed_rebuild).
-	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3, t4, hint, t5, map_hint]
+	_comfort_nodes = [sep, eyebrow, scale_row, t1, t2, t3, t4, hint, t5, map_hint,
+		t6, hints_hint, actions]
 
 # Changement de langue À CHAUD : purge et reconstruit la section confort (seul bloc de cet écran
 # dont les libellés sont posés par code), puis re-traduit la ligne de statut.
