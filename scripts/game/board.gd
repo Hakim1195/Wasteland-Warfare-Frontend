@@ -386,6 +386,35 @@ func set_attack_context(source_tid: String, valid_targets: Array) -> void:
 func set_ability_targets(valid_targets: Array) -> void:
 	set_attack_context("", valid_targets)
 
+# =========================================================
+# SURLIGNAGE DU COACH (§8.129 — complété aux finitions pré-playtest)
+# =========================================================
+# L'étape ATTAQUER du briefing ne désignait AUCUN territoire : le plateau vit dans un `SubViewport`
+# à caméra, et le coach surligne des `Control` d'écran (rect relu en coordonnées d'interface). La
+# conversion monde→écran aurait demandé de suivre le zoom, le travelling et le recadrage de la
+# caméra tactique à chaque frame — beaucoup de code, et un rectangle qui dérive dès qu'on bouge.
+#
+# Le plateau, lui, SAIT DÉJÀ se surligner : le télégraphe de zone (G1 §8.62) allume un liseré or
+# pulsant sur un territoire depuis l'overlay, en coordonnées de CARTE. On emprunte donc ce canal
+# plutôt que d'en inventer un — zéro shader neuf, zéro calcul d'écran, et le surlignage suit la
+# caméra gratuitement puisqu'il est dessiné DANS le plateau.
+#
+# `reduced_motion` est déjà géré en aval par `motion_scale` (poussé plus bas) : le liseré devient
+# FIXE au lieu de pulser, sans une ligne de plus ici.
+var _tutorial_tid: String = ""
+
+func tutorial_highlight(tid: String) -> void:
+	if _tutorial_tid == str(tid):
+		return
+	_tutorial_tid = str(tid)
+	generate_board()
+
+func tutorial_highlight_clear() -> void:
+	if _tutorial_tid == "":
+		return   # no-op silencieux : appelable depuis les 4 chemins de nettoyage sans garde côté appelant
+	_tutorial_tid = ""
+	generate_board()
+
 func clear_attack_context() -> void:
 	if _attack_targets.is_empty() and _intent_target == "":
 		return
@@ -684,7 +713,11 @@ func generate_board() -> void:
 				ov_colors[oi] = Color(fill_col.r, fill_col.g, fill_col.b, fill_alpha)
 				ov_edges[oi] = edge_a
 				ov_mine[oi] = 1.0 if is_mine else 0.0
-				ov_forecast[oi] = 1.0 if is_forecast else 0.0
+				# Le surlignage du COACH emprunte le canal du télégraphe (liseré or pulsant) : même
+				# uniforme de shader, aucun canal neuf. Les deux ne se contredisent jamais — ils
+				# demandent le même geste (« regarde CE territoire »), et si le coach désigne par
+				# hasard un territoire déjà annoncé, le liseré est simplement déjà allumé.
+				ov_forecast[oi] = 1.0 if (is_forecast or tid == _tutorial_tid) else 0.0
 				ov_attack[oi] = 1.0 if _attack_targets.has(tid) else 0.0
 				# Motif daltonien (E10) : index de joueur +1 (1..6) sur les territoires possédés.
 				if colorblind and territory_owner != null:

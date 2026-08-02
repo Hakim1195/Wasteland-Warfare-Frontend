@@ -168,6 +168,7 @@ func _ready() -> void:
 	NetworkManager.fetch_missions()
 	NetworkManager.fetch_profile_history(1)
 	NetworkManager.fetch_company_badge()
+	_start_invite_poll()
 
 func _make_font() -> Font:
 	var f := SystemFont.new()
@@ -508,6 +509,101 @@ func _on_company_badge(data: Dictionary) -> void:
 	_company_unread = int(data.get("unread", 0))
 	_company_online = int(data.get("online", 0))
 	_update_company_badge()
+	var invite = data.get("invite", {})
+	_show_company_invite(invite if typeof(invite) == TYPE_DICTIONARY else {})
+
+
+# =========================================================
+# INVITATION DE COMPAGNIE (finitions pré-playtest) — poll 15 s + toast
+# =========================================================
+# La nav ne se rafraîchissait QU'AU CHANGEMENT D'ÉCRAN : un joueur immobile au QG n'aurait jamais vu
+# arriver l'invitation d'un camarade. D'où ce timer — le SEUL de la barre de navigation.
+#
+# ⚠️⚠️ UN SEUL TIMER, ET JAMAIS EN ARÈNE. `top_nav` est instanciée par CHAQUE écran hub : sans
+# précaution, changer d'écran cinq fois ferait tourner cinq timers et quintuplerait le trafic. Le
+# timer est donc enfant de CETTE instance et meurt avec elle (`queue_free` de l'écran) — il ne peut
+# pas s'accumuler. Et l'arène ne monte pas de `top_nav` du tout : aucun poll ne part pendant un
+# match, ce qui serait à la fois inutile (le joueur ne peut pas rejoindre) et coûteux au pire moment.
+const INVITE_POLL_S := 15.0
+
+var _invite_timer: Timer = null
+var _invite_toast: PanelContainer = null
+var _invite_code: String = ""
+
+func _start_invite_poll() -> void:
+	if _invite_timer != null and is_instance_valid(_invite_timer):
+		return
+	_invite_timer = Timer.new()
+	_invite_timer.wait_time = INVITE_POLL_S
+	_invite_timer.autostart = true
+	_invite_timer.timeout.connect(func() -> void:
+		if is_inside_tree():
+			NetworkManager.fetch_company_badge())
+	add_child(_invite_timer)
+
+
+# `{}` = plus d'invitation (expirée, acceptée, ou escouade dissoute) → le toast disparaît SANS un
+# mot. Une invitation qui expire n'est pas un évènement : l'annoncer ferait passer un non-évènement
+# pour une mauvaise nouvelle.
+func _show_company_invite(invite: Dictionary) -> void:
+	var code := str(invite.get("squad_code", ""))
+	if code == "":
+		if _invite_toast != null and is_instance_valid(_invite_toast):
+			_invite_toast.queue_free()
+		_invite_toast = null
+		_invite_code = ""
+		return
+	if code == _invite_code and _invite_toast != null and is_instance_valid(_invite_toast):
+		return   # même invitation qu'au tick précédent : on ne la re-crée pas sous les doigts
+	if _invite_toast != null and is_instance_valid(_invite_toast):
+		_invite_toast.queue_free()
+	_invite_code = code
+
+	var toast := PanelContainer.new()
+	toast.name = "CompanyInviteToast"
+	toast.mouse_filter = Control.MOUSE_FILTER_STOP
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.97)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(0)
+	st.border_width_left = 3
+	st.border_color = GOLD
+	st.set_content_margin_all(12.0)
+	toast.add_theme_stylebox_override("panel", st)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	toast.add_child(row)
+
+	var label := Label.new()
+	label.text = tr("COMPANY_INVITE_TOAST") % str(invite.get("from_name", "")).to_upper()
+	label.add_theme_font_override("font", _font)
+	label.add_theme_font_size_override("font_size", 15)
+	label.add_theme_color_override("font_color", TEXT)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size = Vector2(300, 0)
+	row.add_child(label)
+
+	var join := Button.new()
+	join.text = tr("COMPANY_INVITE_JOIN")
+	join.focus_mode = Control.FOCUS_NONE
+	join.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	join.add_theme_font_override("font", _font)
+	join.add_theme_font_size_override("font_size", 15)
+	join.add_theme_color_override("font_color", GOLD)
+	join.pressed.connect(func() -> void:
+		AudioManager.play_sfx("click")
+		var joining := _invite_code
+		_show_company_invite({})        # le joueur a tranché : le toast part tout de suite
+		NetworkManager.squad_join(joining)
+		TransitionManager.change_scene("res://scenes/ui/squad_screen.tscn"))
+	row.add_child(join)
+
+	# Ancré SOUS la barre de navigation, à droite : hors du chemin des onglets, et hors du centre
+	# où vivent les CTA de chaque écran.
+	add_child(toast)
+	toast.reset_size()
+	toast.position = Vector2(size.x - toast.size.x - 24.0, 96.0)
 
 func _update_company_badge() -> void:
 	if _company_tab_btn == null or not is_instance_valid(_company_tab_btn):
@@ -759,8 +855,6 @@ func _build_quit_dialog() -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.visible = false
 	add_child(dim)
-	dim.position = Vector2.ZERO
-	dim.size = get_viewport_rect().size
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)

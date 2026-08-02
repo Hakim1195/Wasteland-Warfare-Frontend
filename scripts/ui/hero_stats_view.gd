@@ -203,10 +203,12 @@ static func _make_mini_bar(ratio: float) -> Control:
 static func _power_text(fid: String, hero: Dictionary) -> String:
 	if fid != "":
 		var key_name := "HERO_POWER_NAME_" + fid.to_upper()
-		var n := TranslationServer.translate(key_name)
+		# String(...) : translate() rend un StringName — sans le cast, le ternaire du return mêle
+		# String et StringName (warning INCOMPATIBLE_TERNARY, comportement inchangé par ailleurs).
+		var n := String(TranslationServer.translate(key_name))
 		if n != key_name:
 			var key_desc := "HERO_POWER_DESC_" + fid.to_upper()
-			var d := TranslationServer.translate(key_desc)
+			var d := String(TranslationServer.translate(key_desc))
 			return (n + " — " + d) if d != key_desc else n
 	return str(hero.get("hero_power", ""))
 
@@ -214,15 +216,15 @@ static func _power_text(fid: String, hero: Dictionary) -> String:
 # liseré gauche et fond légèrement teintés à l'accent de la faction (cf. lignes de paliers §Perso).
 # Le texte est du CONTENU dynamique (pas une clé i18n) → auto-traduction désactivée.
 static func _make_power_block(power: String, font: Font, accent: Color) -> Control:
-	var wrap := VBoxContainer.new()
-	wrap.add_theme_constant_override("separation", 3)
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 3)
 
 	var eb := Label.new()
 	eb.text = "FS_POWER_EYEBROW"
 	eb.add_theme_font_override("font", font)
 	eb.add_theme_font_size_override("font_size", 13)
 	eb.add_theme_color_override("font_color", WarzoneUI.ACCENT)
-	wrap.add_child(eb)
+	block.add_child(eb)
 
 	var panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
@@ -245,5 +247,5 @@ static func _make_power_block(power: String, font: Font, accent: Color) -> Contr
 	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	panel.add_child(lbl)
 
-	wrap.add_child(panel)
-	return wrap
+	block.add_child(panel)
+	return block

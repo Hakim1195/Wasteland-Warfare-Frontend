@@ -312,7 +312,7 @@ func _load() -> void:
 	# Mémoires locales de progression (§8.122) : section libre, clés inconnues tolérées (une clé
 	# retirée du code devient simplement inerte — même contrat que `combat_display`).
 	_progress.clear()
-	for key in cfg.get_section_keys("progress") if cfg.has_section("progress") else []:
+	for key in cfg.get_section_keys("progress") if cfg.has_section("progress") else PackedStringArray():
 		_progress[str(key)] = str(cfg.get_value("progress", key, ""))
 
 func _save() -> void:

@@ -1292,6 +1292,7 @@ func _build_pass_table(page: VBoxContainer, evolution: Dictionary) -> void:
 			var rng = potential.get(str(c["key"]), [])
 			var txt := "—"
 			if typeof(rng) == TYPE_ARRAY and rng.size() >= 2:
+				@warning_ignore("integer_division")  # division entière VOULUE : coins pleins par niveau.
 				txt = "%d-%d" % [int(rng[0]) / levels_left, int(rng[1]) / levels_left]
 			var is_active := str(c["tier"]) != "" and str(c["tier"]) == _pass_tier
 			grid.add_child(_table_cell(txt, GOLD if is_active else TEXT, 14))
@@ -1311,12 +1312,12 @@ func _build_pass_table(page: VBoxContainer, evolution: Dictionary) -> void:
 	note.add_theme_font_size_override("font_size", 12)
 	page.add_child(note)
 
-func _table_cell(text: String, color: Color, size: int) -> Label:
+func _table_cell(text: String, color: Color, font_size: int) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED  # déjà traduit / déjà formaté
 	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", color)
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return l
@@ -1723,7 +1724,7 @@ func _make_ratio_bar(percent: int, color: Color) -> ProgressBar:
 # celui qui connaît déjà le jeu lit la première ligne et s'arrête, le nouveau venu lit la seconde.
 # Chaîne vide → aucune ligne ajoutée (c'est ce qui garde l'onglet STATISTIQUES compact).
 func _make_power_panel(power: String, accent: Color, hint: String = "") -> PanelContainer:
-	var panel := PanelContainer.new()
+	var power_panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.set_corner_radius_all(0)
 	sb.bg_color = Color(accent, 0.10)
@@ -1733,11 +1734,11 @@ func _make_power_panel(power: String, accent: Color, hint: String = "") -> Panel
 	sb.content_margin_top = 8.0
 	sb.content_margin_right = 10.0
 	sb.content_margin_bottom = 8.0
-	panel.add_theme_stylebox_override("panel", sb)
+	power_panel.add_theme_stylebox_override("panel", sb)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 5)
-	panel.add_child(box)
+	power_panel.add_child(box)
 
 	var lbl := Label.new()
 	lbl.text = power
@@ -1757,7 +1758,7 @@ func _make_power_panel(power: String, accent: Color, hint: String = "") -> Panel
 		hint_lbl.add_theme_color_override("font_color", MUTED)
 		hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(hint_lbl)
-	return panel
+	return power_panel
 
 # Explication joueur du pouvoir, par faction (`HERO_POWER_HINT_<FID>`). Clé absente → chaîne vide,
 # donc ligne simplement omise : une faction sans texte rédigé n'affiche pas sa clé brute à l'écran.
@@ -1808,7 +1809,7 @@ func _make_xp_block(hero: Dictionary) -> VBoxContainer:
 	bar.custom_minimum_size = Vector2(0, 16)
 	bar.show_percentage = false
 	bar.max_value = maxi(xp_for, 1)
-	bar.value = (bar.max_value if at_max else clampi(xp_in, 0, xp_for))
+	bar.value = (bar.max_value if at_max else float(clampi(xp_in, 0, xp_for)))
 	_style_xp_bar(bar)
 	box.add_child(bar)
 
@@ -1900,11 +1901,11 @@ func _make_stats_block(hero: Dictionary, show_delta: bool = false) -> VBoxContai
 	return box
 
 # Cellule de valeur à largeur fixe, alignée à droite → colonnes ACTUEL / NIV. 50 alignées entre stats.
-func _value_col(text: String, color: Color, size: int) -> Label:
+func _value_col(text: String, color: Color, font_size: int) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", color)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER

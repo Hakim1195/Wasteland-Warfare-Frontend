@@ -369,9 +369,9 @@ func _refresh_all() -> void:
 	_populate_pass_tab()
 
 
-func _set_username(name: String) -> void:
+func _set_username(new_name: String) -> void:
 	if username_value:
-		username_value.text = name.to_upper()
+		username_value.text = new_name.to_upper()
 
 
 func _update_level_xp() -> void:
@@ -1675,11 +1675,11 @@ func _eyebrow(text: String) -> Label:
 
 
 # Label générique de la charte (texte DÉJÀ traduit → pas d'auto-traduction par Godot).
-func _mini(text: String, size: int, color: Color) -> Label:
+func _mini(text: String, font_size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", color)
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	return l
@@ -1841,6 +1841,7 @@ func _days_until(iso: String) -> int:
 	var end_epoch := int(Time.get_unix_time_from_datetime_string(iso.trim_suffix("Z")))
 	if end_epoch <= 0:
 		return -1
+	@warning_ignore("integer_division")  # division entière VOULUE : des jours pleins.
 	return maxi(0, int((end_epoch - int(Time.get_unix_time_from_system())) / 86400))
 
 

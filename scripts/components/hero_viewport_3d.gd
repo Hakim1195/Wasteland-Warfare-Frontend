@@ -25,7 +25,6 @@ const RIM_DEFAULT := Color(0.211765, 0.772549, 0.85098, 1)
 
 @onready var _viewport: SubViewport = $SubViewport
 @onready var _model_mount: Node3D = $SubViewport/HeroStage/ModelMount
-@onready var _camera: Camera3D = $SubViewport/HeroStage/Camera3D
 @onready var _key_light: DirectionalLight3D = $SubViewport/HeroStage/KeyLight
 @onready var _fill_light: DirectionalLight3D = $SubViewport/HeroStage/FillLight
 @onready var _rim_light: DirectionalLight3D = $SubViewport/HeroStage/RimLight

@@ -257,6 +257,7 @@ func _ready():
 	hud.roster_player_clicked.connect(_on_roster_player_clicked)
 	# Carte POUVOIR (lot E) : boutons contextuels (rouvrir Éclipse / Espionnage).
 	hud.power_action_requested.connect(_on_power_action_requested)
+	hud.confirm_accepted.connect(_on_confirm_accepted)
 	# PACTES (§8.123) : intentions du joueur (HUD → réseau) et messages PRIVÉS (réseau → HUD).
 	# Les offres et les refus ne sont JAMAIS diffusés : ils n'arrivent que par ces deux signaux.
 	hud.pact_offer_requested.connect(_on_pact_offer_requested)
@@ -321,8 +322,15 @@ func _ready():
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("ui_cancel"):
 		return
-	# §8.119 — ESC annule d'ABORD un ciblage de capacité en cours (le plus « modal » des deux
-	# états), sinon la désélection d'attaque/mouvement historique.
+	# ESC referme d'ABORD une confirmation modale ouverte — c'est le plus « modal » des états, et
+	# le geste d'échappement doit toujours annuler la question la plus engageante à l'écran. Sans
+	# cette branche EN TÊTE, ESC ouvrirait le Manuel de Guerre PAR-DESSUS la modale (branche finale).
+	if hud.is_confirm_open():
+		hud.hide_confirm()
+		get_viewport().set_input_as_handled()
+		return
+	# §8.119 — ESC annule ensuite un ciblage de capacité en cours (le plus « modal » des deux
+	# états restants), sinon la désélection d'attaque/mouvement historique.
 	if _ability_target_mode != "":
 		_cancel_ability_targeting(true)
 		get_viewport().set_input_as_handled()
@@ -610,6 +618,38 @@ func _valid_attack_targets(source_tid: String) -> Array:
 		if o != null and int(o) != _my_id():
 			out.append(str(tid))
 	return out
+
+# SUGGESTION D'ATTAQUE DU COACH (§8.129, complétée aux finitions pré-playtest).
+# Rend `{tid, source, name, prob}` — le MEILLEUR assaut possible ce tour-ci — ou `{}` si aucun.
+# `{}` couvre les cas réels : aucune garnison à ≥ 2, aucun voisin ennemi, phase inadaptée. Le coach
+# retombe alors sur son texte générique plutôt que de désigner un territoire au hasard.
+#
+# ⚠️ La RÈGLE reste ailleurs : ceci ne fait que classer des cibles déjà légales (`_valid_attack_targets`)
+# avec la prévision déjà calculée pour le survol (`CombatOdds`, G4 §8.63). Aucune arithmétique de
+# combat n'est réécrite ici, et le tutoriel ne peut donc pas conseiller un coup que le jeu refuserait.
+func tutorial_attack_hint() -> Dictionary:
+	if GameState.stage != "playing" or not _is_playing_my_turn():
+		return {}
+	var atk_mods := _faction_modifiers(str(_my_state().get("faction", "")))
+	var best := {}
+	for tid in GameState.territories:
+		var source := str(tid)
+		if _owner(source) != _my_id() or _garrison(source) < 2:
+			continue
+		for target in _valid_attack_targets(source):
+			var def_units := _garrison(str(target))
+			if def_units < 1:
+				continue
+			var def_owner := _owner(str(target))
+			var def_state: Dictionary = GameState.players.get(str(def_owner), {})
+			var odds := CombatOdds.conquest_probability(
+				_garrison(source), def_units, atk_mods,
+				_faction_modifiers(str(def_state.get("faction", ""))))
+			var prob := float(odds.get("win_prob", 0.0))
+			if best.is_empty() or prob > float(best["prob"]):
+				best = {"tid": str(target), "source": source, "prob": prob,
+					"name": _territory_name(str(target))}   # TRADUIT (clé TERR_<ID>, repli FR)
+	return best
 
 # =========================================================
 # Mouvement stratégique (lot E) — chaîne alliée de l'Éveil de la Ruche
@@ -1719,6 +1759,16 @@ func _push_power_card() -> void:
 	if bool(me.get("pending_spy_choice", false)):
 		lines.append(tr("POWER_STATE_SPY_PENDING"))
 		buttons.append({"label": tr("POWER_BTN_SPY"), "action": "spy"})
+	# --- BATTLE ROYALE (§8.125) : réanimation, reddition, coup d'État. ---
+	# ⚠️ PLACÉES AVANT LES CAPACITÉS DE HÉROS, et ce n'est pas cosmétique. `%PowerBox` est plafonné
+	# à 315 px et DÉFILE (§8.128) : tout ce qui dépasse est hors du champ tant qu'on ne fait pas
+	# défiler. En les laissant en dernier, une partie de traître affichait, dans l'ordre, la ligne
+	# d'ordre secret (2 lignes), RATIONNER, puis RÉANIMER — et repoussait COUP D'ÉTAT et SE RENDRE
+	# SOUS LE PLI (constaté en capture, invisible au boot headless). Le geste le plus décisif du
+	# mode se cachait derrière un défilement que rien n'annonçait.
+	# Règle retenue : le DÉCISIF avant le ROUTINIER. Ces trois actions sont uniques dans une partie
+	# et changent son issue ; RATIONNER se rejoue à chaque tour et le joueur sait déjà où il vit.
+	_append_battle_royale_actions(lines, buttons)
 	# --- CAPACITÉS DE HÉROS (§8.119) : les PP deviennent dépensables. ---
 	# RATIONNER : proposé aux 10 héros dès que le joueur a un héros initialisé. Toujours AFFICHÉ
 	# pendant son tour (grisé + raison en infobulle si indisponible) — un bouton qui disparaît
@@ -1745,8 +1795,6 @@ func _push_power_card() -> void:
 				"disabled": power_block != "",
 				"tooltip": tr(power_block) if power_block != "" else tr(str(spec.get("desc_key", ""))),
 			})
-	# --- BATTLE ROYALE (§8.125) : réanimation, reddition, coup d'État. ---
-	_append_battle_royale_actions(lines, buttons)
 	hud.set_power_card(lines, buttons)
 	# --- AIDES CONTEXTUELLES (§8.129) : première fois qu'une capacité est réellement ACTIVABLE.
 	# On teste `disabled == false` et non la simple présence : un bouton grisé n'apprend rien à
@@ -1805,7 +1853,9 @@ func _push_bounty_progress() -> void:
 	if typeof(crates) == TYPE_DICTIONARY:
 		var team := GameState.team_of(me)
 		opened = int(crates.get(str(team), crates.get(team, 0)))
-	hud.set_bounty_progress(total, opened, BR_CRATE_KILL_STEP, BR_CRATE_MAX)
+	hud.set_bounty_progress(total, opened,
+		_br_rule("crate_kill_step", BR_CRATE_KILL_STEP),
+		_br_rule("crate_max_per_team", BR_CRATE_MAX))
 
 
 # Coéquipiers MORTS, réanimables (ni déjà réanimés, ni hors partie).
@@ -1835,6 +1885,17 @@ func _append_battle_royale_actions(lines: Array, buttons: Array) -> void:
 	# --- ORDRE SECRET DU TRAÎTRE ---------------------------------------------------------------
 	# `GameState.traitors` est REDACTÉ à la source : s'il contient une entrée, elle est FORCÉMENT
 	# la nôtre (le serveur ne nous envoie jamais celle d'autrui). Aucun filtrage à faire ici.
+	#
+	# ⚠️⚠️ POURQUOI UN NON-TRAÎTRE NE VOIT AUCUN BOUTON — PAS MÊME GRISÉ. C'est la seule exception
+	# du HUD à la règle « toujours afficher, griser avec sa raison » (§8.119), et elle est délibérée.
+	# Le tirage des traîtres est TOUT-OU-RIEN et GLOBAL (`battle_royale.assign_traitors`) : soit
+	# CHAQUE équipe a le sien, soit AUCUNE n'en a. Cette indiscernabilité EST la mécanique. Un bouton
+	# grisé « COUP D'ÉTAT — vous n'avez pas d'ordre » apprendrait au joueur que le dispositif existe
+	# dans SA partie ; comme le tirage est global, il en déduirait aussitôt que l'équipe adverse a,
+	# elle aussi, son traître — un renseignement que le serveur refuse précisément de donner (§4).
+	# L'absence de bouton est donc AMBIGUË PAR CONSTRUCTION : elle ne distingue pas « pas de traître
+	# dans cette partie » de « le traître, c'est quelqu'un d'autre ». C'est exactement l'état de
+	# doute recherché — il n'y a rien à calculer, seulement à se méfier.
 	var my_victim := -1
 	for k in GameState.traitors.keys():
 		my_victim = int(GameState.traitors[k])
@@ -1854,16 +1915,17 @@ func _append_battle_royale_actions(lines: Array, buttons: Array) -> void:
 	# sous-titre — c'est la seule chose que le joueur doit peser avant de cliquer.
 	if alive and _is_playing_my_turn() and int(GameState.current_phase) in [1, 2, 3, 4]:
 		var my_hp := int(my_state.get("hero_pv_current", 0))
+		var revive_cost := _br_revive_cost()
 		var already_revived := int(_br_state().get("revives_done", {}).get(str(me), 0)) > 0
 		for mate in _revivable_teammates():
 			var blocked := ""
 			if already_revived:
 				blocked = "BR_ERR_ALREADY_USED"
-			elif my_hp - BR_REVIVE_COST < 1:
+			elif my_hp - revive_cost < _br_revive_floor():
 				blocked = "BR_ERR_NOT_ENOUGH_HP"
 			buttons.append({
 				"label": tr("BR_REVIVE") + " — " + _display_name(mate),
-				"subtitle": tr("BR_REVIVE_COST_FMT") % BR_REVIVE_COST,
+				"subtitle": tr("BR_REVIVE_COST_FMT") % revive_cost,
 				"action": "br_revive_%d" % int(mate),
 				"disabled": blocked != "",
 				"tooltip": tr(blocked) if blocked != "" else tr("BR_REVIVE_DESC"),
@@ -1871,22 +1933,24 @@ func _append_battle_royale_actions(lines: Array, buttons: Array) -> void:
 
 	# --- COUP D'ÉTAT ---------------------------------------------------------------------------
 	# Visible du SEUL traître, et seulement pendant sa phase d'attaque. ⚠️ CONFIRMATION EN DEUX
-	# TEMPS (cf. `_coup_armed`) : c'est le seul geste du jeu qui peut tuer son auteur et clore la
-	# partie sur un clic. Un mécanisme d'idempotence serveur protège du double-envoi, pas du
-	# clic MALHEUREUX — et ici le clic malheureux est irrattrapable.
+	# TEMPS par MODALE (`_prompt_coup_detat`) : c'est le seul geste du jeu qui peut tuer son auteur
+	# et clore la partie sur un clic. L'idempotence serveur protège du double-envoi, pas du clic
+	# MALHEUREUX — et ici le clic malheureux est irrattrapable. La modale a remplacé l'armement du
+	# bouton : armer changeait le libellé sur place, donc au même endroit que le clic qui venait
+	# d'avoir lieu — la souris était déjà sur la cible, et le second clic partait trop facilement.
 	if my_victim >= 0 and alive:
 		var coup_used: Array = _br_state().get("coup_used", [])
 		var coup_block := ""
 		if me in coup_used.map(func(v): return int(v)):
 			coup_block = "BR_ERR_ALREADY_USED"
-		elif round_now < BR_COUP_MIN_ROUND:
+		elif round_now < _br_coup_round():
 			coup_block = "BR_ERR_NO_SURRENDER_YET"
 		elif not (_is_playing_my_turn() and int(GameState.current_phase) == 3):
 			coup_block = "BR_ERR_NOT_YOUR_TURN"
 		elif str(GameState.players.get(str(my_victim), {}).get("status", "")) != "alive":
 			coup_block = "BR_ERR_INVALID_TARGET"
 		buttons.append({
-			"label": tr("BR_COUP_CONFIRM") if _coup_armed else tr("BR_COUP_BUTTON"),
+			"label": tr("BR_COUP_BUTTON"),
 			"subtitle": tr("BR_COUP_SUBTITLE") % _display_name(my_victim),
 			"action": "br_coup",
 			"disabled": coup_block != "",
@@ -1913,7 +1977,7 @@ func _append_battle_royale_actions(lines: Array, buttons: Array) -> void:
 		var surr_block := ""
 		if voted:
 			surr_block = "BR_ERR_ALREADY_USED"
-		elif round_now < BR_SURRENDER_MIN_ROUND:
+		elif round_now < _br_surrender_round():
 			surr_block = "BR_ERR_NO_SURRENDER_YET"
 		buttons.append({
 			"label": tr("BR_SURRENDER"),
@@ -1973,28 +2037,92 @@ func _on_power_action_requested(action: String) -> void:
 		"ability_power":
 			_start_power_activation()
 		"br_surrender":
-			_last_coded_action = "br"
-			NetworkManager.send_action("team_surrender", {})
+			# CLIC 1 : la modale rappelle que l'unanimité des VIVANTS est requise — un joueur qui
+			# vote en croyant se rendre seul serait doublement déçu (il reste en jeu ET son camp
+			# sait qu'il a lâché). CLIC 2 : envoi.
+			hud.show_confirm({
+				"title": tr("BR_SURRENDER"),
+				"body": tr("BR_SURRENDER_CONFIRM"),
+				"confirm": tr("BR_SURRENDER"),
+				"action": "br_surrender",
+			})
 		"br_coup":
-			# CONFIRMATION EN DEUX TEMPS : le 1er clic ARME (le bouton devient rouge et change de
-			# libellé), le 2e envoie. Ce geste peut tuer son auteur et clore la partie — le protéger
-			# d'un clic malheureux vaut la seconde de friction. `_push_power_card` re-rend la carte,
-			# donc le nouveau libellé apparaît immédiatement.
-			if not _coup_armed:
-				_coup_armed = true
-				hud.add_log("⚠ " + tr("BR_COUP_ARMED"))
-				_push_power_card()
-				return
-			_coup_armed = false
-			_last_coded_action = "br"
-			NetworkManager.send_action("coup_detat", {})
+			_prompt_coup_detat()
 		_:
 			# RÉANIMER : l'id de la cible est encodé dans l'action (`br_revive_<pid>`) — un bouton
 			# par mort, cf. `_append_battle_royale_actions`.
 			if action.begins_with("br_revive_"):
+				_prompt_revive(int(action.trim_prefix("br_revive_")))
+
+# --- Confirmations modales des trois gestes irréversibles -------------------------------------
+# Elles ne DÉCIDENT rien (Vue pure §6.1) : elles ré-affichent, chiffré, ce que le joueur s'apprête
+# à payer. Le serveur reste seul juge — une modale validée sur un état périmé se fait refuser
+# normalement, et le refus s'affiche par le pipeline `BR_ERROR_KEYS`.
+
+func _prompt_revive(target_id: int) -> void:
+	var cost := _br_revive_cost()
+	var after: int = max(0, int(_my_state().get("hero_pv_current", 0)) - cost)
+	hud.show_confirm({
+		"title": tr("BR_REVIVE"),
+		# Le montant ET le solde résultant : « −100 PV » seul obligerait le joueur à faire la
+		# soustraction lui-même, au moment précis où il doit juger s'il survivra au sacrifice.
+		"body": tr("BR_REVIVE_CONFIRM") % [cost, _display_name(target_id), after],
+		"confirm": tr("BR_REVIVE"),
+		"action": "br_revive_%d" % int(target_id),
+	})
+
+func _prompt_coup_detat() -> void:
+	var my_victim := -1
+	for k in GameState.traitors.keys():
+		my_victim = int(GameState.traitors[k])
+	if my_victim < 0:
+		return
+	var mine := _coup_power(_my_id())
+	var theirs := _coup_power(my_victim)
+	# STRICTEMENT supérieur (miroir de `battle_royale.coup_outcome`) : à égalité, le traître meurt.
+	# Annoncer « FAVORABLE » sur une égalité serait le pire mensonge possible de cette interface.
+	var favourable := mine > theirs
+	hud.show_confirm({
+		"title": tr("BR_COUP_BUTTON"),
+		"body": tr("BR_COUP_MODAL_BODY") % _display_name(my_victim),
+		"detail": tr("BR_COUP_POWER_FMT") % [mine, theirs,
+			tr("BR_COUP_FAVOURABLE") if favourable else tr("BR_COUP_UNFAVOURABLE")],
+		# Le VERDICT porte la couleur : vert/rouge se lisent avant le chiffre. On ne bloque pas
+		# pour autant un coup défavorable — le traître a le droit de se sacrifier en connaissance
+		# de cause, et la règle reste celle du serveur.
+		"detail_color": Color("7fbf5f") if favourable else Color("d6453f"),
+		"confirm": tr("BR_COUP_EXECUTE"),
+		"accent": Color("d6453f"),
+		"action": "br_coup",
+	})
+
+# Envoi RÉEL, après confirmation de la modale.
+func _on_confirm_accepted(action: String) -> void:
+	match action:
+		"br_surrender":
+			_last_coded_action = "br"
+			NetworkManager.send_action("team_surrender", {})
+		"br_coup":
+			_last_coded_action = "br"
+			NetworkManager.send_action("coup_detat", {})
+		_:
+			if action.begins_with("br_revive_"):
 				_last_coded_action = "br"
 				NetworkManager.send_action("team_revive",
 					{"target_player_id": int(action.trim_prefix("br_revive_"))})
+
+# Puissance de frappe d'un joueur pour le COUP D'ÉTAT — MIROIR EXACT de `engine._coup_power` :
+# total de SES garnisons sur toute la carte + PV de son héros. Les deux termes sont PUBLICS (la
+# carte et les PV sont diffusés à tous), donc ce calcul ne révèle rien que le joueur ne puisse
+# faire à la main en comptant les territoires — il lui épargne seulement de compter 42 cases.
+# ⚠️ Si la formule serveur change, la changer ICI aussi : une modale qui annonce « FAVORABLE »
+# sur une règle périmée enverrait le traître à la mort en lui promettant l'inverse.
+func _coup_power(pid: int) -> int:
+	var total := 0
+	for tid in GameState.territories:
+		if _owner(str(tid)) == int(pid):
+			total += _garrison(str(tid))
+	return total + int(GameState.players.get(str(int(pid)), {}).get("hero_pv_current", 0))
 
 # =========================================================
 # CAPACITÉS DE HÉROS (§8.119) — RATIONNER + pouvoir de faction du trio pilote
@@ -2055,17 +2183,34 @@ const ABILITY_ERROR_KEYS := {
 }
 
 # --- BATTLE ROYALE (§8.125) ------------------------------------------------------------------
-# Réglages RECOPIÉS du registre serveur (`battle_royale.BR_RULES`) — ils ne servent QU'À AFFICHER
-# (coût annoncé, grisage anticipé). Le serveur reste l'autorité : une valeur qui divergerait ici
-# ferait au pire promettre un coût inexact, jamais appliquer une règle fausse.
+# ⚠️ REPLIS SEULEMENT — la valeur qui fait foi arrive de l'état serveur (`battle_royale.rules`,
+# diffusé depuis `BR_RULES` par `battle_royale.public_rules()`). Ces constantes ne servent QUE
+# lorsque l'état n'en porte pas : partie née avant le champ, ou serveur pas encore redéployé.
+#
+# POURQUOI CE CHANGEMENT (finitions pré-playtest) : ces cinq nombres étaient auparavant la SOURCE
+# côté client. Un rééquilibrage serveur — changer le coût d'une réanimation, par exemple — aurait
+# laissé l'interface annoncer l'ancien montant. Or ici l'interface ne décore pas : elle promet
+# (« vous tomberez à N PV »). Une promesse fausse est pire qu'un refus, parce que le joueur a déjà
+# pris sa décision quand il découvre l'écart. Le repli reste, lui, sans danger : au pire il affiche
+# une valeur périmée sur un serveur ancien, exactement le comportement d'avant.
 const BR_REVIVE_COST := 100
+const BR_REVIVE_MIN_REMAINING := 1
 const BR_SURRENDER_MIN_ROUND := 3
 const BR_COUP_MIN_ROUND := 4
-# Caisses de ravitaillement : palier de kills d'ÉQUIPE et plafond par partie
-# (`BR_RULES["crate_kill_step"]` / `["crate_max_per_team"]`). Recopiés au même titre que les
-# précédents : ils n'alimentent QUE l'affichage du suivi des primes, jamais une décision.
 const BR_CRATE_KILL_STEP := 50
 const BR_CRATE_MAX := 4
+
+# Lecture d'un réglage Battle Royale : l'état SERVEUR d'abord, le repli client ensuite.
+func _br_rule(key: String, fallback: int) -> int:
+	var rules = _br_state().get("rules", {})
+	if typeof(rules) != TYPE_DICTIONARY or not rules.has(key):
+		return fallback
+	return int(rules[key])
+
+func _br_revive_cost() -> int:      return _br_rule("revive_hp_cost", BR_REVIVE_COST)
+func _br_revive_floor() -> int:     return _br_rule("revive_min_remaining_hp", BR_REVIVE_MIN_REMAINING)
+func _br_surrender_round() -> int:  return _br_rule("surrender_min_round", BR_SURRENDER_MIN_ROUND)
+func _br_coup_round() -> int:       return _br_rule("coup_min_round", BR_COUP_MIN_ROUND)
 
 # Refus CODÉS des actions Battle Royale. Jeu de codes DISTINCT de celui des capacités et des
 # pactes bien que plusieurs noms coïncident (`already_used`, `invalid_target`, `not_your_turn`) :
@@ -2080,11 +2225,6 @@ const BR_ERROR_KEYS := {
 	"not_traitor": "BR_ERR_NOT_TRAITOR",
 	"no_surrender_yet": "BR_ERR_NO_SURRENDER_YET",
 }
-
-# COUP D'ÉTAT armé (1er clic) → le 2e envoie. Remis à false à l'envoi, au refus, et à chaque
-# changement de tour (ci-dessous) : une confirmation qui SURVIVRAIT au tour suivant serait un
-# piège — le joueur cliquerait « attaquer » et déclencherait son coup d'État.
-var _coup_armed := false
 
 # Mode de ciblage EN COURS pour une capacité ("" = aucun). Quand il est armé, le prochain clic de
 # territoire est CONSOMMÉ par la capacité au lieu du jeu normal (attaque / mouvement).
@@ -2570,6 +2710,26 @@ func _play_battle_royale_feedback(event) -> void:
 				_show_br_overlay(CrateRevealScript, func(node):
 					node.play(str(crate.get("reward_id", "")), int(crate.get("total", 0)), named,
 						int(crate.get("team_kills", 0))))
+
+	# --- VOTE DE REDDITION : le compteur bouge chez les COÉQUIPIERS, pas seulement chez le votant.
+	# Sans ce toast, un joueur qui vote voit « 1/2 » et n'a aucun moyen de savoir si son camarade a
+	# vu la demande : le vote unanime se jouait en silence, et le silence se lit comme un refus.
+	# On ne le montre QU'AUX MEMBRES DE L'ÉQUIPE — annoncer à l'adversaire qu'un camp hésite à se
+	# rendre lui offrirait un renseignement gratuit sur son moral.
+	if str(event.get("event_type", "")) == "team_surrender_vote":
+		var vote_team := int(event.get("team_id", -1))
+		if GameState.team_mode != "" and vote_team == GameState.team_of(_my_id()):
+			var voter := int(event.get("voter_id", -1))
+			var votes_arr: Array = event.get("votes", [])
+			var needed_arr: Array = event.get("needed", [])
+			if bool(event.get("surrendered", false)):
+				hud.show_action_toast(tr("BR_SURRENDER_DONE") % vote_team, Color("d6453f"), 2.2)
+			elif voter != _my_id():
+				# Le votant, lui, a déjà eu sa modale : le lui répéter serait du bruit.
+				hud.show_action_toast(
+					tr("BR_SURRENDER_VOTED") % [_display_name(voter),
+						votes_arr.size(), needed_arr.size()],
+					Color("d6453f"), 2.2)
 
 	# --- COUP D'ÉTAT : vu par TOUS, c'est tout son intérêt. ---
 	if str(event.get("event_type", "")) == "coup_detat":
@@ -3118,7 +3278,9 @@ func _on_game_error(message: String):
 	# §8.125 — refus d'une action BATTLE ROYALE. Testé AVANT les capacités, pour la même raison que
 	# les pactes : les jeux de codes partagent des noms et seul le contexte les distingue.
 	if reason != "" and BR_ERROR_KEYS.has(reason) and coded_family == "br":
-		_coup_armed = false   # un refus DÉSARME le coup d'État (on ne laisse jamais un piège armé).
+		# Un refus referme toute confirmation encore ouverte : la question posée portait sur un état
+		# que le serveur vient de démentir, la laisser à l'écran inviterait à re-cliquer dans le vide.
+		hud.hide_confirm()
 		hud.add_log("⚠ " + tr(str(BR_ERROR_KEYS[reason])))
 		_push_power_card()
 		return
@@ -3436,11 +3598,11 @@ func _maybe_show_banner() -> void:
 	if turn_key != _banner_turn_key:
 		_banner_turn_key = turn_key
 		_banner_phase = phase
-		# §8.125 — le COUP D'ÉTAT armé ne SURVIT PAS au changement de tour. Sans ce désarmement, un
-		# joueur qui a armé puis laissé passer son tour retrouverait le bouton en position
-		# « CONFIRMER » et déclencherait son coup d'un clic qu'il croyait anodin. Une confirmation
-		# ne doit jamais survivre au contexte qui l'a demandée.
-		_coup_armed = false
+		# §8.125 — une confirmation ne SURVIT PAS au changement de tour. Le chiffrage qu'elle
+		# affiche (PV restants, rapport de force) a été calculé dans le tour précédent : le laisser
+		# à l'écran, c'est proposer de valider une décision sur des nombres périmés. Une
+		# confirmation ne doit jamais survivre au contexte qui l'a demandée.
+		hud.hide_confirm()
 		if cur_pid == _my_id():
 			_phase_banner.show_banner(tr("BANNER_YOUR_TURN"), Color("e0b249"))
 			AudioManager.play_sfx("your_turn")

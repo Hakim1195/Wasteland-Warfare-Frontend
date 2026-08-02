@@ -1,7 +1,6 @@
 extends Node
 
 signal server_connected
-signal lobby_action_success(action: String, data: Dictionary)
 signal lobby_error(message: String)
 # Session expirée (§AC.5) : émis UNE SEULE FOIS quand une réponse REST authentifiée revient en
 # 401/403. Les écrans hub s'y abonnent pour rediriger vers l'auth — aucun retry, aucune tempête.
@@ -281,6 +280,11 @@ func _ready() -> void:
 		websocket_url = cfg.ws_host + "/ws/"
 	# Une (re)connexion réussie RÉ-ARME la session (retour de l'écran d'auth après expiration).
 	AuthManager.auth_success.connect(func(_m): _session_valid = true)
+	# Le _process ne sert QUE le WebSocket : il démarre à connect_to_server et s'arrête à la
+	# coupure. Sans cette ligne il tourne dès la frame 1 du boot sur un peer JAMAIS connecté — or
+	# un WebSocketPeer neuf naît en STATE_CLOSED (cf. connect_to_server) → fausse annonce
+	# « connexion perdue (code -1) » + émission server_connection_lost parasite au démarrage.
+	set_process(false)
 
 # =========================================================
 # PARTIE 1 : MULTIJOUEUR TEMPS RÉEL (WEBSOCKET)
@@ -889,6 +893,13 @@ func company_mine() -> void:
 func fetch_company_badge() -> void:
 	_send_api_request("/company/badge", HTTPClient.METHOD_GET, {}, _on_company_badge)
 
+# INVITATION DE COMPAGNIE (finitions pré-playtest) : le chef d'escouade dépose une invitation que
+# ses camarades découvrent au prochain rafraîchissement de la pastille (≤ 15 s). La réponse suit la
+# convention zéro-4xx (§8.112) — `{invited, reason}` — et repasse par le callback d'état de
+# compagnie, qui propage le dict COMPLET à l'écran.
+func company_invite() -> void:
+	_send_api_request("/company/invite", HTTPClient.METHOD_POST, {}, _on_company_response)
+
 func _on_company_badge(_result, response_code, _headers, body, http_node):
 	http_node.queue_free()
 	# Serveur non redéployé → 404 : on émet un badge VIDE plutôt que rien. L'onglet existe déjà côté
@@ -902,11 +913,11 @@ func company_mark_seen() -> void:
 	_send_api_request("/company/seen", HTTPClient.METHOD_POST, {},
 		func(_r, _rc, _h, _b, http_node): http_node.queue_free())
 
-func company_create(tag: String, name: String, emblem_id: int) -> void:
+func company_create(tag: String, company_name: String, emblem_id: int) -> void:
 	# Le serveur NORMALISE (strip, majuscules, espaces réduits) avant tout contrôle ; on nettoie
 	# aussi ici pour que l'AFFICHAGE colle à ce qui sera enregistré.
 	_send_api_request("/company/create", HTTPClient.METHOD_POST,
-		{"tag": tag.strip_edges().to_upper(), "name": name.strip_edges(),
+		{"tag": tag.strip_edges().to_upper(), "name": company_name.strip_edges(),
 		 "emblem_id": int(emblem_id)}, _on_company_response)
 
 func company_join(code: String) -> void:
@@ -927,8 +938,8 @@ func company_transfer(user_id: int) -> void:
 func company_regen_code() -> void:
 	_send_api_request("/company/regen_code", HTTPClient.METHOD_POST, {}, _on_company_response)
 
-func company_rename(name: String) -> void:
-	_send_api_request("/company/rename", HTTPClient.METHOD_POST, {"name": name.strip_edges()},
+func company_rename(new_name: String) -> void:
+	_send_api_request("/company/rename", HTTPClient.METHOD_POST, {"name": new_name.strip_edges()},
 		_on_company_response)
 
 func company_set_emblem(emblem_id: int) -> void:

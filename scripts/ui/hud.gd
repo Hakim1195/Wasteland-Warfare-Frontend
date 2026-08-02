@@ -323,6 +323,8 @@ func _ready() -> void:
 	%AbandonButton.pressed.connect(_on_abandon_clicked)
 	%ToggleSidePanelButton.pressed.connect(_toggle_side_panel)
 	%ToggleBottomPanelButton.pressed.connect(_toggle_bottom_panel)
+	# Redimensionnement : la barre ancrée en bas se replace d'autorité → on ré-applique l'état replié.
+	resized.connect(_on_hud_resized)
 	%TogglePlayerSheetButton.pressed.connect(_toggle_player_sheet)
 	# Fiche joueur (lot A) : les flèches parcourent l'ordre de tour et RE-ÉMETTENT
 	# roster_player_clicked (même sémantique que l'ancien clic de ligne du War Roster).
@@ -2364,6 +2366,135 @@ func _pact_toast_button(key: String, accent: Color, accept: bool) -> Button:
 	return b
 
 # =========================================================
+# CONFIRMATION MODALE D'ARÈNE (finitions pré-playtest) — gestes IRRÉVERSIBLES
+# =========================================================
+# Voile plein écran + panneau centré, construit sur le MÊME patron que `warzone_ui._open_info_modal`
+# (référence maison, elle-même calquée sur le Classement) — mais avec DEUX boutons au lieu d'une
+# fermeture au clic : on ne referme pas par mégarde une question dont la réponse engage la partie.
+#
+# POURQUOI UNE MODALE ET PAS UN SIMPLE BOUTON. Les trois gestes du Battle Royale qui passent par
+# ici sont irréversibles et coûteux : réanimer ampute durablement ses propres PV, voter la reddition
+# engage l'équipe, et le coup d'État tue son auteur s'il échoue. Le grisage protège du geste
+# ILLÉGAL ; il ne protège pas du geste MALHEUREUX — celui qu'on fait en visant le bouton d'à côté.
+# La modale ajoute la seule chose qui manquait : le joueur relit ce qu'il s'apprête à payer, chiffré,
+# avant que ce soit parti. L'idempotence serveur (`action_id`) couvre le double-envoi, pas l'erreur
+# de visée.
+#
+# ⚠️ Un SEUL panneau à la fois — un second appel remplace le premier (même règle que le coach,
+# §8.129 : jamais deux panneaux à l'écran).
+signal confirm_accepted(action: String)
+
+var _confirm_veil: ColorRect = null
+var _confirm_action: String = ""
+
+# spec = { title, body, detail?, detail_color?, confirm, accent?, action }
+func show_confirm(spec: Dictionary) -> void:
+	hide_confirm()
+	_confirm_action = str(spec.get("action", ""))
+	var accent: Color = spec.get("accent", ACCENT_CYAN)
+
+	var veil := ColorRect.new()
+	veil.name = "ConfirmOverlay"
+	veil.color = Color(0, 0, 0, 0.62)
+	# STOP, et pas IGNORE : le HUD entier est transparent aux clics (mouse_filter = IGNORE sur la
+	# racine). Sans ce STOP, un clic « à côté » du panneau traverserait jusqu'au PLATEAU et
+	# sélectionnerait un territoire derrière la question posée.
+	veil.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(veil)
+	# ⚠️ Ancrage APRÈS `add_child` : sur un Control encore DÉTACHÉ, le preset se compose avec la
+	# taille courante et DOUBLE le rect (piège payé au §8.121).
+	veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	veil.gui_input.connect(func(ev: InputEvent) -> void:
+		# Clic HORS du panneau = annulation. Le panneau, lui, absorbe ses propres clics.
+		if ev is InputEventMouseButton and ev.pressed:
+			hide_confirm())
+	_confirm_veil = veil
+
+	var center := CenterContainer.new()
+	veil.add_child(center)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var pan := PanelContainer.new()
+	pan.custom_minimum_size = Vector2(620, 0)
+	pan.mouse_filter = Control.MOUSE_FILTER_STOP   # absorbe les clics : ne referme pas le voile
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(2)
+	st.border_color = accent
+	st.set_content_margin_all(28.0)
+	st.shadow_color = Color(0, 0, 0, 0.55)
+	st.shadow_size = 12
+	pan.add_theme_stylebox_override("panel", st)
+	center.add_child(pan)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 14)
+	pan.add_child(col)
+
+	var head := Label.new()
+	head.text = str(spec.get("title", ""))
+	head.add_theme_font_size_override("font_size", FS_SECTION)
+	head.add_theme_color_override("font_color", accent)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(head)
+
+	var body := Label.new()
+	body.text = str(spec.get("body", ""))
+	body.add_theme_font_size_override("font_size", FS_BODY)
+	body.add_theme_color_override("font_color", Color("eef3f7"))
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(body)
+
+	# Ligne de VERDICT facultative (le rapport de force du coup d'État) : sa COULEUR porte
+	# l'information autant que son texte, d'où le paramètre dédié.
+	var detail := str(spec.get("detail", ""))
+	if detail != "":
+		var det := Label.new()
+		det.text = detail
+		det.add_theme_font_size_override("font_size", FS_VALUE)
+		det.add_theme_color_override("font_color", spec.get("detail_color", HERO_MUTED))
+		det.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		det.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		col.add_child(det)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.add_child(row)
+	# ANNULER en PREMIER (à gauche) : la sortie sans conséquence doit être la plus facile à viser.
+	row.add_child(_confirm_button(tr("MENU_QUIT_CANCEL"), HERO_MUTED, false))
+	row.add_child(_confirm_button(str(spec.get("confirm", "")), accent, true))
+
+func _confirm_button(label: String, accent: Color, accept: bool) -> Button:
+	var b := Button.new()
+	b.text = label
+	b.focus_mode = Control.FOCUS_NONE
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	b.add_theme_font_size_override("font_size", FS_BODY)
+	b.add_theme_color_override("font_color", accent)
+	b.custom_minimum_size = Vector2(190, 40)
+	b.pressed.connect(func() -> void:
+		AudioManager.play_sfx("click")
+		# On CAPTURE l'action avant de fermer : `hide_confirm` remet `_confirm_action` à vide.
+		var action := _confirm_action
+		hide_confirm()
+		if accept and action != "":
+			confirm_accepted.emit(action))
+	return b
+
+func hide_confirm() -> void:
+	if _confirm_veil != null and is_instance_valid(_confirm_veil):
+		_confirm_veil.queue_free()
+	_confirm_veil = null
+	_confirm_action = ""
+
+func is_confirm_open() -> bool:
+	return _confirm_veil != null and is_instance_valid(_confirm_veil)
+
+# =========================================================
 # Toast d'ACTIVATION DE POUVOIR (lot E) — « ⚡ Razzia (relance totale) »
 # =========================================================
 # Composant DÉDIÉ (distinct du toast d'action adverse, qui vit plus haut) : file interne, ~2 s par
@@ -3046,16 +3177,44 @@ static func _bottom_panel_y(wrapper_h: float, glass_h: float, hidden: bool,
 
 # Replie (vers le BAS) / déploie la barre basse.
 func _toggle_bottom_panel() -> void:
+	_bottom_hidden = not _bottom_hidden
+	_apply_bottom_panel_state(true)
+
+
+# Applique l'état COURANT (`_bottom_hidden`) à la position ET au glyphe du bouton.
+# `animated` = false → recalage instantané (redimensionnement), sans glissement parasite.
+#
+# ⚠️ SOURCE UNIQUE DE VÉRITÉ : le BOOLÉEN, jamais la position. Les deux sorties (où est la barre,
+# ce que dit le bouton) sont dérivées d'ici et ne peuvent donc plus se contredire.
+func _apply_bottom_panel_state(animated: bool) -> void:
 	var wrapper: Control = %ToggleBottomPanelButton.get_parent()  # BottomCenterWidget (VBox)
 	var glass: Control = wrapper.get_node("GlassBody")
-	_bottom_hidden = not _bottom_hidden
 	var target_y: float = _bottom_panel_y(wrapper.size.y, glass.size.y, _bottom_hidden,
 		size.y, %ToggleBottomPanelButton.size.y)
 	%ToggleBottomPanelButton.text = "▲" if _bottom_hidden else "▼"
 	if _bottom_tween and _bottom_tween.is_valid():
 		_bottom_tween.kill()
+	if not animated:
+		wrapper.position.y = target_y
+		return
 	_bottom_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_bottom_tween.tween_property(wrapper, "position:y", target_y, BOTTOM_SLIDE_TIME)
+
+
+# 🐛 DÉFAUT CORRIGÉ (reste-à-faire §9 du chantier tutoriel) : « redimensionner la fenêtre alors que
+# la barre est repliée la fait réapparaître, avec le bouton encore en ▲ ».
+#
+# CAUSE : la barre est ancrée en bas ; un redimensionnement recalcule ses offsets et la ramène
+# d'autorité à sa position DÉPLOYÉE. Or `_bottom_hidden` restait vrai et le bouton continuait
+# d'afficher ▲ — l'état affiché et l'état réel divergeaient, et il fallait deux clics pour s'en
+# sortir (un pour « replier » ce qui était déjà déplié, un pour rouvrir).
+#
+# Le correctif ne cherche pas à empêcher le recalcul : il le SUIT. À chaque redimensionnement, on
+# ré-applique l'état de vérité — c'est le booléen qui gagne, comme partout ailleurs.
+func _on_hud_resized() -> void:
+	if not _op_built:
+		return   # la barre n'existe pas encore : rien à resynchroniser
+	_apply_bottom_panel_state(false)
 
 # =========================================================
 # Masquage de l'UI pour le Split-Screen VS (§8.29)

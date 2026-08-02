@@ -3351,3 +3351,195 @@ confirmation + toast de prime, 19 pour le Manuel (3 + 8 titres + 8 corps), 6 de 
 > complète demande une recette manuelle sur un compte neuf.
 >
 > ⚠️ **VPS + client ENSEMBLE** (le client se tait si `/auth/me` n'émet pas `tutorial_done`).
+
+---
+
+## §8.130 — HYGIÈNE DU DÉBOGUEUR : zéro rouge, zéro jaune au boot et sur les écrans hub
+
+**Pourquoi.** Le débogueur portait 22 entrées permanentes (relevé 2026-08-02) : 2 vraies erreurs
+runtime, 1 avertissement runtime, 19 avertissements statiques de l'analyseur. Ce bruit de fond
+rend les VRAIES régressions invisibles — objectif du lot : un débogueur qui ne dit plus rien tant
+que rien ne va mal. **100 % client, zéro backend, zéro contrat réseau.**
+
+### Les deux erreurs runtime (les seules lignes ROUGES)
+
+1. **`ERR_BUSY` sur `/auth/me`** — `auth_manager.get_profile()` partage UN `HTTPRequest` entre
+   quatre appelants (`top_nav`, `profile`, `leaderboard`, restauration de session §P1). Le
+   `_ready()` d'un ENFANT s'exécutant avant celui de son parent, la nav (montée par l'écran hôte)
+   tire toujours la première → le `get_profile()` de l'écran Profil heurtait un nœud occupé.
+   **Correctif : drapeau `_profile_in_flight`** (même idiome que `_steam_poll_in_flight`) —
+   l'appel de trop est **SAUTÉ**, jamais heurté ; remis à faux dans `_on_request_completed`,
+   SEUL handler du nœud, donc sur tout dénouement. ⚠️ Un garde sur le CODE DE RETOUR ne suffit
+   PAS : le moteur logge la ligne rouge (`http_request.cpp`, « Condition "requesting" is true »)
+   AVANT de rendre `ERR_BUSY` — vérifié en jeu, le premier correctif tenté (test du retour)
+   laissait la ligne rouge. Personne ne perd de données : chaque écran s'abonne à
+   `profile_loaded` AVANT d'appeler, la réponse UNIQUE sert tous les auditeurs (pseudo affiché,
+   vérifié en jeu). Couvre AUSSI le défaut latent du Classement (même montage nav + écran).
+
+2. **« NETWORK: connexion WebSocket perdue (code -1) » au BOOT** — le `_process` de
+   `network_manager` tourne dès la frame 1 (un Node avec `_process` l'active d'office) sur un
+   `WebSocketPeer` JAMAIS connecté ; or un peer neuf naît en `STATE_CLOSED` (cf. §8.116) → la
+   branche « coupure non applicative » (§8.118) annonçait une perte fictive et CONSOMMAIT
+   `_connection_lost_emitted` avant toute partie. **Correctif : `set_process(false)` au
+   `_ready`**, symétrique du `set_process(true)` de `connect_to_server`.
+
+### L'avertissement runtime
+
+`top_nav._build_quit_dialog()` forçait `position`/`size` APRÈS `PRESET_FULL_RECT` → le layout les
+écrase (« Nodes with non-equal opposite anchors will have their size overridden… »). Deux lignes
+de code MORT : avec `top_level = true`, les ancres d'un Control se réfèrent au viewport —
+vérifié en jeu après suppression, le dialogue couvre 1920×1080 par les ancres seules.
+
+### Les 19 avertissements statiques
+
+- **Shadowing ×9** — paramètres/locales `name`/`size`/`show`/`panel`/`wrap` masquant des membres
+  de `Node`/`Control`/`CanvasItem` (ou une variable de classe) → renommés `company_name`,
+  `new_name`, `font_size`, `show_side`, `power_panel`, `block`. Chaque fonction relue EN ENTIER
+  avant renommage : ⚠️ un usage raté retomberait SILENCIEUSEMENT sur le membre de la classe de
+  base et compilerait quand même.
+- **`INTEGER_DIVISION` ×3** — divisions entières VOULUES (échantillons audio, jours pleins,
+  coins par niveau) → `@warning_ignore("integer_division")` commenté, idiome déjà en place
+  (`shop.gd`, `search_screen.gd`…).
+- **`INCOMPATIBLE_TERNARY` ×3** — `PackedStringArray()` au lieu de `[]` (settings_manager) ;
+  `String(...)` sur les retours `TranslationServer.translate()`, qui rend un StringName
+  (hero_stats_view) ; `float(clampi(...))` vers `Range.value` (characters_screen).
+- **`INT_AS_ENUM` ×1** — `_label(..., align: HorizontalAlignment)` (company_screen) ; tous les
+  appels passent déjà des constantes `HORIZONTAL_ALIGNMENT_*`, aucun warning déplacé.
+- **`UNUSED_SIGNAL`** — `lobby_action_success` SUPPRIMÉ de `network_manager.gd` : dernier
+  vestige du système lobby/waiting_room retiré en §8.116 (zéro référence, `.tscn` compris).
+- **`UNUSED_PRIVATE_CLASS_VARIABLE`** — `_camera` de `hero_viewport_3d.gd` supprimé (câblage
+  `@onready` jamais lu ; le nœud caméra reste dans la scène).
+
+> **Fichiers (10, AUCUN nouveau).** `scripts/managers/auth_manager.gd`, `network_manager.gd`,
+> `settings_manager.gd`, `audio_manager.gd`, `scripts/components/hero_viewport_3d.gd`,
+> `scripts/ui/top_nav.gd`, `company_screen.gd`, `profile.gd`, `hero_stats_view.gd`,
+> `characters_screen.gd`. Les clés JSON `"name"` des routes compagnie sont INCHANGÉES — seuls
+> des noms de PARAMÈTRES GDScript bougent.
+>
+> **Validation (MCP éditeur, EN JEU — pas headless).** Run complet : boot → menu (session
+> restaurée) → écran Profil monté (`change_scene` piloté par `game_eval`) → dialogue QUITTER
+> ouvert/refermé → **journal du run : 2 lignes info, 0 ERROR, 0 WARNING** (contre 8 lignes dont
+> 3 rouges sur le run témoin d'avant correctifs, même parcours). Les 10 scripts rechargés en
+> jeu : `can_instantiate()` vrai partout.
+>
+> ⚠️ **Contre-épreuve restante** : les avertissements statiques sont émis par
+> `GDScript::reload()` au rechargement des scripts DANS l'éditeur (regain de focus). Au prochain
+> focus de l'éditeur, l'onglet Erreurs du débogueur doit rester vide — s'il reste une ligne,
+> c'est un résidu de ce lot.
+
+---
+
+## §8.131 — FINITIONS PRÉ-PLAYTEST : carte POUVOIR, surlignage du coach, invitation, barre basse
+
+> **2 août 2026** · Lots A/B/E **100 % client** · Lot C = **VPS + client ENSEMBLE**.
+
+### 1. ⚠️ Mise au point : les trois boutons Battle Royale EXISTAIENT DÉJÀ
+
+Le reste-à-faire §9 du chantier tutoriel (« boutons RÉANIMER / SE RENDRE / COUP D'ÉTAT toujours
+absents du HUD ») était **PÉRIMÉ** : ils ont été livrés par la passe 02 du §8.125 et sont commités
+(`main.gd:_append_battle_royale_actions`). Le Battle Royale n'était donc pas injouable. Ce lot
+n'ajoute pas les boutons — il **solde les quatre écarts** qui restaient face à la spec.
+
+| écart | avant | après |
+|---|---|---|
+| Confirmation | le clic ENVOYAIT directement | **modale** à deux temps sur les 3 gestes |
+| Coût de réanimation | constante client en dur | lu de `battle_royale.rules` (repli client) |
+| Coup d'État | armement du bouton (« ⚠ CONFIRMER ») | **modale + RAPPORT DE FORCE** chiffré |
+| Vote de reddition | silencieux chez les coéquipiers | **toast** + compteur |
+
+### 2. `hud.show_confirm(spec)` — confirmation modale d'arène
+
+`{title, body, detail?, detail_color?, confirm, accent?, action}` → signal
+**`confirm_accepted(action)`**. Voile plein écran + panneau centré, patron
+`warzone_ui._open_info_modal`, **deux boutons** (ANNULER à gauche : la sortie sans conséquence doit
+être la plus facile à viser). `hide_confirm()` / `is_confirm_open()`.
+
+- Le grisage protège du geste **ILLÉGAL** ; il ne protège pas du geste **MALHEUREUX**, celui qu'on
+  fait en visant le bouton d'à côté. L'idempotence serveur (`action_id`) couvre le double-envoi,
+  pas l'erreur de visée — et ici l'erreur tue son auteur.
+- **Le voile est `MOUSE_FILTER_STOP`** : la racine du HUD est `IGNORE`, sans quoi un clic « à côté »
+  traverserait jusqu'au PLATEAU et sélectionnerait un territoire derrière la question posée.
+- ⚠️ **Ancrage APRÈS `add_child`** — sur un Control encore détaché, le preset se compose avec la
+  taille courante et **DOUBLE le rect** (piège payé au §8.121).
+- Refermée par : ANNULER, clic hors panneau, **ESC** (branche placée EN TÊTE de `_unhandled_input`,
+  sinon ESC ouvrirait le Manuel PAR-DESSUS), un refus serveur, et **tout changement de tour** (son
+  chiffrage a été calculé dans le tour précédent).
+- **RAPPORT DE FORCE** du coup d'État : `main._coup_power(pid)` est le MIROIR EXACT de
+  `engine._coup_power` (garnisons de toute la carte + PV de héros, deux termes PUBLICS). Verdict
+  **FAVORABLE / DÉFAVORABLE** sur le `>` **strict** — annoncer « FAVORABLE » sur une égalité serait
+  le pire mensonge possible de cette interface. Un coup défavorable n'est PAS bloqué : le traître a
+  le droit de se sacrifier en connaissance de cause.
+
+### 3. ⚠️ ORDRE DE LA CARTE POUVOIR : le DÉCISIF avant le ROUTINIER
+
+**Défaut vu EN CAPTURE, invisible au boot headless.** `%PowerBox` est plafonné à 315 px et DÉFILE
+(§8.128). Les actions BR étant ajoutées EN DERNIER, une partie de traître affichait dans l'ordre :
+ligne d'ordre secret (2 lignes) → RATIONNER → RÉANIMER, et repoussait **COUP D'ÉTAT et SE RENDRE
+SOUS LE PLI** — le geste le plus décisif du mode caché derrière un défilement que rien n'annonçait.
+`_append_battle_royale_actions` est donc appelée **AVANT** le bloc des capacités de héros.
+
+> Règle : ces trois actions sont **uniques dans une partie** et changent son issue ; RATIONNER se
+> rejoue à chaque tour et le joueur sait déjà où il vit.
+
+### 4. ⚠️⚠️ Pourquoi un non-traître ne voit AUCUN bouton de coup d'État — pas même grisé
+
+C'est la **seule exception** du HUD à la règle « toujours afficher, griser avec sa raison » (§8.119),
+et elle est délibérée. Le tirage est **TOUT-OU-RIEN et GLOBAL** : soit chaque équipe a son traître,
+soit aucune. Un bouton grisé « vous n'avez pas d'ordre » apprendrait au joueur que le dispositif est
+actif dans SA partie ; comme le tirage est global, il en déduirait aussitôt que **l'équipe adverse a
+le sien** — un renseignement que le serveur refuse précisément de donner. L'absence de bouton est
+donc **AMBIGUË PAR CONSTRUCTION** : elle ne distingue pas « pas de traître » de « le traître, c'est
+quelqu'un d'autre ».
+
+### 5. `board.tutorial_highlight(tid)` / `tutorial_highlight_clear()`
+
+Le reste-à-faire §9 du tutoriel : l'étape ATTAQUER ne désignait aucun territoire. **Aucune
+conversion monde→écran n'a été écrite** — elle aurait exigé de suivre zoom, travelling et recadrage
+de la caméra tactique à chaque frame. Le surlignage **emprunte le canal EXISTANT du télégraphe de
+zone** (`territory_forecast`, liseré or pulsant) : zéro shader neuf, coordonnées de CARTE, et il
+suit la caméra gratuitement puisqu'il est dessiné DANS le plateau. `reduced_motion` est déjà géré en
+aval par `motion_scale` → liseré FIXE, sans une ligne de plus.
+
+- Cible = **meilleur ratio** via `main.tutorial_attack_hint()`, qui classe des cibles déjà légales
+  (`_valid_attack_targets`) avec la prévision déjà calculée pour le survol (`CombatOdds`, G4). Le
+  coach ne calcule aucune règle. `{}` → texte générique, jamais un territoire au hasard.
+- Le coach ajoute « **Visez X — n % de victoire** » (nom TRADUIT, `TUTO_STEP_ATTACK_TARGET`).
+- ⚠️ **QUATRE CHEMINS DE NETTOYAGE**, tous testés : 1ʳᵉ attaque (`_close_step("attack")` — explicite,
+  car `_pump()` sort immédiatement quand la file est vide), changement d'étape, « PASSER LE
+  BRIEFING », fin de partie (**avant** la garde `guided`, sinon un briefing déjà soldé laisserait un
+  liseré). Un liseré or orphelin se lirait comme une **zone radioactive annoncée**.
+
+### 6. Invitation de compagnie — toast de nav + bouton d'escouade
+
+- `top_nav` gagne **son unique `Timer`** (`INVITE_POLL_S = 15`, soit **4 requêtes/min**). Il est
+  **enfant de l'instance** et meurt avec l'écran : visiter cinq écrans ne fait donc pas tourner cinq
+  sondages. ⚠️ **L'arène ne monte aucune `top_nav`** → aucun poll pendant un match (vérifié sur la
+  scène réelle, pas supposé).
+- Toast `[TAG] pseudo VOUS INVITE — REJOINDRE` → `squad_join(code)` + bascule sur `squad_screen`.
+  `{}` = plus d'invitation → il disparaît **SANS un mot** : une invitation qui expire n'est pas un
+  évènement, l'annoncer ferait passer un non-évènement pour une mauvaise nouvelle.
+- `squad_screen` : bouton **INVITER LA COMPAGNIE**, réservé au CHEF et seulement une fois l'escouade
+  créée. ⚠️ `POST /company/invite` **PARTAGE** le callback d'état de compagnie : sa réponse
+  (`{invited, reason}`) ne porte aucune clé `company`, et la traiter comme un état **ferait
+  disparaître toute la section compagnie** au moment précis où l'on vient d'inviter — d'où la garde
+  `if data.has("invited")`.
+
+### 7. Barre basse : l'état replié survit au redimensionnement
+
+`_apply_bottom_panel_state(animated)` devient le **point unique** qui dérive la position ET le
+glyphe ▲/▼ du **BOOLÉEN** `_bottom_hidden` ; `resized` le rappelle sans animation.
+
+⚠️ **Le diagnostic du reste-à-faire §9 était incomplet.** Reproduit pas à pas, le déclencheur n'est
+pas le redimensionnement en soi : hors glissement, les ancres replacent la barre correctement seules
+(vérifié à 1280×720, 1600×900, 1024×768). Le vrai déclencheur est le **redimensionnement PENDANT LE
+GLISSEMENT** : le Tween court vers un `target_y` calculé pour l'ANCIENNE hauteur et l'impose à
+l'arrivée. Mesuré sans correctif — repli lancé en 1920×1080 puis passage à 1280×720 → la barre
+atterrit à **y = 1037 sur un écran de 720 px**, soit elle ET son bouton sous le bord inférieur. Ce
+n'était donc pas cosmétique : c'est la **panne irrécupérable du §3.1 par un autre chemin**.
+
+> **Validation.** 4 contre-épreuves Godot (`tools/test_br_actions` **28** ·
+> `test_tutorial_highlight` **16** · `test_company_invite_poll` **6** · `test_bottom_bar_resize`
+> **18**), chacune **vérifiée par sabotage** (elle échoue quand on retire le correctif).
+> `--import` **0 ERROR** · boot headless de 6 scènes **0 ERROR** · **10 captures PNG relues**.
+> ⚠️ Rappel : un `assert` GDScript faux **fait HANGER** Godot (sortie 124 sous `timeout`), il ne
+> rend jamais un code non nul — le critère est « exit 0 **ET** ligne `asserts verts` présente ».

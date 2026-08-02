@@ -562,12 +562,50 @@ func _rebuild_members() -> void:
 
 
 # --- PONT COMPAGNIE (§8.126) ---------------------------------------------------------------------
+# Ligne de retour de l'invitation (succès ou raison de refus) — recréée avec la section compagnie.
+var _invite_hint: Label = null
+
+func _on_invite_company_pressed() -> void:
+	AudioManager.play_sfx("click")
+	if _invite_hint != null and is_instance_valid(_invite_hint):
+		_invite_hint.text = tr("COMPANY_INVITE_SENDING")
+		_invite_hint.visible = true
+	NetworkManager.company_invite()
+
+
 func _on_company_state(ok: bool, data: Dictionary) -> void:
 	if not is_inside_tree() or not ok:
+		return
+	# ⚠️ `POST /company/invite` PARTAGE ce callback (toutes les routes `/company/*` passent par le
+	# même signal). Sa réponse est `{invited, reason}` et ne porte AUCUNE clé `company` : la traiter
+	# comme un état ferait tomber `_company` à {} et FERAIT DISPARAÎTRE toute la section compagnie
+	# au moment précis où l'on vient d'inviter. On la reconnaît donc à sa clé propre et on sort.
+	if data.has("invited"):
+		_show_invite_result(bool(data.get("invited", false)), str(data.get("reason", "")))
 		return
 	var c = data.get("company")
 	_company = c if typeof(c) == TYPE_DICTIONARY else {}
 	_rebuild_company_section()
+
+
+# Retour de l'invitation, à côté du bouton. Les raisons de refus sont celles du serveur (convention
+# zéro-4xx §8.112) : on les traduit, on n'en invente aucune.
+const INVITE_REASONS := {
+	"no_company": "COMPANY_INVITE_ERR_NO_COMPANY",
+	"no_squad": "COMPANY_INVITE_ERR_NO_SQUAD",
+	"not_leader": "COMPANY_INVITE_ERR_NOT_LEADER",
+}
+
+func _show_invite_result(invited: bool, reason: String) -> void:
+	if _invite_hint == null or not is_instance_valid(_invite_hint):
+		return
+	_invite_hint.visible = true
+	if invited:
+		_invite_hint.add_theme_color_override("font_color", GOLD)
+		_invite_hint.text = tr("COMPANY_INVITE_SENT")
+		return
+	_invite_hint.add_theme_color_override("font_color", DANGER)
+	_invite_hint.text = tr(str(INVITE_REASONS.get(reason, "COMPANY_INVITE_ERR_NO_SQUAD")))
 
 
 # Section « COMPAGNIE » de l'écran Escouade : le clan + son roster, à côté du code d'escouade déjà
@@ -599,6 +637,26 @@ func _rebuild_company_section() -> void:
 	var hint := _muted_label("COMPANY_SQUAD_BRIDGE_HINT", 13)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_company_box.add_child(hint)
+
+	# INVITER LA COMPAGNIE (finitions pré-playtest) — réservé au CHEF, et seulement une fois
+	# l'escouade créée : sans code à transmettre, l'invitation ne mènerait nulle part. Un membre ne
+	# voit donc rien du tout ici (il n'a rien à décider), au lieu d'un bouton grisé de plus.
+	if bool(_squad.get("is_leader", false)) and str(_squad.get("code", "")) != "":
+		var invite := Button.new()
+		invite.text = "❯ " + tr("COMPANY_INVITE_CTA")
+		invite.focus_mode = Control.FOCUS_NONE
+		invite.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		invite.add_theme_font_override("font", _font)
+		invite.add_theme_font_size_override("font_size", 14)
+		invite.add_theme_color_override("font_color", GOLD)
+		invite.pressed.connect(_on_invite_company_pressed)
+		_company_box.add_child(invite)
+		_invite_hint = _muted_label("", 12)
+		# Texte posé à la main par `tr()` → auto-traduction COUPÉE, sinon Godot re-traduirait une
+		# phrase déjà traduite et rendrait la clé brute (piège maison des libellés composés).
+		_invite_hint.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		_invite_hint.visible = false
+		_company_box.add_child(_invite_hint)
 
 	var members: Array = _company.get("members", [])
 	var names := PackedStringArray()

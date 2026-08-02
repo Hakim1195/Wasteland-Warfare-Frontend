@@ -1034,6 +1034,7 @@ func _make_promotion_sting() -> AudioStreamWAV:
 # Fondu de raccord de boucle : atténue les `seconds` premières et dernières secondes pour masquer
 # la discontinuité d'un générateur à ÉTAT (filtre récursif) dont la fin ne rejoint pas le début.
 func _loop_seam(samples: PackedFloat32Array, seconds: float) -> void:
+	@warning_ignore("integer_division")  # division entière VOULUE : un nombre d'échantillons.
 	var fade := mini(int(MIX_RATE * seconds), samples.size() / 2)
 	for i in fade:
 		var g := float(i) / float(fade)

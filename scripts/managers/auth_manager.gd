@@ -25,6 +25,10 @@ var username: String = ""
 # Posée par le hub AVANT de rediriger, LUE et effacée par auth_screen à son _ready. "" = rien.
 var session_notice: String = ""
 var http_request: HTTPRequest
+# Vrai tant qu'une requête get_profile() (/auth/me) est en vol — remis à faux par
+# _on_request_completed (SEUL handler de http_request, donc reset garanti sur tout dénouement).
+# Même idiome que _steam_poll_in_flight : l'appel de trop est SAUTÉ, jamais heurté.
+var _profile_in_flight := false
 var _id_http: HTTPRequest
 
 # --- Avatar Steam (§8.114) : SIGNAL DE RECONNAISSANCE du compte -------------------------------
@@ -373,21 +377,33 @@ func get_profile():
 	if jwt_token == "":
 		emit_signal("auth_failed", tr("AUTHM_NO_TOKEN"))
 		return
-	
+
+	# Une requête /auth/me est DÉJÀ en vol : top_nav (enfant, dont le _ready précède celui de
+	# l'écran hôte) et l'écran Profil/Classement appellent tous deux get_profile() au montage.
+	# On SAUTE l'appel — surtout ne pas rappeler request() : le moteur LOGGE une erreur rouge
+	# (http_request.cpp « Condition "requesting" is true ») AVANT même de rendre ERR_BUSY, un
+	# garde sur le code de retour ne suffirait donc pas. La réponse en vol émettra profile_loaded
+	# pour TOUS les auditeurs (chacun s'abonne AVANT d'appeler), personne ne perd rien.
+	if _profile_in_flight:
+		return
+
 	# Set headers with Authorization
 	var headers = ["Authorization: Bearer " + jwt_token]
-	
+
 	# Send GET request
 	var err = http_request.request(
 		base_url + "/api/v1/auth/me",
 		headers,
 		HTTPClient.METHOD_GET
 	)
-	
+
 	if err != OK:
 		emit_signal("auth_failed", tr("AUTHM_PROFILE_SEND_FAILED"))
+		return
+	_profile_in_flight = true
 
 func _on_request_completed(_result, response_code, _headers, body):
+	_profile_in_flight = false
 	var response_text = body.get_string_from_utf8()
 
 	# Parse via une INSTANCE JSON : sur un corps NON-JSON (ex. "Internal Server Error" brut renvoyé

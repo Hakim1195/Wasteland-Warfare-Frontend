@@ -2578,3 +2578,74 @@ l'écrivent en dur (le client affiche le `coins_awarded` que la route lui renvoi
 >
 > ⚠️ **VPS + client ENSEMBLE** : sans le serveur à jour, `/auth/me` n'émet pas `tutorial_done` et le
 > client se tait (dégradation propre, mais le chantier est alors invisible).
+
+---
+
+## §8.131 — FINITIONS PRÉ-PLAYTEST : réglages BR diffusés · invitation de compagnie (POLL)
+
+> **2 août 2026** · Backend **strictement additif** — aucune règle de jeu modifiée, aucune migration.
+> ⚠️ **VPS + client ENSEMBLE** pour l'invitation ; le reste dégrade proprement sans redéploiement.
+
+### 1. `battle_royale.public_rules()` — les réglages descendent au client
+
+Le bloc d'état `battle_royale` gagne une clé **`rules`** (champ ADDITIF), servie depuis le registre
+`BR_RULES` par la fonction PURE `public_rules()` :
+
+```json
+"battle_royale": {
+  "revives_done": {}, "revived": [], "crates": {}, "surrender": {}, "coup_used": [],
+  "rules": {"revive_hp_cost": 100, "revive_min_remaining_hp": 1, "surrender_min_round": 3,
+            "coup_min_round": 4, "crate_kill_step": 50, "crate_max_per_team": 4}
+}
+```
+
+**Pourquoi** : le client recopiait ces six nombres en dur pour ANNONCER un coût (« vous tomberez à
+N PV ») et anticiper ses grisages. Un rééquilibrage serveur aurait donc fait **mentir l'interface** —
+et une promesse fausse est pire qu'un refus, parce que le joueur a déjà décidé quand il découvre
+l'écart. Le client garde ses constantes en **REPLI** (serveur ancien / partie née avant le champ) :
+sans `rules`, le comportement est exactement celui d'avant.
+
+- ⚠️ **`traitor_chance` n'est PAS diffusée.** La publier permettrait de calculer la probabilité
+  qu'une partie porte des traîtres, ce qui viderait le tirage tout-ou-rien de son sens (§8.125 §4) :
+  toute la mécanique tient à ce qu'il n'y ait **rien à calculer**, seulement à se méfier.
+- `GameEngine._br()` **RÉÉCRIT** `rules` à chaque passage (et ne se contente pas de le créer) : une
+  partie née avant le champ le gagne dès sa première action BR, et un rééquilibrage déployé en cours
+  de partie ne laisse jamais un ancien coût en place.
+
+### 2. `POST /company/invite` + champ `invite` sur `GET /company/badge`
+
+**La version POLL recommandée au §5 du rapport COMPAGNIES**, livrée telle quelle.
+
+| | |
+|---|---|
+| **Dépôt** | `POST /company/invite` → clé Redis `company:invite:{company_id}`, **TTL 300 s** |
+| **Charge** | `{squad_code, playlist, from_name, from_id}` |
+| **Lecture** | `GET /company/badge` gagne `invite: {squad_code, playlist, from_name}` ou `{}` |
+| **Refus** | convention zéro-4xx (§8.112) : `{invited: false, reason: no_company\|no_squad\|not_leader}` |
+
+- **Pas de push WebSocket, et c'est délibéré** : « apparaître » suppose que le serveur parle de sa
+  propre initiative, donc un canal permanent vers un joueur qui n'est dans AUCUNE partie. Ce canal
+  n'existe pas (`/ws/{room_id}/{player_id}` refuse un non-membre en `4003` ; côté client
+  `leave_room()` détruit puis recrée le socket — **un socket = un match**). L'ouvrir voudrait dire un
+  second cycle de vie complet (auth, gate de version, reconnexion, nettoyage), un second registre de
+  connexions et **un socket permanent par joueur** sur une stack mono-worker. Le poll coûte
+  1 requête / 15 s / joueur et réutilise TOUT l'existant (présence, badge, nav, `squad_join`).
+- **UNE seule invitation vivante par compagnie** (la clé est écrasée) : deux chefs qui invitent coup
+  sur coup ne doivent pas empiler deux toasts contradictoires.
+- **Trois filtres de lecture**, aussi importants que le TTL : l'**auteur** ne reçoit pas sa propre
+  invitation ; un membre **DÉJÀ dans l'escouade** non plus (sinon le toast reviendrait toutes les
+  15 s chez quelqu'un qui a accepté) ; une **escouade dissoute** rend l'invitation muette.
+- Une clé illisible ≡ **pas d'invitation** : cette route est appelée depuis TOUS les écrans du hub,
+  elle ne doit jamais lever.
+- ⚠️ `GET /company/badge` devient **`async`** et prend `redis` (il lit le dépôt). Champ `invite`
+  toujours présent, `{}` par défaut — un client antérieur ignore la clé et se comporte comme avant.
+- ⚠️ `company.py` importe `squad.py` **PARESSEUSEMENT** (`_squad_reads()`), jamais au chargement :
+  `squad.py` référence `models.schemas.Squad*` à l'import, et les suites qui testent les endpoints de
+  compagnie sur faux ORM ne stubbent que les schémas `Company*`. Sens de dépendance :
+  `company → squad`, **jamais** l'inverse.
+
+> **Validation.** `test_company_flow.py` **189 ✅ / 0 ❌** (dont 11 contre-épreuves d'invitation :
+> TTL 5 min, refus `not_leader`, non-retour à l'auteur, acceptée → ne réapparaît pas, escouade
+> dissoute, expiration, clé corrompue). **Suite backend COMPLÈTE : 65 suites vertes, 0 rouge** —
+> `test_missions.py` et `test_simulation.py` **RESSUSCITÉES** (voir le rapport de session), et
+> `test_observer_bets.py` réparé (compteur de raisons du ledger périmé depuis §8.129).

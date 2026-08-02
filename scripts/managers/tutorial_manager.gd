@@ -245,6 +245,11 @@ func bind_draft(screen: Control) -> void:
 
 # Appelé par `main.gd` à son `_ready` (l'arène est prête, le HUD existe).
 func bind_arena(_controller: Node, _hud: Control) -> void:
+	# ⚠️ La référence d'arène est gardée MÊME quand `guided` est faux : `notify_game_over()` et les
+	# nettoyages doivent pouvoir éteindre un surlignage laissé derrière par un briefing interrompu.
+	# Typée `Node` — `main.gd` étend `Node`, pas `Control` (piège §7.3 : une signature `Control`
+	# passe l'`--import` sans broncher et casse au BOOT).
+	_arena = _controller
 	if not guided:
 		return
 	_coach.set_safe_margins(ARENA_MARGIN_RIGHT, ARENA_MARGIN_BOTTOM)
@@ -333,6 +338,9 @@ func _on_game_event(event) -> void:
 
 # La partie est finie : le débrief attend le Rapport Post-Op (`bind_report`).
 func notify_game_over() -> void:
+	# Nettoyage n°4 AVANT la garde `guided` : un briefing passé en cours de partie a pu laisser un
+	# liseré allumé, et le Rapport Post-Op s'ouvre par-dessus un plateau encore visible.
+	_clear_board_highlight()
 	if not guided:
 		return
 	for id in ["blind", "deploy", "attack", "combat", "conquer", "movecard", "objective", "zone",
@@ -399,6 +407,12 @@ func _close_step(step_id: String) -> void:
 		return
 	_steps_done[step_id] = true
 	_queue = _queue.filter(func(q): return str(q.get("id", "")) != step_id)
+	# Chemin de nettoyage n°1 : la PREMIÈRE ATTAQUE éteint le liseré. Explicite, et non délégué à
+	# `_pump()` : quand plus rien n'attend dans la file, `_pump` sort immédiatement et ne rappelle
+	# donc PAS `_apply_board_highlight`. Le liseré or serait resté allumé sur un territoire déjà
+	# attaqué — et un liseré or, dans ce jeu, veut dire « zone radioactive annoncée ».
+	if step_id == "attack":
+		_clear_board_highlight()
 	if str(_current.get("id", "")) == step_id:
 		_dismiss_current()
 
@@ -415,9 +429,13 @@ func _pump() -> void:
 		return
 	_current = _queue.pop_front()
 	var is_step: bool = str(_current.get("kind", "")) == "step"
+	# Surlignage PLATEAU : calculé AVANT l'affichage, car il enrichit le texte de l'étape (« vise X
+	# — n % »). Appelé pour CHAQUE panneau, y compris les bulles : c'est ce passage systématique qui
+	# éteint le liseré de l'étape précédente (chemin de nettoyage n°2).
+	var board_suffix := _apply_board_highlight(str(_current.get("id", "")) if is_step else "")
 	_coach.show_message(
 		tr("TUTO_EYEBROW_COACH") if is_step else tr("TUTO_EYEBROW_HINT"),
-		str(_current.get("text", "")),
+		str(_current.get("text", "")) + board_suffix,
 		tr("TUTO_BTN_OK"),
 		# « PASSER LE BRIEFING » n'a de sens QUE pendant la Première Opération : une bulle
 		# contextuelle ne se « passe » pas, elle se referme.
@@ -451,6 +469,7 @@ func _on_skip_requested() -> void:
 	_queue.clear()
 	_current = {}
 	_coach.hide_message()
+	_clear_board_highlight()   # chemin de nettoyage n°3 : le briefing est abandonné, le plateau redevient neutre
 	_save_hints()
 	NetworkManager.tutorial_skip()
 
@@ -501,6 +520,53 @@ func anchor(id: String) -> Control:
 		_anchors.erase(id)
 		return null
 	return c
+
+
+# =========================================================
+# SURLIGNAGE PLATEAU DE L'ÉTAPE « ATTAQUER » (finitions pré-playtest)
+# =========================================================
+# Le reste-à-faire n°2 du §8.129 : l'étape ATTAQUER expliquait quoi faire sans montrer OÙ. On
+# désigne désormais la MEILLEURE cible du tour, calculée par l'arène (`tutorial_attack_hint`) avec
+# la prévision de combat qui sert déjà au survol — le coach ne calcule RIEN lui-même (⛔ aucune
+# règle de jeu ici : il écoute et il affiche).
+#
+# ⚠️ NETTOYAGE : quatre chemins mènent à l'extinction du liseré, et ils sont tous couverts —
+#   1. la première attaque lancée  → `_close_step("attack")` (évènement `attack_result`) ;
+#   2. tout changement d'étape     → `_pump()` rappelle `_apply_board_highlight` pour la suivante ;
+#   3. « PASSER LE BRIEFING »      → `_on_skip_requested` ;
+#   4. la fin de partie            → `notify_game_over`.
+# Un liseré or orphelin serait pris pour un télégraphe de zone — c'est-à-dire pour une MENACE.
+var _arena: Node = null
+
+func _board() -> Node:
+	if _arena == null or not is_instance_valid(_arena):
+		return null
+	var b = _arena.get("board")
+	return b if (b != null and is_instance_valid(b) and b.has_method("tutorial_highlight")) else null
+
+
+func _clear_board_highlight() -> void:
+	var b := _board()
+	if b != null:
+		b.tutorial_highlight_clear()
+
+
+# Rend le complément de texte (« vise X — n % de victoire ») et allume le liseré, ou "" si l'étape
+# n'est pas ATTAQUER / si aucune cible n'est jouable.
+func _apply_board_highlight(step_id: String) -> String:
+	_clear_board_highlight()
+	if step_id != "attack" or _arena == null or not is_instance_valid(_arena):
+		return ""
+	if not _arena.has_method("tutorial_attack_hint"):
+		return ""
+	var hint: Dictionary = _arena.tutorial_attack_hint()
+	if hint.is_empty():
+		return ""
+	var b := _board()
+	if b != null:
+		b.tutorial_highlight(str(hint.get("tid", "")))
+	return "\n" + tr("TUTO_STEP_ATTACK_TARGET") % [
+		str(hint.get("name", "")), int(round(float(hint.get("prob", 0.0)) * 100.0))]
 
 
 func _apply_highlight(anchor_id: String) -> void:

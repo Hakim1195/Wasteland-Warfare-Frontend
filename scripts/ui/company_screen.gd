@@ -444,9 +444,9 @@ func _render_side() -> void:
 	if _side == null:
 		return
 	_clear(_side)
-	var show := not _company.is_empty() and not _is_public() and _view == "main"
-	_side.visible = show
-	if not show:
+	var show_side := not _company.is_empty() and not _is_public() and _view == "main"
+	_side.visible = show_side
+	if not show_side:
 		return
 
 	_side.add_child(_side_card_summary())
@@ -914,13 +914,13 @@ func _confirm(message: String, on_yes: Callable) -> void:
 # =========================================================
 # FABRIQUES / UTILITAIRES (charte §2)
 # =========================================================
-func _label(text: String, size: int, color: Color,
-		align: int = HORIZONTAL_ALIGNMENT_LEFT, min_w: float = 0.0) -> Label:
+func _label(text: String, font_size: int, color: Color,
+		align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT, min_w: float = 0.0) -> Label:
 	var l := Label.new()
 	l.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	l.text = text
 	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", color)
 	l.horizontal_alignment = align
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -929,8 +929,8 @@ func _label(text: String, size: int, color: Color,
 	return l
 
 
-func _center_note(text: String, color: Color, size: int) -> Label:
-	var l := _label(text, size, color, HORIZONTAL_ALIGNMENT_CENTER)
+func _center_note(text: String, color: Color, font_size: int) -> Label:
+	var l := _label(text, font_size, color, HORIZONTAL_ALIGNMENT_CENTER)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return l
