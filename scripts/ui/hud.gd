@@ -899,6 +899,52 @@ func _fill_hero_stats(box: VBoxContainer, hero: Dictionary) -> void:
 	var span := maxi(pp_max - pp_min, 1)
 	box.add_child(_stat_bar("HUD_STAT_PP", tr("HUD_STAT_PP_VALUE_FMT") % [pp, pp_max],
 		clampf(float(pp - pp_min) / float(span), 0.0, 1.0), STAT_PP_COLOR, "PP_TOOLTIP"))
+	# RÉCUPÉRATION (demande Hakim, 2026-08-02) : 5ᵉ ligne, en TEXTE et non en barre — ce n'est pas
+	# une jauge (rien ne se remplit), c'est un DÉBIT. Le joueur ne pouvait pas savoir combien il
+	# regagnait par tour alors que la valeur varie du simple au triple selon la faction (5 % chez
+	# Malik, 15 % chez Ezra) et pèse lourd dans la décision « j'attaque maintenant ou j'attends ».
+	box.add_child(_regen_row(hero, dead))
+
+# Ligne RÉCUPÉRATION : « RÉCUPÉRATION      +N PV / TOUR ». Pas de ProgressBar (cf. appelant), donc
+# pas de `_stat_bar` : l'étiquette prend toute la largeur libre et la valeur se cale à droite, sur
+# la MÊME colonne mono que les valeurs des 4 barres au-dessus (alignement visuel de la carte).
+#
+# ⚠️ LA VALEUR DIT VRAI : `floor(pv_max × regen)` est la formule EXACTE de `engine._apply_hero_regen`
+# (backend, ~l.1340) — pas une approximation d'affichage. Les deux champs voyagent bien dans l'état
+# diffusé (`PlayerState.hero_pv_max` / `hero_regen`, state_schemas.py l.68) et ne sont PAS redactés
+# (donnée publique : les stats de héros s'affichent déjà pour tous, y compris au draft).
+#
+# Héros MORT → 0 : `_apply_hero_regen` sort avant tout calcul quand `is_dead`. Afficher le débit
+# théorique d'un cadavre serait un mensonge, exactement comme la barre PV qui affiche 0 / max.
+func _regen_row(hero: Dictionary, dead: bool) -> Control:
+	var pv_max := int(hero.get("pv_max", 0))
+	var regen := float(hero.get("regen", 0.0))
+	var heal := 0 if dead else int(floor(float(pv_max) * regen))
+	var percent := int(round(regen * 100.0))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 5)
+	row.tooltip_text = tr("STAT_REGEN_TOOLTIP") % [heal, percent]
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
+	var eyebrow := Label.new()
+	eyebrow.text = tr("STAT_REGEN_LABEL")
+	eyebrow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	eyebrow.add_theme_font_size_override("font_size", FS_EYEBROW)
+	eyebrow.add_theme_color_override("font_color", HERO_MUTED)
+	eyebrow.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	eyebrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(eyebrow)
+	var val := Label.new()
+	val.text = tr("STAT_REGEN_VALUE") % heal
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val.add_theme_font_size_override("font_size", FS_EYEBROW)
+	# Vert de soin quand ça régénère vraiment, muet à 0 (héros mort ou faction sans récupération) :
+	# la couleur ne doit pas promettre un gain qui n'aura pas lieu.
+	val.add_theme_color_override("font_color", HERO_MUTED if heal <= 0 else Color("7fd97f"))
+	val.add_theme_font_override("font", RosterHelpers._mono_font())
+	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(val)
+	return row
 
 # Plafonds d'AFFICHAGE des barres PA/PB (aucune valeur de jeu : purement visuel — la valeur
 # chiffrée à droite de chaque barre reste la vérité). PA 30 = ordre de grandeur d'un héros de
@@ -1408,6 +1454,50 @@ func _refresh_spy_intel_label(hidden: bool) -> void:
 # d'espionnage (plaque vs Journal en clair).
 func is_intel_masked() -> bool:
 	return _streamer_mode
+
+
+# =========================================================
+# RAPPEL D'ÉVÉNEMENT (§8.132) — onglet OBJECTIFS d'INFOS
+# =========================================================
+# Le bandeau d'entrée en partie passe et disparaît ; ce bloc RESTE. Le joueur qui se demande au
+# round 6 « pourquoi la zone bouge tout le temps ? » a l'explication à un onglet de distance, pas
+# dans un souvenir. Discret à dessein : sous la plaque objectif, en petit, sans encadré.
+#
+# ⚠️ Les lignes viennent de `EventRulesModal.rule_lines(GameState.event_rules)` — LA MÊME fonction
+# que le modal du QG. Un joueur lit donc EXACTEMENT la même phrase avant et pendant la partie.
+var _event_notice: VBoxContainer = null
+
+func set_event_notice(event_name: String, lines: Array) -> void:
+	if _event_notice == null or not is_instance_valid(_event_notice):
+		_event_notice = VBoxContainer.new()
+		_event_notice.name = "EventNotice"
+		_event_notice.add_theme_constant_override("separation", 1)
+		var anchor: Control = %ObjectiveLabel
+		var parent := anchor.get_parent()
+		parent.add_child(_event_notice)
+		# Sous la plaque objectif ET sous le tracker : le rappel d'événement est un CONTEXTE, pas
+		# une consigne — il ne doit jamais s'intercaler entre l'objectif et sa progression.
+		parent.move_child(_event_notice, parent.get_child_count() - 1)
+	for c in _event_notice.get_children():
+		_event_notice.remove_child(c)
+		c.queue_free()
+	if event_name == "":
+		_event_notice.visible = false
+		return
+	_event_notice.visible = true
+	var title := Label.new()
+	title.text = tr("EVENT_MATCH_BANNER") % event_name.to_upper()
+	title.add_theme_font_size_override("font_size", FS_EYEBROW)
+	title.add_theme_color_override("font_color", ACCENT_GOLD)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_event_notice.add_child(title)
+	for line in lines:
+		var l := Label.new()
+		l.text = "❯ " + str(line)
+		l.add_theme_font_size_override("font_size", FS_EYEBROW)
+		l.add_theme_color_override("font_color", HERO_MUTED)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_event_notice.add_child(l)
 
 
 func _ensure_objective_tracker() -> void:

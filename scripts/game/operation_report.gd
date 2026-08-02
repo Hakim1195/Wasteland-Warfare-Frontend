@@ -1986,6 +1986,20 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 		unranked_lbl.add_theme_font_size_override("font_size", 15)
 		block.add_child(unranked_lbl)
 
+	# §8.132 — ÉVÉNEMENT MUTATEUR : mention en TÊTE du bloc de gains, juste au-dessus des chiffres.
+	# Elle répond à la question qui vient en premier devant un total inhabituel (« pourquoi autant
+	# d'XP ? »), et elle s'affiche MÊME sans multiplicateur : jouer sous TEMPÊTE n'a rien rapporté
+	# de plus, mais ça reste ce qui explique la partie qu'on vient de vivre.
+	if str(rewards.get("event_id", "")) != "":
+		var ev_name_key := str(GameState.event_rules.get("name_key", ""))
+		var ev_lbl := Label.new()
+		ev_lbl.text = tr("EVENT_MATCH_BANNER") % (
+			String(TranslationServer.translate(ev_name_key)).to_upper() if ev_name_key != ""
+			else str(rewards.get("event_id", "")).to_upper())
+		ev_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+		ev_lbl.add_theme_font_size_override("font_size", 15)
+		block.add_child(ev_lbl)
+
 	# --- Ladder RP (§8.95) — EN CLASSÉE UNIQUEMENT (en non classée, rien : cohérent §8.88) ---
 	# Champs PRIVÉS de match_rewards (redactés par destinataire, E11 §8.83). Lecture DÉFENSIVE : un
 	# serveur antérieur au ladder RP n'envoie pas `rp_label` → aucun bloc affiché (pas de « +0 RP »).
@@ -2299,8 +2313,32 @@ func _build_player_detail(box: VBoxContainer, rewards: Dictionary) -> void:
 		int(srv.get("xp_pass_bonus", -1)),
 		# LOT D : forfait de placement RÉELLEMENT crédité (−1 = serveur antérieur → repli local).
 		int(srv.get("xp_placement", -1)))
+	# §8.132 — ÉVÉNEMENT MUTATEUR : la part due au multiplicateur (MOISSON), en DERNIER poste, dans
+	# l'ORDRE où le serveur l'applique (base → pass → événement). Valeur et multiplicateur viennent
+	# tous deux du serveur : le client n'a aucun barème d'événement à connaître. 0 hors événement →
+	# la ligne n'existe pas, et le détail est exactement celui d'avant le chantier.
+	var ev_line := _event_reward_item(rewards, int(srv.get("xp_event_bonus", 0)),
+		int(rewards.get("event_xp_multiplier", 1)), "REPORT_UNIT_XP_LABEL")
+	if not ev_line.is_empty():
+		xp_items.append(ev_line)
 	_render_detail(box, tr("REPORT_XP_EYEBROW"), xp_items,
 		int(rewards.get("xp_earned", _breakdown_total(xp_items))), "REPORT_UNIT_XP")
+
+
+# Poste « ÉVÉNEMENT » d'un détail de gains (§8.132) : « XP ×2 — MOISSON ». Dictionnaire VIDE si
+# aucun événement, si le multiplicateur est neutre, ou si le surplus est nul — on n'affiche jamais
+# une ligne à +0 « grâce à » un événement qui n'a rien donné.
+# Le NOM affiché vient du snapshot serveur porté par l'état de partie (`GameState.event_rules`) :
+# aucune table d'événements côté client.
+func _event_reward_item(rewards: Dictionary, bonus: int, multiplier: int,
+		what_key: String) -> Dictionary:
+	if str(rewards.get("event_id", "")) == "" or multiplier <= 1 or bonus == 0:
+		return {}
+	var name_key := str(GameState.event_rules.get("name_key", ""))
+	var event_name := String(TranslationServer.translate(name_key)) if name_key != "" \
+		else str(rewards.get("event_id", ""))
+	return {"text": tr("EVENT_REWARD_LINE") % [tr(what_key), multiplier, event_name.to_upper()],
+			"value": bonus}
 
 # Détail du barème HÉROS (onglet 2) — mêmes entrées SERVEUR prioritaires (ses `statistics` locales
 # peuvent être en retard d'une action sur l'état final). Réconcilié à rewards.hero_xp_earned.
@@ -2328,7 +2366,13 @@ func _render_detail(box: VBoxContainer, eyebrow_text: String, items: Array,
 	box.add_child(HSeparator.new())
 	box.add_child(_eyebrow(eyebrow_text))
 	for it in items:
-		_detail_line(box, tr(str(it.get("key", ""))), int(it.get("value", 0)), unit_key, false)
+		# `text` (§8.132) : libellé DÉJÀ COMPOSÉ, pour les postes dont l'intitulé porte une donnée —
+		# la ligne d'événement (« XP ×2 — MOISSON ») en est le premier cas. Les postes classiques
+		# continuent de passer une simple clé i18n dans `key`.
+		var label := str(it.get("text", ""))
+		if label == "":
+			label = tr(str(it.get("key", "")))
+		_detail_line(box, label, int(it.get("value", 0)), unit_key, false)
 	var delta := server_total - _breakdown_total(items)
 	if delta != 0:
 		var adj := Label.new()

@@ -2649,3 +2649,94 @@ sans `rules`, le comportement est exactement celui d'avant.
 > dissoute, expiration, clé corrompue). **Suite backend COMPLÈTE : 65 suites vertes, 0 rouge** —
 > `test_missions.py` et `test_simulation.py` **RESSUSCITÉES** (voir le rapport de session), et
 > `test_observer_bets.py` réparé (compteur de raisons du ledger périmé depuis §8.129).
+
+---
+
+## §8.132 — ÉVÉNEMENTS MUTATEURS : calendrier data-driven, mutateurs à la source de lecture
+
+**Ce que c'est.** Des **fenêtres datées** (du vendredi 18:00 UTC au lundi 00:00 UTC exclu) pendant
+lesquelles les parties **CASUAL FFA** se jouent avec des règles modifiées. Un événement par mois,
+annoncé au QG, **sans une ligne de code** : on édite un registre. Quatre événements de lancement —
+`storm` (TEMPÊTE ERRATIQUE), `blitz` (GUERRE ÉCLAIR), `proliferation` (PROLIFÉRATION),
+`harvest` (MOISSON).
+
+**Aucun cron.** Activation **LAZY**, calcul PUR `events.active_event(now)` refait à la création de
+salle et à la lecture de l'endpoint — exactement le patron des saisons (§8.67) et de la rotation
+hebdomadaire (§8.66). Rien n'est planifié, rien n'est stocké.
+
+### Nouveaux champs d'ÉTAT (additifs §1.5)
+
+| Champ | Type | Sens |
+|---|---|---|
+| `GameState.event_id` | `str` (défaut `""`) | id de l'événement sous lequel la partie a été créée. `""` = partie ordinaire. **PUBLIC**. |
+| `GameState.event_rules` | `dict` (défaut `{}`) | **SNAPSHOT** des valeurs mutées, photographié à la création. **PUBLIC**. |
+
+`event_rules` est un **dict PLAT de scalaires** — aucune clé entière, aucun sous-dict (les clés de
+dict reviennent en `str` de Redis : « piège JSON float » §5). Clés :
+
+```
+event_id · name_key · desc_key
+zone_growth_per_player_turn (int) · zone_growth_cap_multiplier (int) · zone_teleport_per_player_turn (bool)
+phase_time_multiplier (float) · card_value_multiplier (int) · reinforcement_multiplier (float)
+xp_multiplier (int) · hero_coins_multiplier (int)
+```
+
+> ⚠️⚠️ **PARAMÈTRES FIGÉS À LA CRÉATION.** La salle photographie les valeurs dans SON état ; le
+> moteur ne relit **jamais** le calendrier, seulement `events.rules_of(state)`. Un événement qui
+> commence ou finit **pendant** une partie ne la change pas. Aucune exception. C'est la
+> contre-épreuve centrale de `test_events_flow.py` (vider `EVENTS_CALENDAR` en pleine partie ne
+> modifie rien, dans les deux sens).
+
+### Endpoint — `GET /squad/playlists` ÉTENDU (additif)
+
+Le point de **configuration publique** existant (registre des playlists §8.124) porte désormais
+trois clés de plus. Aucun second endpoint : le hub va chercher sa configuration de jeu à **un seul
+endroit**.
+
+```jsonc
+{
+  "playlists": { … },                                  // inchangé
+  "active_event": { "id", "name_key", "desc_key", "scope",
+                    "starts_at_epoch", "ends_at_epoch", "rules" } | null,
+  "next_event":   { …même forme… } | null,
+  "upcoming_events": [ …3 prochaines fenêtres NON TERMINÉES, l'active en tête… ]
+}
+```
+
+- **Epochs ENTIERS**, aucun texte affichable : uniquement des clés i18n (le serveur ne parle
+  aucune langue).
+- `rules` = le snapshot ci-dessus → le **client n'a AUCUNE constante d'événement en dur** et le
+  modal de règles énumère des effets exacts. Patron `battle_royale.public_rules()` (§8.131).
+- **Cache processus 60 s** : l'endpoint est appelé par chaque écran du hub, et le cache borne aussi
+  la dérive d'affichage (tous les écrans annoncent le même rebours dans la même minute).
+
+### `game_over` (additif)
+
+- Bloc **PUBLIC** : `event_id` (str) et `event_rules` (dict) — l'affiche du match, identique pour
+  tous (piège n° 9 : tout champ nouveau doit être classé public ou privé).
+- Bloc **PRIVÉ** `match_rewards[<pid>]` : `event_id`, `event_xp_multiplier`,
+  `event_hero_coins_multiplier`, et dans `xp_inputs` le surplus réel `xp_event_bonus`. Servis à
+  **tous** les joueurs, y compris bots et comptes introuvables (forme uniforme).
+
+### Refus
+
+**AUCUN nouveau.** Un événement ne se refuse pas : il s'applique, ou pas.
+
+### Périmètre — ce qui n'est JAMAIS muté
+
+`events.applies_to(event, is_ranked, is_private, team_mode)` décide, **sur les paramètres du bucket
+d'origine** passés à `launch_room` — jamais sur une heuristique lue plus tard dans l'état :
+
+| Contexte | Muté ? | Pourquoi |
+|---|---|---|
+| File publique casual FFA | ✅ | le périmètre v1 |
+| Salon privé | ✅ | même public casual (drapeau registre `applies_to_private`) |
+| **CLASSÉE** | ⛔ **jamais** | les RP de deux week-ends doivent vouloir dire la même chose |
+| **BATTLE ROYALE / playlist d'équipe** | ⛔ pas en v1 | champ `scope` prévu au registre pour plus tard |
+
+> **Validation.** `test_events.py` **64 ✅ / 0 ❌** (bornes de fenêtre à la seconde, mois à 5
+> vendredis, calendrier vide, **sabotage** de la garde de non-chevauchement, snapshot des 4
+> événements, périmètre). `test_events_flow.py` **53 ✅ / 0 ❌** (périmètre par le VRAI
+> `launch_room`, zone sous TEMPÊTE sur la boucle de tour réelle, **paramètres figés**, budgets
+> exacts, ordre des multiplicateurs de renforts et de gains, 1 000 tirages de cartes, ledger).
+> **Suite backend COMPLÈTE : 67 suites vertes, 0 rouge.**

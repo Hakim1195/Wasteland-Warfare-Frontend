@@ -3543,3 +3543,98 @@ n'était donc pas cosmétique : c'est la **panne irrécupérable du §3.1 par un
 > `--import` **0 ERROR** · boot headless de 6 scènes **0 ERROR** · **10 captures PNG relues**.
 > ⚠️ Rappel : un `assert` GDScript faux **fait HANGER** Godot (sortie 124 sous `timeout`), il ne
 > rend jamais un code non nul — le critère est « exit 0 **ET** ligne `asserts verts` présente ».
+
+---
+
+## §8.132 — ÉCRAN ÉVÉNEMENTS · bannière QG · rappel d'arène · ligne RÉCUPÉRATION
+
+### LOT 0 — la ligne RÉCUPÉRATION (demande Hakim, 2026-08-02)
+
+`hud._fill_hero_stats` — **source unique** des barres de stats — gagne une **5ᵉ ligne** compacte
+sous PV/PA/PB/PP : `RÉCUPÉRATION   +N PV / TOUR`. Texte et non barre (un débit, pas une jauge),
+`N = floor(pv_max × regen)` (formule exacte du moteur), vert quand ça régénère, gris à 0.
+
+Comme cette fonction est appelée par la **zone JOUEUR** (barre basse) **et** par la **fiche joueur
+gauche**, la ligne apparaît aux deux endroits avec une seule modification — et **pas** dans le
+Split-Screen VS, qui ne l'appelle pas.
+
+Clés : `STAT_REGEN_LABEL` · `STAT_REGEN_VALUE` · `STAT_REGEN_TOOLTIP`.
+⚠️ `CHAR_STAT_REGEN*` existait déjà mais appartient à l'écran **Personnages** (libellé « RÉGÉN »,
+description de la stat) — deux contextes, deux libellés, aucune fusion.
+
+### Onglet ÉVÉNEMENTS (`top_nav.gd`)
+
+Nouvelle entrée `TABS`, **après COMPAGNIE**. Pastille : un **point OR `●`** quand un événement est
+ACTIF, rien sinon — **pas de compteur**, il n'y a jamais qu'un seul événement à la fois. Même
+mécanique que DÉFIS/COMPAGNIE (texte composé → `AUTO_TRANSLATE_MODE_DISABLED` + re-rendu manuel sur
+`locale_changed`, sinon l'onglet reste en français après un changement de langue).
+
+### Écran ÉVÉNEMENTS (`scenes/ui/events.tscn` + `scripts/ui/events_screen.gd`)
+
+⚠️ **La scène existait déjà en PLACEHOLDER** (`section_placeholder.gd`, « SECTION EN
+CONSTRUCTION »). On l'a **reprise**, pas dupliquée : l'uid de scène et les chemins existants restent
+valides, et il n'y a jamais deux écrans « Événements » dans le dépôt.
+
+Contenu : carte principale (l'ACTIF, liseré **or** — à défaut le PROCHAIN, liseré **cyan** — à
+défaut l'état vide « AUCUNE OPÉRATION SPÉCIALE PLANIFIÉE »), compte à rebours à la seconde,
+calendrier des 3 prochaines fenêtres **en heure LOCALE** (conversion depuis les epochs UTC), et une
+**note de périmètre permanente**. Clic sur la carte → modal de règles.
+
+### Modal de règles (`scripts/ui/event_rules_modal.gd`)
+
+**UN modal, DEUX points d'entrée** (carte du QG, carte de l'écran) — deux implémentations auraient
+été deux occasions d'afficher des règles différentes pour le même week-end.
+
+⚠️⚠️ **Le client ne possède AUCUNE valeur d'événement.** Les lignes d'effets sont dérivées du bloc
+`rules` **servi par le serveur** (`RULE_ROWS` ne décrit que la FORME et le rendu). Rééquilibrer un
+événement au registre backend change ce que le joueur lit, **sans redéployer le client**.
+
+⚠️ Module **100 % statique** → `TranslationServer.translate`, **jamais `tr()`** (`tr()` est une
+méthode d'`Object` : sans instance, l'appel échoue — piège §8.104).
+
+`rule_lines()` est **PURE** et **réutilisée par l'arène** : le joueur lit exactement les mêmes
+phrases au QG et en partie.
+
+### Bannière du QG (`main_menu.gd`)
+
+Carte pleine largeur **sous** les cartes de mode, visible s'il y a un événement actif OU à venir.
+⚠️ Ajoutée au `Shell` (le VBox qui empile MidRow et BottomRow) : **aucun re-parentage**, **aucune
+retouche du `.tscn`** — `cards_row` garde son NodePath exporté (piège maison : un reparentage casse
+les `%NomUnique` et les NodePath de scène). Clic → l'**écran** ÉVÉNEMENTS (destination canonique) ;
+le modal reste réservé au détail des règles.
+
+### Écran de recherche (`search_screen.gd`)
+
+Bandeau fin « <NOM> EN COURS » **dans la branche CASUAL uniquement**. La branche CLASSÉE n'en a pas,
+et l'écran ESCOUADE (Battle Royale) non plus — aucun des deux n'est muté. Le bloc casual couvre
+aussi le **salon privé**, qui lui suit bien l'événement.
+
+### En partie (`main.gd` + `hud.gd`)
+
+- **Bandeau d'ouverture** (patron `phase_banner`, or) « ÉVÉNEMENT — TEMPÊTE ERRATIQUE », **une
+  seule fois** par partie (drapeau `_event_announced`, patron `_final_protocol_announced`).
+- **Rappel permanent** dans l'onglet **OBJECTIFS** d'INFOS, sous la plaque objectif : le bandeau
+  passe, le rappel reste. Lignes issues de `EventRulesModal.rule_lines(GameState.event_rules)`.
+- **Bulle** `first_event` (registre du tutoriel, une fois à vie).
+- `GameState` miroite `event_id` / `event_rules` (défauts vides = serveur antérieur → rien).
+
+### Rapport Post-Op (`operation_report.gd`)
+
+- Mention « ÉVÉNEMENT — <NOM> » en tête du bloc de gains — affichée **même sans multiplicateur** :
+  c'est ce qui explique la partie qu'on vient de vivre.
+- **Ligne du multiplicateur** dans le détail XP (« XP ×2 — MOISSON »), en **dernier poste**, dans
+  l'ordre où le serveur l'applique. `_render_detail` accepte désormais un champ `text` (libellé déjà
+  composé) en plus de `key`.
+- **Carte de partage** : le nom de l'événement s'accroche à la ligne de raison du verdict — « j'ai
+  gagné pendant la TEMPÊTE » n'est pas la même histoire que « j'ai gagné ».
+
+> **Validation.** `--import` **0 ERROR**. Boot headless **0 ERROR** sur 7 scènes (main_menu,
+> search_screen, **events**, leaderboard, profile, game/main, operation_report). **Captures PNG
+> 1920×1080 relues** : écran ÉVÉNEMENTS plein (carte active or + calendrier + note de périmètre),
+> écran **VIDE**, modal de règles (effets dérivés du snapshot serveur), bannière du QG, et arène
+> avec la ligne `RÉCUPÉRATION +33 PV / TOUR` (héros 220 PV × 0,15 → **valeur exacte vérifiée**) plus
+> le rappel d'événement dans INFOS/OBJECTIFS.
+>
+> 🐛 **Défaut trouvé PAR la capture** : les apostrophes des descriptions d'événements avaient sauté
+> à l'écriture du CSV (« dun secteur à lautre »). Corrigé, `--import` refait, re-capture relue. Le
+> boot headless à 0 ERROR ne l'aurait **jamais** montré.

@@ -62,6 +62,15 @@ var match_deadline_epoch: float = 0.0
 # mini-classement de départage, et paris d'observateur FERMÉS. Défaut false (rétro-compat).
 var final_protocol_active: bool = false
 
+# --- ÉVÉNEMENTS MUTATEURS (§8.132) ---
+# `event_id` : id de l'opération spéciale sous laquelle CETTE partie a été créée ("" = partie
+# ordinaire). `event_rules` : SNAPSHOT des valeurs mutées, FIGÉ à la création de la salle.
+# ⚠️⚠️ Le client affiche DEPUIS `event_rules` et ne possède AUCUNE constante d'événement en dur
+# (patron `battle_royale.rules`, §8.131) — un rééquilibrage serveur change ce que le joueur lit,
+# sans redéploiement du client. Défauts vides = serveur antérieur au chantier → rien ne s'affiche.
+var event_id: String = ""
+var event_rules: Dictionary = {}
+
 # « Mémoire Tactique » (§8.35 CONTRAT_RESEAU / §8.36 FRONTEND) : statistiques GLOBALES PUBLIQUES de
 # la partie, diffusées intégralement par le serveur (non rédigées). Modèle backend `GameStatistics` :
 #   - zone_kills_by_player : { "<player_id>": <kills> } — clés STR en JSON (§5), valeurs en float.
@@ -206,6 +215,10 @@ func update_from_json(state_data: Dictionary):
 	# false, et le HUD n'affiche alors NI chip de rebours global NI bandeau PROTOCOLE FINAL.
 	match_deadline_epoch = float(state_data.get("match_deadline_epoch", 0.0))
 	final_protocol_active = bool(state_data.get("final_protocol_active", false))
+	# §8.132 — événement mutateur de la partie (champs PUBLICS, identiques pour tous).
+	event_id = str(state_data.get("event_id", ""))
+	var _ev_rules = state_data.get("event_rules", {})
+	event_rules = _ev_rules if typeof(_ev_rules) == TYPE_DICTIONARY else {}
 	# Le rafraîchissement de l'UI est piloté par le contrôleur d'arène (main.gd) via le
 	# signal NetworkManager.game_state_updated — l'état ne connaît pas l'UI (Règle d'Or §6.1).
 

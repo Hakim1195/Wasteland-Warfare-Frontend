@@ -29,6 +29,10 @@ const WarFeed := preload("res://scripts/ui/war_feed.gd")
 const WarRoom := preload("res://scripts/ui/war_room.gd")
 # Tracker d'objectif vivant (E6 §8.78) : module de calcul PUR de la progression de l'objectif.
 const ObjectiveTracker := preload("res://scripts/ui/objective_tracker.gd")
+# ÉVÉNEMENTS MUTATEURS (§8.132) : on n'en réutilise ICI que `rule_lines`, la fonction PURE qui
+# traduit un snapshot serveur en phrases — la MÊME que le modal du QG, pour que le joueur lise
+# exactement le même texte avant et pendant la partie.
+const EventRulesModal := preload("res://scripts/ui/event_rules_modal.gd")
 # Helpers de charte partagés (identité du meneur de faction — refonte 2026-07-18).
 const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 # Helpers purs du Roster de Guerre (E1 §8.73) : sorted_pids reste la SOURCE UNIQUE de l'ordre
@@ -2539,6 +2543,39 @@ var _final_protocol_announced := false
 # combat) sont des données PUBLIQUES de l'état, donc calculables en direct. Le PREMIER (% d'objectif)
 # est SECRET pour autrui : on affiche « ??? » pour les autres et notre VRAIE valeur pour nous. C'est
 # un choix assumé — la tension vient justement de ne pas savoir où en sont les adversaires.
+# =========================================================
+# ÉVÉNEMENT MUTATEUR (§8.132) — bandeau d'entrée + rappel permanent
+# =========================================================
+# Le bandeau ne passe QU'UNE fois par partie (drapeau, patron `_final_protocol_announced`) : il
+# annonce ; c'est le rappel de l'onglet OBJECTIFS qui explique, et lui reste.
+#
+# ⚠️ Appelé à CHAQUE état reçu, mais IDEMPOTENT : rejouer le bandeau à chaque diffusion en ferait
+# un clignotant. Le rappel, lui, se réécrit — ses lignes dépendent de la langue courante.
+var _event_announced := false
+
+func _push_event_banner() -> void:
+	var eid := str(GameState.event_id)
+	if eid == "":
+		hud.set_event_notice("", [])
+		return
+	# Nom et effets viennent du SNAPSHOT SERVEUR figé dans l'état (aucune constante d'événement
+	# côté client). `name_key` n'est pas dans l'état — il est dans `event_rules`, que le serveur
+	# remplit avec les clés i18n en même temps que les valeurs (cf. events.snapshot_rules).
+	var rules: Dictionary = GameState.event_rules
+	var name_key := str(rules.get("name_key", ""))
+	var event_name := String(TranslationServer.translate(name_key)) if name_key != "" else eid
+	hud.set_event_notice(event_name, EventRulesModal.rule_lines(rules))
+	if _event_announced:
+		return
+	_event_announced = true
+	if _phase_banner != null:
+		_phase_banner.show_banner(tr("EVENT_MATCH_BANNER") % event_name.to_upper(),
+			Color("e0b249"))
+	# §8.129 — première partie sous événement : le bandeau dit QU'IL se passe quelque chose, la
+	# bulle dit OÙ retrouver le détail.
+	TutorialManager.hint_once("first_event")
+
+
 func _push_match_countdown() -> void:
 	hud.set_match_deadline(float(GameState.match_deadline_epoch), float(GameState.server_time))
 	var active: bool = bool(GameState.final_protocol_active) \
@@ -3361,6 +3398,9 @@ func _refresh():
 	_push_zone_forecast()
 	# Rebours GLOBAL de partie + mini-classement de départage (chantier « Tension », LOT F).
 	_push_match_countdown()
+	# ÉVÉNEMENT MUTATEUR (§8.132) : bandeau d'entrée (une seule fois) + rappel permanent des règles
+	# mutées dans l'onglet OBJECTIFS. No-op complet hors événement.
+	_push_event_banner()
 	# SUIVI DES PRIMES (2026-08-01) : kills cumulés de MON équipe + caisses déjà ouvertes.
 	_push_bounty_progress()
 	# INTENSITÉ DE GUERRE (§8.122, LOT A) : nouvelle CIBLE. Le lissage et la propagation (musique,
@@ -4157,9 +4197,18 @@ func _share_card_payload() -> Dictionary:
 	var kills := WarRoom.stat_of(GameState.statistics, "combat_kills_by_player", me)
 	var conquests := WarRoom.stat_of(GameState.statistics, "conquests_by_player", me)
 	var duration := _match_duration_text()
+	# §8.132 — la carte de partage PORTE le nom de l'événement : « j'ai gagné pendant la TEMPÊTE »
+	# n'est pas la même histoire que « j'ai gagné ». On l'accroche à la ligne de raison du verdict
+	# (déjà en place) plutôt que d'ajouter un bloc — la carte est une image, pas un tableau.
+	var verdict_reason := tr(reason_key) if reason_key != "" else ""
+	var _ev_name_key := str(GameState.event_rules.get("name_key", ""))
+	if str(GameState.event_id) != "" and _ev_name_key != "":
+		var _ev_line := tr("EVENT_MATCH_BANNER") % \
+			String(TranslationServer.translate(_ev_name_key)).to_upper()
+		verdict_reason = (verdict_reason + " · " + _ev_line) if verdict_reason != "" else _ev_line
 	return {
 		"verdict": tr("SHARE_VERDICT_WIN") if is_victory else tr("SHARE_VERDICT_LOSS"),
-		"verdict_reason": tr(reason_key) if reason_key != "" else "",
+		"verdict_reason": verdict_reason,
 		"is_victory": is_victory,
 		"podium": podium,
 		"faction_name": str(finfo.get("name", "")),

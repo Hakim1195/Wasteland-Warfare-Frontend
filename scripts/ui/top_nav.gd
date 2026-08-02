@@ -67,6 +67,11 @@ const TABS := [
 	# « où est-ce que je me situe ? », l'une seul, l'autre avec les siens. Avant cet onglet, l'écran
 	# n'était atteignable que depuis une carte du Profil — autant dire invisible.
 	{"id": "company", "key": "MENU_TAB_COMPANY", "scene": "res://scenes/ui/company_screen.tscn"},
+	# §8.132 — ÉVÉNEMENTS. Placé APRÈS Compagnie (demande Hakim, 2026-08-02) : c'est la dernière
+	# entrée, celle qu'on consulte « au cas où il se passerait quelque chose ce week-end ». La scène
+	# `events.tscn` existait déjà en PLACEHOLDER (« section en construction ») depuis les premiers
+	# chantiers ; elle porte désormais le vrai écran — on ne crée pas de seconde scène.
+	{"id": "events", "key": "NAV_EVENTS", "scene": "res://scenes/ui/events.tscn"},
 ]
 
 const LOBBY_SCENE := "res://scenes/ui/main_menu.tscn"
@@ -115,6 +120,11 @@ var _missions_claimable: int = 0
 var _company_tab_btn: Button = null
 var _company_unread: int = 0
 var _company_online: int = 0
+# §8.132 — pastille ÉVÉNEMENTS : un simple point OR quand une opération est EN COURS. Pas de
+# compteur (contrairement à DÉFIS/COMPAGNIE) : il n'y a JAMAIS qu'un seul événement actif à la
+# fois — un « ●1 » perpétuel n'apprendrait rien à personne.
+var _events_tab_btn: Button = null
+var _event_active: bool = false
 
 # --- Mini-profil flottant (§8.58, déplacé du menu en §8.94) ---
 var _profile_flyout: Control = null
@@ -159,6 +169,10 @@ func _ready() -> void:
 	# §8.126.1 — pastille COMPAGNIE. Route VOLONTAIREMENT minuscule (`/company/badge` : deux
 	# nombres), justement parce qu'elle part depuis TOUS les écrans hub à chaque navigation.
 	NetworkManager.company_badge_loaded.connect(_on_company_badge)
+	# §8.132 — configuration des ÉVÉNEMENTS. Même raisonnement que ci-dessus : la nav est montée
+	# partout, elle charge UNE fois par écran et les écrans hôtes (QG, recherche) n'ont qu'à écouter
+	# `events_loaded`. Réponse mémoïsée 60 s côté serveur → le coût réel est nul.
+	NetworkManager.events_loaded.connect(_on_events_config)
 	# Session expirée (§AC.5) : top_nav est l'en-tête COMMUN de tous les écrans hub → un seul point de
 	# redirection vers l'auth, quel que soit l'écran affiché quand le token expire.
 	NetworkManager.session_expired.connect(_on_session_expired)
@@ -168,6 +182,12 @@ func _ready() -> void:
 	NetworkManager.fetch_missions()
 	NetworkManager.fetch_profile_history(1)
 	NetworkManager.fetch_company_badge()
+	NetworkManager.fetch_events()
+	# Le cache peut DÉJÀ être garni (navigation depuis un autre écran hub) : on peint la pastille
+	# tout de suite, sans attendre l'aller-retour — sinon elle clignoterait à chaque changement
+	# d'écran (absente puis présente).
+	if not NetworkManager.events_config.is_empty():
+		_on_events_config(NetworkManager.events_config)
 	_start_invite_poll()
 
 func _make_font() -> Font:
@@ -271,6 +291,9 @@ func _build_nav_pill() -> Control:
 		# §8.126.1 — même mécanique pour la pastille COMPAGNIE.
 		elif str(t.get("id")) == "company":
 			_company_tab_btn = btn
+		# §8.132 — même mécanique ENCORE (troisième usage : on RÉUTILISE, on ne duplique pas).
+		elif str(t.get("id")) == "events":
+			_events_tab_btn = btn
 	return pill
 
 # --- Un onglet (Button stylé, transparent + soulignement cyan si actif — comme main_menu) ---
@@ -628,6 +651,35 @@ func _update_company_badge() -> void:
 		_company_tab_btn.remove_theme_color_override("font_color")
 
 
+# =========================================================
+# PASTILLE ÉVÉNEMENTS (§8.132) — un point OR, rien d'autre
+# =========================================================
+func _on_events_config(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return  # garde défensive : signal global reçu pendant un changement de scène.
+	var active = data.get("active_event", {})
+	_event_active = typeof(active) == TYPE_DICTIONARY and not active.is_empty()
+	_update_events_badge()
+
+func _update_events_badge() -> void:
+	if _events_tab_btn == null or not is_instance_valid(_events_tab_btn):
+		return
+	if _event_active:
+		# Texte COMPOSÉ → auto-traduction désactivée, re-rendu manuel sur locale_changed (même
+		# piège que DÉFIS/COMPAGNIE : sans ça, l'onglet reste en français après un changement de
+		# langue). `●` : même bloc Unicode que les pastilles existantes — aucun emoji, aucun tofu.
+		_events_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		_events_tab_btn.text = "%s ●" % tr("NAV_EVENTS")
+		_events_tab_btn.add_theme_color_override("font_color", GOLD)
+		return
+	_events_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_INHERIT
+	_events_tab_btn.text = "NAV_EVENTS"
+	if active_tab == "events":
+		_events_tab_btn.add_theme_color_override("font_color", TEXT)
+	else:
+		_events_tab_btn.remove_theme_color_override("font_color")
+
+
 # Session expirée (§AC.5) : purge le token mort, laisse un message et renvoie à l'écran d'auth.
 # AUCUN retry — l'utilisateur se reconnecte. NetworkManager n'émet le signal qu'UNE fois.
 func _on_session_expired() -> void:
@@ -639,6 +691,7 @@ func _on_session_expired() -> void:
 func _on_locale_changed(_code: String) -> void:
 	_update_missions_badge()
 	_update_company_badge()
+	_update_events_badge()
 	# Le mini-profil, s'il est ouvert, contient des valeurs formatées → re-rendu.
 	if _profile_flyout != null and _profile_flyout.visible:
 		_populate_profile_flyout()

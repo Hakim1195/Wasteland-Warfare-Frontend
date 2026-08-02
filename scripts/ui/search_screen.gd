@@ -76,6 +76,9 @@ var _back_button: Button
 
 var _map_tiles: Dictionary = {}   # map_id -> {"panel":PanelContainer,"button":Button,"label":Label}
 var _ranked_reminder_label: Label
+# §8.132 — bandeau d'ÉVÉNEMENT de la branche CASUAL (null en branche classée : elle n'en construit
+# pas, et c'est le comportement voulu — la Classée n'est jamais mutée).
+var _event_strip: Label = null
 # Ligne « explication des points » (classée : barème RP / casual : aucun RP). Une SEULE des deux
 # branches est construite par écran -> une seule référence suffit. Mémorisée pour re-résoudre son
 # infobulle au changement de langue (le libellé, lui, s'auto-traduit via sa clé brute).
@@ -322,8 +325,40 @@ func _build_ranked_branch(parent: VBoxContainer) -> void:
 	_points_hint_label = _make_hint_line(parent, "MM_RANKED_POINTS_LABEL", "MM_RANKED_POINTS_HINT", ACCENT)
 
 
+# §8.132 — met à jour le bandeau d'événement de la branche casual. Un événement ACTIF seulement :
+# annoncer « ce week-end » sur l'écran de recherche n'aiderait personne à décider maintenant.
+func _on_events_config(data: Dictionary) -> void:
+	if _event_strip == null or not is_instance_valid(_event_strip):
+		return
+	var active = data.get("active_event", {})
+	if typeof(active) != TYPE_DICTIONARY or active.is_empty():
+		_event_strip.visible = false
+		return
+	_event_strip.text = String(TranslationServer.translate("EVENT_QUEUE_STRIP")) % \
+		String(TranslationServer.translate(str(active.get("name_key", "")))).to_upper()
+	_event_strip.visible = true
+
+
 # Branche CASUAL : sélecteur de carte (tuiles) + CTA + bloc SALON PRIVÉ (créer / rejoindre par code).
 func _build_casual_branch(parent: VBoxContainer) -> void:
+	# ÉVÉNEMENTS MUTATEURS (§8.132) — bandeau fin « TEMPÊTE ERRATIQUE EN COURS ».
+	# ⚠️ ICI ET NULLE PART AILLEURS : la branche CLASSÉE n'en a pas, et le Battle Royale (écran
+	# ESCOUADE) non plus — parce qu'aucun des deux n'est muté. Un bandeau posé sur la Classée
+	# promettrait des règles modifiées qui ne viendraient jamais.
+	# Le bloc casual couvre AUSSI le salon privé, qui LUI suit bien l'événement (drapeau du registre
+	# serveur `applies_to_private`) — c'est donc le bon emplacement pour les deux.
+	_event_strip = Label.new()
+	_event_strip.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_event_strip.add_theme_font_override("font", _font)
+	_event_strip.add_theme_font_size_override("font_size", 14)
+	_event_strip.add_theme_color_override("font_color", GOLD)
+	_event_strip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_event_strip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_event_strip.visible = false
+	parent.add_child(_event_strip)
+	NetworkManager.events_loaded.connect(_on_events_config)
+	_on_events_config(NetworkManager.events_config)
+
 	var tiles_row := HBoxContainer.new()
 	tiles_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	tiles_row.add_theme_constant_override("separation", 16)

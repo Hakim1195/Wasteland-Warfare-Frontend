@@ -187,6 +187,10 @@ func _ready() -> void:
 	# fetch_profile_history / get_profile), sur TOUS les écrans hub. Éviter d'ajouter un fetch ici :
 	# les deux consommateurs (pastille de la nav, carte du menu) partagent la même réponse.
 	NetworkManager.missions_loaded.connect(_on_missions_badge_data)
+	# ÉVÉNEMENTS MUTATEURS (§8.132) : même discipline que ci-dessus — le menu ÉCOUTE, c'est
+	# `top_nav` qui déclenche `fetch_events()` sur tous les écrans hub. La bannière apparaît quand
+	# le serveur répond, et ne s'affiche PAS du tout si rien n'est programmé.
+	NetworkManager.events_loaded.connect(_on_events_config)
 
 	_set_status("MENU_STATUS_LOADING")
 
@@ -202,6 +206,171 @@ func _ready() -> void:
 	_mount_top_nav()
 
 	NetworkManager.fetch_leaderboard(3)
+	# Le cache peut DÉJÀ être garni (retour au QG depuis un autre écran hub) : on peint sans
+	# attendre l'aller-retour, sinon la bannière apparaîtrait avec un temps de retard visible.
+	_on_events_config(NetworkManager.events_config)
+
+
+# =========================================================
+# BANNIÈRE ÉVÉNEMENT (§8.132) — sous les cartes de mode
+# =========================================================
+# Le QG est le seul écran que TOUS les joueurs traversent : c'est là que se joue « je découvre
+# qu'il se passe quelque chose ce week-end ». La bannière ne s'affiche QUE s'il y a une opération
+# en cours ou à venir — pas de cadre vide « aucun événement », qui n'apprendrait rien et prendrait
+# la place d'une carte de mode.
+#
+# ⚠️ AJOUTÉE AU `Shell` (le VBox qui empile MidRow et BottomRow), donc littéralement SOUS la rangée
+# de cartes. On ne re-parente RIEN et on ne touche PAS au `.tscn` : `cards_row` garde son NodePath
+# exporté (piège maison — un reparentage casse les `%NomUnique` et les NodePath de scène).
+#
+# Clic → l'ÉCRAN Événements (destination canonique). Le MODAL de règles, lui, s'ouvre depuis la
+# carte principale de cet écran : un seul modal, deux points d'entrée, jamais deux textes.
+var _event_banner: Control = null
+var _event_countdown: Label = null
+var _event_countdown_epoch: int = 0
+var _event_countdown_key: String = ""
+var _event_tick: Timer = null
+
+
+func _on_events_config(data: Dictionary) -> void:
+	if not is_inside_tree() or cards_row == null:
+		return
+	var active: Dictionary = _as_dict(data.get("active_event", {}))
+	var upcoming: Dictionary = _as_dict(data.get("next_event", {}))
+	var event: Dictionary = active if not active.is_empty() else upcoming
+	var is_active := not active.is_empty()
+
+	if _event_banner != null and is_instance_valid(_event_banner):
+		_event_banner.queue_free()
+		_event_banner = null
+		_event_countdown = null
+		_event_countdown_epoch = 0
+	if event.is_empty():
+		return
+
+	var shell := cards_row.get_parent().get_parent()
+	if shell == null:
+		return
+	_event_banner = _make_event_banner(event, is_active)
+	shell.add_child(_event_banner)
+
+	if _event_tick == null or not is_instance_valid(_event_tick):
+		_event_tick = Timer.new()
+		_event_tick.wait_time = 1.0
+		_event_tick.timeout.connect(_update_event_countdown)
+		add_child(_event_tick)
+	_event_tick.start()
+	_update_event_countdown()
+
+
+func _make_event_banner(event: Dictionary, is_active: bool) -> Control:
+	var accent: Color = GOLD if is_active else ACCENT
+	var btn := Button.new()
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.custom_minimum_size = Vector2(0, 74)
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(SURFACE, 0.82)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(1)
+	st.border_width_left = 4          # après set_border_width_all, sinon écrasé.
+	st.border_color = accent
+	st.content_margin_left = 18.0
+	st.content_margin_right = 18.0
+	st.content_margin_top = 10.0
+	st.content_margin_bottom = 10.0
+	var hover := st.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(accent, 0.12)
+	btn.add_theme_stylebox_override("normal", st)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_stylebox_override("focus", st)
+	WarzoneUI.wire_button_sfx(btn)
+	btn.pressed.connect(func() -> void:
+		TransitionManager.change_scene("res://scenes/ui/events.tscn"))
+
+	# Contenu posé PAR-DESSUS le bouton (un Button n'est pas un conteneur de mise en page), en
+	# plein cadre et transparent aux clics → tout le pavé reste cliquable.
+	var row := HBoxContainer.new()
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = 18.0
+	row.offset_right = -18.0
+	row.add_theme_constant_override("separation", 16)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(row)
+
+	var left := VBoxContainer.new()
+	left.add_theme_constant_override("separation", 2)
+	left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	left.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(left)
+	left.add_child(_event_label(
+		_tr_key("EVENT_CARD_ACTIVE" if is_active else "EVENT_CARD_UPCOMING"), 12, accent))
+	left.add_child(_event_label(_tr_key(str(event.get("name_key", ""))).to_upper(), 22, TEXT))
+
+	var desc := _event_label(_tr_key(str(event.get("desc_key", ""))), 14, MUTED)
+	desc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	desc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(desc)
+
+	_event_countdown_epoch = int(event.get("ends_at_epoch", 0)) if is_active \
+		else int(event.get("starts_at_epoch", 0))
+	_event_countdown_key = "EVENT_ENDS_IN" if is_active else "EVENT_STARTS_IN"
+	_event_countdown = _event_label("", 17, accent, HORIZONTAL_ALIGNMENT_RIGHT)
+	_event_countdown.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_event_countdown.custom_minimum_size = Vector2(220, 0)
+	row.add_child(_event_countdown)
+	return btn
+
+
+func _update_event_countdown() -> void:
+	if _event_countdown == null or not is_instance_valid(_event_countdown):
+		return
+	if _event_countdown_epoch <= 0:
+		_event_countdown.text = ""
+		return
+	var remaining := _event_countdown_epoch - int(Time.get_unix_time_from_system())
+	if remaining <= 0:
+		# La fenêtre vient de basculer (début OU fin) : on redemande la configuration au lieu
+		# d'afficher un rebours négatif. Réponse mémoïsée 60 s côté serveur.
+		_event_countdown.text = ""
+		_event_countdown_epoch = 0
+		NetworkManager.fetch_events()
+		return
+	var d := remaining / 86400
+	var h := (remaining % 86400) / 3600
+	var m := (remaining % 3600) / 60
+	var s := remaining % 60
+	var dur := ""
+	if d > 0:
+		dur = _tr_key("EVENT_DUR_DH") % [d, h]
+	elif h > 0:
+		dur = _tr_key("EVENT_DUR_HM") % [h, m]
+	else:
+		dur = _tr_key("EVENT_DUR_MS") % [m, s]
+	_event_countdown.text = _tr_key(_event_countdown_key) % dur
+
+
+func _event_label(text: String, font_size: int, color: Color,
+		align: int = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
+	var l := Label.new()
+	l.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	l.text = text
+	l.add_theme_font_override("font", _font)
+	l.add_theme_font_size_override("font_size", font_size)
+	l.add_theme_color_override("font_color", color)
+	l.horizontal_alignment = align
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+
+func _tr_key(key: String) -> String:
+	return String(TranslationServer.translate(key))
+
+
+func _as_dict(value) -> Dictionary:
+	return value if typeof(value) == TYPE_DICTIONARY else {}
 
 
 # =========================================================
@@ -858,6 +1027,9 @@ func _on_locale_changed(_code: String) -> void:
 	# Carte Défis : intitulés composés (« ❯ NOM ») → re-rendu manuel (la pastille « ●N » de l'onglet
 	# est, elle, re-rendue par top_nav qui la porte désormais, §8.94).
 	_rebuild_challenges_rows()
+	# §8.132 : la bannière ÉVÉNEMENT est intégralement composée (nom, description, rebours) →
+	# reconstruction complète, sinon elle reste en français après un changement de langue.
+	_on_events_config(NetworkManager.events_config)
 
 func _go(path: String) -> void:
 	TransitionManager.change_scene(path)

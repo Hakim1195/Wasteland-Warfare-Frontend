@@ -109,6 +109,10 @@ const HINTS := {
 	# bulle = ajoute la bulle »), déclenchées à la première ouverture du Roster de Guerre.
 	"first_roster_order":  {"text": "TUTO_HINT_ROSTER_ORDER",  "section": "phases"},
 	"first_roster_enemy":  {"text": "TUTO_HINT_ROSTER_ENEMY",  "section": "hero"},
+	# §8.132 — première partie jouée sous un ÉVÉNEMENT MUTATEUR. Renvoie vers la section PHASES du
+	# Manuel : ce que l'événement modifie (zone, temps, cartes, renforts) y est déjà décrit dans sa
+	# version de base — la bulle explique seulement que ces règles-là ont bougé pour ce week-end.
+	"first_event":         {"text": "TUTO_HINT_EVENT",         "section": "phases"},
 }
 
 # --- État ---------------------------------------------------------------------------------------

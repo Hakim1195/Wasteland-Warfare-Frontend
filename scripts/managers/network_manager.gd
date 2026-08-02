@@ -61,6 +61,13 @@ signal team_playlists_loaded(playlists: Dictionary)
 # VICTOIRE D'ÉQUIPE (§8.124) — diffusée AVANT le game_over pour la mise en scène du bandeau.
 signal team_victory(team_id: int, member_ids: Array, victory_reason: String)
 
+# --- ÉVÉNEMENTS MUTATEURS (§8.132) ---
+# Configuration publique des événements : { active_event, next_event, upcoming_events }.
+# ⚠️ Servie par le MÊME endpoint que les playlists (`GET /squad/playlists`) — c'est LE point de
+# configuration de jeu du hub. Un écran qui charge déjà les playlists reçoit donc les événements
+# sans une seule requête de plus.
+signal events_loaded(data: Dictionary)
+
 # --- COMPAGNIES (§8.126) ---
 # ⚠️ FRONTIÈRE ESCOUADE / COMPAGNIE : rien ci-dessous ne met en file. L'escouade (au-dessus) est
 # l'objet de matchmaking ; la compagnie est une IDENTITÉ PERSISTANTE — elle FABRIQUE des escouades,
@@ -256,6 +263,14 @@ var current_salon_code: String = ""
 # team_count, capacity}}). VIDE tant que `fetch_team_playlists()` n'a pas répondu : les écrans
 # n'affichent alors AUCUNE carte de mode d'équipe — jamais une valeur devinée.
 var team_playlists: Dictionary = {}
+# --- ÉVÉNEMENTS MUTATEURS (§8.132) ---
+# Cache local de la configuration d'événements : { "active_event": Dictionary|{}, "next_event":
+# Dictionary|{}, "upcoming_events": Array }. VIDE tant que le serveur n'a pas répondu → les écrans
+# n'affichent RIEN plutôt qu'un événement deviné (§9.5 : le serveur est l'autorité, et le client ne
+# possède AUCUN registre d'événements en dur).
+# ⚠️ `null` du JSON est NORMALISÉ en {} à l'entrée : `active_event.is_empty()` est le seul test à
+# faire côté vue, jamais un `!= null` sur une valeur qui peut être `null` OU absente.
+var events_config: Dictionary = {}
 # Blocs d'ÉQUIPE du dernier `game_over` (mémorisés en propriété, pattern `last_objectives_reveal` :
 # le signal `match_over` reste INCHANGÉ, donc aucun écouteur existant à retoucher). Tous vides en
 # FFA — le Rapport Post-Op masque alors ses sections d'équipe.
@@ -845,6 +860,39 @@ func _on_team_playlists(_result, response_code, _headers, body, http_node):
 		playlists = {}
 	team_playlists = playlists
 	team_playlists_loaded.emit(playlists)
+	# §8.132 : la MÊME réponse porte les événements — on les range au passage, sans requête en plus.
+	_store_events(data)
+
+# --- ÉVÉNEMENTS MUTATEURS (§8.132) ---
+# Charge la configuration d'événements. C'est le MÊME endpoint que les playlists : un écran qui
+# n'a besoin QUE des événements (QG, écran ÉVÉNEMENTS, barre de navigation) l'appelle par ce nom
+# plus parlant, et ceux qui chargent déjà les playlists n'ont rien à appeler du tout.
+func fetch_events() -> void:
+	_send_api_request("/squad/playlists", HTTPClient.METHOD_GET, {}, _on_events_config)
+
+func _on_events_config(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200:
+		events_loaded.emit(events_config)  # on NE VIDE PAS le cache : un incident réseau ne doit
+		return                             # pas faire disparaître une bannière déjà à l'écran.
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	_store_events(data)
+
+# NORMALISATION unique de la configuration d'événements. `active_event`/`next_event` valent `null`
+# côté serveur quand il n'y a rien : on les range en {} pour que TOUTES les vues n'aient qu'un seul
+# test à écrire (`is_empty()`), au lieu de jongler entre `null`, absent et vide.
+func _store_events(data: Dictionary) -> void:
+	var active = data.get("active_event", null)
+	var upcoming = data.get("upcoming_events", [])
+	var nxt = data.get("next_event", null)
+	events_config = {
+		"active_event": active if typeof(active) == TYPE_DICTIONARY else {},
+		"next_event": nxt if typeof(nxt) == TYPE_DICTIONARY else {},
+		"upcoming_events": upcoming if typeof(upcoming) == TYPE_ARRAY else [],
+	}
+	events_loaded.emit(events_config)
 
 func squad_create(playlist: String) -> void:
 	_send_api_request("/squad/create", HTTPClient.METHOD_POST, {"playlist": playlist},
