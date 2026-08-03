@@ -270,9 +270,10 @@ func _on_mission_claimed(data: Dictionary) -> void:
 		msg += "  " + tr("MISSIONS_PASS_BONUS")
 	_set_status(msg, GOLD)
 	# Source de vérité serveur : on RE-FETCHE la liste (progress/claimed/pastille à jour).
-	# NOTE (constat, hors périmètre de ce chantier) : la jauge de Coins de la nav n'est PAS
-	# rafraîchie après un claim — elle ne bouge qu'au prochain `/auth/me`. Comportement HÉRITÉ de
-	# l'écran d'origine, reconduit tel quel : ce lot est un déménagement, pas une correction.
+	# §8.135 (LOT 0) — DETTE SOLDÉE : la jauge de Coins de la nav se rafraîchit désormais à cet
+	# instant précis. Rien à faire ICI : `top_nav` écoute le MÊME signal `mission_claimed` et lit le
+	# `coins_balance` que le serveur vient de renvoyer (aucun appel réseau de plus). Ce panneau reste
+	# une vue PURE — il ne connaît pas la nav et n'a pas à aller la chercher dans l'arbre.
 	NetworkManager.fetch_missions()
 
 

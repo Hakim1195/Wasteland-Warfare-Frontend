@@ -42,6 +42,10 @@ const TimelineChart := preload("res://scripts/ui/timeline_chart.gd")
 # l'objectif révélé de chaque camp à partir de sa forme structurée {type, params}, exactement comme
 # la révélation individuelle. Aucun libellé serveur affiché tel quel.
 const ObjectiveTracker := preload("res://scripts/ui/objective_tracker.gd")
+# §8.135 — MAÎTRISE : bordures + libellés de titre (implémentation unique), et la séquence de
+# révélation RÉUTILISÉE telle quelle pour un passage de rang (aucune seconde mise en scène).
+const MasteryBorder := preload("res://scripts/ui/mastery_border.gd")
+const UnlockCelebrationScene := preload("res://scenes/ui/unlock_celebration.tscn")
 # CARTE DE PARTAGE (§8.121, LOT D) — compositeur offscreen (SubViewport → PNG). Preload à SENS
 # UNIQUE : `share_card.gd` ne connaît PAS le rapport (il partage seulement TimelineChart), ce qui
 # évite toute inclusion cyclique de ressources.
@@ -791,13 +795,43 @@ func _make_podium_row(r: Dictionary) -> Control:
 	rank_lbl.add_theme_font_size_override("font_size", 17)
 	rank_lbl.add_theme_color_override("font_color", ACCENT_GOLD if is_first else TEXT_MUTED)
 	line1.add_child(rank_lbl)
+	# §8.135 — BORDURE DE MAÎTRISE de la faction JOUÉE, devant la chip d'identité. C'est ici, et pas
+	# dans l'arène (décision de sobriété §1.4), que la maîtrise se montre aux autres.
+	var pid := int(r.get("pid", 0))
+	var pstate: Dictionary = GameState.players.get(str(pid), {})
+	var tier := str(pstate.get("mastery_border", "")) if typeof(pstate) == TYPE_DICTIONARY else ""
+	if tier != "":
+		var mb := MasteryBorder.make(tier, 26.0)
+		mb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		line1.add_child(mb)
 	var chip := PlayerChipScene.instantiate()
 	chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line1.add_child(chip)
-	chip.setup(int(r.get("pid", 0)), false)
+	chip.setup(pid, false)
 	for t in r.get("titles", []):
 		line1.add_child(_title_badge(tr(str(t)), tr("REPORT_TITLE_TOOLTIP")))
 	card.add_child(line1)
+
+	# §8.135 — TITRE DE MAÎTRISE porté, sous le pseudo, en teinte atténuée. Distinct des badges
+	# honorifiques ci-dessus, qui ne valent QUE pour ce match : celui-ci est PERSISTANT, c'est
+	# précisément ce que le chantier ajoute au jeu. Absent → aucune ligne (pas de trou à combler).
+	var equipped := str(pstate.get("equipped_title", "")) if typeof(pstate) == TYPE_DICTIONARY else ""
+	if equipped != "":
+		# Catalogue de noms de faction résolu par le helper (le rapport n'a pas le sien).
+		var mastery_label := MasteryBorder.title_with_faction(equipped)
+		if mastery_label != "":
+			var trow := HBoxContainer.new()
+			trow.add_theme_constant_override("separation", 8)
+			var tindent := Control.new()
+			tindent.custom_minimum_size = Vector2(28, 0)
+			trow.add_child(tindent)
+			var tlbl := Label.new()
+			tlbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+			tlbl.text = mastery_label
+			tlbl.add_theme_font_size_override("font_size", 12)
+			tlbl.add_theme_color_override("font_color", Color(ACCENT_GOLD, 0.72))
+			trow.add_child(tlbl)
+			card.add_child(trow)
 
 	var line2 := HBoxContainer.new()
 	line2.add_theme_constant_override("separation", 8)
@@ -834,6 +868,50 @@ func _make_podium_row(r: Dictionary) -> Control:
 	line2.add_child(stats)
 	card.add_child(line2)
 	return wrap
+
+# =========================================================
+# MAÎTRISE DE FACTION (§8.135) — révélation d'un passage de rang
+# =========================================================
+# On RÉUTILISE `unlock_celebration` (§8.122) telle quelle : elle sait déjà faire « voici ce que vous
+# venez d'obtenir » (voile → silhouette → révélation + gerbe dorée), elle est skippable au clic et
+# elle respecte `reduced_motion`. Écrire une seconde mise en scène aurait produit deux dialectes
+# visuels pour le même message.
+#
+# TROIS RÈGLES, toutes issues du chantier :
+#   • UNE SEULE séquence même en cas de multi-franchissement — on montre le rang FINAL (§5.4) ;
+#     c'est déjà ce que le serveur envoie (un seul bloc `{from, to, title_key}`), rien à agréger ;
+#   • elle ne se joue QUE si un NOUVEAU TITRE est débloqué (`title_key` non nul). Un rang de plus
+#     sans titre a sa ligne dans l'onglet XP HÉROS, et c'est proportionné : célébrer chaque rang
+#     userait la célébration en trois parties ;
+#   • ⚠️ elle NE BLOQUE JAMAIS « REJOUER » (règle §8.129). La surcouche est un enfant de l'écran qui
+#     avale ses propres clics, elle ne désactive aucun bouton et se ferme au premier clic.
+var _mastery_cine_armed := false
+
+
+func _arm_mastery_celebration(rank_up: Dictionary) -> void:
+	if _mastery_cine_armed:
+		return   # `populate_rewards` peut être rejoué (victoire PUIS game_over) : une seule fois.
+	var title_key := str(rank_up.get("title_key", "") if rank_up.get("title_key") != null else "")
+	if title_key == "":
+		return   # rang gagné sans nouveau titre → la ligne de l'onglet suffit.
+	_mastery_cine_armed = true
+
+	# Le titre est celui de la faction JOUÉE : c'est elle qu'on vient de maîtriser un cran de plus.
+	var me: Dictionary = GameState.players.get(str(AuthManager.user_id), {})
+	var fid := str(me.get("faction", "")) if typeof(me) == TYPE_DICTIONARY else ""
+	var label := MasteryBorder.title_label(title_key)
+	var full := MasteryBorder.title_with_faction("%s:%s" % [fid, title_key])
+	if full != "":
+		label = full
+
+	var cine = UnlockCelebrationScene.instantiate()
+	add_child(cine)     # dernier enfant → au-dessus du panneau, jamais au-dessus de la logique
+	cine.play({
+		"name": label.to_upper(),
+		"texture": null,     # pas d'asset de titre : la plaque d'accent de la séquence fait office
+		"accent": ACCENT_GOLD,
+	})
+
 
 # =========================================================
 # RÉVÉLATION THÉÂTRALE DES OBJECTIFS (§8.121, LOT C)
@@ -2158,6 +2236,21 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 	hero_bar.add_theme_stylebox_override("fill", hb_fill)
 	block.add_child(hero_bar)
 
+	# --- MAÎTRISE DE FACTION (§8.135) : ligne dédiée « MAÎTRISE : RANG %d → %d » ------------------
+	# Le drapeau vient du SERVEUR (`mastery_rank_up`, posé par `process_match_results`) : le client
+	# ne recalcule NI la courbe NI les paliers. `null` / clé absente (aucun franchissement, serveur
+	# non redéployé) → aucune ligne, ce qui est le cas de l'immense majorité des matchs.
+	var rank_up = rewards.get("mastery_rank_up")
+	if typeof(rank_up) == TYPE_DICTIONARY:
+		var mline := Label.new()
+		mline.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		mline.text = tr("MASTERY_RANK_UP") % [int(rank_up.get("from", 0)), int(rank_up.get("to", 0))]
+		mline.add_theme_color_override("font_color", ACCENT_GOLD)
+		mline.add_theme_font_size_override("font_size", 15)
+		block.add_child(mline)
+		# Un NOUVEAU TITRE mérite en plus la séquence de révélation — pas un simple rang de plus.
+		_arm_mastery_celebration(rank_up)
+
 	# Pop-up « Statistiques Améliorées » : un palier franchi → bonus de stats (ex. +50 PV, +1 PA).
 	for ms in rewards.get("hero_milestones", []):
 		var ms_lbl := Label.new()
@@ -2168,6 +2261,7 @@ func _build_hero_progress(rewards: Dictionary) -> void:
 		block.add_child(ms_lbl)
 
 	box.add_child(block)
+
 	# NOUVEAU — détail du barème héros (réconcilié à hero_xp_earned).
 	# §8.99 — même garde que l'onglet 1 : en anomalie (`rewards` vide), le détail retomberait sur le
 	# total RECONSTRUIT côté client et contredirait la bannière « aucune récompense reçue ».

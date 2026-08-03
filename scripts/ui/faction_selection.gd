@@ -50,6 +50,8 @@ const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 # Vue partagée des caractéristiques du héros (SOURCE UNIQUE : STAT_ROWS + formatage + rangée de
 # pastilles) — mutualisée avec characters_screen.gd (DRY, aucun libellé/format dupliqué).
 const HeroStatsView = preload("res://scripts/ui/hero_stats_view.gd")
+# §8.135 — bordures de maîtrise + libellés de titre (implémentation unique, cf. mastery_border.gd).
+const MasteryBorder = preload("res://scripts/ui/mastery_border.gd")
 # Héros 3D (SubViewport transparent) — remplace le portrait 2D quand la faction a un .glb riggé.
 # Préchargé (pas de class_name, par prudence vis-à-vis du cache d'import).
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
@@ -107,6 +109,10 @@ var _access_banner: Label = null
 # Ligne d'identité du MENEUR (refonte 2026-07-18) : « GÉNÉRAL VIKTOR "IRONLINE" STAHL », créée
 # par code SOUS le nom de faction (aucune retouche .tscn — même pattern que _access_banner).
 var _leader_line: Label = null
+# §8.135 — bordure de MAÎTRISE posée en surcouche du portrait, et ligne du TITRE porté (toutes deux
+# créées par code, même patron que `_leader_line` : aucune retouche du .tscn).
+var _mastery_border: Control = null
+var _title_line: Label = null
 # Skins équipés par faction (M5 §8.69) : { faction_id: skin_id } — bloc `equipped` de l'inventaire.
 var _equipped_map: Dictionary = {}
 const SKINS_DIR := "res://resources/skins/"
@@ -288,6 +294,75 @@ func _apply_card_content() -> void:
 		counter_label.text = "%02d / %02d" % [_index + 1, _factions.size()]
 	# M3 (§8.66) : accès à la faction courante (bandeau + grisage + verrou du CONFIRMER).
 	_apply_access_state(f)
+	# §8.135 — bordure de MAÎTRISE autour du portrait + titre porté, pour la faction affichée.
+	_refresh_mastery_frame()
+
+
+# =========================================================
+# MAÎTRISE DE FACTION (§8.135) — bordure de portrait + titre porté, au DRAFT
+# =========================================================
+# ⚠️ ÉCART CONSIGNÉ AVEC LE BRIEF (§5.3). Celui-ci demandait « sous le pseudo de CHAQUE joueur, son
+# titre + la bordure autour de SON portrait ». Le draft n'affiche PAS les autres joueurs : c'est un
+# carrousel d'UNE carte — MA faction — avec un simple compteur « N / M » de verrous. Il n'existe ni
+# pseudo ni portrait d'adversaire à décorer ici (vérifié dans `faction_selection.tscn` : ni liste,
+# ni chip, ni roster). On applique donc la règle au SEUL portrait qui existe — le mien — ce qui rend
+# exactement l'intention (« la bordure de la faction que je vais engager, et le titre que je porte »).
+# Les identités des ADVERSAIRES restent visibles là où elles l'ont toujours été : au Rapport Post-Op
+# (§5.4), qui les décore, lui, pour tout le monde.
+#
+# Aucun appel réseau : la maîtrise voyage dans le payload `/heroes` que le draft demande DÉJÀ pour
+# les statistiques de héros, et le titre porté dans le bloc identité de l'état de partie.
+func _refresh_mastery_frame() -> void:
+	if hero_portrait == null or _factions.is_empty():
+		return
+	var frame := hero_portrait.get_parent()
+	if frame == null:
+		return
+	if _mastery_border != null and is_instance_valid(_mastery_border):
+		_mastery_border.queue_free()
+		_mastery_border = null
+
+	var fid := str(_factions[_index].id)
+	var hero = _heroes_by_faction.get(fid)
+	var tier := ""
+	if hero is Dictionary and typeof(hero.get("mastery")) == TYPE_DICTIONARY:
+		tier = str(hero["mastery"].get("border_tier", ""))
+	if tier != "":
+		# Plein cadre par-dessus le portrait : la bordure ENCADRE le héros, elle ne s'ajoute pas
+		# à côté (elle n'intercepte pas la souris — cf. mastery_border.gd).
+		_mastery_border = MasteryBorder.make(tier, 0.0)
+		_mastery_border.custom_minimum_size = Vector2.ZERO
+		_mastery_border.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		frame.add_child(_mastery_border)
+
+	# Ligne de TITRE, en teinte atténuée sous l'identité du meneur. Le titre est GLOBAL (un seul
+	# porté), il ne dépend donc pas de la faction affichée — mais il n'a de sens qu'ici, à l'instant
+	# où le joueur choisit ce que la table verra de lui.
+	_ensure_title_line()
+	var me: Dictionary = GameState.players.get(str(AuthManager.user_id), {})
+	var label := ""
+	if typeof(me) == TYPE_DICTIONARY:
+		var names := {}
+		for ff in _factions:
+			names[str(ff.id)] = str(ff.name)
+		label = MasteryBorder.title_with_faction(str(me.get("equipped_title", "")), names)
+	_title_line.text = label
+	_title_line.visible = label != ""
+
+
+func _ensure_title_line() -> void:
+	if _title_line != null and is_instance_valid(_title_line):
+		return
+	_title_line = Label.new()
+	_title_line.name = "MasteryTitleLine"
+	_title_line.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_title_line.add_theme_font_size_override("font_size", 13)
+	_title_line.add_theme_color_override("font_color", Color(0.878431, 0.698039, 0.286275, 0.72))
+	_title_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_ensure_leader_line()
+	var parent := _leader_line.get_parent()
+	parent.add_child(_title_line)
+	parent.move_child(_title_line, _leader_line.get_index() + 1)
 
 # =========================================================
 # Rotation & possession des factions payantes (M3 §8.66)
@@ -564,6 +639,9 @@ func _on_heroes_loaded(heroes: Array) -> void:
 	if _factions.is_empty():
 		return
 	_render_hero_stats(_factions[_index])
+	# §8.135 — la maîtrise arrive dans le MÊME payload que le roster : la bordure de la faction
+	# affichée se peint dès que `/heroes` répond, sans un seul appel de plus.
+	_refresh_mastery_frame()
 
 # Détermine les stats où le héros courant est le PLUS FORT de tout le roster (repère ▲ doré au
 # draft — aide de décision). Comparaison côté client sur le roster déjà en mémoire (Vue pure : on

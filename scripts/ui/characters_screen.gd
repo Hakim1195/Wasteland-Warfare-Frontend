@@ -40,6 +40,9 @@ const TopNav = preload("res://scripts/ui/top_nav.gd")
 # Vue partagée des caractéristiques (SOURCE UNIQUE de STAT_ROWS + formatage) — mutualisée avec
 # faction_selection.gd (DRY : aucun libellé ni format de stat dupliqué).
 const HeroStatsView = preload("res://scripts/ui/hero_stats_view.gd")
+# §8.135 — bordures de maîtrise + helpers de libellé de titre : implémentation UNIQUE, partagée
+# avec le Profil, le draft et le Rapport Post-Op (aucune des cinq vues ne redessine sa bordure).
+const MasteryBorder = preload("res://scripts/ui/mastery_border.gd")
 
 # --- Palette canonique (§2) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -666,6 +669,32 @@ func _build_hero_stage() -> void:
 	hero_stage.add_child(_hero3d)
 	_hero3d.visible = false
 
+# §8.135 — bordure de maîtrise posée EN SURCOUCHE du présentoir (plein cadre, souris ignorée).
+# Reconstruite à chaque changement de personnage : garder l'ancienne montrerait la tranche du héros
+# précédent, ce qui serait pire que rien. Tranche "" (rang 0, ou personnage jamais joué) → aucun
+# nœud ajouté, le présentoir retrouve exactement son aspect d'avant le chantier.
+var _stage_mastery: Control = null
+
+func _apply_stage_mastery(fid: String) -> void:
+	if hero_stage == null:
+		return
+	if _stage_mastery != null and is_instance_valid(_stage_mastery):
+		_stage_mastery.queue_free()
+		_stage_mastery = null
+	var tier := ""
+	for h in _heroes:
+		if typeof(h) == TYPE_DICTIONARY and str(h.get("faction_id", "")) == fid:
+			if typeof(h.get("mastery")) == TYPE_DICTIONARY:
+				tier = str(h["mastery"].get("border_tier", ""))
+			break
+	if tier == "":
+		return
+	_stage_mastery = MasteryBorder.make(tier, 0.0)
+	_stage_mastery.custom_minimum_size = Vector2.ZERO
+	_stage_mastery.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hero_stage.add_child(_stage_mastery)
+
+
 # Habillage du présentoir : fond gunmetal profond + liseré fin à la couleur donnée. Recalculé à
 # chaque personnage / aperçu de skin (un StyleBox est partagé s'il n'est pas dupliqué → on en
 # refabrique un, c'est le pattern des autres écrans).
@@ -718,6 +747,10 @@ func _apply_hero_stage(fid: String) -> void:
 	# Cadre du présentoir : liseré à la couleur effective (faction ou skin prévisualisé) — le
 	# personnage est ainsi ENCADRÉ comme une pièce de collection, pas posé sur du vide.
 	_style_stage_frame(accent)
+	# §8.135 — BORDURE DE MAÎTRISE par-dessus le présentoir : c'est LE portrait de l'écran, donc
+	# l'endroit que §5.1 désigne (« la bordure du rang autour du portrait »). Elle change avec le
+	# personnage sélectionné, comme le reste du présentoir — la maîtrise est PAR FACTION.
+	_apply_stage_mastery(fid)
 
 	# --- Chemin 3D : .glb présent → héros 3D, replis masqués. ---
 	if _hero3d != null and _hero3d.set_model(model_path):
@@ -1201,8 +1234,154 @@ func _populate_tab_evolution(page: VBoxContainer, hero: Dictionary) -> void:
 		coins_card.add_child(coins_lbl)
 		page.add_child(coins_card)
 
-	# --- 4. Comparatif des Pass (§Y.4) ---------------------------------------------------------
+	# --- 4. MAÎTRISE DE FACTION (§8.135) — la progression qui ne s'arrête jamais ----------------
+	_build_mastery_block(page, hero)
+
+	# --- 5. Comparatif des Pass (§Y.4) ---------------------------------------------------------
 	_build_pass_table(page, evolution)
+
+
+# =========================================================
+# MAÎTRISE DE FACTION (§8.135) — bloc de l'onglet ÉVOLUTION
+# =========================================================
+# TROIS ÉTATS, et c'est tout le sujet de cette fonction :
+#   • faction NON POSSÉDÉE  → RIEN. Une maîtrise fantôme sur un personnage qu'on ne peut pas jouer
+#     serait une promesse creuse (et la ligne « — % Coins en BOUTIQUE » dit déjà quoi faire).
+#   • héros SOUS le niveau 50 → « MAÎTRISE — DÈS LE NIVEAU 50 » + la jauge du NIVEAU en cours : on
+#     montre l'échéance et le chemin qui y mène, pas une barre vers un rang inatteignable.
+#   • héros AU niveau 50     → rang, bordure, jauge vers le rang suivant, prochain titre, carrière.
+#
+# ⚠️ Le client ne calcule RIEN : rang, titre, tranche de bordure, position dans le rang et prochain
+# titre arrivent tous du bloc `mastery` du payload (§3.1). Aucune courbe, aucun seuil en dur ici —
+# c'est ce qui permet de ré-équilibrer la maîtrise sans redéployer le client.
+func _build_mastery_block(page: VBoxContainer, hero: Dictionary) -> void:
+	var mastery: Dictionary = hero.get("mastery", {}) if typeof(hero.get("mastery")) == TYPE_DICTIONARY else {}
+	if mastery.is_empty():
+		return   # serveur non redéployé : on ne fabrique pas un bloc à partir de rien.
+	# Personnage verrouillé : aucune maîtrise à montrer (cf. les trois états ci-dessus).
+	if _access_type(hero) == "locked":
+		return
+
+	page.add_child(_section_header("MASTERY_EYEBROW"))
+
+	var unlocked := bool(mastery.get("unlocked", false))
+	var rank := int(mastery.get("rank", 0))
+	var title_key := str(mastery.get("title_key", "") if mastery.get("title_key") != null else "")
+
+	# --- En-tête : bordure du rang + libellé « RANG %d — %s » --------------------------------
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
+	page.add_child(head)
+
+	# MÉDAILLON DE RANG : la bordure de la tranche, avec le RANG ÉCRIT DEDANS. Une bordure vide à
+	# côté d'un texte se lisait comme un cadre orphelin (défaut vu en capture au premier jet) ;
+	# habitée d'un chiffre, elle devient l'objet qu'elle prétend être. Tranche "" (rang 0) → le
+	# helper ne dessine rien et il ne reste que le chiffre, ce qui est exactement l'état à montrer.
+	var medal := Control.new()
+	medal.custom_minimum_size = Vector2(64, 64)
+	medal.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(medal)
+	var border := MasteryBorder.make(str(mastery.get("border_tier", "")), 64.0)
+	border.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	medal.add_child(border)
+	var medal_lbl := Label.new()
+	medal_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	medal_lbl.text = str(rank)
+	medal_lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	medal_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	medal_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	medal_lbl.add_theme_font_override("font", _font)
+	medal_lbl.add_theme_font_size_override("font_size", 26)
+	medal_lbl.add_theme_color_override("font_color", GOLD if unlocked else MUTED)
+	medal.add_child(medal_lbl)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(col)
+
+	var headline := Label.new()
+	headline.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	headline.add_theme_font_override("font", _font)
+	headline.add_theme_font_size_override("font_size", 20)
+	if not unlocked:
+		# Niveau 50 pas encore atteint : on annonce l'échéance, on ne promet pas un rang.
+		headline.text = tr("MASTERY_LOCKED")
+		headline.add_theme_color_override("font_color", MUTED)
+	elif title_key != "":
+		headline.text = tr("MASTERY_RANK") % [rank, MasteryBorder.title_label(title_key)]
+		headline.add_theme_color_override("font_color", GOLD)
+	else:
+		# Niveau 50 atteint mais rang 0 : DÉVERROUILLÉ sans titre — un état bien réel, qu'un simple
+		# « rang > 0 ? » aurait confondu avec « verrouillé » (d'où le champ `unlocked` du payload).
+		headline.text = tr("MASTERY_RANK_PLAIN") % rank
+		headline.add_theme_color_override("font_color", TEXT)
+	col.add_child(headline)
+
+	# --- Jauge : vers le prochain RANG si déverrouillée, vers le prochain NIVEAU sinon ---------
+	var cur := 0
+	var span := 0
+	if unlocked:
+		cur = int(mastery.get("xp_into_rank", 0))
+		span = int(mastery.get("xp_per_rank", 0))
+	else:
+		cur = int(hero.get("xp_in_level", 0))
+		span = int(hero.get("xp_for_level", 0))
+	if span > 0:
+		var bar := ProgressBar.new()
+		bar.custom_minimum_size = Vector2(0, 12)
+		bar.show_percentage = false
+		bar.max_value = span
+		bar.value = clampi(cur, 0, span)
+		_style_xp_bar(bar)
+		col.add_child(bar)
+
+		var under := Label.new()
+		under.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		under.text = "%s / %s XP" % [_format_thousands(cur), _format_thousands(span)]
+		under.add_theme_font_override("font", _font)
+		under.add_theme_font_size_override("font_size", 13)
+		under.add_theme_color_override("font_color", MUTED)
+		col.add_child(under)
+
+	# --- Prochain titre à venir ---------------------------------------------------------------
+	var next_title = mastery.get("next_title")
+	var next_lbl := Label.new()
+	next_lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	next_lbl.add_theme_font_override("font", _font)
+	next_lbl.add_theme_font_size_override("font_size", 14)
+	next_lbl.add_theme_color_override("font_color", ACCENT)
+	if typeof(next_title) == TYPE_DICTIONARY:
+		next_lbl.text = tr("MASTERY_NEXT_TITLE") % [
+			MasteryBorder.title_label(str(next_title.get("title_key", ""))),
+			int(next_title.get("rank", 0))]
+	else:
+		# Au-delà du dernier palier : les RANGS continuent, les titres non — on le dit clairement
+		# plutôt que de laisser une ligne vide qui ressemblerait à une donnée manquante.
+		next_lbl.text = tr("MASTERY_NEXT_TITLE_NONE")
+	page.add_child(next_lbl)
+
+	# --- Carrière sur ce personnage (agrégat DÉJÀ servi par /heroes, bloc `record`) ------------
+	# Clé absente (serveur antérieur) → aucune carte : on n'invente pas des zéros (§Y.3).
+	var record: Dictionary = hero.get("record", {}) if typeof(hero.get("record")) == TYPE_DICTIONARY else {}
+	if not record.is_empty():
+		page.add_child(_section_header("MASTERY_CAREER_TITLE"))
+		var grid := GridContainer.new()
+		grid.columns = 3
+		grid.add_theme_constant_override("h_separation", 12)
+		grid.add_theme_constant_override("v_separation", 12)
+		grid.add_child(_readout_card(tr("MASTERY_CAREER_GAMES"),
+				_format_thousands(int(record.get("games", 0))), ACCENT))
+		grid.add_child(_readout_card(tr("MASTERY_CAREER_WINS"),
+				_format_thousands(int(record.get("wins", 0))), GOLD))
+		# ÉLIMINATIONS : le roster ne les sert PAS par personnage (l'agrégat `record` porte
+		# games/wins/losses/winrate). Plutôt qu'un « 0 » mensonger, on montre le TAUX DE VICTOIRE,
+		# qui est la donnée réellement disponible — et on ne réclame pas une requête de plus pour
+		# une ligne d'ornement.
+		grid.add_child(_readout_card(tr("CHAR_RECORD_WINRATE"),
+				"%d %%" % int(record.get("winrate", 0)), TEXT))
+		page.add_child(grid)
 
 # Une étape de la frise : pastille hexagonale « NIV. N » (or si franchie, contour muet sinon),
 # le détail du bonus en clair, et le chip « PROCHAIN — dans N niveaux » sur la prochaine étape.

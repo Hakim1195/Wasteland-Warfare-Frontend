@@ -46,6 +46,9 @@ const TopNav = preload("res://scripts/ui/top_nav.gd")
 # Compagnie (porteur du `static var target_tag` — même mécanique que `public_profile`, §8.107).
 const CompanyEmblems = preload("res://scripts/ui/company_emblems.gd")
 const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
+# §8.135 — bordures de maîtrise + libellés de titre : implémentation UNIQUE partagée avec la fiche
+# Personnage, le draft et le Rapport Post-Op.
+const MasteryBorder = preload("res://scripts/ui/mastery_border.gd")
 
 # --- Palette canonique (§2) — AUCUNE couleur hors charte ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
@@ -131,6 +134,16 @@ var _form: Array = []
 var _maps_stats: Array = []
 # §8.126 — COMPAGNIE d'appartenance ({tag, name, emblem_id}) ; {} = SANS COMPAGNIE.
 var _company: Dictionary = {}
+# §8.135 — MAÎTRISE. `_equipped_title` = "<faction_id>:<rank_key>" du titre PORTÉ ("" = aucun) ;
+# `_masteries` = palmarès [{faction_id, rank, title_key, border_tier, unlocked_titles}], trié rang
+# décroissant par le serveur. Vides sur un serveur non redéployé → le bouton TITRE se masque
+# (aucune maîtrise à proposer : un sélecteur vide serait pire qu'absent).
+var _equipped_title: String = ""
+var _masteries: Array = []
+# Titre affiché AVANT l'aller-retour serveur (mise à jour optimiste) — sert de valeur de ROLLBACK
+# si le serveur refuse. "" est une valeur légitime, d'où le drapeau séparé.
+var _title_rollback: String = ""
+var _title_in_flight: bool = false
 
 # Repli LEGACY de la carte division : division + points lus de /auth/me (utilisé UNIQUEMENT si le
 # bloc `season` de /profile/stats est absent, c.-à-d. serveur non redéployé).
@@ -209,6 +222,11 @@ func _ready():
 	NetworkManager.profile_pass_loaded.connect(_on_pass_loaded)
 	# Chantier U : personnage GRATUIT de la semaine + crédit de parties (GET /shop/rotation).
 	NetworkManager.shop_rotation_loaded.connect(_on_rotation_loaded)
+	# §8.135 — MAÎTRISE : réponse du sélecteur de titre. DEUX signaux distincts parce que ce sont
+	# deux situations distinctes — un REFUS légitime (droit perdu, `ok:false` en 200) rétablit
+	# l'état de vérité du serveur, un ÉCHEC de transport rétablit l'état d'AVANT le clic.
+	NetworkManager.title_equipped.connect(_on_title_equipped)
+	NetworkManager.title_equip_failed.connect(_on_title_equip_failed)
 
 	NetworkManager.fetch_profile_stats()
 	NetworkManager.fetch_shop_rotation()
@@ -268,6 +286,13 @@ func _on_profile_loaded(data: Dictionary):
 	# quoi le Profil garderait éternellement l'appartenance d'hier.
 	var comp = data.get("company")
 	_company = comp if typeof(comp) == TYPE_DICTIONARY else {}
+	# §8.135 — MAÎTRISE. Écrasement SYSTÉMATIQUE, même par vide : le serveur re-valide le titre à
+	# chaque lecture (purge lazy §8.109), donc une réponse sans titre veut dire « il n'est plus
+	# légitime », pas « la donnée manque ». Garder l'ancien afficherait un titre fantôme — le seul
+	# état que tout ce chantier s'interdit.
+	_equipped_title = str(data.get("equipped_title", ""))
+	var ms = data.get("masteries_summary")
+	_masteries = ms if typeof(ms) == TYPE_ARRAY else []
 
 	_refresh_all()
 	_set_status(tr("PROFILE_STATUS_LOADED"))
@@ -559,6 +584,15 @@ func _populate_overview_tab() -> void:
 		return
 	_clear(_overview_box)
 
+	# --- TITRE DE MAÎTRISE (§8.135) : sous l'identité, AVANT les statistiques ---------------------
+	# Placé en tête parce que c'est de l'IDENTITÉ, pas un chiffre de campagne : le joueur vient ici
+	# pour choisir ce que les autres verront de lui au draft. Masqué s'il n'a aucune maîtrise —
+	# proposer « CHOISIR UN TITRE » à qui n'en a aucun n'ouvrirait qu'un panneau vide.
+	var title_row := _build_title_row()
+	if title_row != null:
+		_overview_box.add_child(title_row)
+		_overview_box.add_child(_spacer(8))
+
 	_overview_box.add_child(_eyebrow(tr("PROFILE_STATS_HEADER")))
 	var grid := GridContainer.new()
 	grid.columns = 3
@@ -615,6 +649,283 @@ func _populate_overview_tab() -> void:
 		if typeof(e) != TYPE_DICTIONARY:
 			continue
 		strip.add_child(_make_form_square(bool(e.get("win", false)), bool(e.get("is_ranked", false))))
+
+
+# =========================================================
+# TITRE DE MAÎTRISE (§8.135) — ligne d'identité + sélecteur modal
+# =========================================================
+# Le titre est ce que les AUTRES voient : sous le pseudo au draft, au podium du Rapport Post-Op.
+# Le choisir est donc un geste d'identité, pas un réglage — d'où sa place en tête de l'APERÇU.
+#
+# ⚠️ Le client ne décide RIEN de ce qui est équipable. La liste vient de `unlocked_titles`, servie
+# par le serveur dans `masteries_summary` : aucune table de paliers n'est recopiée ici, et le
+# serveur re-valide de toute façon au clic (un droit peut tomber entre l'ouverture et le choix).
+
+# Ligne « TITRE : X ▾ » — `null` si le joueur n'a AUCUNE maîtrise (rien à proposer).
+func _build_title_row() -> Control:
+	if _masteries.is_empty():
+		return null
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+
+	# La bordure de la MEILLEURE maîtrise (première ligne : le serveur trie par rang décroissant).
+	# Sur le Profil on porte son plus haut fait d'armes, toutes factions confondues — au draft ce
+	# sera au contraire la faction ENGAGÉE (§1.3, deux règles distinctes, assumées).
+	var best: Dictionary = _masteries[0] if typeof(_masteries[0]) == TYPE_DICTIONARY else {}
+	var border := MasteryBorder.make(str(best.get("border_tier", "")), 40.0)
+	border.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(border)
+
+	var btn := Button.new()
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.text = tr("TITLE_BUTTON") % _equipped_title_label()
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 16)
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.disabled = _title_in_flight
+	WarzoneUI.apply_ghost_button(btn)
+	WarzoneUI.wire_button_sfx(btn)
+	btn.pressed.connect(_open_title_picker)
+	row.add_child(btn)
+	return row
+
+
+# Libellé du titre PORTÉ, prêt à afficher (« VÉTÉRAN — PHALANGES D'ACIER »), ou « AUCUN TITRE ».
+func _equipped_title_label() -> String:
+	if _equipped_title == "":
+		return tr("TITLE_NONE")
+	# Le catalogue de l'écran est DÉJÀ chargé (`_factions`) : on le passe plutôt que de laisser le
+	# helper en charger un second.
+	var names := {}
+	for fid in _factions:
+		names[fid] = str(_factions[fid].get("name", fid))
+	var label := MasteryBorder.title_with_faction(_equipped_title, names)
+	return label if label != "" else tr("TITLE_NONE")
+
+
+# Panneau modal CALQUÉ SUR LE CLASSEMENT (référence maison §8.125) : voile cliquable, panneau
+# gunmetal à liseré cyan, encoches de coin, bouton FERMER. Construit à la demande, détruit à la
+# fermeture — il n'a aucun état à conserver.
+func _open_title_picker() -> void:
+	if _title_in_flight:
+		return
+	AudioManager.play_sfx("click")
+
+	var modal := Control.new()
+	modal.name = "TitlePicker"
+	modal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(modal)
+
+	var veil := ColorRect.new()
+	veil.color = Color(0, 0, 0, 0.62)
+	veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	veil.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed:
+			modal.queue_free())
+	modal.add_child(veil)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	modal.add_child(center)
+
+	var pan := PanelContainer.new()
+	pan.name = "TitlePickerPanel"
+	pan.custom_minimum_size = Vector2(620, 520)
+	pan.mouse_filter = Control.MOUSE_FILTER_STOP
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(2)
+	st.border_color = ACCENT
+	st.set_content_margin_all(24.0)
+	st.shadow_color = Color(0, 0, 0, 0.5)
+	st.shadow_size = 10
+	pan.add_theme_stylebox_override("panel", st)
+	center.add_child(pan)
+	WarzoneUI.add_corner_notches(pan)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	pan.add_child(col)
+
+	# --- En-tête : titre + rappel de la règle + FERMER ---
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	col.add_child(head)
+
+	var head_col := VBoxContainer.new()
+	head_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head_col.add_theme_constant_override("separation", 2)
+	head.add_child(head_col)
+
+	var big := Label.new()
+	big.text = "TITLE_PICKER_TITLE"
+	big.add_theme_font_override("font", _font)
+	big.add_theme_font_size_override("font_size", 24)
+	big.add_theme_color_override("font_color", ACCENT)
+	head_col.add_child(big)
+
+	var hint := Label.new()
+	hint.text = "TITLE_PICKER_HINT"
+	hint.add_theme_font_override("font", _font)
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", MUTED)
+	head_col.add_child(hint)
+
+	var close_btn := Button.new()
+	close_btn.text = "MANUAL_CLOSE"
+	close_btn.add_theme_font_override("font", _font)
+	close_btn.add_theme_font_size_override("font_size", 15)
+	close_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	close_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	WarzoneUI.apply_ghost_button(close_btn)
+	WarzoneUI.wire_button_sfx(close_btn)
+	close_btn.pressed.connect(func() -> void: modal.queue_free())
+	head.add_child(close_btn)
+
+	WarzoneUI.add_filet(col)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	col.add_child(scroll)
+
+	var list := VBoxContainer.new()
+	list.add_theme_constant_override("separation", 8)
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(list)
+
+	# « AUCUN TITRE » EN TÊTE : retirer son titre est un choix aussi légitime qu'en porter un, et il
+	# doit être atteignable sans faire défiler.
+	list.add_child(_make_title_option("", "", "", modal))
+
+	# Puis un GROUPE par faction, dans l'ordre du palmarès (rang décroissant, tri serveur).
+	for entry in _masteries:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var fid := str(entry.get("faction_id", ""))
+		var titles = entry.get("unlocked_titles", [])
+		if typeof(titles) != TYPE_ARRAY or titles.is_empty():
+			continue
+		list.add_child(_make_faction_group_header(entry))
+		# Du palier le plus HAUT au plus bas : on présente d'abord ce dont le joueur est le plus fier.
+		for i in range(titles.size() - 1, -1, -1):
+			list.add_child(_make_title_option(fid, str(titles[i]),
+					str(entry.get("border_tier", "")), modal))
+
+
+# En-tête de groupe : bordure de la tranche + nom de faction + « RANG %d ».
+func _make_faction_group_header(entry: Dictionary) -> Control:
+	var fid := str(entry.get("faction_id", ""))
+	var info: Dictionary = _factions.get(fid, {})
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+
+	var border := MasteryBorder.make(str(entry.get("border_tier", "")), 28.0)
+	border.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(border)
+
+	var lbl := Label.new()
+	lbl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	lbl.text = "%s  ·  %s" % [str(info.get("name", fid)).to_upper(),
+			tr("MASTERY_RANK_PLAIN") % int(entry.get("rank", 0))]
+	lbl.add_theme_font_override("font", _font)
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_color_override("font_color",
+			info.get("color", ACCENT) if not info.is_empty() else MUTED)
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(lbl)
+	return row
+
+
+# Une option cliquable du sélecteur. `faction_id == ""` produit la ligne « AUCUN TITRE ».
+# L'option DÉJÀ portée est marquée et désactivée : re-choisir le même titre n'a aucun sens et
+# provoquerait un aller-retour réseau pour rien.
+func _make_title_option(faction_id: String, title_key: String, border_tier: String,
+		modal: Control) -> Control:
+	var title_id := "" if faction_id == "" else "%s:%s" % [faction_id, title_key]
+	var is_current := title_id == _equipped_title
+
+	var btn := Button.new()
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 17)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var label := tr("TITLE_NONE") if faction_id == "" else MasteryBorder.title_label(title_key)
+	btn.text = ("▸  " + label) if is_current else ("   " + label)
+	btn.disabled = is_current
+	WarzoneUI.apply_ghost_button(btn)
+	if not is_current:
+		WarzoneUI.wire_button_sfx(btn)
+		btn.pressed.connect(func() -> void:
+			modal.queue_free()
+			_request_title(title_id))
+	else:
+		# LE TITRE PORTÉ doit se voir d'un coup d'œil : à la première capture, il ne se distinguait
+		# que par un « ▸ » et un gris légèrement plus clair — invisible. On lui donne donc le
+		# vocabulaire « sélectionné » du reste de l'interface : fond et liseré OR, texte or.
+		# ⚠️ Les surcharges viennent APRÈS `apply_ghost_button`, qui pose les siennes — l'inverse
+		# les écraserait sans bruit.
+		var cur := StyleBoxFlat.new()
+		cur.set_corner_radius_all(0)
+		cur.content_margin_left = 16.0
+		cur.content_margin_top = 10.0
+		cur.content_margin_right = 16.0
+		cur.content_margin_bottom = 10.0
+		cur.bg_color = Color(GOLD, 0.13)
+		cur.set_border_width_all(1)
+		cur.border_color = GOLD
+		cur.border_width_left = 4
+		btn.add_theme_stylebox_override("disabled", cur)
+		btn.add_theme_color_override("font_disabled_color", GOLD)
+	return btn
+
+
+# Envoie le choix au serveur avec MISE À JOUR OPTIMISTE : l'écran affiche le nouveau titre tout de
+# suite (le joueur voit son geste aboutir), et retombe sur l'ancien si le serveur refuse. Le refus
+# est rare — il ne peut venir que d'un droit perdu entre l'ouverture du panneau et le clic — mais
+# c'est précisément pour ces cas-là qu'un rollback existe.
+func _request_title(title_id: String) -> void:
+	if _title_in_flight:
+		return
+	_title_in_flight = true
+	_title_rollback = _equipped_title
+	_equipped_title = title_id            # optimiste
+	_populate_overview_tab()
+	NetworkManager.equip_title(title_id)
+
+
+func _on_title_equipped(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	_title_in_flight = false
+	# ⚠️ On adopte TOUJOURS la valeur du serveur, succès comme refus : c'est elle l'état de vérité.
+	# Sur un refus (`ok:false`), elle vaut le titre RÉELLEMENT porté — ce qui réalise le rollback
+	# sans que le client ait à choisir entre sa valeur optimiste et l'ancienne.
+	_equipped_title = str(data.get("equipped_title", _title_rollback))
+	if not bool(data.get("ok", false)):
+		AudioManager.play_sfx("error")
+		_set_status(tr("ERR_TITLE_NOT_UNLOCKED"))
+	else:
+		AudioManager.play_sfx("confirm")
+	_populate_overview_tab()
+
+
+func _on_title_equip_failed(message: String) -> void:
+	if not is_inside_tree():
+		return
+	# VRAI échec (transport, session, serveur non redéployé) : on rend l'affichage à son état
+	# d'avant le clic — l'optimisme ne doit jamais survivre à une requête qui n'a pas abouti.
+	_title_in_flight = false
+	_equipped_title = _title_rollback
+	AudioManager.play_sfx("error")
+	_set_status(message)
+	_populate_overview_tab()
 
 
 # =========================================================

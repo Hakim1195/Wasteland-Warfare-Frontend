@@ -93,6 +93,19 @@ signal salon_state_updated(count: int, max_players: int, is_creator: bool)
 signal salon_closed(reason: String)
 # REJOUER après une partie PRIVÉE : impossible (salons éphémères) → l'écran ramène au QG.
 signal requeue_unavailable
+
+# --- LA TRANCHÉE (§8.136) — mini-jeu d'événement : duel 1v1 temps réel de l'onglet BONUS -------
+# File dédiée (REST /trench/*) : mêmes états d'affichage que la file générale (§8.116), plus
+# `event_closed` (fenêtre d'événement fermée). Le duel lui-même passe par le WS de salle EXISTANT
+# (mêmes gates 4000/4001/4003) — trois messages dédiés relayés tels quels, l'écran fait le tri.
+signal trench_queue_result(ok: bool, data: Dictionary)
+signal trench_status_updated(data: Dictionary)
+signal trench_left(left: bool, reason: String)
+signal trench_training_result(ok: bool, data: Dictionary)
+signal trench_leaderboard_loaded(data: Dictionary)
+signal trench_init_received(data: Dictionary)
+signal trench_state_received(data: Dictionary)
+signal trench_result_received(data: Dictionary)
 # Révélation des objectifs de fin de partie (E11 §8.83) — bloc PUBLIC du game_over :
 # [{ player_id, username, description, completed }] ordonné par rankings. [] avant la fin
 # (ou serveur antérieur) ; consommé par le Rapport Post-Op (podium).
@@ -143,6 +156,12 @@ signal leaderboard_loaded(entries: Array, me: Dictionary)
 # Réponse à fetch_profile_stats : dict aux clés canoniques (level, xp, xp_max, games_played, wins,
 # losses, heaviest_toll, favorite_faction, credits, username) — lu défensivement par profile.gd.
 signal profile_stats_loaded(data: Dictionary)
+# MAÎTRISE (§8.135) — réponse de POST /profile/title : { ok, equipped_title, reason }.
+# ⚠️ Émis AUSSI sur un REFUS (`ok:false`) : la route suit la convention zéro-4xx (§8.112), un titre
+# non débloqué n'est pas une erreur réseau mais un état de vérité que l'écran doit ré-appliquer.
+signal title_equipped(data: Dictionary)
+# Vrai échec (transport / session / 5xx / serveur non redéployé) — message prêt à afficher.
+signal title_equip_failed(message: String)
 # Réponse à fetch_profile_history : liste d'objets {win, faction_id, detail} (le plus récent d'abord).
 # ⚠️ Émis UNIQUEMENT pour une requête NON FILTRÉE (aucun filtre, offset 0) — cf. la note de
 # fetch_profile_history : ses écouteurs (main_menu, top_nav) veulent « les N derniers matchs »
@@ -449,6 +468,17 @@ func _handle_server_message(msg: Dictionary) -> void:
 		"salon_closed":
 			# L'hôte a fermé le salon : l'écran ramène à la recherche avec un message amical.
 			salon_closed.emit(str(msg.get("reason", "")))
+		"trench_init", "trench_state", "trench_result":
+			# LA TRANCHÉE (§8.136) : relayés TELS QUELS à l'écran de duel (aucune logique ici —
+			# l'interpolation, le rendu et le résultat vivent dans trench_duel.gd). `trench_state`
+			# arrive à 10 Hz : pas de print, pas de traitement, un simple emit.
+			match msg_type:
+				"trench_init":
+					trench_init_received.emit(msg)
+				"trench_state":
+					trench_state_received.emit(msg)
+				_:
+					trench_result_received.emit(msg)
 		"game_over":
 			# La victoire est déjà gérée via winner_id dans l'état ; ici on relaie le RÉSULTAT
 			# ÉCONOMIQUE (points/XP/Coins, §8.47) pour le Rapport Post-Op animé. Piège JSON §5 :
@@ -683,6 +713,23 @@ func send_chat_message(tab: String, text: String, target_id: int = -1) -> void:
 		message["target_id"] = target_id
 	socket.send_text(JSON.stringify(message))
 
+# LA TRANCHÉE (§8.136) — entrée de duel envoyée À PLAT (contrat §2.3), SANS enveloppe ni action_id :
+# à 10 messages/seconde l'idempotence n'a pas d'objet, le serveur coalesce par tick et JETTE le
+# surplus (anti-flood). Socket fermé → on jette EN SILENCE (ce chemin est appelé à 10 Hz — le
+# bandeau CONNEXION PERDUE de l'écran de duel suffit, pas une tempête de game_error).
+func send_trench_input(input: Dictionary) -> void:
+	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	var message := {"type": "trench_input"}
+	message.merge(input, true)
+	socket.send_text(JSON.stringify(message))
+
+# ÉCHAP → confirmation d'abandon du duel (§5.5) : le serveur clôt le match (l'adversaire gagne).
+func send_trench_forfeit() -> void:
+	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	socket.send_text(JSON.stringify({"type": "trench_forfeit"}))
+
 # =========================================================
 # PARTIE 2 : NAVIGATEUR DE SALLES (HTTP REST)
 # =========================================================
@@ -794,6 +841,66 @@ func _on_mm_leave(_result, response_code, _headers, body, http_node):
 		data = {}
 	mm_left.emit(bool(data.get("left", false)) if response_code == 200 else false,
 		str(data.get("reason", "")))
+
+# --- LA TRANCHÉE (§8.136) : file dédiée 1v1, entraînement, classement d'événement -----------------
+# Mêmes conventions que les files ci-dessus : HTTPRequest DÉDIÉ par appel, dict COMPLET propagé aux
+# signaux (reason/event_window/room_id…), l'ÉCRAN choisit le message.
+func trench_queue_join() -> void:
+	_send_api_request("/trench/queue", HTTPClient.METHOD_POST, {}, _on_trench_queue)
+
+func _on_trench_queue(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	trench_queue_result.emit(response_code == 200, data)
+
+func trench_queue_status() -> void:
+	_send_api_request("/trench/queue/status", HTTPClient.METHOD_GET, {}, _on_trench_status)
+
+func _on_trench_status(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200:
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	trench_status_updated.emit(data)
+
+func trench_queue_leave() -> void:
+	_send_api_request("/trench/queue", HTTPClient.METHOD_DELETE, {}, _on_trench_leave)
+
+func _on_trench_leave(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	trench_left.emit(bool(data.get("left", false)) if response_code == 200 else false,
+		str(data.get("reason", "")))
+
+func trench_training_start() -> void:
+	_send_api_request("/trench/training", HTTPClient.METHOD_POST, {}, _on_trench_training)
+
+func _on_trench_training(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	trench_training_result.emit(response_code == 200, data)
+
+func fetch_trench_leaderboard() -> void:
+	# Authentifié (défaut) : la route est PUBLIQUE côté serveur mais le bloc `me` exige le Bearer —
+	# et un client connecté a toujours un token (patron du classement §9.2).
+	_send_api_request("/trench/leaderboard", HTTPClient.METHOD_GET, {}, _on_trench_leaderboard)
+
+func _on_trench_leaderboard(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	if response_code != 200:
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	trench_leaderboard_loaded.emit(data)
 
 # --- Salons privés ---
 func private_create(map_id: String, mode_players: int) -> void:
@@ -1136,6 +1243,29 @@ func _on_profile_stats_fetched(_result, response_code, _headers, body, http_node
 			profile_stats_loaded.emit(data)
 	else:
 		lobby_error.emit(tr("NET_PROFILE_FETCH_FAILED"))
+
+# 5 bis. MAÎTRISE (§8.135) — équipe / retire le TITRE porté : POST /profile/title {title_id}.
+# `title_id` = "<faction_id>:<rank_key>" (ex. "phalanges_acier:veteran") ; "" = RETIRER le titre.
+#
+# ⚠️ Convention « zéro-4xx nominal » (§8.112, comme /company et /matchmaking) : un refus arrive en
+# **200** avec `{ok:false, reason:"not_unlocked"}` — ce n'est PAS une erreur réseau. Le seul cas
+# réel est un droit perdu entre l'ouverture du sélecteur et le clic (purge d'un accès temporaire),
+# où l'UI doit simplement revenir en arrière. On émet donc `title_equipped` dans les DEUX cas, avec
+# l'état de vérité renvoyé par le serveur — c'est ce qui permet le rollback optimiste sans deviner.
+# `title_equip_failed` est réservé au VRAI échec (transport, session, 5xx).
+func equip_title(title_id: String):
+	_send_api_request("/profile/title", HTTPClient.METHOD_POST,
+		{"title_id": title_id}, _on_title_equipped)
+
+func _on_title_equipped(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if response_code == 200 and typeof(data) == TYPE_DICTIONARY:
+		title_equipped.emit(data)
+	else:
+		# 404 = serveur non redéployé : le message générique convient (le sélecteur se referme et
+		# l'affichage revient à l'état d'avant), inutile d'un cas particulier.
+		title_equip_failed.emit(tr("ERR_TITLE_NOT_UNLOCKED"))
 
 # 6. Historique récent : GET /profile/history (authentifié). Liste {win, faction_id, detail, …}.
 # Chantier J — filtres et pagination ADDITIFS, tous à défaut NEUTRE : l'appel historique

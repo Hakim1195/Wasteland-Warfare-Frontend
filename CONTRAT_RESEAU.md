@@ -2818,3 +2818,293 @@ et l'afficher donnerait un « 5/5 » trompeur sur une faction déjà achetée.
 > ⚠️ Deux harnais stubbaient `api.v1.endpoints.auth` sans `get_current_user_optional`
 > (`test_squad_flow`, `test_company_flow` — ce dernier charge `squad.py` à la demande) : stub
 > complété, même convention que `test_missions`/`test_ladder_payload`.
+
+---
+
+## §8.135 — MAÎTRISE DE FACTION : rangs infinis, titres persistants, bordures (ADDITIF strict §1.5)
+
+> **Le problème.** Au niveau 50 d'un héros, la progression s'arrêtait net — plus rien à poursuivre
+> sur un personnage qu'on jouait depuis des mois. Et les titres honorifiques du Rapport Post-Op
+> (`TITLE_BUTCHER`, `TITLE_CONQUEROR`… §8.83) mouraient avec l'écran de fin : aucune trace, aucune
+> vitrine. La MAÎTRISE reprend là où le niveau s'arrête.
+>
+> **Le principe, et c'est TOUT le chantier : la maîtrise SE LIT, ELLE NE SE STOCKE PAS.** Le rang
+> est une fonction PURE du total d'XP héros DÉJÀ accumulé par le couple (joueur, faction) au-delà
+> du seuil du niveau 50. Aucune table, aucun compteur parallèle, **aucun nouveau tuyau d'accrual** :
+> `hero_progression.credit_hero_xp` additionne sans borne depuis l'origine (seul `hero_level_for_xp`
+> plafonne, à 50) — **il n'y avait rien à débrider**, contrairement à ce que prévoyait le brief.
+> Trois conséquences voulues :
+>   • changer la courbe ne demande **aucune migration** — la lecture suivante dit la nouvelle vérité ;
+>   • la **PURGE LAZY** des accès temporaires (§8.109) s'applique **GRATUITEMENT** : la ligne d'XP
+>     disparaît, donc le rang, les titres et la bordure de cette faction avec elle. Zéro code ;
+>   • **rien à stocker donc rien à désynchroniser.** Précédent retenu : les scores de compagnie §8.126.
+>
+> ⛔ **STRICTEMENT COSMÉTIQUE.** Ni stat, ni récompense (**le rang EST la récompense** : pas un
+> coin, pas un XP), ni matchmaking, ni normalisation Classée. Contre-épreuve MÉCANIQUE dans
+> `test_mastery.py::test_strictly_cosmetic` : un rang 40 et un rang 0 rendent des `stats` et
+> `stats_max` IDENTIQUES sur les 10 factions.
+
+### 1. Registre (module PUR `api/game/mastery.py`)
+
+`MASTERY` est la **SEULE** chose à éditer pour ré-équilibrer :
+
+| Clé | Valeur | Rôle |
+|---|---|---|
+| `xp_per_rank` | `5000` | coût d'un rang, en XP héros au-delà du seuil du niveau 50 |
+| `titles` | `{1: veteran, 5: elite, 10: master, 20: legend, 35: myth, 50: immortal}` | rang d'obtention → clé de titre |
+| `borders` | `1 steel · 5 bronze · 10 silver · 20 gold · 35 platinum · 50 prismatic` | tranche de bordure (une CLÉ, jamais une couleur) |
+| `summary_cap` | `10` | borne de payload du palmarès des profils |
+
+Le **seuil** est `rewards.hero_total_xp_for_level(HERO_LEVEL_MAX)` — **importé, jamais recopié**
+(69 050 XP aujourd'hui). `test_mastery.py::test_no_literal_threshold` le SABOTE et vérifie que la
+maîtrise suit : un futur ré-équilibrage de la courbe héros l'emmène avec lui.
+
+⚠️ **`rank > 0` n'est PAS « déverrouillé ».** Un héros qui vient d'atteindre le niveau 50 est
+DÉVERROUILLÉ au **rang 0** : il lui reste 5 000 XP pour devenir VÉTÉRAN. D'où le booléen
+**`unlocked`** explicite dans le payload — le client ne redéduit pas « niveau ≥ 50 » lui-même.
+Au-delà du dernier palier le rang continue (« IMMORTEL · RANG 63 ») : **l'infini est le contrat**.
+
+### 2. `GET /heroes` — bloc `mastery` par personnage (ADDITIF)
+
+```json
+"mastery": {
+  "rank": 7, "title_key": "elite", "border_tier": "bronze", "unlocked": true,
+  "unlocked_titles": ["veteran", "elite"],
+  "xp_into_rank": 3120, "xp_per_rank": 5000,
+  "next_title": {"rank": 10, "title_key": "master"}
+}
+```
+
+Bloc **TOUJOURS complet**, y compris pour un héros jamais joué (rang 0, `unlocked: false`,
+`title_key: null`) — « aucune maîtrise » est un état affichable, jamais une clé absente. `int` PURS
+(piège JSON float §5). **`unlocked_titles` est servi et non déduit du rang côté client** : sans lui,
+le sélecteur de titre devrait embarquer la table des paliers, une valeur d'ÉQUILIBRAGE qui doit
+pouvoir bouger sans redéploiement de client.
+
+### 3. `/profile/stats` et `/profile/public/{username}` — deux champs (ADDITIFS)
+
+- **`equipped_title: str`** — `"<source>:<key>"` (ex. `"phalanges_acier:veteran"`), `""` = aucun.
+  ⚠️ C'est le titre **RÉELLEMENT LÉGITIME AU MOMENT DE LA LECTURE**, pas la valeur brute de la
+  colonne (cf. §5 ci-dessous).
+- **`masteries_summary: [{faction_id, rank, title_key, border_tier, unlocked_titles}]`** — tri rang
+  DÉCROISSANT puis `faction_id` (départage STABLE), **rangs 0 écartés** (c'est un palmarès, pas un
+  inventaire), borné à `summary_cap`. `[]` = aucune maîtrise, état affichable.
+
+**Frontière de confidentialité (§8.107) :** le profil PUBLIC expose **ces deux champs et rien
+d'autre** de la maîtrise. Un titre est public par construction — il s'affiche déjà au draft devant
+cinq adversaires. Restent PRIVÉS la jauge vers le rang suivant, l'XP totale et la carrière par
+personnage : ils vivent sur `GET /heroes`, qui ne répond que pour `current_user` et n'accepte aucun
+tiers en paramètre. `test_profile_data.py` verrouille la liste blanche.
+
+### 4. `POST /profile/title {title_id}` — équiper / retirer
+
+Réponse **`{ ok: bool, equipped_title: str, reason: str }`**.
+
+**Convention zéro-4xx nominal (§8.112, comme `/company` et `/matchmaking`)** : un refus est un
+**200** avec `ok:false` et `reason:"not_unlocked"`, jamais une erreur HTTP. Le sélecteur ne propose
+que des titres débloqués — un refus signifie donc un client désynchronisé ou **un droit perdu entre
+l'ouverture du panneau et le clic** (purge d'un accès temporaire), deux cas où l'UI doit faire un
+rollback propre, pas afficher une panne réseau. `""` = retirer (toujours légal). **IDEMPOTENTE.**
+
+### 5. ⚠️ VALIDATION À LA LECTURE, PAS SEULEMENT À L'ÉQUIPEMENT — « jamais de titre fantôme »
+
+`users.equipped_title` (colonne additive, `server_default ""`, auto-migrée ; archive
+`migration_mastery.sql`) n'est **pas un acquis mais une PRÉFÉRENCE D'AFFICHAGE**. Le droit de porter
+un titre peut se perdre **sans que le joueur ne touche à rien** : une faction jouée en rotation ou
+sous Pass voit sa progression PURGÉE à l'expiration → rang 0 → le titre n'existe plus. La purge
+étant LAZY (aucun cron), **aucun événement ne se déclenche à ce moment-là** : la seule occasion de
+s'en apercevoir est la lecture suivante.
+
+D'où `hero_progression.resolve_equipped_title()`, appelée à **chaque** lecture de profil ET au
+draft : un titre devenu illégitime est renvoyé `""` **et nettoyé en base**. On ne se contente pas de
+le taire — il ressusciterait au rechargement suivant.
+
+**Exception assumée :** le profil PUBLIC lit avec `purge=False` (LECTURE SEULE stricte §8.107 —
+consulter le palmarès d'un tiers ne doit écrire aucune ligne chez lui). Conséquence bornée : le
+profil public d'un joueur dont l'accès vient d'expirer peut montrer un rang d'avance jusqu'à SA
+prochaine connexion. Jamais l'inverse, et jamais chez lui.
+
+### 6. Identité en partie — `PlayerState` (3 champs ADDITIFS, publics)
+
+`equipped_title: str` · `mastery_rank: int` · `mastery_border: str`. Posés au **draft**
+(`router._load_mastery_identity`, session courte tolérante aux pannes — un ornement ne fait jamais
+rater un lancement) ; `""`/`0` pour un bot. **Le rang est celui de la faction JOUÉE**, pas de la
+meilleure maîtrise : on porte les couleurs de la faction qu'on a engagée. `mastery_border` voyage
+**en plus** du rang pour que le client n'ait aucun seuil de tranche en dur.
+
+⚠️ **Consommés par le DRAFT et le RAPPORT POST-OP uniquement — PAS par l'arène** (chips, HUD, kill
+feed) : la lisibilité tactique prime et le HUD est déjà dense. Décision de sobriété, pas un oubli.
+
+### 7. `game_over` — `mastery_rank_up` (ADDITIF)
+
+`{ "from": int, "to": int, "title_key": str|null } | null`. `null` = aucun rang franchi (l'immense
+majorité des matchs). Calculé par **deux appels au module PUR**, sans état : le total d'avant se
+retrouve exactement par `hero_total_xp − hero_xp_earned`.
+
+`title_key` n'est renseigné que si un **NOUVEAU titre** est débloqué : monter de 12 à 13 est une
+montée de rang sans nouveau titre, et annoncer « MAÎTRE » une seconde fois ferait mentir la
+célébration. Un multi-franchissement (rang 4 → 6 en une partie) rend **UN seul bloc** et le titre du
+rang FINAL — on montre l'aboutissement, pas l'historique.
+
+### 8. Format d'identifiant `"<source>:<key>"` — prévu pour la suite
+
+`source` est un `faction_id` aujourd'hui. Le format accueillera **tel quel** les titres d'ÉVÉNEMENT
+et de CHAMPIONNAT (hors périmètre v1) sans toucher ni à la colonne ni à la route.
+
+### Validation
+
+`test_mastery.py` **176 ✅ / 0 ❌** : bornes de rang **au XP près** (un cran sous/au seuil, dernier XP
+avant chaque palier, rang 63), réciprocité `rank ∘ total_for` sur 120 rangs, sabotage du seuil,
+titres et 6 tranches à toutes leurs bornes, ids malformés, purge → rang 0 + titre déséquipé,
+pérennisation à l'achat, profil public sans écriture, refus `not_unlocked` **par sabotage** (4
+formes), cycle complet rotation expirée, `mastery_rank_up` (simple / multiple / aucun / saut
+extrême), et la **contre-épreuve d'équité**. **Suite backend COMPLÈTE : 69 suites vertes, 0 rouge.**
+
+⚠️ Trois suites existantes ont été mises à jour **délibérément** : `test_heroes_roster` (contrat de
+clés STRICT → `mastery` ajouté + 6 contrôles neufs), `test_profile_data` (**liste blanche de
+confidentialité** — l'extension est un choix documenté, c'est exactement ce que ce test doit
+forcer), `test_tutorial` (stub `pydantic`, `profile.py` déclarant désormais un `BaseModel`).
+
+⚠️ **VPS + client partent ENSEMBLE.** Le client lit `mastery` / `masteries_summary` /
+`mastery_rank_up` ; le serveur pose `equipped_title` dans l'état de partie. Chaque lecture a un
+défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE maîtrise.
+
+---
+
+## §8.136 — LA TRANCHÉE : mini-jeu d'événement, duel 1v1 TEMPS RÉEL (onglet BONUS, ADDITIF strict §1.5)
+
+> **Le premier contenu de l'onglet BONUS (§8.134) et la PREMIÈRE boucle temps réel du projet.**
+> Deux soldats dans deux tranchées face à face, 5 positions discrètes, DEBOUT pour agir / ACCROUPI
+> pour survivre, grenades en cloche, escalade d'armes au mérite — match en 2 manches gagnantes,
+> manche de 90 s. Faisable à **10 Hz** sur le WebSocket existant grâce à UNE règle d'or absolue :
+> **tout ce qui traverse le no man's land est un projectile LENT et VISIBLE** (balles >= 3 ticks de
+> vol, grenades 15-30 ticks) — aucune prédiction complexe, aucune compensation de lag, aucun
+> netcode de FPS (détail règles/équilibrage : encart `ARCHITECTURE_ET_REGLES.md`).
+
+### 1. Architecture — une salle `mode="trench"`, un aiguillage précoce, AUCUN GameEngine
+
+- **`game_rooms.mode`** (String, `""` = partie classique, `server_default` → auto-migrée ; archive
+  `migration_trench.sql`). Un duel = un `GameRoom(mode="trench", max_players=2, is_ranked=False)` +
+  ses `GameRoomPlayer` — le gate de membership 4003 est hérité tel quel.
+- **Aiguillage PRÉCOCE** (`router._room_mode`, lu UNE fois par connexion WS, après version 4000 /
+  auth 4001 / membership 4003) : une salle `trench` est déléguée ENTIÈRE à
+  `trench_runner.handle_trench_socket` — **aucun message de duel ne traverse `GameEngine`**, aucun
+  verrou/minuterie de salle classique n'est armé. Une salle normale ne voit de ce chantier qu'une
+  lecture de colonne (contre-épreuve par SABOTAGE : condition inversée → `test_security_locks`
+  tombe, remise en place → 71/71 suites vertes).
+- **Runtime IN-MEMORY par process** (`api/sockets/trench_runner.py`, 1 worker — même contrainte que
+  ConnectionManager) : état de simulation + tampons d'entrées + task de tick 10 Hz par salle. Un
+  redémarrage perd les duels en cours — assumé : la purge des GameRooms au boot (`main.py`) et le
+  message `trench_room_gone` (close 1000) couvrent le cas proprement.
+- **La RÈGLE vit dans deux modules PURS** : `api/game/trench_sim.py` (registres `TRENCH_RULES` /
+  `TRENCH_WEAPONS` / `TRENCH_GRENADE` / `ESCALATION`, état sérialisable, `step(state, inputs, tick,
+  rng)` DÉTERMINISTE — rejeu au bit près, contre-épreuve porteuse de `test_trench_sim.py`) et
+  `api/game/trench_bot.py` (machine à états lisible : esquive du marqueur si préavis >= 0,8 s ⚙,
+  plongeon face au laser, agression/couverture alternées, rng injecté).
+
+### 2. Protocole WS (§1.5 additif — enveloppe de salle existante)
+
+- **client → serveur** (À PLAT, comme le chat) — `{"type": "trench_input", "move": -1|0|1,
+  "stance": "up"|"down", "fire": bool, "throw": {"charge": 0..1} | null,
+  "pick_weapon": "chacal"|"condor" | null}`. **<= 10 msg/s par connexion, le serveur JETTE le
+  surplus** (anti-flood, `TrenchRuntime.allow_message`) ; le tick serveur COALESCE (dernière
+  direction/posture gagnante, un clic de tir n'est jamais perdu, le 11e message d'un tick est
+  ignoré — `trench_sim.coalesce_inputs`). `{"type": "trench_forfeit"}` = abandon (ÉCHAP confirmé).
+- **serveur → clients** :
+  - `trench_init` (PERSONNEL, à la connexion et à la reconnexion) : `{rules:
+    trench_sim.public_rules(), your_slot: 1|2, training: bool, opponent: {name, is_bot},
+    state | null}` — le client n'a AUCUNE constante du mini-jeu en dur (patron
+    `battle_royale.public_rules` §8.131) ;
+  - `trench_state` (BROADCAST, 10 Hz — même état pour les deux, il n'y a aucun secret dans une
+    tranchée) : `{tick, phase: intermission|playing|over, round_no, round_start_tick, round_ticks,
+    score: [m1, m2], winner_slot, players: [{slot, pos, stance, hp, weapon, hits_total, grenades,
+    choice_deadline_tick, laser_fire_tick, disconnected}], projectiles: [{id, kind, owner_slot,
+    from_pos, target_pos, launch_tick, impact_tick}], events: [...]}`. ⚠️ Les projectiles voyagent
+    par INSTANTS (lancement, impact) — le CLIENT interpole la trajectoire, le serveur ne calcule
+    que les instants et les dégâts. Événements du tick : `round_start` · `fire` · `impact` · `hit`
+    · `grenade_thrown` (marqueur visible par la cible DÈS le lancer) · `laser` (CONDOR : 5 ticks
+    avant le TIR) · `laser_cancelled` · `escalation` · `weapon_choice` · `weapon_chosen` ·
+    `round_end {winner_slot: 0 = nulle-rejouée, reason: kill|time|afk|disconnect}` · `match_end
+    {reason: score|disconnect|forfeit}` ;
+  - `trench_result` (PERSONNEL, à la fin) : `{your_slot, winner_slot, you_won, score, reason,
+    vs_bot, training, rewards: {participation_coins, participation_capped, win_coins, win_capped,
+    new_titles: [{threshold, title_id, title_key}], progression: {wins, level, level_max,
+    next_threshold, thresholds, titles}} | null}`.
+- **Client** (§2.4 du brief) : rendu interpolé **150 ms** derrière le dernier état (tampon
+  horodaté) ; SEULE exception, la posture/position du joueur LOCAL est appliquée IMMÉDIATEMENT
+  (réconciliation silencieuse : 2 états divergents consécutifs → on se cale sur le serveur). Rien
+  d'autre n'est prédit.
+- **Déconnexion/AFK (décision n° 10)** : socket tombé → la sim reçoit le marqueur `disconnected`
+  (soldat FIGÉ ACCROUPI) ; grâce 10 s → manche perdue ; 2e fois → match perdu. 20 s sans le
+  moindre message → manche perdue. Jamais connecté au coup d'envoi (20 s ⚙) → forfait immédiat.
+  La reconnexion passe par la MÊME URL WS (socle §5) et ré-reçoit `trench_init`.
+
+### 3. REST (préfixe `/trench`, convention zéro-4xx §8.112) — `api/v1/endpoints/trench.py`
+
+- `POST /trench/queue` → `{queued}` ou `{queued: false, reason: event_closed|banned|in_room}` ;
+  `event_closed` porte `event_window` (epochs de la PROCHAINE fenêtre — le client affiche un
+  rebours exact sans aucune date en dur). `GET /trench/queue/status` (heartbeat 2 s — états
+  §8.116 : searching/extending/starting/ready/in_game/idle + `event_closed` si la fenêtre se ferme
+  PENDANT l'attente) · `DELETE /trench/queue` (refus doux `assigned`, re-lecture post-ZREM —
+  même course fermée que §8.116).
+- **File `mm:q:trench`** (FIFO, 2 joueurs, bot-fill 60 s — `matchmaking.plan_bucket`, la MÊME
+  décision pure que partout) traitée par le tick du `matchmaker_runner` (branche dédiée →
+  `trench_runner.process_trench_bucket`). ⚠️ MÊME clé de ticket `mm:ticket:{uid}` que les files
+  solo/équipe : toutes les gardes « déjà en file » du dépôt fonctionnent sans une ligne de plus.
+  Hors fenêtre, la file se PURGE à chaque tick (tickets effacés → le client retombe sur idle).
+- `POST /trench/training` : salle solo + bot créée DIRECTEMENT sans file (pattern « LANCER AVEC
+  BOTS ») — aucune récompense, aucun compteur, gate d'événement identique.
+- `GET /trench/leaderboard` (PUBLIC, enrichi si connecté — patron du bloc `me` §9.2) :
+  `{entries: [{rank, name, wins, level}] (top 50, cache processus 60 s — pattern compagnies),
+  me: {name, rank|null, wins, level, level_max, next_threshold, thresholds, titles} | null,
+  event_active}`.
+
+### 4. Récompenses, progression, titres (équité ABSOLUE : rien n'entre jamais dans la simulation)
+
+- **Raison ledger `trench`** (11e — `economy.REASON_TRENCH`), refs `participation`/`win` :
+  participation **5 ¢** (max 5/jour), victoire contre un HUMAIN **+15 ¢** (max 5/jour) ⚙ —
+  montants dans `trench_progression.TRENCH_REWARDS`, plafonds en compteurs Redis
+  `trench:cap:{kind}:{uid}:{jour}` à la convention **04:00 UTC** (`mission_day_key`, TTL 2 j).
+- ⚠️ **ANTI-FARM (décision n° 8)** : victoire contre le BOT = participation SEULE, et
+  `users.trench_wins` n'est PAS incrémenté. L'ENTRAÎNEMENT ne crédite RIEN.
+- **`users.trench_wins`** (compteur additif auto-migré) : total à vie de victoires HUMAINES. Le
+  **niveau d'événement** (paliers 5/15/40 → 0..3) et les **titres** s'en DÉRIVENT à la lecture
+  (`api/game/trench_progression.py`, PUR — rien d'autre n'est persisté, patron maîtrise §8.135).
+- **Titres `"trench:grenadier"` / `"trench:sapeur"` / `"trench:seigneur_des_tranchees"`** : le
+  format `"<source>:<key>"` de la maîtrise accueille sa première source d'ÉVÉNEMENT —
+  `mastery.EVENT_TITLES["trench"]` (SOURCE UNIQUE des paliers), `is_title_unlocked` valide contre
+  la MÉTRIQUE `event_title_metrics(user)` (= `trench_wins`), la MÊME route `POST /profile/title`
+  équipe, `resolve_equipped_title` nettoie un titre perdu. ⚠️ `masteries_summary` ÉCARTE les
+  sources d'événement : le palmarès de maîtrise reste un palmarès de FACTIONS — la progression
+  trench s'affiche et s'équipe dans le hub Événements (onglet BONUS).
+- **Télémétrie légère** (décision §4.3, le plus simple documenté) : UNE ligne de log structurée
+  par duel (`trench_match room=… ticks=… score=… winner_slot=… reason=… weapons=…`).
+
+### 5. Événement-porte `trench_week` (type `bonus` — le premier réel)
+
+Registre `events.py` : `trench_week` (priorité 30 dérivée, AUCUN mutateur — `applies_to` refuse
+déjà tout type ≠ `match`, un bonus ne mute JAMAIS une partie). Calendrier : `(2026, 8)` ordinal 2
+(**ven. 14 août 18:00 → lun. 17 août 00:00 UTC — ⚙ PREMIÈRE FENÊTRE À CALER PAR HAKIM**).
+Nouveau helper PUR `events.is_event_active(event_id, now)` = LE gate de la file/entraînement.
+Pendant sa fenêtre, `featured` le met en VEDETTE du QG (bonus 30 > match 20 — §8.134 inchangé).
+
+> **Fichiers.** NOUVEAUX : `api/game/trench_sim.py`, `api/game/trench_bot.py`,
+> `api/game/trench_progression.py`, `api/sockets/trench_runner.py`, `api/v1/endpoints/trench.py`,
+> `migration_trench.sql`, `test_trench_sim.py`, `test_trench_bot.py`, `test_trench_flow.py`.
+> MODIFIÉS : `models/models.py` (2 colonnes), `api/game/economy.py` (raison), `api/game/events.py`
+> (trench_week + is_event_active), `api/game/mastery.py` (EVENT_TITLES additif),
+> `api/game/hero_progression.py` + `api/v1/endpoints/profile.py` (métriques d'événement),
+> `api/sockets/router.py` (aiguillage), `api/sockets/matchmaker_runner.py` (branche bucket),
+> `api/__init__.py`. Client : voir `FRONTEND_INTERFACES.md §8.136`.
+>
+> **Validation.** `test_trench_sim.py` **86 ✅** (REJEU 1 000 ticks au bit près + sabotage de
+> registre qui DOIT diverger) · `test_trench_bot.py` **15 ✅** (2 bots × 1 000 ticks
+> déterministes) · `test_trench_flow.py` **56 ✅** (gate, formation, plafonds, anti-farm,
+> classement) — **suite backend COMPLÈTE : 71 suites vertes, 0 rouge** (3 suites adaptées :
+> compteur 11 raisons ×2, `next_event` sous TEMPÊTE → trench_week). Client : `--import` 0 ERROR,
+> boots headless 0 ERROR (events, trench_duel, main_menu, search), 4 captures PNG RELUES
+> (2 défauts de layout trouvés et corrigés par ELLES : ancres par méthode + offsets, fond
+> viewport). ⛔ Recette manuelle à DEUX COMPTES à faire (annexe de `RAPPORT_MINIJEU_TRANCHEE.md`).
+>
+> ⚠️ **VPS + client partent ENSEMBLE** (le client appelle `/trench/*` et la scène de duel parle le
+> protocole ci-dessus ; le gate de version WS protège la transition).

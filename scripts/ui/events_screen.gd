@@ -63,6 +63,14 @@ const DEFAULT_TAB := "matches"
 # l'onglet de nav rouvrirait l'onglet où l'avait mené sa dernière notification.
 static var target_tab: String = ""
 
+# LA TRANCHÉE (§8.136) : « REJOUER » depuis l'écran de fin de duel — l'onglet BONUS s'ouvre et la
+# file repart tout seul. Posé par `trench_duel.gd`, purgé à la lecture (même hygiène que target_tab).
+static var pending_trench_requeue: bool = false
+
+# Id de l'événement-porte du mini-jeu — MIROIR du registre serveur (`events.py`), utilisé UNIQUEMENT
+# pour reconnaître « la carte bonus active est LA TRANCHÉE » et monter le panneau d'actions dessous.
+const TRENCH_EVENT_ID := "trench_week"
+
 var _font: Font
 var _tabs_bar: HBoxContainer = null
 var _tab_buttons: Dictionary = {}
@@ -94,9 +102,24 @@ func _ready() -> void:
 	NetworkManager.events_loaded.connect(_on_events)
 	LocaleManager.locale_changed.connect(_on_locale_changed)
 
+	# LA TRANCHÉE (§8.136) : signaux de la file dédiée + classement d'événement. Connectés à l'écran
+	# (pas au panneau) : le panneau survit aux _render() mais l'écran reste l'unique abonné.
+	NetworkManager.trench_queue_result.connect(_on_trench_queue_result)
+	NetworkManager.trench_status_updated.connect(_on_trench_status)
+	NetworkManager.trench_left.connect(_on_trench_left)
+	NetworkManager.trench_training_result.connect(_on_trench_training_result)
+	NetworkManager.trench_leaderboard_loaded.connect(_on_trench_leaderboard)
+	NetworkManager.title_equipped.connect(_on_trench_title_equipped)
+
 	# La nav lance déjà `fetch_events()` de son côté ; on peint immédiatement le cache s'il existe
 	# (navigation depuis un autre écran hub) pour ne pas afficher un écran vide une demi-seconde.
 	_render()
+
+	# REJOUER depuis l'écran de fin de duel : onglet BONUS + remise en file immédiate.
+	if pending_trench_requeue:
+		pending_trench_requeue = false
+		_show_tab("bonus")
+		_trench_join()
 
 
 func _make_font() -> Font:
@@ -246,6 +269,12 @@ func _render_event_tab(tab_id: String, type_id: String, actives: Array, upcoming
 	var page: VBoxContainer = _pages.get(tab_id)
 	if page == null:
 		return
+	# LA TRANCHÉE (§8.136) : le panneau d'actions SURVIT aux _render() (il porte une recherche de
+	# duel en vol — même doctrine que _missions_panel). On le détache AVANT la purge, on le remonte
+	# après la carte si l'événement est toujours actif.
+	if tab_id == "bonus" and _trench_panel != null and is_instance_valid(_trench_panel) \
+			and _trench_panel.get_parent() == page:
+		page.remove_child(_trench_panel)
 	_clear(page)
 
 	var mine: Array = []
@@ -268,6 +297,17 @@ func _render_event_tab(tab_id: String, type_id: String, actives: Array, upcoming
 		page.add_child(_empty_state(
 			"EVENTS_BONUS_EMPTY" if type_id == TYPE_BONUS else "EVENT_NONE_PLANNED",
 			"EVENTS_BONUS_EMPTY_HINT" if type_id == TYPE_BONUS else ""))
+
+	# LA TRANCHÉE active → le panneau d'actions (file, entraînement, top 50, ma progression).
+	if tab_id == "bonus":
+		if _contains_id(mine, TRENCH_EVENT_ID):
+			page.add_child(_ensure_trench_panel())
+			NetworkManager.fetch_trench_leaderboard()
+		elif _trench_panel != null and is_instance_valid(_trench_panel):
+			# Fenêtre refermée : le panneau meurt avec elle (la file serveur est déjà purgée).
+			_trench_stop_poll()
+			_trench_panel.queue_free()
+			_trench_panel = null
 
 	# --- CALENDRIER : les prochaines opérations, en heure LOCALE du joueur ---
 	if not soon.is_empty():
@@ -532,6 +572,266 @@ func _empty_state(title_key: String, hint_key: String) -> Control:
 		h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		box.add_child(h)
 	return pan
+
+
+# =========================================================
+# LA TRANCHÉE (§8.136) — panneau d'actions de l'onglet BONUS
+# =========================================================
+# Monté SOUS la carte de l'événement quand `trench_week` est ACTIF : les deux CTA (file /
+# entraînement), l'état de recherche (poll 2 s, mêmes états d'affichage que search_screen), MA
+# progression de niveau d'événement et le top 50. AUCUNE valeur en dur : paliers, plafonds et
+# classement descendent du serveur (`/trench/leaderboard`).
+const TrenchDuelScript := preload("res://scripts/game/trench_duel.gd")
+
+var _trench_panel: PanelContainer = null
+var _trench_status_label: Label = null
+var _trench_enter_btn: Button = null
+var _trench_cancel_btn: Button = null
+var _trench_training_btn: Button = null
+var _trench_progress_box: VBoxContainer = null
+var _trench_board_box: VBoxContainer = null
+var _trench_poll: Timer = null
+var _trench_searching := false
+
+
+func _ensure_trench_panel() -> PanelContainer:
+	if _trench_panel != null and is_instance_valid(_trench_panel):
+		return _trench_panel
+	var pan := PanelContainer.new()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(SURFACE, 0.7)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(1)
+	st.border_color = Color(GOLD, 0.55)
+	st.set_content_margin_all(18.0)
+	pan.add_theme_stylebox_override("panel", st)
+	pan.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_trench_panel = pan
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	pan.add_child(box)
+
+	# --- Rangée d'actions : ENTRER / ANNULER / ENTRAÎNEMENT + ligne d'état ---
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+	_trench_enter_btn = _cta(_t("TRENCH_ENTER_CTA"), GOLD, _trench_join)
+	row.add_child(_trench_enter_btn)
+	_trench_cancel_btn = _cta(_t("TRENCH_CANCEL_SEARCH"), MUTED, _trench_cancel)
+	_trench_cancel_btn.visible = false
+	row.add_child(_trench_cancel_btn)
+	_trench_training_btn = _cta(_t("TRENCH_TRAINING_CTA"), ACCENT, _trench_training)
+	row.add_child(_trench_training_btn)
+	_trench_status_label = _label("", 14, MUTED)
+	_trench_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_trench_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_trench_status_label)
+	var note := _label(_t("TRENCH_VS_BOT_NOTE"), 12, MUTED)
+	box.add_child(note)
+
+	# --- Ma progression (peuplée par /trench/leaderboard, bloc `me`) ---
+	_trench_progress_box = VBoxContainer.new()
+	_trench_progress_box.add_theme_constant_override("separation", 4)
+	box.add_child(_trench_progress_box)
+
+	# --- Top 50 ---
+	WarzoneUI.add_filet(box)
+	box.add_child(_label(_t("TRENCH_LEADERBOARD_TITLE"), 13, ACCENT))
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 130)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
+	_trench_board_box = VBoxContainer.new()
+	_trench_board_box.add_theme_constant_override("separation", 2)
+	_trench_board_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_trench_board_box)
+
+	# Poll de file (2 s — même cadence que search_screen). Enfant de l'ÉCRAN : il meurt au
+	# changement de scène, jamais de poll fantôme.
+	if _trench_poll == null:
+		_trench_poll = Timer.new()
+		_trench_poll.wait_time = 2.0
+		_trench_poll.timeout.connect(func() -> void: NetworkManager.trench_queue_status())
+		add_child(_trench_poll)
+	return pan
+
+
+func _trench_join() -> void:
+	if _trench_searching:
+		return
+	_trench_set_status(_t("COMMON_SYNCING"), MUTED)
+	NetworkManager.trench_queue_join()
+
+
+func _trench_cancel() -> void:
+	NetworkManager.trench_queue_leave()
+
+
+func _trench_training() -> void:
+	if _trench_searching:
+		return
+	_trench_set_status(_t("COMMON_SYNCING"), MUTED)
+	NetworkManager.trench_training_start()
+
+
+func _trench_set_status(text: String, color: Color) -> void:
+	if _trench_status_label != null and is_instance_valid(_trench_status_label):
+		_trench_status_label.text = text
+		_trench_status_label.add_theme_color_override("font_color", color)
+
+
+func _trench_set_searching(searching: bool) -> void:
+	_trench_searching = searching
+	if _trench_enter_btn != null and is_instance_valid(_trench_enter_btn):
+		_trench_enter_btn.visible = not searching
+		_trench_cancel_btn.visible = searching
+		_trench_training_btn.disabled = searching
+	if searching:
+		if _trench_poll != null:
+			_trench_poll.start()
+	else:
+		_trench_stop_poll()
+
+
+func _trench_stop_poll() -> void:
+	if _trench_poll != null and is_instance_valid(_trench_poll):
+		_trench_poll.stop()
+
+
+func _on_trench_queue_result(ok: bool, data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	var reason := str(data.get("reason", ""))
+	if ok and bool(data.get("queued", false)):
+		_trench_set_searching(true)
+		_trench_set_status(_t("TRENCH_SEARCHING"), GOLD)
+	elif reason == "event_closed":
+		_trench_set_searching(false)
+		_trench_set_status(_t("TRENCH_EVENT_CLOSED"), MUTED)
+		NetworkManager.fetch_events()  # la fenêtre a bougé : la carte doit suivre.
+	elif reason == "in_room" and str(data.get("room_mode", "")) == "trench":
+		# Un duel m'attend déjà (reconnexion) : on y retourne directement.
+		_go_to_duel(int(data.get("room_id", 0)))
+	elif reason == "banned":
+		_trench_set_searching(false)
+		_trench_set_status(_t("SQUAD_ERR_BANNED"), MUTED)
+	else:
+		_trench_set_searching(false)
+		_trench_set_status(_t("NET_UNKNOWN_ERROR"), MUTED)
+
+
+func _on_trench_status(data: Dictionary) -> void:
+	if not is_inside_tree() or not _trench_searching:
+		return
+	var state := str(data.get("state", "idle"))
+	match state:
+		"searching", "extending", "starting":
+			var since := int(data.get("since_s", 0))
+			_trench_set_status(_t("TRENCH_SEARCHING") + "  ·  %ds" % since,
+				GOLD if state != "extending" else ACCENT)
+		"ready", "in_game":
+			var rid = data.get("room_id")
+			if rid != null:
+				_trench_set_searching(false)
+				_go_to_duel(int(rid))
+		"event_closed":
+			_trench_set_searching(false)
+			_trench_set_status(_t("TRENCH_EVENT_CLOSED"), MUTED)
+			NetworkManager.fetch_events()
+		"idle":
+			# Ticket disparu (fenêtre fermée côté serveur, heartbeat perdu…) : on s'arrête proprement.
+			_trench_set_searching(false)
+			_trench_set_status(_t("TRENCH_EVENT_CLOSED"), MUTED)
+
+
+func _on_trench_left(left: bool, _reason: String) -> void:
+	if not is_inside_tree():
+		return
+	if left:
+		_trench_set_searching(false)
+		_trench_set_status("", MUTED)
+
+
+func _on_trench_training_result(ok: bool, data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	if ok and bool(data.get("created", false)):
+		_go_to_duel(int(data.get("room_id", 0)))
+	elif str(data.get("reason", "")) == "event_closed":
+		_trench_set_status(_t("TRENCH_EVENT_CLOSED"), MUTED)
+	elif str(data.get("reason", "")) == "in_room" and str(data.get("room_mode", "")) == "trench":
+		_go_to_duel(int(data.get("room_id", 0)))
+	else:
+		_trench_set_status(_t("NET_UNKNOWN_ERROR"), MUTED)
+
+
+func _go_to_duel(room_id: int) -> void:
+	_trench_stop_poll()
+	TrenchDuelScript.pending_room_id = str(int(room_id))
+	TransitionManager.change_scene("res://scenes/game/trench_duel.tscn")
+
+
+func _on_trench_leaderboard(data: Dictionary) -> void:
+	if not is_inside_tree() or _trench_board_box == null \
+			or not is_instance_valid(_trench_board_box):
+		return
+	# --- Ma progression ---
+	_clear(_trench_progress_box)
+	var me = data.get("me")
+	if typeof(me) == TYPE_DICTIONARY:
+		var wins := int(me.get("wins", 0))
+		var level := int(me.get("level", 0))
+		var level_max := int(me.get("level_max", 3))
+		var line := _t("TRENCH_EVENT_LEVEL") % [level, level_max, wins]
+		var next = me.get("next_threshold")
+		if next != null:
+			line += "  ·  " + _t("TRENCH_NEXT_LEVEL") % int(next)
+		var rank = me.get("rank")
+		if rank != null:
+			line += "  ·  " + _t("TRENCH_MY_RANK") % int(rank)
+		_trench_progress_box.add_child(_label(line, 15, GOLD))
+		# Titres débloqués → équipables ICI (la progression d'événement vit dans ce hub, pas dans
+		# le palmarès de maîtrise — POST /profile/title accepte les "trench:*" depuis §8.136).
+		var titles: Array = me.get("titles", [])
+		if not titles.is_empty():
+			var trow := HBoxContainer.new()
+			trow.add_theme_constant_override("separation", 8)
+			_trench_progress_box.add_child(trow)
+			for title_id in titles:
+				var key := str(title_id).replace("trench:", "").to_upper()
+				var btn := _cta(_t("TITLE_TRENCH_" + key), ACCENT,
+					func() -> void: NetworkManager.equip_title(str(title_id)))
+				btn.custom_minimum_size = Vector2(0, 34)
+				btn.add_theme_font_size_override("font_size", 12)
+				trow.add_child(btn)
+			trow.add_child(_label(_t("TRENCH_EQUIP_HINT"), 12, MUTED))
+	# --- Top 50 ---
+	_clear(_trench_board_box)
+	var entries: Array = data.get("entries", [])
+	if entries.is_empty():
+		_trench_board_box.add_child(_label(_t("TRENCH_LEADERBOARD_EMPTY"), 14, MUTED))
+		return
+	for e in entries:
+		var entry := _dict(e)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		var rank_lbl := _label("#%d" % int(entry.get("rank", 0)), 14, MUTED)
+		rank_lbl.custom_minimum_size = Vector2(44, 0)
+		row.add_child(rank_lbl)
+		var name_lbl := _label(str(entry.get("name", "")), 14, TEXT)
+		name_lbl.custom_minimum_size = Vector2(300, 0)
+		row.add_child(name_lbl)
+		row.add_child(_label(_t("TRENCH_WINS_FMT") % int(entry.get("wins", 0)), 14, GOLD))
+		_trench_board_box.add_child(row)
+
+
+func _on_trench_title_equipped(data: Dictionary) -> void:
+	if not is_inside_tree() or _active_tab != "bonus":
+		return
+	if bool(data.get("ok", false)) and str(data.get("equipped_title", "")).begins_with("trench:"):
+		_trench_set_status(_t("TRENCH_TITLE_EQUIPPED"), ACCENT)
 
 
 # =========================================================

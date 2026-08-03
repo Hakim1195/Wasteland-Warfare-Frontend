@@ -3884,3 +3884,275 @@ Aucun re-parentage, aucune touche au `.tscn` : la colonne est ajoutée par code,
 > **Reste à faire** : aucune partie réelle jouée sous ce hub (pas de serveur local) ; l'audit
 > `ui_scale` des écrans AUTRES que ceux traversés par la recette reste un chantier séparé (§10 du
 > brief) — les panneaux de hub à 980 px de large sont la contrainte qui fixe le plancher d'échelle.
+
+---
+
+## §8.135 — MAÎTRISE DE FACTION (client) + LOT 0 : jauge de Coins après claim
+
+### LOT 0 — la jauge de Coins de la nav suit enfin un claim de mission (dette §8.134)
+
+`POST /missions/claim` renvoyait **déjà** `coins_balance` : la donnée était là, personne ne la
+lisait — la jauge attendait le prochain `/auth/me`, donc une navigation. Le joueur voyait
+« +120 ¢ » dans le statut du panneau DÉFIS et un compteur immobile.
+
+**Correctif, 0 appel réseau :** `top_nav` s'abonne à `NetworkManager.mission_claimed` (le MÊME
+signal que le panneau) et pose le solde reçu. L'abonnement vit dans la **nav**, pas dans
+`missions_panel` : la jauge lui appartient, et n'importe quel hôte du panneau — aujourd'hui
+l'onglet DÉFIS du hub, demain un autre — en bénéficie sans le savoir. `missions_panel` reste une
+vue PURE : il ne va pas chercher la nav dans l'arbre.
+
+⚠️ `top_nav.animate_coins()` recopie aussi le solde dans `_profile_data` (source du mini-profil).
+Sans cela la jauge disait vrai et le mini-profil ouvert juste après annonçait l'ancien solde —
+**deux chiffres contradictoires à l'écran**. Le correctif profite du même coup à la boutique, qui
+appelle la même fonction.
+
+**Contre-épreuve** `tools/test_claim_coins_gauge.tscn` — **12 asserts** : état initial, claim →
+jauge ET mini-profil à jour, repeinture du panneau OUVERT, payload sans `coins_balance` (solde
+INCHANGÉ, jamais un 0 inventé), et **SABOTAGE** — l'abonnement débranché, la jauge reste figée
+(le défaut d'origine reproduit à la demande), rebranché elle suit de nouveau.
+
+### La brique unique : `scripts/ui/mastery_border.gd`
+
+**Une seule implémentation** pour les cinq sites d'affichage (fiche Personnage, sélecteur de titre,
+draft, nav, Rapport Post-Op). Elle porte **deux** choses :
+
+1. **Les 6 bordures, dessinées 100 % par code** — parti pris maison éprouvé (HazardPlate du menu,
+   PowerGlyph de la nav, CoinIcon de la jauge, emblèmes de compagnie §8.126) : quand l'asset manque,
+   on dessine. Plaque octogonale à coins biseautés, filet intérieur, **crans de rang** et pointes de
+   coin. `MasteryBorder.make(tier, side)` ; `MOUSE_FILTER_IGNORE` (elle se superpose à des portraits
+   cliquables sans les neutraliser).
+2. **Les helpers de libellé** (`title_i18n_key`, `title_label`, `title_with_faction`) et le
+   **catalogue de noms de faction mémoïsé**, pour les vues qui n'en ont pas (le Post-Op). Ils vivent
+   ici parce que ce fichier est DÉJÀ préchargé par les cinq écrans : les isoler ailleurs aurait
+   ajouté un `preload` à chacun et fait exister deux endroits où « afficher une maîtrise » est
+   défini.
+
+⚠️ **AUCUNE RÈGLE ICI.** La tranche est une **clé** calculée serveur (`border_tier`) : ce script ne
+sait ni ce qu'est un rang, ni où commence le palier or. Il PEINT une clé. C'est ce qui permet de
+ré-équilibrer les seuils sans redéployer le client.
+
+⚠️ **Les 6 tranches doivent rester distinctes EN IMAGE FIXE.** Défaut vu en capture au premier jet :
+platine et irisé se confondaient (tous deux cyan). Écartés depuis — argent NEUTRE, platine ICY quasi
+blanc, irisé SATURÉ. Et la teinte n'est **pas** le seul discriminant : le nombre de **crans**
+(2/3/4/5/6/8) les sépare aussi, ce qui les rend lisibles en daltonisme comme sur une capture
+désaturée.
+
+⚠️ `reduced_motion` (§8.82) : la tranche `prismatic` (rang 50+) est la **seule** animée ; sous ce
+réglage elle est FIGÉE sur une teinte fixe. La bordure reste distinctive — c'est une récompense, on
+ne la retire pas, elle cesse simplement de bouger.
+
+### Où la maîtrise s'affiche
+
+| Écran | Ce qui s'affiche | Source |
+|---|---|---|
+| **Personnages** — présentoir | bordure de la faction sélectionnée **autour du portrait** | `mastery.border_tier` de `/heroes` |
+| **Personnages** — onglet ÉVOLUTION | **médaillon de rang** (bordure + le rang ÉCRIT DEDANS), « RANG %d — %s », jauge vers le rang suivant, prochain titre, carrière | idem |
+| **Profil** — onglet APERÇU | bordure de la **meilleure** maîtrise + bouton « TITRE : %s » → sélecteur modal | `masteries_summary` |
+| **Draft** | bordure de la faction affichée sur MON portrait + ma ligne de titre | `/heroes` + état de partie |
+| **Nav** (cadre identité) | bordure de la **meilleure** maîtrise, **sans titre** (sobriété) | `masteries_summary` |
+| **Rapport Post-Op** — podium | bordure de la faction JOUÉE + titre porté, sous le pseudo, pour **tous** | `PlayerState` |
+
+⛔ **Rien dans l'arène** (chips, HUD, kill feed) : la lisibilité tactique prime, le HUD est déjà
+dense. Décision de sobriété, pas un oubli.
+
+⚠️ **ÉCART CONSIGNÉ AVEC LE BRIEF (§5.3).** Celui-ci demandait « sous le pseudo de CHAQUE joueur, son
+titre + la bordure autour de SON portrait » **au draft**. Vérification faite dans
+`faction_selection.tscn` : **le draft n'affiche PAS les autres joueurs** — c'est un carrousel d'UNE
+carte (MA faction) avec un simple compteur « N / M » de verrous. Il n'y existe ni pseudo, ni
+portrait, ni chip d'adversaire à décorer. La règle est donc appliquée au SEUL portrait présent — le
+mien — ce qui rend exactement l'intention. Les identités des ADVERSAIRES restent visibles là où
+elles l'ont toujours été : au podium du Rapport Post-Op, qui les décore, lui, pour tout le monde.
+
+### La fiche ÉVOLUTION a TROIS états, et le premier compte autant que les autres
+
+- **faction NON POSSÉDÉE** → rien. Une maîtrise fantôme sur un personnage injouable serait une
+  promesse creuse (la ligne « — %d Coins en BOUTIQUE » dit déjà quoi faire).
+- **héros SOUS le niveau 50** → « MAÎTRISE — DÈS LE NIVEAU 50 » + **la jauge du NIVEAU en cours** :
+  on montre l'échéance et le chemin qui y mène, pas une barre vers un rang inatteignable.
+- **héros AU niveau 50** → rang, bordure, jauge vers le rang suivant, prochain titre, carrière.
+  ⚠️ Le **rang 0 déverrouillé** est un état bien réel (niveau 50 atteint, VÉTÉRAN pas encore) —
+  qu'un simple `rank > 0` aurait confondu avec « verrouillé ». D'où le champ `unlocked` du payload.
+
+⚠️ **Le médaillon porte le rang à l'intérieur.** Premier jet : une bordure vide à côté d'un texte,
+qui se lisait comme un cadre orphelin (vu en capture). Habitée d'un chiffre, elle devient l'objet
+qu'elle prétend être.
+
+### Sélecteur de titre (Profil → APERÇU) — modal calqué Classement (§8.125)
+
+« AUCUN TITRE » **en tête** (retirer son titre est un choix aussi légitime qu'en porter un, et doit
+être atteignable sans défiler), puis un groupe par faction (bordure + « RANG %d »), titres du palier
+le plus HAUT au plus bas. Le titre PORTÉ est marqué **fond et liseré OR** et désactivé.
+
+⚠️ Premier jet : il ne se distinguait que par un « ▸ » et un gris à peine plus clair — **invisible
+en capture**. On lui a donc donné le vocabulaire « sélectionné » du reste de l'interface.
+
+**MISE À JOUR OPTIMISTE + ROLLBACK.** L'écran affiche le nouveau titre tout de suite (le joueur voit
+son geste aboutir). Deux retours possibles, et **deux issues distinctes** :
+- **refus légitime** (`ok:false` en 200 — droit perdu entre l'ouverture et le clic) → on adopte la
+  valeur du SERVEUR, qui est l'état de vérité : le rollback est gratuit ;
+- **échec de transport** (session, 5xx, serveur non redéployé) → retour à l'état d'AVANT le clic.
+  L'optimisme ne doit jamais survivre à une requête qui n'a pas abouti.
+
+D'où **deux signaux** `NetworkManager` : `title_equipped` (les deux cas nominaux) et
+`title_equip_failed` (le vrai échec).
+
+### Rapport Post-Op — passage de rang
+
+Ligne « MAÎTRISE : RANG %d → %d » dans l'onglet XP HÉROS, pilotée par le drapeau SERVEUR
+`mastery_rank_up` (le client ne recalcule ni courbe ni paliers).
+
+La séquence `unlock_celebration` (§8.122) est **RÉUTILISÉE telle quelle** — elle sait déjà faire
+« voici ce que vous venez d'obtenir », elle est skippable au clic et respecte `reduced_motion` ;
+en écrire une seconde aurait produit deux dialectes visuels pour le même message. Trois règles :
+- **UNE seule** séquence même en multi-franchissement — le rang FINAL (c'est déjà ce que le serveur
+  envoie : un seul bloc) ;
+- elle ne se joue **que si un NOUVEAU titre** est débloqué. Un rang de plus sans titre a sa ligne
+  dans l'onglet, et c'est proportionné : célébrer chaque rang userait la célébration en trois parties ;
+- ⚠️ elle **NE BLOQUE JAMAIS « REJOUER »** (règle §8.129) — vérifié par contre-épreuve.
+
+### Coût réseau de la bordure de nav — décision explicite
+
+`masteries_summary` vit sur `/profile/stats`, que la nav n'appelait **pas** (elle ne charge que
+`/auth/me`). La nav étant reconstruite à **chaque** navigation de hub, un appel par écran aurait
+doublé son trafic pour un ornement. On le demande donc **une seule fois par session** (cache
+STATIQUE) ; les navigations suivantes repeignent depuis le cache, sans réseau, et la valeur se
+rafraîchit gratuitement dès que le joueur ouvre son Profil.
+
+⛔ **Écarté délibérément :** ajouter les champs à `/auth/me`. Cette route est sur le chemin critique
+de tout le jeu, et la maîtrise y aurait ajouté la passe de purge lazy (plusieurs requêtes) à chaque
+appel — un prix hors de proportion avec un liseré.
+
+### i18n (LOT C) — 25 clés, FR/EN/IT, aucun emoji
+
+`MASTERY_TITLE` · `MASTERY_EYEBROW` · `MASTERY_RANK` · `MASTERY_RANK_PLAIN` · `MASTERY_LOCKED` ·
+`MASTERY_NEXT_TITLE` · `MASTERY_NEXT_TITLE_NONE` · `MASTERY_RANK_UP` · `MASTERY_NONE` ·
+`MASTERY_CAREER_{TITLE,GAMES,WINS,KILLS}` · `TITLE_{VETERAN,ELITE,MASTER,LEGEND,MYTH,IMMORTAL}` ·
+`TITLE_NONE` · `TITLE_PICKER_TITLE` · `TITLE_PICKER_HINT` · `TITLE_BUTTON` · `TITLE_WITH_FACTION` ·
+`ERR_TITLE_NOT_UNLOCKED`.
+
+⚠️ Le préfixe `TITLE_` est **PARTAGÉ** avec les titres honorifiques éphémères du Rapport Post-Op
+(`TITLE_BUTCHER`, `TITLE_CONQUEROR`, `TITLE_GRAVEDIGGER`, `TITLE_UNBREAKABLE`, `TITLE_IRRADIATED` —
+§8.83). Aucune collision aujourd'hui, mais **un futur titre de maîtrise ne doit reprendre aucun de
+ces cinq noms**. Les deux familles cohabitent d'ailleurs sur la même ligne du podium : badge
+honorifique à droite (ce match), titre de maîtrise sous le pseudo (persistant).
+
+### Validation
+
+- **`tools/test_mastery_ui.tscn` — 65 asserts** : les 6 tranches **peignent réellement** (pixels
+  comptés dans un SubViewport — on ne se contente pas de vérifier que `_draw()` a été appelé), rang
+  0 et clé inconnue ne peignent RIEN, `reduced_motion` fige l'irisation sans retirer la bordure
+  (+ contre-épreuve : sans le réglage, ça bouge), libellés et replis, fiche ÉVOLUTION dans ses
+  6 états, **sélecteur : optimiste → ROLLBACK par SABOTAGE d'un refus → échec transport → succès →
+  retrait**, purge simulée (+ contre-épreuve que le bouton existe quand il doit), Post-Op
+  (célébration seulement sur NOUVEAU titre, une seule fois, REJOUER jamais bloqué).
+  ⚠️ **À LANCER SANS `--headless`** : le bloc 1 compte des pixels, et sous le pilote factice il
+  mesurerait une image vide en concluant au vert. Une garde explicite arrête le test dans ce cas.
+- **BOOT headless 0 `ERROR`** : characters_screen, profile, public_profile, faction_selection,
+  operation_report, main_menu, shop, events.
+- **`tools/shot_mastery.tscn`** — captures de recette **relues** : les 6 bordures + le témoin rang 0,
+  la fiche ÉVOLUTION (verrouillée / rang 7 / rang 52), le sélecteur, le podium. Deux défauts de mise
+  en page ont été trouvés PAR CES CAPTURES et corrigés (platine ≈ irisé ; titre porté invisible).
+
+📌 **Bruit de fermeture connu** de `test_mastery_ui` : ~14 lignes `ERROR` « leaked texture / RID
+allocations … at exit », émises APRÈS le verdict, à l'extinction du moteur. Elles proviennent des
+cibles de rendu des ÉCRANS DE PRODUCTION instanciés par le test (viewport héros 3D, shaders du
+rapport) — **pas du test** : leur nombre est identique avec un seul viewport de mesure ou avec neuf,
+et le boot isolé de ces mêmes écrans reste à 0 `ERROR`. Ne pas chercher de fuite dans ce fichier.
+
+⚠️ **VPS + client partent ENSEMBLE** (cf. `CONTRAT_RESEAU.md §8.135`).
+
+---
+
+## §8.136 — LA TRANCHÉE (client) : scène de duel temps réel + panneau BONUS du hub
+
+> Volet client du mini-jeu d'événement (protocole/serveur : `CONTRAT_RESEAU.md §8.136` ; règles :
+> encart `ARCHITECTURE_ET_REGLES.md`). Le joueur LOCAL est TOUJOURS en BAS de l'écran,
+> l'adversaire en HAUT — les deux clients rendent la même partie en miroir.
+
+### 1. Scène `scenes/game/trench_duel.tscn` (100 % code-driven, patron company_screen)
+
+- **`scripts/game/trench_duel.gd`** (CONTRÔLEUR — réseau, entrées, interpolation, HUD) +
+  **`scripts/game/trench_render.gd`** (VUE PURE Node2D — dessine le champ de bataille depuis un
+  VIEW-MODEL reconstruit chaque frame : ciel toxique + lueur d'horizon, ruines en silhouette
+  (parallaxe FIGÉE si `reduced_motion`), barbelés, deux tranchées aux encoches de positions,
+  soldats-silhouettes procéduraux, projectiles, marqueurs d'impact, laser, arc de visée,
+  explosions). AUCUN asset — 100 % dessiné code, charte Warzone Command.
+- **Entrée en scène** : `TrenchDuel.pending_room_id` posé par l'écran Événements AVANT le
+  `change_scene` (patron `CompanyScreen.target_tag`) → `_ready` ouvre le WS de salle EXISTANT
+  (`NetworkManager.connect_to_server`) ; `trench_init` (PERSONNEL) apporte `rules`/`your_slot`/
+  adversaire — le client n'a AUCUNE constante du duel en dur.
+- **Entrées (§5.2 du brief)** : ◀▶ / Q / A / D = position · S / ▼ / clic DROIT maintenu =
+  accroupi · ESPACE maintenu = grenade (jauge + arc de Bézier à chevrons, savoir-faire
+  `attack_arrow`) · clic GAUCHE = tir · 1 / 2 = choix d'arme · ÉCHAP = confirmation d'abandon
+  (pause IMPOSSIBLE — temps réel). Manette : stick/croix, A = tir, B = accroupi, X = grenade
+  (champ libre, PAS un critère de recette).
+- **Envoi 10 Hz coalescé** : un `trench_input` toutes les `SEND_INTERVAL = 0,105 s` — STRICTEMENT
+  sous les 10 msg/s du serveur (à 0,1 s pile, la gigue ferait parfois tomber 11 messages dans la
+  même seconde serveur et le surplus JETÉ pourrait être un clic de TIR). Dernière direction/
+  posture gagnante, tir/lancer/choix retenus s'ils sont apparus entre deux envois.
+- **Interpolation** : rendu 150 ms derrière le dernier `trench_state` (tampon horodaté, paire
+  d'états encadrante) ; le joueur LOCAL est PRÉDIT (posture/position immédiates, cadence de pas
+  locale = `move_ticks` du barème) et RÉCONCILIÉ en silence (2 états serveur divergents → snap).
+  Rien d'autre n'est prédit — ne pas sophistiquer (§2.4 du brief).
+- **Lisibilité de la menace (règle de design)** : marqueur d'impact de grenade rendu DÈS le
+  lancer sur la position visée (cercle pulsant + croix), laser CONDOR tracé du tireur à la cible
+  pendant les 5 ticks de télégraphe (FIXE si `reduced_motion`), arc de visée = miroir EXACT du
+  mapping serveur (arrondi DEMI-SUPÉRIEUR — le `round()` Python arrondit à la banquière, celui de
+  Godot au supérieur : sans cet alignement l'aperçu mentirait sur les charges médianes).
+- **HUD** : PV des deux soldats (barres), arme courante + `COUPS AU BUT : n / seuil`, grenades,
+  chrono de manche, score, bandeau d'événements (TOUCHE ! / MANCHE n / ARME AMÉLIORÉE — pattern
+  phase_banner), fenêtre de choix CHACAL/CONDOR avec rebours, bandeau `NET_CONNECTION_LOST` +
+  reconnexion unique à 2 s (politique de l'arène §8.118). Écran de FIN sobre : VICTOIRE/DÉFAITE,
+  score, coins avec PLAFOND affiché (`TRENCH_DAILY_CAP`), note anti-farm bot, progression de
+  niveau d'événement, REJOUER (→ hub, re-file automatique) / RETOUR AU QG ; nouveau palier →
+  `unlock_celebration`.
+- **Confort** : `reduced_motion` = parallaxe figée, laser fixe, AUCUN screenshake.
+
+### 2. Onglet BONUS du hub Événements (`events_screen.gd`)
+
+La carte de l'événement est rendue par le composant §8.134 (aucun code neuf). Quand `trench_week`
+est ACTIF, un **panneau d'actions** est monté SOUS la carte : CTA « ENTRER DANS LA TRANCHÉE »
+(file : poll 2 s, mêmes états d'affichage que search_screen, ANNULER pendant la recherche) et
+« ENTRAÎNEMENT » (salle solo + bot immédiate), note « AUCUNE RÉCOMPENSE », **ma progression**
+(niveau x/3, victoires, prochain palier, rang) avec les TITRES débloqués équipables ICI (la même
+route `POST /profile/title` — la progression d'événement vit dans ce hub, jamais dans le palmarès
+de maîtrise), et le **top 50** (`/trench/leaderboard`). ⚠️ Le panneau SURVIT aux `_render()`
+(détaché avant la purge de page, remonté après la carte — il porte une recherche EN VOL, même
+doctrine que `_missions_panel`). `EventsScreen.pending_trench_requeue` (statique) : « REJOUER »
+depuis l'écran de fin rouvre l'onglet BONUS et relance la file tout seul.
+
+### 3. Réseau (`network_manager.gd`, additif)
+
+Signaux `trench_queue_result` / `trench_status_updated` / `trench_left` /
+`trench_training_result` / `trench_leaderboard_loaded` (REST `/trench/*`) et `trench_init_received`
+/ `trench_state_received` / `trench_result_received` (WS, relayés TELS QUELS — aucune logique).
+`send_trench_input` envoie À PLAT sans enveloppe ni `action_id` (10 Hz — socket fermé = jet EN
+SILENCE, jamais un `game_error` par frame) ; `send_trench_forfeit` = abandon.
+
+### 4. i18n (FR/EN/IT, AUCUN emoji)
+
+`EVENT_TRENCH_NAME/DESC` (carte serveur) · `TRENCH_TITLE` · `TRENCH_ENTER_CTA` /
+`TRENCH_TRAINING_CTA` / `TRENCH_CANCEL_SEARCH` / `TRENCH_SEARCHING` · les 4 armes
+(`WEAPON_VIPERE` VIPÈRE/VIPER/VIPERA · `WEAPON_FRELON` FRELON/HORNET/CALABRONE · `WEAPON_CHACAL`
+CHACAL/JACKAL/SCIACALLO · `WEAPON_CONDOR`) · `TRENCH_ROUND(_TIE/_WON/_LOST)` · `TRENCH_HIT` ·
+`TRENCH_ESCALATION` · `TRENCH_WEAPON_CHOICE` · `TRENCH_WIN/LOSE/REPLAY/BACK` ·
+`TRENCH_DAILY_CAP` · `TRENCH_VS_BOT_NOTE` / `TRENCH_BOT_NO_WIN_REWARD` / `TRENCH_BOT_NAME` ·
+`TRENCH_EVENT_CLOSED` · `TRENCH_EVENT_LEVEL` / `TRENCH_NEXT_LEVEL` / `TRENCH_MY_RANK` /
+`TRENCH_WINS_FMT` / `TRENCH_LEADERBOARD_TITLE/_EMPTY` · `TRENCH_GRENADES/SCORE/NEXT_WEAPON/
+ARSENAL_MAX` · `TRENCH_ABANDON_*` · `TRENCH_EQUIP_HINT` / `TRENCH_TITLE_EQUIPPED` · les 3 titres
+`TITLE_TRENCH_*` (GRANATIERE/GENIERE/SIGNORE DELLE TRINCEE en IT) · `PROFILE_FIN_SRC_TRENCH`
+(ligne FINANCES de la raison ledger).
+
+### ⚠️⚠️ Pièges appris (vus en CAPTURE, invisibles au boot headless — outil `tools/preview_trench.tscn`)
+
+1. **`node.anchors_preset = X` NE S'APPLIQUE PAS en code** (commodité d'éditeur) : la MÉTHODE
+   `set_anchors_preset()` fait foi. 2. **`position` est relatif au PARENT** (elle recalcule les
+   offsets) : pour placer relativement à l'ANCRE, poser `offset_left/offset_top`. Sans ces deux
+   corrections, tout le HUD bas/centre restait ancré en haut-gauche (plaque du bas HORS ÉCRAN).
+3. **Les nœuds créés par code ont des noms auto** (`@VBoxContainer@N`) : références DIRECTES,
+   jamais `get_node("VBoxContainer/…")`. 4. **Le fond par défaut du viewport est GRIS CLAIR** :
+   une vue procédurale plein écran doit peindre JUSQU'AU bas. 5. Le soldat adverse « en miroir »
+   pendait tête en bas sous son parapet — les DEUX soldats se dessinent DEBOUT, chacun derrière
+   sa ligne de tranchée.
+
+⚠️ **VPS + client partent ENSEMBLE** (cf. `CONTRAT_RESEAU.md §8.136`).

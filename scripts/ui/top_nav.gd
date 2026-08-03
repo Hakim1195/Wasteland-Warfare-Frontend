@@ -30,6 +30,8 @@ const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const XpCoinsBarScript = preload("res://scripts/ui/xp_coins_bar.gd")
 # §8.126.1 — porteur du `static var target_tag` de l'écran Compagnie (purgé au clic sur l'onglet).
 const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
+# §8.135 — bordure de maîtrise du cadre identité (implémentation unique, cf. mastery_border.gd).
+const MasteryBorder = preload("res://scripts/ui/mastery_border.gd")
 const LOGO_TEX = preload("res://assets/images/logo_mark.svg")  # marque hex-nœuds (§8.57)
 
 # Hauteur de la bande de navigation (marges + barre + filet) — calquée sur la top-bar du menu.
@@ -219,6 +221,14 @@ func _ready() -> void:
 	# missions_loaded pour sa carte Défis et profile_history_loaded pour son héros) — évite le
 	# double fetch qu'aurait produit « chacun son appel ».
 	NetworkManager.missions_loaded.connect(_on_missions_loaded)
+	# §8.135 (LOT 0) — la réponse du claim porte DÉJÀ le nouveau solde (`coins_balance`, cf.
+	# `POST /missions/claim`) : la jauge se met à jour à cet instant, sans attendre le prochain
+	# `/auth/me`. On s'abonne ICI plutôt que dans `missions_panel` parce que la jauge appartient à la
+	# nav : n'importe quel hôte du panneau (aujourd'hui l'onglet DÉFIS du hub, demain un autre) en
+	# bénéficie sans le savoir. AUCUN appel réseau supplémentaire.
+	NetworkManager.mission_claimed.connect(_on_mission_claimed)
+	# §8.135 — bordure de MAÎTRISE du cadre identité (cf. le bloc dédié plus bas pour le coût réseau).
+	NetworkManager.profile_stats_loaded.connect(_on_profile_stats_for_mastery)
 	NetworkManager.profile_history_loaded.connect(_on_history_loaded)
 	# §8.126.1 — pastille COMPAGNIE. Route VOLONTAIREMENT minuscule (`/company/badge` : deux
 	# nombres), justement parce qu'elle part depuis TOUS les écrans hub à chaque navigation.
@@ -242,6 +252,13 @@ func _ready() -> void:
 	# d'écran (absente puis présente).
 	if not NetworkManager.events_config.is_empty():
 		_on_events_config(NetworkManager.events_config)
+	# §8.135 — bordure de maîtrise : UNE demande par SESSION, puis peinture depuis le cache statique
+	# à chaque navigation (la nav est reconstruite à chaque écran — cf. le bloc dédié plus bas).
+	if not _mastery_fetched:
+		_mastery_fetched = true
+		NetworkManager.fetch_profile_stats()
+	elif _mastery_tier_cache != "":
+		_apply_mastery_frame(_mastery_tier_cache)
 	_start_invite_poll()
 
 func _make_font() -> Font:
@@ -1267,9 +1284,36 @@ func _on_quit_confirm() -> void:
 
 # Fait DÉFILER le solde de Coins de la jauge (achat confirmé en boutique). Relais vers la brique
 # xp_coins_bar, SEULE à savoir animer ce compteur (le pattern y vit depuis le Rapport Post-Op).
+#
+# §8.135 (LOT 0) : le solde est aussi RECOPIÉ dans `_profile_data`, qui alimente le mini-profil.
+# Sans cela, la jauge disait vrai mais le mini-profil ouvert juste après annonçait encore l'ancien
+# solde (deux chiffres contradictoires à l'écran) — il ne se serait recalé qu'au prochain
+# `/auth/me`. Le mini-profil est repeint SEULEMENT s'il est ouvert (sinon il le sera à l'ouverture).
 func animate_coins(target: int) -> void:
+	target = maxi(0, target)
+	if not _profile_data.is_empty():
+		# Les deux noms : `coins_balance` (canonique) et `coins` (repli historique) sont lus l'un
+		# OU l'autre selon les endroits — laisser l'un des deux périmé rouvrirait le même écart.
+		_profile_data["coins_balance"] = target
+		_profile_data["coins"] = target
 	if _xp_bar != null and is_instance_valid(_xp_bar):
 		_xp_bar.animate_coins_to(target)
+	if _profile_flyout != null and _profile_flyout.visible:
+		_populate_profile_flyout()
+
+
+# Claim de mission réussi (§8.135, LOT 0) : `{ coins_balance, reward_paid, pass_bonus_applied }`.
+# On ne re-demande RIEN — le serveur vient de nous donner le solde d'après-claim. Le décompte animé
+# et le flash or de `xp_coins_bar` sont ceux qui existent déjà pour la boutique : une seule mise en
+# scène de « quelque chose est arrivé aux Coins » dans tout le jeu.
+func _on_mission_claimed(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	# Piège JSON float §5 : le solde arrive en float, il sert de valeur affichée → int() obligatoire.
+	# Clé absente (réponse d'un serveur antérieur) → on ne touche à rien plutôt que d'afficher 0.
+	if not data.has("coins_balance"):
+		return
+	animate_coins(int(data.get("coins_balance", 0)))
 
 
 # --- Toast de promotion de division ---------------------------------------------------------
@@ -1407,6 +1451,58 @@ func _on_profile_loaded(data: Dictionary) -> void:
 	# Si le mini-profil est ouvert au moment où le profil (re)charge, on rafraîchit son résumé.
 	if _profile_flyout != null and _profile_flyout.visible:
 		_populate_profile_flyout()
+
+
+# =========================================================
+# MAÎTRISE DE FACTION (§8.135) — bordure du cadre identité
+# =========================================================
+# SOBRE, et c'est une décision (§5.6) : le cadre identité prend la bordure de la MEILLEURE maîtrise
+# du joueur, SANS son titre. La nav est déjà dense (onglets, pastilles, jauge, ⚙, ⏻) ; y ajouter un
+# libellé la ferait déborder — c'est exactement le défaut que §8.133 a coûté cher à corriger. La
+# bordure, elle, ne prend aucune place : elle habille un cadre qui existe déjà.
+#
+# ⚠️ COÛT RÉSEAU MAÎTRISÉ. La donnée vit sur `/profile/stats` (`masteries_summary`, trié rang
+# décroissant par le serveur), que la nav n'appelait PAS — elle ne charge que `/auth/me`. On ne la
+# demande donc qu'UNE FOIS PAR SESSION (cache STATIQUE) et non à chaque écran : la nav est
+# reconstruite à CHAQUE navigation de hub, et un appel par écran pour un ornement aurait multiplié
+# le trafic de la barre par deux. Les navigations suivantes repeignent depuis le cache, sans réseau
+# — et la valeur se rafraîchit gratuitement dès que le joueur ouvre son Profil (la nav y écoute le
+# même signal).
+#
+# ⛔ Écarté délibérément : ajouter les champs à `/auth/me`. Cette route est sur le chemin critique de
+# tout le jeu, et la maîtrise y aurait ajouté la passe de purge lazy (plusieurs requêtes) à chaque
+# appel — un prix hors de proportion avec un liseré.
+static var _mastery_tier_cache: String = ""
+static var _mastery_fetched: bool = false
+var _mastery_frame: Control = null
+
+
+func _apply_mastery_frame(tier: String) -> void:
+	if _avatar_frame == null or not is_instance_valid(_avatar_frame):
+		return
+	if _mastery_frame != null and is_instance_valid(_mastery_frame):
+		_mastery_frame.queue_free()
+		_mastery_frame = null
+	if tier == "":
+		return
+	_mastery_frame = MasteryBorder.make(tier, 0.0)
+	_mastery_frame.custom_minimum_size = Vector2.ZERO
+	_mastery_frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_avatar_frame.add_child(_mastery_frame)
+
+
+func _on_profile_stats_for_mastery(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	var rows = data.get("masteries_summary", [])
+	# Première ligne = meilleur rang (tri SERVEUR) : la nav ne trie rien, elle prend la tête.
+	# Réponse sans le bloc (serveur non redéployé) → "" : le cadre reste nu, jamais d'ornement
+	# inventé. Écrasement SYSTÉMATIQUE : perdre une maîtrise (purge) doit retirer la bordure.
+	if typeof(rows) == TYPE_ARRAY and not rows.is_empty() and typeof(rows[0]) == TYPE_DICTIONARY:
+		_mastery_tier_cache = str(rows[0].get("border_tier", ""))
+	else:
+		_mastery_tier_cache = ""
+	_apply_mastery_frame(_mastery_tier_cache)
 
 # Historique (/profile/history, le plus récent d'abord) : la 1re entrée valide donne la DERNIÈRE
 # faction jouée → alimente la ligne « faction de prédilection » du mini-profil.
