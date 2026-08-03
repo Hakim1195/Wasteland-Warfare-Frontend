@@ -46,6 +46,9 @@ const EventsScreen = preload("res://scripts/ui/events_screen.gd")
 # §8.134 — UN SEUL afficheur de temps dans tout le hub (carte du QG + les 4 onglets du hub) : même
 # format, même seconde de bascule, même couleur d'urgence. C'est ça, la cohérence.
 const CountdownLabel = preload("res://scripts/ui/countdown_label.gd")
+# §8.134.1 — SOURCE UNIQUE des lignes d'effet : la carte du QG en montre un APERÇU, le modal du hub
+# la liste complète. Deux formulations auraient fini par se contredire.
+const EventRulesModal = preload("res://scripts/ui/event_rules_modal.gd")
 # Héros 3D (SubViewport transparent) — remplace le portrait 2D quand la faction a un .glb riggé.
 # Préchargé (pas de class_name, par prudence vis-à-vis du cache d'import, cf. WarzoneUI).
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
@@ -218,39 +221,71 @@ func _ready() -> void:
 
 
 # =========================================================
-# CARTE ÉVÉNEMENT DU QG (§8.132, DÉPLACÉE §8.134) — carte latérale, en tête de colonne
+# CARTE ÉVÉNEMENT DU QG (§8.132, DÉPLACÉE §8.134, REFONDUE §8.134.1) — colonne DROITE
 # =========================================================
 # Le QG est le seul écran que TOUS les joueurs traversent : c'est là que se joue « je découvre
-# qu'il se passe quelque chose ». La bannière §8.132, posée sous la rangée de cartes de mode,
-# occupait la largeur de l'écran pour une seule ligne d'information et se lisait comme un bandeau
-# publicitaire. Elle devient une CARTE de la colonne latérale, au MÊME gabarit que « TOP JOUEURS »
-# et « DÉFIS EN COURS », et en PREMIÈRE position : c'est la plus datée des trois, donc la plus
-# urgente à voir.
+# qu'il se passe quelque chose ». Deux formes ont été écartées :
+#   • §8.132 — bannière pleine largeur SOUS les cartes de mode : une seule ligne d'information
+#     étalée sur 1800 px, qui se lisait comme un bandeau publicitaire ;
+#   • §8.134 (1ʳᵉ version) — petite carte glissée en tête de la colonne de GAUCHE : elle tenait
+#     dans le gabarit des voisines mais n'avait la place que d'un titre et d'un rebours.
+# Forme retenue (décision Hakim, 2026-08-03) : une COLONNE DROITE dédiée, et une carte HAUTE, la
+# seule de l'écran à porter une illustration. Elle doit donner envie d'ouvrir le hub, pas seulement
+# signaler qu'il existe.
 #
-# ⚠️⚠️ CONTRADICTION DU BRIEF, TRANCHÉE PAR LE CODE (règle §8.131). Le chantier demandait une
-# « carte latérale DROITE, même colonne que TOP JOUEURS / DÉFIS EN COURS ». Ces deux cartes vivent
-# en réalité dans `Hud/Shell/MidRow/LeftColumn` — la colonne de GAUCHE. Les deux exigences sont
-# donc incompatibles ; on retient la plus précise et la plus répétée (« MÊME colonne », « EN
-# PREMIER dans la colonne »), qui préserve l'unité de la colonne d'information. Déplacer les trois
-# cartes à droite reste un geste d'une ligne le jour où Hakim tranche autrement.
+# ANATOMIE (dans cet ordre — chaque élément a été demandé nommément) :
+#   illustration ▸ sur-titre (TYPE) ▸ TITRE ▸ sous-titre (description) ▸ APERÇU (les effets réels)
+#   ▸ compte à rebours ▸ bouton « VOIR L'ÉVÉNEMENT ».
 #
-# ⚠️ AUCUN RE-PARENTAGE, AUCUNE TOUCHE AU `.tscn` : on insère dans `LeftColumn` par
-# `move_child`, `challenges_content`/`leaderboard_content` gardent leurs NodePath exportés (piège
-# maison — un reparentage casse les `%NomUnique` et les NodePath de scène).
+# ⚠️ L'APERÇU N'EST PAS RÉÉCRIT ICI : il vient de `EventRulesModal.rule_lines(rules)`, la MÊME
+# fonction qui alimente le modal de règles du hub. Une seconde formulation des effets aurait fini
+# par contredire la première — et c'est exactement ce que le joueur vérifierait en cliquant.
+#
+# ⚠️ AUCUN RE-PARENTAGE, AUCUNE TOUCHE AU `.tscn` : on AJOUTE une colonne à `MidRow` (après le
+# `CenterSpacer`, donc à droite). `LeftColumn` et ses deux cartes ne bougent pas d'un pixel, et
+# `challenges_content`/`leaderboard_content` gardent leurs NodePath exportés (piège maison — un
+# reparentage casse les `%NomUnique` et les NodePath de scène).
 #
 # CONTENU = `featured_id`, calculé SERVEUR (§8.134). Le client ne classe RIEN : il cherche l'entrée
 # qui porte cet id parmi les actifs puis les à-venir, et l'affiche. Une règle de vedette dupliquée
 # ici aurait fini par montrer autre chose que le hub.
-#
-# Clic → le HUB, à l'onglet correspondant au TYPE de l'événement vedette.
+
+# Largeur de la colonne droite. Plus large que `LeftColumn` (340) : cette carte porte une
+# illustration et trois lignes d'aperçu, là où les voisines n'alignent que du texte court.
+const EVENT_COLUMN_W := 380.0
+# Hauteur de l'illustration. ~46 % de la largeur : un bandeau panoramique, pas une vignette.
+const EVENT_ART_H := 172.0
+# Nombre d'effets montrés en aperçu. Au-delà, on n'aperçoit plus, on lit — et c'est le rôle du hub.
+const EVENT_PREVIEW_MAX := 3
+
 var _event_card: Control = null
 var _event_countdown: Node = null
+var _event_column: VBoxContainer = null
+
+
+# Colonne DROITE, créée à la demande et une seule fois. Ajoutée en DERNIER dans `MidRow`, donc
+# après le `CenterSpacer` qui s'étire : elle se colle au bord droit, symétrique de `LeftColumn`.
+func _ensure_event_column() -> VBoxContainer:
+	if _event_column != null and is_instance_valid(_event_column):
+		return _event_column
+	if challenges_content == null:
+		return null
+	var left := challenges_content.get_parent().get_parent()   # ChallengesCard -> LeftColumn
+	if left == null or left.get_parent() == null:
+		return null
+	_event_column = VBoxContainer.new()
+	_event_column.name = "RightColumn"
+	_event_column.custom_minimum_size = Vector2(EVENT_COLUMN_W, 0)
+	_event_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_event_column.add_theme_constant_override("separation", 14)
+	left.get_parent().add_child(_event_column)                 # MidRow, en dernier → à droite.
+	return _event_column
 
 
 func _on_events_config(data: Dictionary) -> void:
-	if not is_inside_tree() or challenges_content == null:
+	if not is_inside_tree():
 		return
-	var column := challenges_content.get_parent().get_parent()   # ChallengesCard -> LeftColumn
+	var column := _ensure_event_column()
 	if column == null:
 		return
 
@@ -266,11 +301,16 @@ func _on_events_config(data: Dictionary) -> void:
 		# « SYNCHRONISATION… » se lit comme « ça arrive ». Jamais de contenu inventé (§9.5).
 		featured = {"__syncing": true}
 
-	_event_card = _make_event_card(featured)
+	_event_card = _make_event_card(featured, _as_dict(data.get("character", {})))
 	column.add_child(_event_card)
-	column.move_child(_event_card, 0)   # EN PREMIER dans la colonne (décision produit).
-	# Encoches biseautées, comme les deux cartes voisines (ADN angulaire §2) : sans elles, la carte
-	# ÉVÉNEMENT jurait dans la colonne — constat de relecture de capture.
+	column.move_child(_event_card, 0)   # EN PREMIER dans la colonne.
+	# Talon extensible SOUS la carte : la carte garde sa hauteur naturelle et reste ancrée EN HAUT,
+	# au lieu d'être étirée sur toute la colonne par le `SIZE_EXPAND_FILL` de celle-ci.
+	var tail := Control.new()
+	tail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(tail)
+	# Encoches biseautées, comme les cartes de la colonne gauche (ADN angulaire §2).
 	WarzoneUI.add_corner_notches(_event_card)
 
 
@@ -313,7 +353,7 @@ func _tab_for_type(type_id: String) -> String:
 			return "matches"
 
 
-func _make_event_card(event: Dictionary) -> Control:
+func _make_event_card(event: Dictionary, character: Dictionary) -> Control:
 	var syncing := bool(event.get("__syncing", false))
 	# ACTIF = la fenêtre a déjà commencé. On le déduit de l'epoch de début plutôt que d'un drapeau :
 	# la même entrée sert d'« actif » et d'« à venir » selon l'heure qu'il est.
@@ -322,63 +362,240 @@ func _make_event_card(event: Dictionary) -> Control:
 	var accent: Color = GOLD if is_active else ACCENT
 	var type_id := str(event.get("type", "match"))
 
-	var btn := Button.new()
-	btn.focus_mode = Control.FOCUS_NONE
-	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var card := PanelContainer.new()
+	card.name = "EventCard"
 	var st := StyleBoxFlat.new()
-	st.bg_color = Color(SURFACE, 0.82)
+	st.bg_color = Color(SURFACE, 0.88)
 	st.set_corner_radius_all(0)
 	st.set_border_width_all(1)
 	st.border_width_left = 3          # après set_border_width_all, sinon écrasé.
 	st.border_color = Color(MUTED, 0.6) if syncing else accent
-	st.set_content_margin_all(16.0)
-	var hover := st.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(accent, 0.12)
-	btn.add_theme_stylebox_override("normal", st)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
-	btn.add_theme_stylebox_override("focus", st)
-	WarzoneUI.wire_button_sfx(btn)
-	btn.pressed.connect(func() -> void:
-		EventsScreen.target_tab = _tab_for_type(type_id)
-		_go("res://scenes/ui/events.tscn"))
+	st.content_margin_left = 16.0
+	st.content_margin_right = 16.0
+	st.content_margin_top = 0.0       # l'illustration monte JUSQU'AU bord haut de la carte.
+	st.content_margin_bottom = 16.0
+	card.add_theme_stylebox_override("panel", st)
 
-	# Contenu posé PAR-DESSUS le bouton (un Button n'est pas un conteneur de mise en page), en
-	# plein cadre et transparent aux clics → tout le pavé reste cliquable.
 	var box := VBoxContainer.new()
-	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	box.offset_left = 16.0
-	box.offset_top = 12.0
-	box.offset_right = -16.0
-	box.offset_bottom = -12.0
-	box.add_theme_constant_override("separation", 4)
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(box)
+	box.add_theme_constant_override("separation", 6)
+	card.add_child(box)
 
 	if syncing:
+		box.add_child(_spacer_v(16))
 		box.add_child(_event_label(_tr_key("NAV_EVENTS"), 12, MUTED))
 		box.add_child(_event_label(_tr_key("COMMON_SYNCING"), 18, MUTED))
-		btn.custom_minimum_size = Vector2(0, 92)
-		return btn
+		return card
 
-	# Sur-titre = TYPE (« ÉVÉNEMENT — PARTIES »). C'est lui qui rattache visuellement la carte à
-	# l'onglet où le clic va atterrir.
+	# --- ILLUSTRATION -------------------------------------------------------------------------
+	# Débordée de 16 px de chaque côté pour aller d'un bord à l'autre de la carte, malgré les
+	# marges de contenu du panneau : une image à bords perdus fait « affiche », une image encadrée
+	# fait « vignette de liste ».
+	var art := _event_art(event, character, accent)
+	art.add_theme_constant_override("margin_left", -16)
+	art.add_theme_constant_override("margin_right", -16)
+	box.add_child(art)
+
+	# --- SUR-TITRE (type) : rattache visuellement la carte à l'onglet où le clic va atterrir ---
 	box.add_child(_event_label(_tr_key(_eyebrow_key(type_id)), 12, accent))
-	var title := _event_label(_tr_key(str(event.get("name_key", ""))).to_upper(), 20, TEXT)
+
+	# --- TITRE ---------------------------------------------------------------------------------
+	var title := _event_label(_tr_key(str(event.get("name_key", ""))).to_upper(), 24, TEXT)
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.max_lines_visible = 2                     # 2 lignes MAX, puis ellipsis (gabarit de colonne).
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	box.add_child(title)
 
-	_event_countdown = CountdownLabel.make(17, accent)
+	# --- SOUS-TITRE : la description de l'événement, telle que le serveur la nomme --------------
+	var subtitle := _event_label(_tr_key(str(event.get("desc_key", ""))), 13, MUTED)
+	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	subtitle.max_lines_visible = 3
+	subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	box.add_child(subtitle)
+
+	# --- APERÇU : ce que l'événement CHANGE vraiment -------------------------------------------
+	var preview := _event_preview_lines(event, character)
+	if not preview.is_empty():
+		box.add_child(_spacer_v(2))
+		WarzoneUI.add_filet(box)
+		box.add_child(_event_label(_tr_key("EVENT_PREVIEW_TITLE"), 12, accent))
+		for line in preview:
+			var row := _event_label("❯  " + str(line), 13, TEXT)
+			row.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			box.add_child(row)
+
+	# --- COMPTE À REBOURS ----------------------------------------------------------------------
+	box.add_child(_spacer_v(4))
+	_event_countdown = CountdownLabel.make(19, accent)
 	box.add_child(_event_countdown)
 	_event_countdown.set_target(int(event.get("ends_at_epoch", 0)) if is_active else starts,
 		"COUNTDOWN_ENDS_IN" if is_active else "COUNTDOWN_STARTS_IN")
 	# La fenêtre vient de basculer (début OU fin) : on redemande la configuration au lieu d'afficher
 	# un rebours figé. Réponse mémoïsée 60 s côté serveur.
 	_event_countdown.expired.connect(func() -> void: NetworkManager.fetch_events())
-	btn.custom_minimum_size = Vector2(0, 118)
-	return btn
+
+	# --- CTA ------------------------------------------------------------------------------------
+	var cta := Button.new()
+	cta.text = _tr_key("EVENT_VIEW_CTA")
+	cta.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	cta.focus_mode = Control.FOCUS_NONE
+	cta.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	cta.custom_minimum_size = Vector2(0, 46)
+	cta.add_theme_font_override("font", _font)
+	cta.add_theme_font_size_override("font_size", 15)
+	WarzoneUI.apply_ghost_button(cta)
+	cta.add_theme_color_override("font_color", accent)
+	WarzoneUI.wire_button_sfx(cta)
+	cta.pressed.connect(func() -> void:
+		EventsScreen.target_tab = _tab_for_type(type_id)
+		_go("res://scenes/ui/events.tscn"))
+	box.add_child(_spacer_v(4))
+	box.add_child(cta)
+	return card
+
+
+# APERÇU de l'événement — les effets RÉELS, jamais une paraphrase.
+#   • `match`/`bonus` : les lignes de règles du snapshot serveur, via la MÊME fonction que le modal
+#     du hub (`EventRulesModal.rule_lines`) → aucune seconde formulation à maintenir ;
+#   • `character`    : le personnage offert et le crédit de parties restant, qui SONT le contenu
+#     de cet événement-là (son snapshot de règles est neutre par construction).
+func _event_preview_lines(event: Dictionary, character: Dictionary) -> Array:
+	if str(event.get("type", "match")) == "character":
+		var out: Array = []
+		var faction = _resolve_faction(str(character.get("faction_id", "")))
+		if faction != null and faction.get("name") != null:
+			out.append(str(faction.name).to_upper())
+		var left = character.get("free_games_left", null)
+		if left == null:
+			out.append(_tr_key("EVENT_FACTION_OWNED"))
+		else:
+			out.append(_tr_key("EVENT_FREE_GAMES_LEFT")
+				% [int(left), int(character.get("free_games_max", 0))])
+		return out
+	var rules = event.get("rules", {})
+	var lines: Array = EventRulesModal.rule_lines(rules if typeof(rules) == TYPE_DICTIONARY else {})
+	if lines.is_empty():
+		# Un événement peut ne RIEN changer aux règles — un tournoi `bonus`, ou MOISSON qui ne
+		# touche que les gains. On le DIT, avec la clé que le modal du hub emploie déjà pour ce cas
+		# exact : une section d'aperçu vide ferait douter du chargement, et deux formulations du
+		# même « rien » finiraient par diverger.
+		return [_tr_key("EVENT_RULE_NONE")]
+	return lines.slice(0, EVENT_PREVIEW_MAX)
+
+
+# =========================================================
+# ILLUSTRATION DE L'ÉVÉNEMENT (§8.134.1)
+# =========================================================
+# ⚠️ LE DÉPÔT N'A AUCUN VISUEL D'ÉVÉNEMENT (vérifié : `assets/images/` ne contient que les fonds,
+# la marque et les portraits de héros ; `board_bg.png` est une mappemonde aux couleurs vives, hors
+# charte). Trois sources, de la plus fidèle à la plus dégradée — et AUCUNE image inventée :
+#   1. `res://assets/images/events/<event_id>.png` — CONVENTION : déposer un PNG nommé comme l'id
+#      de l'événement l'affiche, sans une ligne de code ni de registre à toucher ;
+#   2. type `character` → le PORTRAIT du héros de la faction offerte (asset RÉEL, déjà au dépôt) ;
+#   3. à défaut, un visuel DESSINÉ à la charte : plaque gunmetal, rayures diagonales d'accent et
+#      filigrane de la marque hex (`logo_mark.svg` — `logo_ww.png` reste proscrit en filigrane).
+#      Même parti pris que le `PowerGlyph` de la nav : quand l'asset manque, on dessine.
+const EVENT_ART_DIR := "res://assets/images/events/"
+
+
+func _event_art(event: Dictionary, character: Dictionary, accent: Color) -> MarginContainer:
+	var wrap := MarginContainer.new()
+	wrap.custom_minimum_size = Vector2(0, EVENT_ART_H)
+	wrap.clip_contents = true                       # une image à bords perdus ne bave pas dehors.
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var tex := _event_texture(event, character)
+	if tex != null:
+		var rect := TextureRect.new()
+		rect.texture = tex
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.add_child(rect)
+	else:
+		wrap.add_child(HazardPlate.new_with(accent))
+
+	# Voile sombre en dégradé vers le bas : quelle que soit l'image, le sur-titre qui suit reste
+	# lisible et la carte garde son unité gunmetal.
+	var veil := TextureRect.new()
+	veil.texture = _veil_texture()
+	veil.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	veil.stretch_mode = TextureRect.STRETCH_SCALE
+	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(veil)
+
+	# Filet d'accent en pied d'illustration (charte §2) — la couture entre l'image et le texte.
+	var line := ColorRect.new()
+	line.color = Color(accent, 0.85)
+	line.custom_minimum_size = Vector2(0, 2)
+	line.size_flags_vertical = Control.SIZE_SHRINK_END
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(line)
+	return wrap
+
+
+func _event_texture(event: Dictionary, character: Dictionary) -> Texture2D:
+	# 1. Illustration dédiée, par CONVENTION de nommage (aucune n'existe aujourd'hui).
+	var event_id := str(event.get("id", ""))
+	if event_id != "":
+		var path := EVENT_ART_DIR + event_id + ".png"
+		if ResourceLoader.exists(path):
+			return load(path) as Texture2D
+	# 2. Événement de PERSONNAGE : le portrait du héros offert cette semaine.
+	if str(event.get("type", "")) == "character":
+		var faction = _resolve_faction(str(character.get("faction_id", "")))
+		if faction != null and faction.get("hero_path") != null:
+			var hero := str(faction.get("hero_path"))
+			if hero != "" and ResourceLoader.exists(hero):
+				return load(hero) as Texture2D
+	return null
+
+
+# Dégradé transparent → gunmetal, généré une fois et mis en cache (2 px de large suffisent : le
+# TextureRect l'étire). Aucune ressource sur disque, aucun `.import` à toucher.
+static var _veil_cache: Texture2D = null
+
+
+static func _veil_texture() -> Texture2D:
+	if _veil_cache != null:
+		return _veil_cache
+	var h := 64
+	var img := Image.create(2, h, false, Image.FORMAT_RGBA8)
+	for y in range(h):
+		# Courbe quadratique : quasi transparent en haut, franc en bas — le texte gagne son fond
+		# sans que l'image paraisse « salie » sur sa moitié haute.
+		var t := float(y) / float(h - 1)
+		var a := clampf(t * t * 1.15, 0.0, 0.92)
+		for x in range(2):
+			img.set_pixel(x, y, Color(0.058824, 0.07451, 0.094118, a))
+	_veil_cache = ImageTexture.create_from_image(img)
+	return _veil_cache
+
+
+# Visuel de REPLI dessiné à la charte : rayures diagonales d'accent + filigrane de la marque hex.
+class HazardPlate extends Control:
+	const MARK := preload("res://assets/images/logo_mark.svg")
+	var accent: Color = Color(0.211765, 0.772549, 0.85098, 1)
+
+	static func new_with(color: Color) -> HazardPlate:
+		var p := HazardPlate.new()
+		p.accent = color
+		p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return p
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.058824, 0.07451, 0.094118, 1.0))
+		# Rayures à 45°, pas de 26 px — le motif « zone d'opération » de la charte militaire.
+		var step := 26.0
+		var x := -h
+		while x < w + h:
+			draw_line(Vector2(x, h), Vector2(x + h, 0.0), Color(accent, 0.10), 9.0)
+			x += step
+		# Filigrane de la marque, centré et discret (⛔ jamais `logo_ww.png` en filigrane, §8.121).
+		var side := minf(w, h) * 0.62
+		draw_texture_rect(MARK, Rect2((size - Vector2(side, side)) * 0.5, Vector2(side, side)),
+			false, Color(accent, 0.22))
 
 
 func _eyebrow_key(type_id: String) -> String:
@@ -389,6 +606,13 @@ func _eyebrow_key(type_id: String) -> String:
 			return "EVENTS_EYEBROW_BONUS"
 		_:
 			return "EVENTS_EYEBROW_MATCH"
+
+
+func _spacer_v(h: int) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(0, h)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return c
 
 
 func _event_label(text: String, font_size: int, color: Color,

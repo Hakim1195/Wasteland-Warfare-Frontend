@@ -3753,26 +3753,60 @@ or ; (2) sinon opération `match` active → `●` seul ; (3) sinon rien.
 pastille toujours allumée est une pastille morte, et le jour où un vrai mutateur tourne elle
 n'apprend plus rien. D'où la lecture de `active_event` (les `match` seuls) et non de la liste v2.
 
-**Carte ÉVÉNEMENT du QG.** Quitte le `Shell` (elle y était pleine largeur, sous les cartes de mode,
-et se lisait comme un bandeau) pour la **colonne des cartes latérales**, **en première position**
-(la plus datée des trois). Eyebrow = type, titre 2 lignes max + ellipsis, `countdown_label` en
-évidence, liseré gauche 3 px (or = actif, cyan = à venir), encoches de charte, clic → hub **au bon
-onglet**. Contenu = `featured_id` **serveur** ; sans réseau, carte « SYNCHRONISATION… » (jamais de
-mock non étiqueté, jamais de carte absente). L'ancienne bannière est **supprimée**.
-⚠️⚠️ **Contradiction du brief tranchée par le code (§8.131)** : le chantier demandait une « carte
-latérale **DROITE**, même colonne que TOP JOUEURS / DÉFIS EN COURS ». Ces deux cartes vivent dans
-`Hud/Shell/MidRow/`**`LeftColumn`** — la colonne de GAUCHE. Les deux exigences sont incompatibles ;
-on retient la plus précise et la plus répétée (« MÊME colonne », « EN PREMIER dans la colonne »),
-qui préserve l'unité de la colonne d'information. Déplacer les trois cartes à droite reste un geste
-d'une ligne le jour où Hakim tranche autrement.
-Aucun re-parentage : insertion par `move_child`, les NodePath exportés sont intacts.
+**Carte ÉVÉNEMENT du QG — colonne DROITE dédiée (arbitrage Hakim, 2026-08-03).** Deux formes ont
+été écartées avant celle-ci : la bannière §8.132 pleine largeur sous les cartes de mode (une ligne
+d'information étalée sur 1800 px, lue comme un bandeau publicitaire), puis une petite carte en tête
+de la colonne de GAUCHE — elle tenait dans le gabarit des voisines mais n'avait la place que d'un
+titre et d'un rebours.
+⚠️ **La contradiction du brief a été tranchée par Hakim, pas par le code** : le chantier demandait
+« carte latérale DROITE, **même colonne** que TOP JOUEURS / DÉFIS EN COURS » — or ces deux cartes
+vivent dans `Hud/Shell/MidRow/`**`LeftColumn`**. C'est **DROITE** qui l'emporte, dans une **colonne
+neuve** : `RightColumn` (380 px) est ajoutée à `MidRow` **après le `CenterSpacer`**, donc collée au
+bord droit, symétrique de `LeftColumn`. Les deux cartes de gauche ne bougent pas d'un pixel.
 
-> **Contre-épreuves comportementales (77 vérifications, 2 sabotages).**
+Anatomie, dans l'ordre — chaque élément a été demandé nommément :
+**illustration ▸ sur-titre (TYPE) ▸ TITRE ▸ sous-titre (description) ▸ APERÇU ▸ compte à rebours ▸
+bouton « VOIR L'ÉVÉNEMENT »**. C'est la seule carte de l'écran à porter une image : elle doit donner
+envie d'ouvrir le hub, pas seulement signaler qu'il existe.
+
+⚠️ **L'APERÇU n'est pas réécrit** : il vient de `EventRulesModal.rule_lines(rules)`, la MÊME
+fonction qui alimente le modal du hub — une seconde formulation des effets aurait fini par
+contredire la première, et c'est exactement ce que le joueur vérifierait en cliquant. Borné à
+**3 lignes** (au-delà on n'aperçoit plus, on lit). Un événement sans effet mécanique (tournoi
+`bonus`, MOISSON) affiche `EVENT_RULE_NONE` — la clé que le modal emploie déjà pour ce cas : une
+section d'aperçu vide ferait douter du chargement. Pour un événement `character`, l'aperçu porte la
+faction offerte et le crédit de parties, qui **sont** le contenu de cet événement-là (son snapshot
+de règles est neutre par construction).
+
+⚠️⚠️ **AUCUN VISUEL D'ÉVÉNEMENT N'EXISTE AU DÉPÔT** (vérifié : `assets/images/` ne contient que les
+fonds, la marque et les portraits de héros ; `board_bg.png` est une mappemonde aux couleurs vives,
+totalement hors charte). Trois sources, de la plus fidèle à la plus dégradée, **sans jamais inventer
+d'image** :
+1. `res://assets/images/events/<event_id>.png` — **CONVENTION** : déposer un PNG nommé comme l'id de
+   l'événement l'affiche, **sans une ligne de code ni de registre à toucher**. Aucun n'existe
+   aujourd'hui ; c'est le point d'entrée pour le pipeline d'illustrations.
+2. type `character` → le **portrait du héros** de la faction offerte (asset RÉEL, déjà au dépôt).
+3. à défaut → visuel **DESSINÉ à la charte** (`HazardPlate`) : plaque gunmetal, rayures diagonales
+   d'accent à 45°, filigrane de la marque hex (`logo_mark.svg` — `logo_ww.png` reste proscrit en
+   filigrane, §8.121). Même parti pris que le `PowerGlyph` de la nav : **quand l'asset manque, on
+   dessine**, on ne laisse pas un trou et on ne détourne pas un asset hors charte.
+Un voile en dégradé (généré en mémoire, 2×64 px, aucun `.import`) assombrit le bas de
+l'illustration : quelle que soit l'image, le sur-titre reste lisible et la carte garde son unité.
+
+Contenu = `featured_id` **serveur** ; sans réseau, carte « SYNCHRONISATION… » (jamais de mock non
+étiqueté, jamais de carte absente). L'ancienne bannière est **supprimée**.
+Aucun re-parentage, aucune touche au `.tscn` : la colonne est ajoutée par code, et
+`challenges_content`/`leaderboard_content` gardent leurs NodePath exportés.
+
+> **Contre-épreuves comportementales (102 vérifications, 2 sabotages).**
 > Hub — **35 ✅** : les 4 cas de contenu, onglet BONUS vide, compteur `N/5` **vs** « FACTION
 > POSSÉDÉE » (aucun `0/5` mensonger), 4 deep-links atterrissant sur le bon onglet + `target_tab`
 > purgé, panneau DÉFIS non reconstruit par des `_render()` successifs, bascule FR→EN à chaud.
-> QG — **42 ✅** : les 4 cas de vedette + repli hors ligne, carte **première** dans la colonne, au
-> gabarit, route vers le bon onglet, **aucune bannière legacy** résiduelle.
+> QG — **67 ✅** : les 4 cas de vedette + repli hors ligne, carte **première** dans la `RightColumn`,
+> colonne bien **dernière de `MidRow`** (donc à droite), `LeftColumn` **intacte** (2 cartes +
+> spacer), carte **haute (≥ 380 px)**, anatomie complète vérifiée pièce par pièce (illustration,
+> sur-titre, titre, sous-titre, aperçu à chevrons borné à 3, rebours, bouton), aperçu `character`
+> = crédit de parties, route vers le bon onglet, **aucune bannière legacy** résiduelle.
 > Les deux sabotages (pastille effacée / carte supprimée) font bien passer les scripts au ROUGE.
 >
 > 🐛 **Faux positif corrigé dans le test lui-même** : un `Control` en auto-traduction garde la
