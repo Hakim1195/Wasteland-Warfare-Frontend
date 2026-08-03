@@ -39,6 +39,17 @@ const NAV_H := 100.0
 # Extraites en constante depuis §8.133 : la mesure de débordement en a besoin, et deux chiffres 40
 # recopiés auraient fini par diverger de la mise en page réelle.
 const NAV_MARGIN_X := 40.0
+# Marge BASSE interne de la bande : l'espace que le contenu de la nav laisse sous lui avant le
+# filet cyan. Extraite en constante (§8.134.1) parce qu'elle sert désormais DEUX fois — ici, et
+# comme respiration des écrans hôtes (ci-dessous).
+const NAV_MARGIN_BOTTOM := 10.0
+# Hauteur à laquelle un écran qui aligne son contenu EN HAUT doit commencer (le QG). Un écran qui
+# démarre exactement à `NAV_H` vient s'ADOSSER au filet : ses cartes touchent la ligne, sans un
+# pixel de respiration, là où la nav s'en accorde une au-dessus. On rend donc la même respiration
+# en dessous — l'écran n'a aucun chiffre à deviner, et la relation survit à un changement de NAV_H.
+# ⚠️ Ne concerne QUE les écrans à contenu haut : les autres centrent leur panneau (CenterContainer
+# + `offset_top = NAV_H`) et ont déjà tout l'espace du monde.
+const NAV_CONTENT_TOP := NAV_H + NAV_MARGIN_BOTTOM
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
 # Côté de l'avatar Steam (§8.114) : calé sur la hauteur du bloc eyebrow + pseudo pour que le cadre
 # identité garde exactement sa hauteur actuelle — l'ajout ne doit pas décaler la barre de navigation.
@@ -246,7 +257,7 @@ func _build() -> void:
 	margin.add_theme_constant_override("margin_left", int(NAV_MARGIN_X))
 	margin.add_theme_constant_override("margin_right", int(NAV_MARGIN_X))
 	margin.add_theme_constant_override("margin_top", 18)
-	margin.add_theme_constant_override("margin_bottom", 10)
+	margin.add_theme_constant_override("margin_bottom", int(NAV_MARGIN_BOTTOM))
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(margin)
 
@@ -692,6 +703,17 @@ func _set_overflow_count(n: int) -> void:
 	_tabs_box.update_minimum_size()
 
 
+# Une PASTILLE vient d'apparaître ou de disparaître (§8.134.2) : « ÉVÉNEMENTS » devient
+# « ÉVÉNEMENTS ●3 », l'onglet s'élargit, et la rangée peut cesser de tenir. Les réponses réseau
+# arrivent APRÈS `_build()`, donc après le seul `_relayout()` de la construction — sans ce rappel,
+# une barre calculée juste à la construction déborde dès que les pastilles se posent.
+# ⚠️ Pas de récursion : `_relayout()` appelle `_set_overflow_count()` → `_refresh_overflow_menu()`,
+# qui ne rappelle rien. Le sens de la dépendance est à sens unique.
+func _badges_changed() -> void:
+	_refresh_overflow_menu()
+	_relayout()
+
+
 # (Re)peuple le popup. Le libellé est celui de l'onglet TEL QU'IL EST à cet instant — pastille
 # comprise : une mission réclamable reste visible même quand DÉFIS a basculé dans le menu.
 func _refresh_overflow_menu() -> void:
@@ -735,7 +757,8 @@ func _on_missions_loaded(data: Dictionary) -> void:
 	_update_missions_badge()
 	_update_events_badge()
 	# §8.133 — l'onglet peut être dans le menu « ••• » : sa pastille doit y suivre.
-	_refresh_overflow_menu()
+	# §8.134.2 — et la barre se re-mesure : une pastille élargit l'onglet.
+	_badges_changed()
 
 func _update_missions_badge() -> void:
 	if _missions_tab_btn == null or not is_instance_valid(_missions_tab_btn):
@@ -766,7 +789,7 @@ func _on_company_badge(data: Dictionary) -> void:
 	_company_unread = int(data.get("unread", 0))
 	_company_online = int(data.get("online", 0))
 	_update_company_badge()
-	_refresh_overflow_menu()   # §8.133 — la pastille suit l'onglet jusque dans le menu « ••• ».
+	_badges_changed()   # §8.133/§8.134.2 — pastille suivie au menu « ••• », ET barre re-mesurée.
 	var invite = data.get("invite", {})
 	_show_company_invite(invite if typeof(invite) == TYPE_DICTIONARY else {})
 
@@ -905,7 +928,7 @@ func _on_events_config(data: Dictionary) -> void:
 	var active = data.get("active_event", {})
 	_event_active = typeof(active) == TYPE_DICTIONARY and not active.is_empty()
 	_update_events_badge()
-	_refresh_overflow_menu()   # §8.133 — la pastille suit l'onglet jusque dans le menu « ••• ».
+	_badges_changed()   # §8.133/§8.134.2 — pastille suivie au menu « ••• », ET barre re-mesurée.
 
 func _update_events_badge() -> void:
 	if _events_tab_btn == null or not is_instance_valid(_events_tab_btn):

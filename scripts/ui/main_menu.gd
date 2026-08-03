@@ -156,6 +156,15 @@ func _ready() -> void:
 	_style_cta(play_button)
 	if play_button: play_button.pressed.connect(_on_play_pressed)
 
+	# --- Respiration sous la barre de navigation (§8.134.1) ---
+	# Le `.tscn` cale le Hud à 100 px, soit EXACTEMENT `NAV_H` : les cartes des colonnes venaient
+	# donc s'adosser au filet cyan, sans un pixel d'air. On repose la marge haute depuis la nav
+	# elle-même (`NAV_CONTENT_TOP`), pour que le contenu respire autant SOUS le filet que le contenu
+	# de la nav respire AU-DESSUS — et pour que la relation survive à un changement de `NAV_H`.
+	var hud := get_node_or_null("Hud") as MarginContainer
+	if hud != null:
+		hud.add_theme_constant_override("margin_top", int(TopNav.NAV_CONTENT_TOP))
+
 	# --- Cartes de mode (bas-centre) ---
 	_build_mode_cards()
 

@@ -3676,10 +3676,8 @@ réglage.
    partant de la GAUCHE et **jamais l'actif**, basculent un par un dans un menu **« ••• »** en fin
    de pilule (entrées navigables, **pastilles comprises** — texte composé). `_relayout()` repart
    toujours du palier 0 : la dégradation est **réversible** sans rien recliquer.
-3. **Confirmation à rebours 10 s** (`settings.gd`) — « CONSERVER CETTE ÉCHELLE ? » ; sans
-   confirmation ou sur **ÉCHAP**, retour à la valeur précédente. ⚠️ ÉCHAP est traité dans `_input`
-   et non `_unhandled_input` : la nav, montée APRÈS l'écran, capte l'ÉCHAP pour ramener au QG et
-   emporterait le joueur hors des Paramètres avec une échelle non confirmée sur les bras.
+3. ~~**Confirmation à rebours 10 s**~~ — **RETIRÉE en §8.134.2 : c'était un DÉFAUT.** Voir
+   ci-dessous.
 
 > **Contre-épreuve (12 cases × 4 assertions, + sabotage).** ⚠️⚠️ **La première version du script
 > était VERTE SANS RIEN TESTER** : en headless, `get_window().size = …` est un **NO-OP** — le
@@ -3695,6 +3693,59 @@ réglage.
 > reposait la préférence du joueur** entre l'ordre et la prise. Comportement VOULU en production ;
 > pour la capture on débranche son écoute (et surtout **pas** via `set_comfort`, qui écrirait dans
 > le `settings.cfg` du joueur).
+
+---
+
+## §8.134.2 — L'ÉCHELLE QUI NE TENAIT PAS : retrait de la confirmation à rebours
+
+**Symptôme rapporté** (Hakim, 2026-08-03) : « la navbar est bien propre à tous les pourcentages,
+mais dès que je quitte les Paramètres l'écriture WASTELAND WARFARE réapparaît comme avant ».
+
+**Trois fausses pistes écartées par la mesure, pas par le raisonnement.** (a) « la nav ne se
+relayoute pas sur un écran neuf » → repro : une nav montée sur un viewport déjà mis à l'échelle se
+dégrade correctement (densité 2, marque masquée) ; (b) idem avec les VRAIES scènes
+(`main_menu`/`events`/`settings`/`shop`) : toutes correctes ; (c) `animate_screen_enter` ne touche
+que `position` et `modulate`, jamais la taille.
+
+**Le fait qui a tranché** : `settings.cfg` contenait `ui_scale=1.0` alors que Hakim venait de
+choisir un autre palier. Ce n'était donc pas un problème d'affichage — **le réglage lui-même
+revenait en arrière**. Reproduit : après le clic `ui_scale = 1.3` ; après **12 s d'inaction**
+`ui_scale = 1.0`, réécrit sur disque.
+
+**Cause : la confirmation à rebours de 10 s elle-même** (défense n°3 du §8.133, reprise du brief).
+Le patron « appliquer, puis revenir faute de confirmation » suppose que le joueur REGARDE le
+dialogue. Ici il regarde exactement l'inverse : il change la TAILLE DE L'INTERFACE pour observer la
+**barre de navigation, en haut de l'écran**, pendant que le dialogue attend **au centre**. Le
+comportement le plus naturel qui soit — inspecter le résultat — déclenchait donc l'annulation.
+
+**Correctif : suppression pure et simple.** Ce que la confirmation prétendait couvrir est déjà tenu,
+et mieux, par deux mécanismes qui n'existaient pas quand ce patron a été spécifié :
+* les paliers que la fenêtre ne peut pas porter sont **GRISÉS** (`ui_scale_fits`) — on ne peut plus
+  choisir une échelle qui ne rentre pas ;
+* la nav **se dégrade** et garantit ⚙ et ⏻ à l'écran à toutes les échelles (matrice 12/12).
+Le joueur peut donc toujours revenir en arrière lui-même : il n'y avait plus rien à protéger, et un
+réglage qui se défait tout seul est bien pire qu'un réglage qu'on change deux fois. Les clés i18n
+`SETTINGS_SCALE_KEEP` / `_REVERT_IN` / `_REVERT` / `_CONFIRM` / `_REVERTED` restent au CSV
+(**on ne supprime jamais une clé**) et deviennent orphelines ; `SETTINGS_SCALE_TOO_BIG` sert
+toujours.
+
+**Défaut LATENT trouvé au passage.** Les pastilles (`●3`) arrivent par le réseau **après**
+`_build()`, donc après le seul `_relayout()` de la construction : « ÉVÉNEMENTS » devient
+« ÉVÉNEMENTS ●3 », la rangée s'élargit, et plus rien ne la re-mesurait. Les trois gestionnaires de
+pastille passent désormais par `_badges_changed()` (re-rendu du menu « ••• » **puis** `_relayout()`).
+Mesuré : la rangée passe de 1350 à 1389 px à l'arrivée des pastilles — sous les 1476 disponibles à
+130 %, mais la marge n'était pas garantie.
+
+> **Contre-épreuve (12 ✅).** Elle était **ROUGE avant le correctif** (c'est le repro qui a servi de
+> diagnostic) : clic → 1.30, puis 12 s d'inaction → 1.0. Après correctif : l'échelle tient à
+> l'inaction, **survit au changement d'écran** (`main_menu` et `events` : nav dégradée, marque
+> masquée, rangée 1350 ≤ 1476), aucun dialogue n'apparaît, et les pastilles arrivées après coup
+> laissent la barre dans ses clous.
+>
+> ⚠️⚠️ **Ce test NE PEUT PAS tourner en headless** : `_apply_ui_scale()` y sort immédiatement, et la
+> largeur de fenêtre rapportée fait GRISER les paliers — le bouton 130 % est alors `disabled`, sans
+> gestionnaire connecté, et le script passe au vert **sans avoir rien cliqué** (constaté). Toute
+> vérification d'échelle doit se faire **en fenêtre réelle**.
 
 ---
 
@@ -3793,16 +3844,27 @@ d'image** :
 Un voile en dégradé (généré en mémoire, 2×64 px, aucun `.import`) assombrit le bas de
 l'illustration : quelle que soit l'image, le sur-titre reste lisible et la carte garde son unité.
 
+**Respiration sous la barre de navigation.** Le `.tscn` du QG calait son `Hud` à `margin_top = 100`,
+soit EXACTEMENT `NAV_H` : les cartes des deux colonnes venaient s'adosser au filet cyan, sans un
+pixel d'air, là où la nav s'en accorde au-dessus du sien. `top_nav` expose désormais
+`NAV_MARGIN_BOTTOM` (sa propre marge basse, 10 px, jusque-là écrite en dur) et
+`NAV_CONTENT_TOP = NAV_H + NAV_MARGIN_BOTTOM` ; le QG repose sa marge haute depuis cette constante.
+Le contenu respire donc autant SOUS le filet que le contenu de la nav respire AU-DESSUS, et la
+relation survit à un changement de `NAV_H`. Mesuré : **11 à 13 px** selon la carte (assertion
+`>= NAV_MARGIN_BOTTOM` dans la contre-épreuve). ⚠️ Ne concerne QUE les écrans à contenu aligné en
+HAUT — les autres centrent leur panneau (`CenterContainer` + `offset_top = NAV_H`) et ont déjà
+l'espace.
+
 Contenu = `featured_id` **serveur** ; sans réseau, carte « SYNCHRONISATION… » (jamais de mock non
 étiqueté, jamais de carte absente). L'ancienne bannière est **supprimée**.
 Aucun re-parentage, aucune touche au `.tscn` : la colonne est ajoutée par code, et
 `challenges_content`/`leaderboard_content` gardent leurs NodePath exportés.
 
-> **Contre-épreuves comportementales (102 vérifications, 2 sabotages).**
+> **Contre-épreuves comportementales (112 vérifications, 2 sabotages).**
 > Hub — **35 ✅** : les 4 cas de contenu, onglet BONUS vide, compteur `N/5` **vs** « FACTION
 > POSSÉDÉE » (aucun `0/5` mensonger), 4 deep-links atterrissant sur le bon onglet + `target_tab`
 > purgé, panneau DÉFIS non reconstruit par des `_render()` successifs, bascule FR→EN à chaud.
-> QG — **67 ✅** : les 4 cas de vedette + repli hors ligne, carte **première** dans la `RightColumn`,
+> QG — **77 ✅** : les 4 cas de vedette + repli hors ligne, carte **première** dans la `RightColumn`,
 > colonne bien **dernière de `MidRow`** (donc à droite), `LeftColumn` **intacte** (2 cartes +
 > spacer), carte **haute (≥ 380 px)**, anatomie complète vérifiée pièce par pièce (illustration,
 > sur-titre, titre, sous-titre, aperçu à chevrons borné à 3, rebours, bouton), aperçu `character`

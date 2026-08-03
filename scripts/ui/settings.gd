@@ -633,14 +633,9 @@ func _comfort_segments(label_key: String, comfort_key: String, values: Array) ->
 			continue
 		btn.pressed.connect(func() -> void:
 			AudioManager.play_sfx("click")
-			var previous = SettingsManager.get_comfort(comfort_key)
 			SettingsManager.set_comfort(comfort_key, val)
 			for i in range(values.size()):
-				_style_segment(buttons[i], _same_value(values[i][0], val))
-			# §8.133 — l'échelle est le seul réglage capable de rendre l'écran inutilisable : elle
-			# passe par une confirmation à rebours (patron standard des réglages d'affichage).
-			if gated and not _same_value(previous, val):
-				_confirm_ui_scale(previous, values, buttons))
+				_style_segment(buttons[i], _same_value(values[i][0], val)))
 		buttons.append(btn)
 		seg_wrap.add_child(btn)
 	row.add_child(seg_wrap)
@@ -648,146 +643,29 @@ func _comfort_segments(label_key: String, comfort_key: String, values: Array) ->
 
 
 # =========================================================
-# CONFIRMATION À REBOURS DE L'ÉCHELLE (§8.133)
+# ÉCHELLE D'INTERFACE — APPLICATION IMMÉDIATE (§8.133, révisé §8.134.2)
 # =========================================================
-# Troisième défense du chantier, après l'assainissement (SettingsManager) et la nav résiliente
-# (top_nav) : elle couvre ce que les deux premières ne prévoient pas — un écran tiers illisible, un
-# pilote qui ment sur la taille de fenêtre, un cas qu'on n'a pas imaginé. Sans confirmation, ou sur
-# ÉCHAP, on REVIENT à la valeur précédente. Le joueur ne peut donc pas se piéger lui-même.
-const UI_SCALE_CONFIRM_S := 10
+# ⚠️⚠️ LA CONFIRMATION À REBOURS DE 10 s A ÉTÉ RETIRÉE — elle était un DÉFAUT, pas une sécurité.
+# Le patron « appliquer puis revenir sans confirmation » suppose que le joueur regarde le dialogue.
+# Ici il regarde exactement l'inverse : il change la TAILLE DE L'INTERFACE pour observer la BARRE DE
+# NAVIGATION, en haut de l'écran, pendant que le dialogue attend au centre. Au bout de 10 s son
+# choix était donc annulé EN SILENCE — et `set_comfort` le réécrivait sur disque. Symptôme vécu :
+# « la navbar est propre à tous les pourcentages, mais dès que je quitte les Paramètres l'écriture
+# WASTELAND WARFARE revient ». Reproduit et mesuré : après le clic `ui_scale = 1.3`, après 12 s
+# d'inaction `ui_scale = 1.0`.
+#
+# Ce que la confirmation prétendait couvrir est DÉJÀ tenu, et mieux, par deux mécanismes qui
+# n'existaient pas quand ce patron a été spécifié :
+#   • les paliers que la fenêtre ne peut pas porter sont GRISÉS (`ui_scale_fits`) — on ne peut donc
+#     plus choisir une échelle qui ne rentre pas ;
+#   • la nav se DÉGRADE et garantit ⚙ et ⏻ à l'écran à toutes les échelles (§8.133, matrice 12/12).
+# Le joueur peut donc TOUJOURS revenir en arrière lui-même : il n'y a plus rien à protéger, et un
+# réglage qui se défait tout seul est bien pire qu'un réglage qu'on doit changer deux fois.
+#
+# ⚠️ Les clés i18n `SETTINGS_SCALE_KEEP` / `_REVERT_IN` / `_REVERT` / `_CONFIRM` / `_REVERTED`
+# restent au CSV : on ne supprime JAMAIS une clé (règle projet), elles deviennent simplement
+# orphelines. `SETTINGS_SCALE_TOO_BIG`, elle, sert toujours (mention des paliers grisés).
 
-var _scale_dialog: Control = null
-var _scale_timer: Timer = null
-var _scale_left: int = 0
-# Contexte du retour arrière, mémorisé pour que la touche ÉCHAP (traitée dans `_input`) puisse
-# annuler exactement comme le bouton — sans avoir à retrouver les segments dans l'arbre.
-var _scale_previous = null
-var _scale_values: Array = []
-var _scale_buttons: Array[Button] = []
-
-# ÉCHAP pendant le compte à rebours = REVENIR. ⚠️ Traité dans `_input` (et non `_unhandled_input`) :
-# la barre de navigation, montée APRÈS cet écran, capte l'ÉCHAP en `_unhandled_input` pour ramener
-# au QG — elle emporterait le joueur hors des Paramètres avec une échelle non confirmée sur les bras.
-func _input(event: InputEvent) -> void:
-	if _scale_dialog == null or not is_instance_valid(_scale_dialog):
-		return
-	if event.is_action_pressed("ui_cancel"):
-		_revert_ui_scale(_scale_previous, _scale_values, _scale_buttons)
-		get_viewport().set_input_as_handled()
-
-
-func _confirm_ui_scale(previous, values: Array, buttons: Array[Button]) -> void:
-	_dismiss_scale_dialog()
-	_scale_left = UI_SCALE_CONFIRM_S
-	_scale_previous = previous
-	_scale_values = values
-	_scale_buttons = buttons
-
-	var dim := ColorRect.new()
-	dim.name = "UiScaleConfirm"
-	dim.color = Color(0, 0, 0, 0.6)
-	dim.top_level = true
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(dim)
-	_scale_dialog = dim
-
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.add_child(center)
-
-	var pan := PanelContainer.new()
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.058824, 0.07451, 0.094118, 0.98)
-	st.set_corner_radius_all(0)
-	st.set_border_width_all(2)
-	st.border_color = ACCENT
-	st.set_content_margin_all(28.0)
-	pan.add_theme_stylebox_override("panel", st)
-	center.add_child(pan)
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 16)
-	pan.add_child(v)
-
-	var title := Label.new()
-	title.text = tr("SETTINGS_SCALE_KEEP")
-	title.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	title.add_theme_font_override("font", _font)
-	title.add_theme_font_size_override("font_size", 24)
-	title.add_theme_color_override("font_color", TEXT)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(title)
-
-	var body := Label.new()
-	body.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	body.add_theme_font_override("font", _font)
-	body.add_theme_font_size_override("font_size", 15)
-	body.add_theme_color_override("font_color", MUTED)
-	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	body.text = tr("SETTINGS_SCALE_REVERT_IN") % _scale_left
-	v.add_child(body)
-
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	v.add_child(row)
-
-	var revert := Button.new()
-	revert.text = tr("SETTINGS_SCALE_REVERT")
-	revert.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	revert.add_theme_font_override("font", _font)
-	revert.add_theme_font_size_override("font_size", 16)
-	revert.custom_minimum_size = Vector2(170, 48)
-	WarzoneUI.apply_ghost_button(revert)
-	WarzoneUI.wire_button_sfx(revert)
-	revert.pressed.connect(func() -> void: _revert_ui_scale(previous, values, buttons))
-	row.add_child(revert)
-
-	var keep := Button.new()
-	keep.text = tr("SETTINGS_SCALE_CONFIRM")
-	keep.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
-	keep.add_theme_font_override("font", _font)
-	keep.add_theme_font_size_override("font_size", 16)
-	keep.custom_minimum_size = Vector2(170, 48)
-	WarzoneUI.apply_ghost_button(keep)
-	keep.add_theme_color_override("font_color", ACCENT)
-	WarzoneUI.wire_button_sfx(keep)
-	keep.pressed.connect(func() -> void:
-		_dismiss_scale_dialog()
-		_set_status(tr("SETTINGS_STATUS")))
-	row.add_child(keep)
-
-	WarzoneUI.add_corner_notches(pan)
-
-	_scale_timer = Timer.new()
-	_scale_timer.wait_time = 1.0
-	_scale_timer.timeout.connect(func() -> void:
-		_scale_left -= 1
-		if _scale_left <= 0:
-			_revert_ui_scale(previous, values, buttons)
-			return
-		if is_instance_valid(body):
-			body.text = tr("SETTINGS_SCALE_REVERT_IN") % _scale_left)
-	dim.add_child(_scale_timer)
-	_scale_timer.start()
-
-
-func _revert_ui_scale(previous, values: Array, buttons: Array[Button]) -> void:
-	_dismiss_scale_dialog()
-	SettingsManager.set_comfort("ui_scale", previous)
-	for i in range(values.size()):
-		if i < buttons.size() and is_instance_valid(buttons[i]):
-			_style_segment(buttons[i], _same_value(values[i][0], previous))
-	_set_status(tr("SETTINGS_SCALE_REVERTED"))
-
-
-func _dismiss_scale_dialog() -> void:
-	if _scale_timer != null and is_instance_valid(_scale_timer):
-		_scale_timer.stop()
-	_scale_timer = null
-	if _scale_dialog != null and is_instance_valid(_scale_dialog):
-		_scale_dialog.queue_free()
-	_scale_dialog = null
 
 # Rangée « libellé + ON/OFF » pour un réglage booléen.
 func _comfort_toggle(label_key: String, comfort_key: String) -> HBoxContainer:
