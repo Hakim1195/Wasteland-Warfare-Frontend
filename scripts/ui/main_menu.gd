@@ -40,6 +40,12 @@ const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 # Header CANONIQUE partagé (§8.94) : marque + onglets + pastille défis + identité/jauge + ⚙ + ⏻.
 # La jauge XP/Coins (§8.47) est montée PAR la nav — le menu n'en garde aucune copie.
 const TopNav = preload("res://scripts/ui/top_nav.gd")
+# §8.134 — porteur du `static var target_tab` du hub ÉVÉNEMENTS (onglet d'ouverture), utilisé par
+# la carte « DÉFIS EN COURS » et par la carte ÉVÉNEMENT de la colonne latérale.
+const EventsScreen = preload("res://scripts/ui/events_screen.gd")
+# §8.134 — UN SEUL afficheur de temps dans tout le hub (carte du QG + les 4 onglets du hub) : même
+# format, même seconde de bascule, même couleur d'urgence. C'est ça, la cohérence.
+const CountdownLabel = preload("res://scripts/ui/countdown_label.gd")
 # Héros 3D (SubViewport transparent) — remplace le portrait 2D quand la faction a un .glb riggé.
 # Préchargé (pas de class_name, par prudence vis-à-vis du cache d'import, cf. WarzoneUI).
 const HeroViewport3DScene = preload("res://scenes/components/hero_viewport_3d.tscn")
@@ -212,73 +218,120 @@ func _ready() -> void:
 
 
 # =========================================================
-# BANNIÈRE ÉVÉNEMENT (§8.132) — sous les cartes de mode
+# CARTE ÉVÉNEMENT DU QG (§8.132, DÉPLACÉE §8.134) — carte latérale, en tête de colonne
 # =========================================================
 # Le QG est le seul écran que TOUS les joueurs traversent : c'est là que se joue « je découvre
-# qu'il se passe quelque chose ce week-end ». La bannière ne s'affiche QUE s'il y a une opération
-# en cours ou à venir — pas de cadre vide « aucun événement », qui n'apprendrait rien et prendrait
-# la place d'une carte de mode.
+# qu'il se passe quelque chose ». La bannière §8.132, posée sous la rangée de cartes de mode,
+# occupait la largeur de l'écran pour une seule ligne d'information et se lisait comme un bandeau
+# publicitaire. Elle devient une CARTE de la colonne latérale, au MÊME gabarit que « TOP JOUEURS »
+# et « DÉFIS EN COURS », et en PREMIÈRE position : c'est la plus datée des trois, donc la plus
+# urgente à voir.
 #
-# ⚠️ AJOUTÉE AU `Shell` (le VBox qui empile MidRow et BottomRow), donc littéralement SOUS la rangée
-# de cartes. On ne re-parente RIEN et on ne touche PAS au `.tscn` : `cards_row` garde son NodePath
-# exporté (piège maison — un reparentage casse les `%NomUnique` et les NodePath de scène).
+# ⚠️⚠️ CONTRADICTION DU BRIEF, TRANCHÉE PAR LE CODE (règle §8.131). Le chantier demandait une
+# « carte latérale DROITE, même colonne que TOP JOUEURS / DÉFIS EN COURS ». Ces deux cartes vivent
+# en réalité dans `Hud/Shell/MidRow/LeftColumn` — la colonne de GAUCHE. Les deux exigences sont
+# donc incompatibles ; on retient la plus précise et la plus répétée (« MÊME colonne », « EN
+# PREMIER dans la colonne »), qui préserve l'unité de la colonne d'information. Déplacer les trois
+# cartes à droite reste un geste d'une ligne le jour où Hakim tranche autrement.
 #
-# Clic → l'ÉCRAN Événements (destination canonique). Le MODAL de règles, lui, s'ouvre depuis la
-# carte principale de cet écran : un seul modal, deux points d'entrée, jamais deux textes.
-var _event_banner: Control = null
-var _event_countdown: Label = null
-var _event_countdown_epoch: int = 0
-var _event_countdown_key: String = ""
-var _event_tick: Timer = null
+# ⚠️ AUCUN RE-PARENTAGE, AUCUNE TOUCHE AU `.tscn` : on insère dans `LeftColumn` par
+# `move_child`, `challenges_content`/`leaderboard_content` gardent leurs NodePath exportés (piège
+# maison — un reparentage casse les `%NomUnique` et les NodePath de scène).
+#
+# CONTENU = `featured_id`, calculé SERVEUR (§8.134). Le client ne classe RIEN : il cherche l'entrée
+# qui porte cet id parmi les actifs puis les à-venir, et l'affiche. Une règle de vedette dupliquée
+# ici aurait fini par montrer autre chose que le hub.
+#
+# Clic → le HUB, à l'onglet correspondant au TYPE de l'événement vedette.
+var _event_card: Control = null
+var _event_countdown: Node = null
 
 
 func _on_events_config(data: Dictionary) -> void:
-	if not is_inside_tree() or cards_row == null:
+	if not is_inside_tree() or challenges_content == null:
 		return
-	var active: Dictionary = _as_dict(data.get("active_event", {}))
-	var upcoming: Dictionary = _as_dict(data.get("next_event", {}))
-	var event: Dictionary = active if not active.is_empty() else upcoming
-	var is_active := not active.is_empty()
+	var column := challenges_content.get_parent().get_parent()   # ChallengesCard -> LeftColumn
+	if column == null:
+		return
 
-	if _event_banner != null and is_instance_valid(_event_banner):
-		_event_banner.queue_free()
-		_event_banner = null
+	if _event_card != null and is_instance_valid(_event_card):
+		_event_card.queue_free()
+		_event_card = null
 		_event_countdown = null
-		_event_countdown_epoch = 0
-	if event.is_empty():
-		return
 
-	var shell := cards_row.get_parent().get_parent()
-	if shell == null:
-		return
-	_event_banner = _make_event_banner(event, is_active)
-	shell.add_child(_event_banner)
+	var featured := _featured_event(data)
+	if featured.is_empty():
+		# Aucune donnée du tout (hors ligne, serveur §8.132 sans bloc v2) : carte d'ATTENTE plutôt
+		# que rien. Une carte absente se lit comme « il n'y a jamais rien ici » ; une carte qui dit
+		# « SYNCHRONISATION… » se lit comme « ça arrive ». Jamais de contenu inventé (§9.5).
+		featured = {"__syncing": true}
 
-	if _event_tick == null or not is_instance_valid(_event_tick):
-		_event_tick = Timer.new()
-		_event_tick.wait_time = 1.0
-		_event_tick.timeout.connect(_update_event_countdown)
-		add_child(_event_tick)
-	_event_tick.start()
-	_update_event_countdown()
+	_event_card = _make_event_card(featured)
+	column.add_child(_event_card)
+	column.move_child(_event_card, 0)   # EN PREMIER dans la colonne (décision produit).
+	# Encoches biseautées, comme les deux cartes voisines (ADN angulaire §2) : sans elles, la carte
+	# ÉVÉNEMENT jurait dans la colonne — constat de relecture de capture.
+	WarzoneUI.add_corner_notches(_event_card)
 
 
-func _make_event_banner(event: Dictionary, is_active: bool) -> Control:
+# Retrouve l'entrée VEDETTE désignée par le serveur. Replis successifs, du plus fidèle au plus
+# dégradé : `featured_id` dans les actifs → dans les à-venir → premier actif → `active_event` v1
+# (serveur pas encore déployé) → `next_event` v1. Aucune règle de tri n'est réimplémentée ici.
+func _featured_event(data: Dictionary) -> Dictionary:
+	var featured_id := str(data.get("featured_id", ""))
+	var pools: Array = []
+	if typeof(data.get("active")) == TYPE_ARRAY:
+		pools.append(data.get("active"))
+	if typeof(data.get("upcoming")) == TYPE_ARRAY:
+		pools.append(data.get("upcoming"))
+	if featured_id != "":
+		for pool in pools:
+			for e in pool:
+				var entry := _as_dict(e)
+				if str(entry.get("id", "")) == featured_id:
+					return entry
+	for pool in pools:
+		for e in pool:
+			var entry := _as_dict(e)
+			if not entry.is_empty():
+				return entry
+	# Repli v1 : un serveur antérieur à §8.134 ne sert pas `events_v2`.
+	var active := _as_dict(data.get("active_event", {}))
+	if not active.is_empty():
+		return active
+	return _as_dict(data.get("next_event", {}))
+
+
+# Onglet du hub à ouvrir pour un type d'événement — miroir des ids de `events_screen.TAB_DEFS`.
+func _tab_for_type(type_id: String) -> String:
+	match type_id:
+		"character":
+			return "characters"
+		"bonus":
+			return "bonus"
+		_:
+			return "matches"
+
+
+func _make_event_card(event: Dictionary) -> Control:
+	var syncing := bool(event.get("__syncing", false))
+	# ACTIF = la fenêtre a déjà commencé. On le déduit de l'epoch de début plutôt que d'un drapeau :
+	# la même entrée sert d'« actif » et d'« à venir » selon l'heure qu'il est.
+	var starts := int(event.get("starts_at_epoch", 0))
+	var is_active := not syncing and starts > 0 and starts <= int(Time.get_unix_time_from_system())
 	var accent: Color = GOLD if is_active else ACCENT
+	var type_id := str(event.get("type", "match"))
+
 	var btn := Button.new()
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	btn.custom_minimum_size = Vector2(0, 74)
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(SURFACE, 0.82)
 	st.set_corner_radius_all(0)
 	st.set_border_width_all(1)
-	st.border_width_left = 4          # après set_border_width_all, sinon écrasé.
-	st.border_color = accent
-	st.content_margin_left = 18.0
-	st.content_margin_right = 18.0
-	st.content_margin_top = 10.0
-	st.content_margin_bottom = 10.0
+	st.border_width_left = 3          # après set_border_width_all, sinon écrasé.
+	st.border_color = Color(MUTED, 0.6) if syncing else accent
+	st.set_content_margin_all(16.0)
 	var hover := st.duplicate() as StyleBoxFlat
 	hover.bg_color = Color(accent, 0.12)
 	btn.add_theme_stylebox_override("normal", st)
@@ -287,69 +340,55 @@ func _make_event_banner(event: Dictionary, is_active: bool) -> Control:
 	btn.add_theme_stylebox_override("focus", st)
 	WarzoneUI.wire_button_sfx(btn)
 	btn.pressed.connect(func() -> void:
-		TransitionManager.change_scene("res://scenes/ui/events.tscn"))
+		EventsScreen.target_tab = _tab_for_type(type_id)
+		_go("res://scenes/ui/events.tscn"))
 
 	# Contenu posé PAR-DESSUS le bouton (un Button n'est pas un conteneur de mise en page), en
 	# plein cadre et transparent aux clics → tout le pavé reste cliquable.
-	var row := HBoxContainer.new()
-	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 18.0
-	row.offset_right = -18.0
-	row.add_theme_constant_override("separation", 16)
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(row)
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 16.0
+	box.offset_top = 12.0
+	box.offset_right = -16.0
+	box.offset_bottom = -12.0
+	box.add_theme_constant_override("separation", 4)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(box)
 
-	var left := VBoxContainer.new()
-	left.add_theme_constant_override("separation", 2)
-	left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	left.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(left)
-	left.add_child(_event_label(
-		_tr_key("EVENT_CARD_ACTIVE" if is_active else "EVENT_CARD_UPCOMING"), 12, accent))
-	left.add_child(_event_label(_tr_key(str(event.get("name_key", ""))).to_upper(), 22, TEXT))
+	if syncing:
+		box.add_child(_event_label(_tr_key("NAV_EVENTS"), 12, MUTED))
+		box.add_child(_event_label(_tr_key("COMMON_SYNCING"), 18, MUTED))
+		btn.custom_minimum_size = Vector2(0, 92)
+		return btn
 
-	var desc := _event_label(_tr_key(str(event.get("desc_key", ""))), 14, MUTED)
-	desc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	desc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	row.add_child(desc)
+	# Sur-titre = TYPE (« ÉVÉNEMENT — PARTIES »). C'est lui qui rattache visuellement la carte à
+	# l'onglet où le clic va atterrir.
+	box.add_child(_event_label(_tr_key(_eyebrow_key(type_id)), 12, accent))
+	var title := _event_label(_tr_key(str(event.get("name_key", ""))).to_upper(), 20, TEXT)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.max_lines_visible = 2                     # 2 lignes MAX, puis ellipsis (gabarit de colonne).
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	box.add_child(title)
 
-	_event_countdown_epoch = int(event.get("ends_at_epoch", 0)) if is_active \
-		else int(event.get("starts_at_epoch", 0))
-	_event_countdown_key = "EVENT_ENDS_IN" if is_active else "EVENT_STARTS_IN"
-	_event_countdown = _event_label("", 17, accent, HORIZONTAL_ALIGNMENT_RIGHT)
-	_event_countdown.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_event_countdown.custom_minimum_size = Vector2(220, 0)
-	row.add_child(_event_countdown)
+	_event_countdown = CountdownLabel.make(17, accent)
+	box.add_child(_event_countdown)
+	_event_countdown.set_target(int(event.get("ends_at_epoch", 0)) if is_active else starts,
+		"COUNTDOWN_ENDS_IN" if is_active else "COUNTDOWN_STARTS_IN")
+	# La fenêtre vient de basculer (début OU fin) : on redemande la configuration au lieu d'afficher
+	# un rebours figé. Réponse mémoïsée 60 s côté serveur.
+	_event_countdown.expired.connect(func() -> void: NetworkManager.fetch_events())
+	btn.custom_minimum_size = Vector2(0, 118)
 	return btn
 
 
-func _update_event_countdown() -> void:
-	if _event_countdown == null or not is_instance_valid(_event_countdown):
-		return
-	if _event_countdown_epoch <= 0:
-		_event_countdown.text = ""
-		return
-	var remaining := _event_countdown_epoch - int(Time.get_unix_time_from_system())
-	if remaining <= 0:
-		# La fenêtre vient de basculer (début OU fin) : on redemande la configuration au lieu
-		# d'afficher un rebours négatif. Réponse mémoïsée 60 s côté serveur.
-		_event_countdown.text = ""
-		_event_countdown_epoch = 0
-		NetworkManager.fetch_events()
-		return
-	var d := remaining / 86400
-	var h := (remaining % 86400) / 3600
-	var m := (remaining % 3600) / 60
-	var s := remaining % 60
-	var dur := ""
-	if d > 0:
-		dur = _tr_key("EVENT_DUR_DH") % [d, h]
-	elif h > 0:
-		dur = _tr_key("EVENT_DUR_HM") % [h, m]
-	else:
-		dur = _tr_key("EVENT_DUR_MS") % [m, s]
-	_event_countdown.text = _tr_key(_event_countdown_key) % dur
+func _eyebrow_key(type_id: String) -> String:
+	match type_id:
+		"character":
+			return "EVENTS_EYEBROW_CHARACTER"
+		"bonus":
+			return "EVENTS_EYEBROW_BONUS"
+		_:
+			return "EVENTS_EYEBROW_MATCH"
 
 
 func _event_label(text: String, font_size: int, color: Color,
@@ -1228,9 +1267,13 @@ func _on_play_pressed() -> void:
 		mc.set_mode(m["id"], int(m["count"]), bool(m["ranked"]))
 	_go("res://scenes/ui/search_screen.tscn")
 
-# Cible du pied de la carte Défis (« VOIR TOUT ❯ ») — même écran que l'onglet Défis de la nav.
+# Cible du pied de la carte Défis (« VOIR TOUT ❯ »). §8.134 : DÉFIS a quitté la barre de navigation
+# pour devenir le 4ᵉ onglet du hub ÉVÉNEMENTS — on y va DIRECTEMENT, à l'onglet voulu, plutôt que de
+# passer par la coquille de redirection `missions.tscn` (qui reste en ceinture pour les chemins
+# legacy). L'onglet cible est posé AVANT le changement de scène : il est lu au `_ready` du hub.
 func _on_missions_pressed() -> void:
-	_go("res://scenes/ui/missions.tscn")
+	EventsScreen.target_tab = "missions"
+	_go("res://scenes/ui/events.tscn")
 
 # Réception des missions (§8.92) : le menu n'en tire QUE la carte Défis — la pastille « ●N » de
 # l'onglet est portée par top_nav (§8.94), qui écoute le même signal global.

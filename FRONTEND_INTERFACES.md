@@ -3638,3 +3638,153 @@ aussi le **salon privé**, qui lui suit bien l'événement.
 > 🐛 **Défaut trouvé PAR la capture** : les apostrophes des descriptions d'événements avaient sauté
 > à l'écriture du CSV (« dun secteur à lautre »). Corrigé, `--import` refait, re-capture relue. Le
 > boot headless à 0 ERROR ne l'aurait **jamais** montré.
+
+---
+
+## §8.133 — ÉCHELLE D'INTERFACE : l'enfermement à 115 %, et la nav qui plie au lieu de casser
+
+**Le bug, MESURÉ avant d'être corrigé.** `SettingsManager.ui_scale` s'applique par
+`window.content_scale_factor`, qui **divise** le viewport logique. Relevé headless sur la nav
+RÉELLE (locale FR, 8 onglets) : la rangée réclame **1 721 px** + marges 40+40 = **1 801 px**.
+
+| Fenêtre | 90 % | 100 % | 115 % | 130 % |
+|---|---|---|---|---|
+| 1920 | 2133 ✅ | 1920 ✅ | **1669 ❌** | **1476 ❌** |
+| 1600 | **1777 ❌** | **1600 ❌** | **1391 ❌** | **1230 ❌** |
+| 1280 | ❌ | ❌ | ❌ | ❌ |
+
+La rangée débordait à droite en emportant le **cluster identité + ⚙ + ⏻** hors écran : plus moyen
+d'ouvrir les paramètres, donc **plus moyen de revenir à 100 %**. Enfermement. ⚠️ **Pire que
+signalé** : en fenêtre 1600×900, la barre débordait **dès 90 %**, sans que le joueur ait touché au
+réglage.
+
+**Triple défense.**
+
+1. **Assainissement de l'échelle EFFECTIVE** (`settings_manager.gd`) — `effective_ui_scale() =
+   min(préférence, max_ui_scale_that_fits(fenêtre))`, recalculé au boot, à chaque `size_changed` et
+   à chaque changement de réglage. **La préférence sauvegardée n'est JAMAIS modifiée** : la fenêtre
+   regrandit, la préférence reprend effet seule. Le plancher `ui_min_logical_width()` =
+   `max(plancher nav MESURÉ, HUB_CONTENT_MIN_WIDTH 1060)` + `UI_SCALE_SAFETY_MARGIN 24` — le
+   plancher nav est **rapporté par `top_nav` à chaque construction** (`report_nav_floor_width`,
+   799 px relevés), jamais un chiffre magique. Le terme dominant est le CONTENU : les panneaux de
+   hub sont à `custom_minimum_size.x = 980`, et aucune dégradation de barre ne rattrape un contenu
+   trop large. Résultat : 130 % est **grisé en 1280** (« FENÊTRE TROP PETITE »), permis ailleurs.
+2. **Nav résiliente par dégradation contrôlée** (`top_nav.gd`, sur `NOTIFICATION_RESIZED` et à la
+   construction) — **INVARIANT : le cluster droit ne rétrécit jamais et ne sort JAMAIS de
+   l'écran.** Paliers, dans l'ordre, jusqu'à ce que ça tienne : (0) nominal → (1) marges d'onglet
+   16→10 px, police 16→14 → (2) marque en **logo seul** → (3+) les onglets **excédentaires**, en
+   partant de la GAUCHE et **jamais l'actif**, basculent un par un dans un menu **« ••• »** en fin
+   de pilule (entrées navigables, **pastilles comprises** — texte composé). `_relayout()` repart
+   toujours du palier 0 : la dégradation est **réversible** sans rien recliquer.
+3. **Confirmation à rebours 10 s** (`settings.gd`) — « CONSERVER CETTE ÉCHELLE ? » ; sans
+   confirmation ou sur **ÉCHAP**, retour à la valeur précédente. ⚠️ ÉCHAP est traité dans `_input`
+   et non `_unhandled_input` : la nav, montée APRÈS l'écran, capte l'ÉCHAP pour ramener au QG et
+   emporterait le joueur hors des Paramètres avec une échelle non confirmée sur les bras.
+
+> **Contre-épreuve (12 cases × 4 assertions, + sabotage).** ⚠️⚠️ **La première version du script
+> était VERTE SANS RIEN TESTER** : en headless, `get_window().size = …` est un **NO-OP** — le
+> viewport restait à 2133 px pour les trois « fenêtres ». La nav ne connaît qu'UNE grandeur, la
+> **largeur logique** (= fenêtre / échelle) : on la pilote donc par `content_scale_factor` seul, en
+> reproduisant chaque case de la matrice réelle. Après correctif, avec 7 onglets : **12/12 vertes**
+> (⚙ et ⏻ `get_global_rect()` ⊂ viewport, tous les onglets atteignables, actif jamais relégué),
+> dégradation observée 0→1→2 puis menu 1→5, réversibilité confirmée, et le **sabotage**
+> (dégradation annulée à 985 px logiques) fait bien passer le script au ROUGE.
+>
+> 🐛 **Trouvé par la capture PNG** : les 4 prises de nav sortaient identiques. Cause — changer
+> `content_scale_factor` fait émettre `size_changed`, donc le SettingsManager **ré-assainissait et
+> reposait la préférence du joueur** entre l'ordre et la prise. Comportement VOULU en production ;
+> pour la capture on débranche son écoute (et surtout **pas** via `set_comfort`, qui écrirait dans
+> le `settings.cfg` du joueur).
+
+---
+
+## §8.134 — HUB ÉVÉNEMENTS V2 : quatre onglets, DÉFIS déménagé, carte de QG, compte à rebours unique
+
+**Le hub (`events_screen.gd`, scène `events.tscn` conservée).** Quatre onglets construits en code
+(patron TabsBar de `settings.gd`/`shop.gd` — `warzone_ui.gd` n'a **aucun** helper d'onglets, et le
+`TabContainer` natif ne se plie pas à l'ADN angulaire §2 sans plus de code) :
+
+| Onglet | Contenu |
+|---|---|
+| **PARTIES** | les mutateurs `match` §8.132 : carte de l'actif (ou du prochain), calendrier, modal de règles **inchangé**, note de périmètre |
+| **PERSONNAGES** | carte « PERSONNAGE GRATUIT DE LA SEMAINE » — portrait/accent de faction, héros, compte à rebours, **compteur personnel `N/5`** (ou « FACTION POSSÉDÉE » si `null`), CTA « L'ESSAYER » / « VOIR EN BOUTIQUE ». **Structure en LISTE** dès le départ : la rotation est la première entrée, pas un cas spécial |
+| **BONUS** | coquille prête, **vide au lancement** : état vide soigné. Le rendu de carte est **le même composant** que PARTIES — un événement `bonus` s'affichera sans code neuf |
+| **DÉFIS** | `missions_panel.gd` (cf. ci-dessous) |
+
+Acquis §8.132 conservés : **coquille-puis-nav** (leçon §8.126), cache peint immédiatement,
+`_render()` sur `locale_changed`. Le timer d'1 s a disparu — le temps est l'affaire du composant.
+Onglet d'ouverture par `static var target_tab` (patron §8.107), **purgé à la lecture**.
+
+**`countdown_label.gd` — LE seul afficheur de temps du hub.** Trois écrans formataient leur propre
+rebours ; c'est fini. Régimes : ≥ 48 h « 3J 14H » → < 48 h « HH:MM:SS » → < 1 h **or + pulsation**
+(coupée sous `reduced_motion`, la couleur seule dit l'urgence) → 0 « TERMINÉ » + signal `expired`
+(le parent recharge). Une recomposition par seconde (`_process` + comparaison d'entiers, pas de
+Timer par instance). **Chiffres tabulaires** par la fonctionnalité OpenType **`tnum` sur la police
+de la charte** : la charte §2 n'a aucune monospace, en introduire une aurait cassé l'identité
+typographique — `tnum` fige la chasse des chiffres sans changer le dessin (largeur minimale en
+ceinture si la police système ne la porte pas).
+⚠️ **Contradiction du brief tranchée par le code** : « epoch serveur + offset d'horloge (§8.31) » —
+cet offset **n'existe pas hors de l'arène** (il vient du message WS `timer_updated`). Horloge
+locale assumée, comme en §8.132 : la dérive se compte en secondes sur des fenêtres de 54 h ou 7 j.
+
+**`missions_panel.gd` — DÉMÉNAGEMENT, pas réécriture.** Boîtes quotidien/hebdo, décomptes, claim,
+verrou `_claim_in_flight`, statuts, clés i18n, routes : tout vient de `missions.gd` **à
+l'identique**. Seul ajout : la bascule de langue à chaud (l'écran d'origine ne la gérait pas).
+⚠️ Le panneau est monté **une seule fois** et **jamais purgé** par `_render()` : une config
+d'événements qui arrive n'a pas à annuler un claim en vol sous les doigts du joueur.
+📌 **Constat reconduit tel quel** (hors périmètre) : la jauge de Coins de la nav ne se rafraîchit
+pas après un claim — elle attend le prochain `/auth/me`. Défaut **hérité**, pas introduit ici.
+
+**Table de re-routage DÉFIS — traitée ligne à ligne :**
+
+| Ancien chemin | Nouveau |
+|---|---|
+| entrée `missions` de `TABS` | **retirée** → nav à **7 onglets** : `QG · PERSONNAGES · BOUTIQUE · PROFIL · CLASSEMENT · COMPAGNIE · ÉVÉNEMENTS` |
+| pastille `●N` de l'onglet DÉFIS | **migrée** sur ÉVÉNEMENTS (mécanique texte-composé conservée) |
+| carte « DÉFIS EN COURS » du QG (« VOIR TOUT ») | hub, `target_tab = "missions"` |
+| `missions.tscn` | **coquille de REDIRECTION** vers le hub (ceinture legacy — la scène et son uid restent valides, aucun `.import`/`.uid` touché) |
+| `TUTO_STEP_DEBRIEF` | « Passe voir **ÉVÉNEMENTS, onglet DÉFIS**… » (FR/EN/IT) |
+| `TUTO_HINT_SHOP` | inchangé : « des DÉFIS réclamés » **décrit une source de coins**, ce n'est pas une consigne de navigation |
+| pont missions du Rapport Post-Op (§8.106) | vérifié — il ne passe pas par `missions.tscn` |
+
+**Pastille ÉVÉNEMENTS — une, deux régimes, PRIORITÉ À L'ACTION.** (1) missions réclamables → `●N`
+or ; (2) sinon opération `match` active → `●` seul ; (3) sinon rien.
+⚠️ **Le personnage gratuit ne l'allume JAMAIS**, alors qu'il est perpétuellement actif : une
+pastille toujours allumée est une pastille morte, et le jour où un vrai mutateur tourne elle
+n'apprend plus rien. D'où la lecture de `active_event` (les `match` seuls) et non de la liste v2.
+
+**Carte ÉVÉNEMENT du QG.** Quitte le `Shell` (elle y était pleine largeur, sous les cartes de mode,
+et se lisait comme un bandeau) pour la **colonne des cartes latérales**, **en première position**
+(la plus datée des trois). Eyebrow = type, titre 2 lignes max + ellipsis, `countdown_label` en
+évidence, liseré gauche 3 px (or = actif, cyan = à venir), encoches de charte, clic → hub **au bon
+onglet**. Contenu = `featured_id` **serveur** ; sans réseau, carte « SYNCHRONISATION… » (jamais de
+mock non étiqueté, jamais de carte absente). L'ancienne bannière est **supprimée**.
+⚠️⚠️ **Contradiction du brief tranchée par le code (§8.131)** : le chantier demandait une « carte
+latérale **DROITE**, même colonne que TOP JOUEURS / DÉFIS EN COURS ». Ces deux cartes vivent dans
+`Hud/Shell/MidRow/`**`LeftColumn`** — la colonne de GAUCHE. Les deux exigences sont incompatibles ;
+on retient la plus précise et la plus répétée (« MÊME colonne », « EN PREMIER dans la colonne »),
+qui préserve l'unité de la colonne d'information. Déplacer les trois cartes à droite reste un geste
+d'une ligne le jour où Hakim tranche autrement.
+Aucun re-parentage : insertion par `move_child`, les NodePath exportés sont intacts.
+
+> **Contre-épreuves comportementales (77 vérifications, 2 sabotages).**
+> Hub — **35 ✅** : les 4 cas de contenu, onglet BONUS vide, compteur `N/5` **vs** « FACTION
+> POSSÉDÉE » (aucun `0/5` mensonger), 4 deep-links atterrissant sur le bon onglet + `target_tab`
+> purgé, panneau DÉFIS non reconstruit par des `_render()` successifs, bascule FR→EN à chaud.
+> QG — **42 ✅** : les 4 cas de vedette + repli hors ligne, carte **première** dans la colonne, au
+> gabarit, route vers le bon onglet, **aucune bannière legacy** résiduelle.
+> Les deux sabotages (pastille effacée / carte supprimée) font bien passer les scripts au ROUGE.
+>
+> 🐛 **Faux positif corrigé dans le test lui-même** : un `Control` en auto-traduction garde la
+> **clé** dans `.text` (Godot traduit au DESSIN). Lire `.text` brut faisait croire à une clé oubliée
+> à l'écran — le test résout désormais par `atr()`, comme le rendu.
+> 📌 **Piège de données de test** : `nomades.tres` porte `id = "pillards_poussiere"` (le nom de
+> fichier n'est PAS l'id, cf. pipeline personnages). Une capture avec `faction_id: "nomades"`
+> sortait sans portrait ni nom de héros — artefact de jeu d'essai, pas un défaut du code.
+>
+> **Captures relues** : nav aux 4 échelles, hub × 4 onglets, onglet BONUS vide, carte de QG en tête
+> de colonne, dialogue de confirmation d'échelle.
+>
+> **Reste à faire** : aucune partie réelle jouée sous ce hub (pas de serveur local) ; l'audit
+> `ui_scale` des écrans AUTRES que ceux traversés par la recette reste un chantier séparé (§10 du
+> brief) — les panneaux de hub à 980 px de large sont la contrainte qui fixe le plancher d'échelle.

@@ -887,10 +887,23 @@ func _store_events(data: Dictionary) -> void:
 	var active = data.get("active_event", null)
 	var upcoming = data.get("upcoming_events", [])
 	var nxt = data.get("next_event", null)
+	# §8.134 — bloc v2 du HUB à quatre onglets. NORMALISÉ ici, comme le reste : les vues n'ont
+	# jamais à distinguer `null`, absent et vide. Un serveur §8.132 (déploiement en retard) ne le
+	# sert pas → structure vide, et les onglets affichent leur état vide au lieu de casser.
+	var v2 = data.get("events_v2", {})
+	if typeof(v2) != TYPE_DICTIONARY:
+		v2 = {}
+	var v2_active = v2.get("active", [])
+	var v2_upcoming = v2.get("upcoming", [])
+	var v2_character = v2.get("character", {})
 	events_config = {
 		"active_event": active if typeof(active) == TYPE_DICTIONARY else {},
 		"next_event": nxt if typeof(nxt) == TYPE_DICTIONARY else {},
 		"upcoming_events": upcoming if typeof(upcoming) == TYPE_ARRAY else [],
+		"active": v2_active if typeof(v2_active) == TYPE_ARRAY else [],
+		"upcoming": v2_upcoming if typeof(v2_upcoming) == TYPE_ARRAY else [],
+		"character": v2_character if typeof(v2_character) == TYPE_DICTIONARY else {},
+		"featured_id": str(v2.get("featured_id", "")),
 	}
 	events_loaded.emit(events_config)
 

@@ -33,7 +33,7 @@ const _CONFIG_PATH := "user://settings.cfg"
 const COMFORT_DEFAULTS := {
 	"reduced_motion": false,           # E10 : coupe VFX/pulses/particules
 	"colorblind_mode": false,          # E10 : palette Okabe-Ito + motifs
-	"ui_scale": 1.0,                   # E10 : 0.9 / 1.0 / 1.15 / 1.3
+	"ui_scale": 1.0,                   # E10 : 0.9 / 1.0 / 1.15 / 1.3 (cf. UI_SCALE_STEPS)
 	"damage_numbers": true,            # E10 : flotteurs de dégâts
 	# MODE STREAMER (§8.121, LOT E) — masque l'OBJECTIF SECRET en partie (et le renseignement
 	# d'espionnage) derrière un « maintenir pour révéler ». Anti stream-sniping : l'objectif est la
@@ -153,7 +153,15 @@ func _ready() -> void:
 	_load()
 	_load_seen_items()
 	_apply_all()
+	# ⚠️ ORDRE : `_apply_display()` (dans `_apply_all`) fixe d'abord la taille de la fenêtre —
+	# l'assainissement d'échelle qui suit mesure donc la BONNE fenêtre, pas celle du démarrage.
 	_apply_ui_scale()
+	# §8.133 — l'échelle effective se recalcule à chaque redimensionnement (bascule plein écran,
+	# changement de résolution, fenêtre tirée à la souris). Sans ça, un joueur qui rétrécit sa
+	# fenêtre après le boot retombait dans l'enfermement que l'assainissement vient d'écarter.
+	var w := get_window()
+	if w != null:
+		w.size_changed.connect(_on_window_resized)
 
 # --- Lecture publique (la Vue initialise ses contrôles depuis le manager) ---
 func get_volume(bus: String) -> float:
@@ -197,14 +205,103 @@ func set_comfort(key: String, value) -> void:
 		_apply_ui_scale()
 	comfort_changed.emit(key, value)
 
-# Applique le facteur d'échelle d'interface (E10 §8.82) : content_scale_factor de la fenêtre —
-# agrandit TOUTE l'UI (menus + HUD). Ignoré en headless (validation CLI).
+# =========================================================
+# ÉCHELLE D'INTERFACE — assainissement automatique (§8.133)
+# =========================================================
+# LE BUG D'ORIGINE (mesuré le 2026-08-03, pas deviné) : `content_scale_factor` DIVISE le viewport
+# logique. À 1.15 sur un écran 1920, l'UI ne dispose plus que de 1669 px logiques — or la barre de
+# navigation en réclame 1801 au minimum (rangée 1721 + marges 40+40). La rangée débordait donc à
+# droite et emportait le cluster identité + ⚙ + ⏻ HORS DE L'ÉCRAN : un joueur à 115 % ne pouvait
+# plus ni ouvrir les paramètres, ni se déconnecter — donc plus revenir à 100 %. Enfermement.
+#
+# TROIS DÉFENSES, indépendantes (§8.133) :
+#   1. ICI — l'échelle EFFECTIVE est bornée à ce que la fenêtre peut réellement porter ;
+#   2. `top_nav._relayout()` — la nav se DÉGRADE (densité, marque, débordement) jusqu'à tenir ;
+#   3. `settings.gd` — confirmation à rebours de 10 s sur tout changement d'échelle.
+#
+# ⚠️ LA PRÉFÉRENCE SAUVEGARDÉE N'EST JAMAIS MODIFIÉE. On ne réécrit pas le choix du joueur parce
+# qu'il a réduit sa fenêtre : c'est l'APPLICATION qui est bornée. La fenêtre regrandit → la
+# préférence reprend effet toute seule, sans rien re-cliquer.
+
+# Paliers d'échelle proposés — SOURCE UNIQUE (l'écran Paramètres les lit ici, il n'en code aucun).
+const UI_SCALE_STEPS: Array[float] = [0.9, 1.0, 1.15, 1.3]
+
+# Largeur logique minimale d'un ÉCRAN DE HUB : les panneaux centraux du dépôt (écran DÉFIS, hub
+# ÉVÉNEMENTS) sont posés à `custom_minimum_size.x = 980`, plus les marges latérales de 40 px de
+# part et d'autre. En dessous, ce n'est plus la nav qui déborde mais le CONTENU — et aucune
+# dégradation de barre ne peut le rattraper. C'est donc le vrai plancher de l'échelle.
+const HUB_CONTENT_MIN_WIDTH := 1060.0
+
+# Marge de sécurité (px logiques) ajoutée au plancher mesuré : absorbe les variations de LANGUE
+# (un onglet allemand est plus large qu'un onglet français) et les arrondis de rendu de police.
+const UI_SCALE_SAFETY_MARGIN := 24.0
+
+# PLANCHER MESURÉ de la barre de navigation entièrement dégradée (logo seul + onglet actif + menu
+# « ••• » + cluster droit intouchable). Rapporté par `top_nav` à chaque construction — donc juste,
+# quelle que soit la langue et le nombre d'onglets du jour. Vaut 0 avant la première nav : le boot
+# retombe alors sur `HUB_CONTENT_MIN_WIDTH` seul, qui est de toute façon le terme dominant.
+var _nav_floor_width: float = 0.0
+
+# Largeur logique EN DESSOUS DE LAQUELLE l'interface ne fonctionne plus, quoi qu'on dégrade.
+func ui_min_logical_width() -> float:
+	return maxf(_nav_floor_width, HUB_CONTENT_MIN_WIDTH) + UI_SCALE_SAFETY_MARGIN
+
+# Appelé par `top_nav` avec la largeur minimale de sa rangée LA PLUS DÉGRADÉE. On ne garde que la
+# valeur la plus CONTRAIGNANTE de la session : une nav mesurée sur un écran aux onglets nombreux ne
+# doit pas être « oubliée » par un écran qui en montre moins.
+func report_nav_floor_width(px: float) -> void:
+	if px <= 0.0 or px <= _nav_floor_width:
+		return
+	_nav_floor_width = px
+	_apply_ui_scale()
+
+# Largeur PHYSIQUE de la fenêtre (px réels). En headless, le viewport racine fait foi.
+func _window_width() -> float:
+	var w := get_window()
+	if w == null:
+		return 0.0
+	return float(w.size.x)
+
+# Cette échelle tient-elle dans la fenêtre courante ? `largeur_min_logique × échelle ≤ largeur
+# physique` — c'est la même inégalité que `logique = physique / échelle ≥ largeur_min_logique`,
+# écrite sans division pour ne pas dépendre d'un `échelle > 0`.
+func ui_scale_fits(step: float, window_width: float = -1.0) -> bool:
+	var width: float = window_width if window_width > 0.0 else _window_width()
+	if width <= 0.0:
+		return true   # taille inconnue (headless, fenêtre pas encore créée) → on ne bride rien.
+	return ui_min_logical_width() * float(step) <= width
+
+# Plus grande échelle proposée qui tienne. Le plus PETIT palier est le plancher : on ne descend
+# jamais en dessous de 0.9, même sur une fenêtre minuscule — c'est alors à la nav de se dégrader.
+func max_ui_scale_that_fits(window_width: float = -1.0) -> float:
+	var best: float = UI_SCALE_STEPS[0]
+	for s in UI_SCALE_STEPS:
+		if s > best and ui_scale_fits(s, window_width):
+			best = s
+	return best
+
+# Échelle réellement APPLIQUÉE = min(préférence, ce que la fenêtre peut porter).
+func effective_ui_scale() -> float:
+	return minf(float(get_comfort("ui_scale")), max_ui_scale_that_fits())
+
+# Applique le facteur d'échelle d'interface (E10 §8.82, assaini §8.133) : content_scale_factor de
+# la fenêtre — agrandit TOUTE l'UI (menus + HUD). Ignoré en headless (validation CLI).
 func _apply_ui_scale() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
 	var w := get_window()
-	if w != null:
-		w.content_scale_factor = float(get_comfort("ui_scale"))
+	if w == null:
+		return
+	var target := effective_ui_scale()
+	# Écriture conditionnelle : `content_scale_factor` déclenche un relayout complet, et cette
+	# fonction est rappelée à CHAQUE redimensionnement (donc en rafale pendant un drag de fenêtre).
+	if not is_equal_approx(w.content_scale_factor, target):
+		w.content_scale_factor = target
+
+# Redimensionnement de fenêtre : l'échelle effective peut changer dans les DEUX sens — se brider
+# quand la fenêtre rétrécit, et reprendre la préférence complète quand elle regrandit.
+func _on_window_resized() -> void:
+	_apply_ui_scale()
 
 # Libellés « L × H » pour le sélecteur de résolution (numériques → pas de traduction).
 func resolution_labels() -> PackedStringArray:

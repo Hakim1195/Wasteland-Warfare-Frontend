@@ -2740,3 +2740,81 @@ d'origine** passés à `launch_room` — jamais sur une heuristique lue plus tar
 > `launch_room`, zone sous TEMPÊTE sur la boucle de tour réelle, **paramètres figés**, budgets
 > exacts, ordre des multiplicateurs de renforts et de gains, 1 000 tirages de cartes, ledger).
 > **Suite backend COMPLÈTE : 67 suites vertes, 0 rouge.**
+
+---
+
+## §8.134 — HUB ÉVÉNEMENTS V2 : types, priorités, personnage gratuit (ADDITIF strict §1.5)
+
+**Registre `api/game/events.py`.** Chaque événement porte désormais un **`type`** :
+`match` (les 4 mutateurs §8.132), `character` (les personnages), `bonus` (tournois et offres —
+type et onglet existants, **aucun événement bonus au lancement**). La **`priority`** (bonus 30 >
+match 20 > character 10) est **DÉRIVÉE du type** et jamais recopiée dans les entrées : un
+`priority` écrit à la main finit toujours par contredire son propre type. Un id inconnu ou une
+entrée sans `type` répond `match`/20 — le comportement d'avant ce chantier.
+
+**Événement PERMANENT `free_character`** (`type: "character"`). Il n'est dans AUCUNE entrée
+d'`EVENTS_CALENDAR` : sa fenêtre est **calculée** par `events.character_window(now)` sur la semaine
+ISO de `rotation.py` (lundi 04:00 UTC → lundi suivant, borne haute **exclusive**). La constante
+d'heure de bascule est **importée** de `missions_progress` — pas de 2ᵉ convention (piège transverse
+n° 7). Contre-épreuve figée : `character_window(t)[1] == rotation.weekly_resets_at(t)` sur 5
+instants, dont 03:59:59 et 04:00:00 pile.
+
+**Garde de non-chevauchement élargie.** Le chevauchement **inter-types** est désormais AUTORISÉ —
+c'est le cœur du hub : le personnage gratuit tourne pendant les mutateurs du week-end, et un
+tournoi `bonus` doit pouvoir se superposer à une TEMPÊTE. Ce qui reste interdit à l'import, c'est
+**deux `match` simultanés** (`active_event()` n'en rend qu'un ; le choix dépendrait de l'ordre
+d'itération d'un dict).
+
+**`active_event()` est INCHANGÉ pour le moteur** : il ne rend que du `match`. Un `bonus` ou le
+personnage gratuit ne doivent jamais atteindre `snapshot_rules`. `applies_to()` porte la même
+ceinture (`type != match` → False). Les autres types se lisent par `active_events()`.
+
+### `GET /squad/playlists` — bloc `events_v2`
+
+Route **toujours PUBLIQUE**, mais **enrichie si connecté** (`get_current_user_optional`, patron du
+bloc `me` du classement §9.2). Aucun 401 possible : c'est de la configuration de jeu, lisible avant
+l'ouverture du WebSocket. Les clés v1 (`active_event`, `next_event`, `upcoming_events`) **restent
+servies à l'identique** — un client §8.132 ne voit même pas ce bloc.
+
+```jsonc
+"events_v2": {
+  "active":   [ {id, type, priority, name_key, desc_key, scope,
+                 starts_at_epoch, ends_at_epoch, rules} ],   // tous types, tri priorité ↓ puis fin ↑
+  "upcoming": [ … 3 prochaines fenêtres match/bonus … ],
+  "featured_id": "storm",                                     // règle de VEDETTE calculée SERVEUR
+  "character": {                                              // part PERSONNELLE, HORS cache 60 s
+    "faction_id": "ordre_eclipse",
+    "starts_at_epoch": 0, "ends_at_epoch": 0,
+    "free_games_max": 5,
+    "free_games_left": 3        // null = sans objet (anonyme, ou faction déjà possédée)
+  }
+}
+```
+
+**Règle de VEDETTE (`featured_id`), calculée serveur** — le client ne classe RIEN, sous peine de
+montrer autre chose que le hub : (1) parmi les ACTIFS, la plus forte priorité ; (2) à égalité,
+celui qui **finit le plus tôt** ; (3) aucun `match`/`bonus` actif → le **prochain** à venir
+(« COMMENCE DANS ») ; (4) rien du tout → le personnage gratuit. Il y a donc **toujours** quelque
+chose à afficher : une carte de QG vide est interdite.
+
+⚠️ **`free_games_left` est calculé HORS du cache 60 s**, et c'est tout l'intérêt de l'avoir séparé :
+il change à chaque partie jouée. Servi depuis le cache, le hub aurait annoncé « 3/5 » pendant une
+minute après une partie qui venait d'en consommer une. Le bloc mémoïsé est un dict **partagé entre
+requêtes** : il n'est jamais muté sur place — on recompose `events_v2` par-dessus une copie, sinon
+le compteur du premier appelant serait servi à tous les suivants.
+
+⚠️ **Zéro logique dupliquée** : le tirage vient de `rotation.current_rotation()`, le décompte de
+`access.faction_access_map` (3 requêtes). `free_games_left` n'est renseigné que sous le titre
+`rotation` — sous `owned`/`free`/`pass`, `access.py` renvoie le PLAFOND (sémantique « sans objet »),
+et l'afficher donnerait un « 5/5 » trompeur sur une faction déjà achetée.
+
+> **Validation.** `test_events.py` **98 ✅ / 0 ❌** (types et priorités dérivées, bornes de la
+> fenêtre ISO à la seconde et **égalité avec `weekly_resets_at`**, chevauchement inter-types
+> ACCEPTÉ / intra-`match` REFUSÉ — les deux par **sabotage**, `featured` sur toutes les
+> combinaisons dont registre vide, non-régression `applies_to`/`snapshot_rules` du type
+> `character`). `test_events_flow.py` **53 ✅ / 0 ❌**, intégrale : le moteur des mutateurs ne voit
+> aucune différence. **Suite backend COMPLÈTE : 67 suites vertes, 0 rouge.**
+>
+> ⚠️ Deux harnais stubbaient `api.v1.endpoints.auth` sans `get_current_user_optional`
+> (`test_squad_flow`, `test_company_flow` — ce dernier charge `squad.py` à la demande) : stub
+> complété, même convention que `test_missions`/`test_ladder_payload`.

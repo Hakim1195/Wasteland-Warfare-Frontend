@@ -35,6 +35,10 @@ const LOGO_TEX = preload("res://assets/images/logo_mark.svg")  # marque hex-nœu
 # Hauteur de la bande de navigation (marges + barre + filet) — calquée sur la top-bar du menu.
 # Les écrans hôtes décalent leur contenu de NAV_H pour ne jamais passer dessous.
 const NAV_H := 100.0
+# Marges latérales de la bande (calquées sur le Hud du menu principal, 40 px de chaque côté).
+# Extraites en constante depuis §8.133 : la mesure de débordement en a besoin, et deux chiffres 40
+# recopiés auraient fini par diverger de la mise en page réelle.
+const NAV_MARGIN_X := 40.0
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)   # cyan tactique
 # Côté de l'avatar Steam (§8.114) : calé sur la hauteur du bloc eyebrow + pseudo pour que le cadre
 # identité garde exactement sa hauteur actuelle — l'ajout ne doit pas décaler la barre de navigation.
@@ -61,7 +65,10 @@ const TABS := [
 	{"id": "characters", "key": "MENU_TAB_CHARACTERS", "scene": "res://scenes/ui/characters_screen.tscn"},
 	{"id": "shop", "key": "MENU_TAB_SHOP", "scene": "res://scenes/ui/shop.tscn"},
 	{"id": "profile", "key": "MENU_TAB_PROFILE", "scene": "res://scenes/ui/profile.tscn"},
-	{"id": "missions", "key": "MENU_TAB_MISSIONS", "scene": "res://scenes/ui/missions.tscn"},
+	# §8.134 — DÉFIS A QUITTÉ LA BARRE. L'écran des missions est devenu le 4ᵉ onglet du hub
+	# ÉVÉNEMENTS ; sa pastille « ●N » a MIGRÉ sur l'onglet ÉVÉNEMENTS (cf. `_update_events_badge`).
+	# La barre passe ainsi de 8 à 7 onglets — et c'est aussi 80 px de moins à faire tenir, ce qui
+	# n'est pas un détail après la mesure de débordement du §8.133.
 	{"id": "leaderboard", "key": "MENU_TAB_LEADERBOARD", "scene": "res://scenes/ui/leaderboard.tscn"},
 	# §8.126.1 — COMPAGNIE. Placée APRÈS le Classement, dans la continuité : les deux répondent à
 	# « où est-ce que je me situe ? », l'une seul, l'autre avec les siens. Avant cet onglet, l'écran
@@ -138,6 +145,42 @@ var _factions: Dictionary = {}
 var _quit_dialog: Control = null
 
 
+# =========================================================
+# NAV RÉSILIENTE (§8.133) — dégradation contrôlée
+# =========================================================
+# INVARIANT DU CHANTIER : le CLUSTER DROIT (identité + ⚙ + ⏻) ne rétrécit jamais et ne sort JAMAIS
+# de l'écran. Tout le reste plie avant lui — parce que c'est par ⚙ qu'on répare une échelle trop
+# grande, et par ⏻ qu'on quitte. Les rendre inatteignables enferme le joueur (bug d'origine :
+# à 115 % d'échelle sur 1920, le viewport logique tombe à 1669 px pour une rangée qui en réclame
+# 1801 ; à 1600 px de fenêtre, la rangée débordait DÈS 90 %).
+#
+# TROIS PALIERS DE DENSITÉ, puis un DÉBORDEMENT, appliqués dans l'ordre jusqu'à ce que ça tienne :
+#   0 — nominal : marges d'onglet 16 px, police 16, marque « logo + WASTELAND WARFARE ».
+#   1 — compact : marges 10 px, police 14 (≈ 165 px regagnés).
+#   2 — marque en LOGO SEUL, le texte est masqué (≈ 220 px de plus).
+#   3+ — les onglets EXCÉDENTAIRES basculent, un par un EN PARTANT DE LA GAUCHE, dans un menu
+#        « ••• » en fin de pilule. L'onglet ACTIF n'y va JAMAIS : on doit toujours voir où on est.
+# Chaque palier est RÉVERSIBLE : `_relayout()` repart systématiquement du palier 0 et redescend, si
+# bien qu'une fenêtre qui regrandit retrouve sa barre complète sans rien à recliquer.
+const DENSITY_STEPS := 3
+const TAB_MARGIN_X: Array[float] = [16.0, 10.0, 10.0]
+const TAB_FONT_SIZE: Array[int] = [16, 14, 14]
+const BRAND_TEXT_VISIBLE: Array[bool] = [true, true, false]
+
+var _row: HBoxContainer = null
+var _pill: PanelContainer = null
+var _tabs_box: HBoxContainer = null
+var _brand_title: Label = null
+# id d'onglet -> Button (les trois pastilles s'en servent aussi : un seul registre, pas quatre var).
+var _tab_buttons: Dictionary = {}
+var _overflow_btn: MenuButton = null
+# Définitions d'onglets actuellement DANS le menu « ••• » (ordre = ordre des entrées du popup).
+var _overflow_tabs: Array = []
+# Palier de densité courant. -1 = « jamais appliqué » → le premier `_apply_density(0)` agit.
+var _density_level: int = -1
+var _overflow_count: int = -1
+
+
 func _ready() -> void:
 	# Bande pleine largeur ancrée en haut (hauteur fixe NAV_H). La bande elle-même est transparente
 	# et n'intercepte pas la souris (IGNORE) : seuls ses enfants interactifs captent les clics.
@@ -200,8 +243,8 @@ func _build() -> void:
 	# Marges latérales = menu principal (Hud : 40 px). Conteneur transparent.
 	var margin := MarginContainer.new()
 	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 40)
-	margin.add_theme_constant_override("margin_right", 40)
+	margin.add_theme_constant_override("margin_left", int(NAV_MARGIN_X))
+	margin.add_theme_constant_override("margin_right", int(NAV_MARGIN_X))
 	margin.add_theme_constant_override("margin_top", 18)
 	margin.add_theme_constant_override("margin_bottom", 10)
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -211,6 +254,7 @@ func _build() -> void:
 	row.add_theme_constant_override("separation", 16)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.add_child(row)
+	_row = row
 
 	# Marque (gauche) ▸ [extenseur] ▸ pastille onglets (centre) ▸ [extenseur] ▸ cluster (droite).
 	row.add_child(_build_brand())
@@ -218,6 +262,12 @@ func _build() -> void:
 	row.add_child(_build_nav_pill())
 	row.add_child(_make_spacer())
 	row.add_child(_build_right_cluster())
+
+	# §8.133 — mesure du PLANCHER (nav la plus dégradée) publiée au SettingsManager, qui s'en sert
+	# pour borner l'échelle d'interface. Faite ici, avant la première frame : les paliers extrêmes
+	# sont posés puis immédiatement relâchés par `_relayout()`, rien n'est visible à l'écran.
+	_measure_and_report_floor()
+	_relayout()
 
 	# Filet cyan sous la bande (miroir du FiletSeparator du menu principal), dans les marges latérales.
 	var filet := ColorRect.new()
@@ -262,6 +312,8 @@ func _build_brand() -> Control:
 	title.add_theme_color_override("font_color", TEXT)
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	box.add_child(title)
+	# §8.133 — 2ᵉ palier de dégradation : ce Label se masque et la marque redevient le seul logo.
+	_brand_title = title
 	return box
 
 # --- Pastille opaque centrée contenant les onglets (= NavPanel du menu principal) ---
@@ -285,6 +337,7 @@ func _build_nav_pill() -> Control:
 	for t in TABS:
 		var btn := _build_tab(t)
 		tabs_box.add_child(btn)
+		_tab_buttons[str(t.get("id"))] = btn
 		# Mémorise l'onglet Défis : sa pastille « ●N » est un texte COMPOSÉ, re-rendu à la volée.
 		if str(t.get("id")) == "missions":
 			_missions_tab_btn = btn
@@ -294,7 +347,53 @@ func _build_nav_pill() -> Control:
 		# §8.132 — même mécanique ENCORE (troisième usage : on RÉUTILISE, on ne duplique pas).
 		elif str(t.get("id")) == "events":
 			_events_tab_btn = btn
+	# §8.133 — menu de DÉBORDEMENT, dernier palier de dégradation. Créé toujours, masqué tant que
+	# la rangée tient : le construire à la demande obligerait à le glisser au bon rang du HBox au
+	# pire moment (pendant une mesure), et un MenuButton invisible ne coûte rien.
+	tabs_box.add_child(_build_overflow_button())
+	_pill = pill
+	_tabs_box = tabs_box
 	return pill
+
+
+# --- Menu « ••• » : les onglets qui ne tiennent plus, sans en perdre aucun -----------------------
+func _build_overflow_button() -> MenuButton:
+	var mb := MenuButton.new()
+	mb.text = "•••"
+	mb.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	mb.tooltip_text = tr("NAV_MORE_TOOLTIP")
+	mb.visible = false
+	mb.focus_mode = Control.FOCUS_NONE
+	mb.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	mb.add_theme_font_override("font", _font)
+	mb.add_theme_font_size_override("font_size", 16)
+	var normal := StyleBoxFlat.new()
+	normal.set_corner_radius_all(0)
+	normal.bg_color = Color(1, 1, 1, 0.0)
+	normal.content_margin_left = 14.0
+	normal.content_margin_right = 14.0
+	normal.content_margin_top = 10.0
+	normal.content_margin_bottom = 10.0
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT, 0.06)
+	hover.border_width_bottom = 3
+	hover.border_color = Color(ACCENT, 0.5)
+	mb.add_theme_stylebox_override("normal", normal)
+	mb.add_theme_stylebox_override("hover", hover)
+	mb.add_theme_stylebox_override("pressed", hover)
+	mb.add_theme_stylebox_override("focus", normal)
+	mb.add_theme_color_override("font_color", MUTED)
+	mb.add_theme_color_override("font_hover_color", TEXT)
+	mb.mouse_entered.connect(func() -> void: AudioManager.play_sfx("hover"))
+	# L'id de l'entrée est son RANG dans `_overflow_tabs` : la liste change à chaque relayout, mais
+	# le popup est reconstruit dans la foulée — les deux ne peuvent pas se désynchroniser.
+	mb.get_popup().id_pressed.connect(func(idx: int) -> void:
+		if idx < 0 or idx >= _overflow_tabs.size():
+			return
+		var t: Dictionary = _overflow_tabs[idx]
+		_on_tab_pressed(str(t.get("id")), str(t.get("scene"))))
+	_overflow_btn = mb
+	return mb
 
 # --- Un onglet (Button stylé, transparent + soulignement cyan si actif — comme main_menu) ---
 func _build_tab(t: Dictionary) -> Button:
@@ -495,13 +594,148 @@ func _go(scene: String) -> void:
 
 
 # =========================================================
+# MOTEUR DE DÉGRADATION (§8.133)
+# =========================================================
+# Redimensionnement du viewport (fenêtre tirée, plein écran, changement d'échelle d'interface) :
+# la bande est ancrée pleine largeur, donc sa `size.x` EST la largeur logique disponible.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_relayout()
+
+
+# Largeur logique dont la rangée a besoin dans son état courant, marges de bande comprises.
+func _row_need() -> float:
+	if _row == null or not is_instance_valid(_row):
+		return 0.0
+	return _row.get_combined_minimum_size().x + NAV_MARGIN_X * 2.0
+
+
+# Cherche le palier le PLUS LÉGER qui tienne, en repartant toujours du nominal — c'est ce qui rend
+# la dégradation réversible : rien ne « reste » dégradé quand la place revient.
+func _relayout() -> void:
+	if _row == null or not is_instance_valid(_row) or not is_inside_tree():
+		return
+	var avail := size.x
+	if avail <= 0.0:
+		return
+	for lvl in range(DENSITY_STEPS):
+		_apply_density(lvl)
+		_set_overflow_count(0)
+		if _row_need() <= avail:
+			return
+	# Toujours trop large au palier de densité maximal : on évacue les onglets un par un vers le
+	# menu « ••• ». Borne HAUTE = tous sauf l'actif — au-delà il n'y a plus rien à retirer, et le
+	# cluster droit reste intouchable par construction (invariant du chantier).
+	for n in range(1, TABS.size()):
+		_set_overflow_count(n)
+		if _row_need() <= avail:
+			return
+
+
+# Applique un palier de DENSITÉ (marges + police des onglets, visibilité du texte de marque).
+func _apply_density(level: int) -> void:
+	level = clampi(level, 0, DENSITY_STEPS - 1)
+	if level == _density_level:
+		return
+	_density_level = level
+	var mx: float = TAB_MARGIN_X[level]
+	var fs: int = TAB_FONT_SIZE[level]
+	for id in _tab_buttons:
+		var btn: Button = _tab_buttons[id]
+		if btn == null or not is_instance_valid(btn):
+			continue
+		btn.add_theme_font_size_override("font_size", fs)
+		# `normal`/`hover`/`pressed`/`focus` partagent deux objets seulement (cf. `_build_tab`) :
+		# les parcourir tous les quatre est sans effet de bord, et à l'épreuve d'un futur 3ᵉ style.
+		for style_name in ["normal", "hover", "pressed", "focus"]:
+			var sb := btn.get_theme_stylebox(style_name) as StyleBoxFlat
+			if sb != null:
+				sb.content_margin_left = mx
+				sb.content_margin_right = mx
+		btn.update_minimum_size()
+	if _overflow_btn != null and is_instance_valid(_overflow_btn):
+		_overflow_btn.add_theme_font_size_override("font_size", fs)
+		_overflow_btn.update_minimum_size()
+	if _brand_title != null and is_instance_valid(_brand_title):
+		_brand_title.visible = BRAND_TEXT_VISIBLE[level]
+	if _tabs_box != null and is_instance_valid(_tabs_box):
+		_tabs_box.update_minimum_size()
+
+
+# Bascule les `n` premiers onglets NON ACTIFS (de gauche à droite) dans le menu « ••• ».
+func _set_overflow_count(n: int) -> void:
+	if _tabs_box == null or not is_instance_valid(_tabs_box):
+		return
+	n = clampi(n, 0, TABS.size() - 1)
+	if n == _overflow_count:
+		return
+	_overflow_count = n
+	var moved: Array = []
+	var remaining := n
+	for t in TABS:
+		var id := str(t.get("id"))
+		var btn: Button = _tab_buttons.get(id)
+		if btn == null or not is_instance_valid(btn):
+			continue
+		# L'onglet ACTIF est SAUTÉ sans consommer de quota : on doit toujours voir où on est.
+		var to_menu: bool = remaining > 0 and id != active_tab
+		if to_menu:
+			remaining -= 1
+			moved.append(t)
+		btn.visible = not to_menu
+	_overflow_tabs = moved
+	if _overflow_btn != null and is_instance_valid(_overflow_btn):
+		_overflow_btn.visible = not moved.is_empty()
+	_refresh_overflow_menu()
+	# La visibilité d'un enfant ne réinvalide pas toujours le cache de taille minimale du parent :
+	# on force, sinon la mesure qui suit lirait l'ANCIENNE largeur et la boucle croirait avoir gagné.
+	_tabs_box.update_minimum_size()
+
+
+# (Re)peuple le popup. Le libellé est celui de l'onglet TEL QU'IL EST à cet instant — pastille
+# comprise : une mission réclamable reste visible même quand DÉFIS a basculé dans le menu.
+func _refresh_overflow_menu() -> void:
+	if _overflow_btn == null or not is_instance_valid(_overflow_btn):
+		return
+	var pop := _overflow_btn.get_popup()
+	pop.clear()
+	for i in range(_overflow_tabs.size()):
+		pop.add_item(_menu_entry_text(_overflow_tabs[i]), i)
+
+
+func _menu_entry_text(t: Dictionary) -> String:
+	var btn: Button = _tab_buttons.get(str(t.get("id")))
+	# Un onglet à pastille porte un texte COMPOSÉ déjà traduit (auto-traduction coupée) : on le
+	# reprend tel quel. Sinon le bouton ne contient qu'une CLÉ i18n brute, qu'il faut traduire.
+	if btn != null and is_instance_valid(btn) \
+			and btn.auto_translate_mode == Control.AUTO_TRANSLATE_MODE_DISABLED:
+		return btn.text
+	return tr(str(t.get("key")))
+
+
+# Mesure du PLANCHER absolu de la barre (§8.133) : état le plus dégradé possible — densité
+# maximale, tous les onglets sauf l'actif dans le menu. C'est la largeur en dessous de laquelle
+# plus aucune dégradation ne peut sauver l'interface ; le SettingsManager en fait la borne de
+# l'échelle. Mesuré sur la nav RÉELLE (langue et onglets du jour), jamais un chiffre en dur.
+func _measure_and_report_floor() -> void:
+	_apply_density(DENSITY_STEPS - 1)
+	_set_overflow_count(TABS.size() - 1)
+	SettingsManager.report_nav_floor_width(_row_need())
+
+
+# =========================================================
 # PASTILLE DÉFIS (§8.94) — « DÉFIS ●N » sur l'onglet des défis
 # =========================================================
 func _on_missions_loaded(data: Dictionary) -> void:
 	if not is_inside_tree():
 		return  # garde défensive : signal global reçu pendant un changement de scène.
 	_missions_claimable = int(data.get("claimable_count", 0))
+	# §8.134 — l'onglet DÉFIS n'existe plus dans la barre : `_update_missions_badge` est devenue une
+	# no-op défensive (son bouton est null), et c'est la pastille ÉVÉNEMENTS qui porte le « ●N ».
 	_update_missions_badge()
+	_update_events_badge()
+	# §8.133 — l'onglet peut être dans le menu « ••• » : sa pastille doit y suivre.
+	_refresh_overflow_menu()
 
 func _update_missions_badge() -> void:
 	if _missions_tab_btn == null or not is_instance_valid(_missions_tab_btn):
@@ -532,6 +766,7 @@ func _on_company_badge(data: Dictionary) -> void:
 	_company_unread = int(data.get("unread", 0))
 	_company_online = int(data.get("online", 0))
 	_update_company_badge()
+	_refresh_overflow_menu()   # §8.133 — la pastille suit l'onglet jusque dans le menu « ••• ».
 	var invite = data.get("invite", {})
 	_show_company_invite(invite if typeof(invite) == TYPE_DICTIONARY else {})
 
@@ -652,22 +887,38 @@ func _update_company_badge() -> void:
 
 
 # =========================================================
-# PASTILLE ÉVÉNEMENTS (§8.132) — un point OR, rien d'autre
+# PASTILLE ÉVÉNEMENTS (§8.132, ÉLARGIE §8.134) — une pastille, deux régimes
 # =========================================================
+# DÉFIS ayant quitté la barre, sa pastille « ●N » a migré ICI. Deux signaux, un emplacement, et la
+# PRIORITÉ VA À L'ACTION :
+#   1. des missions RÉCLAMABLES → « ●N » en or : de l'argent attend le joueur, c'est un geste ;
+#   2. sinon, une opération `match`/`bonus` EN COURS → « ● » seul : il se passe quelque chose ;
+#   3. sinon, rien.
+#
+# ⚠️ LE PERSONNAGE GRATUIT NE DÉCLENCHE JAMAIS LA PASTILLE, alors qu'il est perpétuellement actif.
+# Une pastille toujours allumée est une pastille morte : au bout de trois jours, l'œil ne la voit
+# plus — et le jour où un vrai mutateur tourne, elle n'apprend plus rien. D'où la lecture de
+# `active_event` (les `match` seuls, contrat v1) et NON de la liste `active` de v2.
 func _on_events_config(data: Dictionary) -> void:
 	if not is_inside_tree():
 		return  # garde défensive : signal global reçu pendant un changement de scène.
 	var active = data.get("active_event", {})
 	_event_active = typeof(active) == TYPE_DICTIONARY and not active.is_empty()
 	_update_events_badge()
+	_refresh_overflow_menu()   # §8.133 — la pastille suit l'onglet jusque dans le menu « ••• ».
 
 func _update_events_badge() -> void:
 	if _events_tab_btn == null or not is_instance_valid(_events_tab_btn):
 		return
+	# Texte COMPOSÉ → auto-traduction désactivée, re-rendu manuel sur locale_changed (même piège que
+	# COMPAGNIE : sans ça, l'onglet reste en français après un changement de langue). `●` : même
+	# bloc Unicode que les pastilles existantes — aucun emoji, aucun tofu.
+	if _missions_claimable > 0:
+		_events_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		_events_tab_btn.text = "%s ●%d" % [tr("NAV_EVENTS"), _missions_claimable]
+		_events_tab_btn.add_theme_color_override("font_color", GOLD)
+		return
 	if _event_active:
-		# Texte COMPOSÉ → auto-traduction désactivée, re-rendu manuel sur locale_changed (même
-		# piège que DÉFIS/COMPAGNIE : sans ça, l'onglet reste en français après un changement de
-		# langue). `●` : même bloc Unicode que les pastilles existantes — aucun emoji, aucun tofu.
 		_events_tab_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 		_events_tab_btn.text = "%s ●" % tr("NAV_EVENTS")
 		_events_tab_btn.add_theme_color_override("font_color", GOLD)
@@ -692,6 +943,13 @@ func _on_locale_changed(_code: String) -> void:
 	_update_missions_badge()
 	_update_company_badge()
 	_update_events_badge()
+	# §8.133 — les entrées du menu « ••• » sont des textes composés/traduits à la main comme les
+	# pastilles : sans ce re-rendu, elles resteraient dans la langue précédente.
+	_refresh_overflow_menu()
+	if _overflow_btn != null and is_instance_valid(_overflow_btn):
+		_overflow_btn.tooltip_text = tr("NAV_MORE_TOOLTIP")
+	# Une langue plus verbeuse peut faire déborder une barre qui tenait : on re-mesure.
+	_relayout()
 	# Le mini-profil, s'il est ouvert, contient des valeurs formatées → re-rendu.
 	if _profile_flyout != null and _profile_flyout.visible:
 		_populate_profile_flyout()

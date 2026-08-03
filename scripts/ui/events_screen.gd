@@ -1,26 +1,36 @@
 extends Control
 
 # =========================================================================
-# ÉCRAN ÉVÉNEMENTS (§8.132) — charte « Warzone Command » §2
+# HUB ÉVÉNEMENTS — quatre onglets (§8.134), charte « Warzone Command » §2
 # =========================================================================
-# La destination CANONIQUE des « opérations spéciales » : ce qui tourne ce week-end, ce qui arrive,
-# et à quelles parties ça s'applique.
+# La destination CANONIQUE de tout ce qui est « en ce moment » dans le jeu :
+#   PARTIES     — les mutateurs §8.132 (ce qui change dans les règles ce week-end) ;
+#   PERSONNAGES — le personnage GRATUIT de la semaine, jusqu'ici enterré dans la Boutique ;
+#   BONUS       — tournois et offres exceptionnelles (coquille prête, VIDE au lancement) ;
+#   DÉFIS       — les missions quotidiennes/hebdo, qui quittent la barre de navigation.
 #
-# ⚠️ CET ÉCRAN REMPLACE UN PLACEHOLDER. `scenes/ui/events.tscn` existait depuis les premiers
-# chantiers avec `section_placeholder.gd` (« SECTION EN CONSTRUCTION »). On a REPRIS la scène plutôt
-# que d'en créer une seconde : l'onglet de navigation, l'uid de la scène et les chemins existants
-# restent valides, et il n'y a jamais deux écrans « Événements » dans le dépôt.
+# ⚠️ CET ÉCRAN REMPLACE UN PLACEHOLDER, PUIS S'EST REFONDU. `scenes/ui/events.tscn` portait
+# `section_placeholder.gd`, puis l'écran §8.132 à page unique. On REPREND toujours la même scène :
+# l'onglet de navigation, l'uid et les chemins existants restent valides, et il n'y a jamais deux
+# écrans « Événements » dans le dépôt.
 #
-# ⚠️⚠️ AUCUNE VALEUR D'ÉVÉNEMENT EN DUR. Nom, description, dates ET effets viennent tous du serveur
-# (`NetworkManager.events_config`, alimenté par `GET /squad/playlists`). Le client ne sait même pas
-# combien d'événements existent. C'est ce qui permet d'ouvrir un événement en éditant un registre
-# backend, sans redéployer un client.
+# ⚠️⚠️ AUCUNE VALEUR D'ÉVÉNEMENT EN DUR. Nom, description, dates, type, effets, vedette : tout
+# descend du serveur (`NetworkManager.events_config`, alimenté par `GET /squad/playlists`). Le
+# client ne sait même pas combien d'événements existent, ni lequel mettre en avant — `featured_id`
+# est calculé SERVEUR. C'est ce qui permet d'ouvrir un événement en éditant un registre backend.
+#
+# ACQUIS §8.132 CONSERVÉS : ordre coquille-puis-nav (leçon §8.126), cache `events_config` peint
+# immédiatement, `_render()` sur `locale_changed`. Le TIMER unique d'1 s, lui, a disparu : le temps
+# est désormais l'affaire du composant `countdown_label` (un seul afficheur de temps dans tout le
+# hub — c'est ça, la cohérence).
 #
 # Règle d'Or §6.1 : VUE pure — aucune règle de jeu ici, uniquement du rendu.
 
 const WarzoneUI = preload("res://scripts/ui/warzone_ui.gd")
 const TopNav = preload("res://scripts/ui/top_nav.gd")
 const EventRulesModal = preload("res://scripts/ui/event_rules_modal.gd")
+const CountdownLabel = preload("res://scripts/ui/countdown_label.gd")
+const MissionsPanel = preload("res://scripts/ui/missions_panel.gd")
 
 # --- Palette canonique (§2, miroir company_screen.gd) ---
 const ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
@@ -32,14 +42,35 @@ const GUNMETAL := Color(0.058824, 0.07451, 0.094118, 0.9)
 
 const BAR_H := TopNav.NAV_H
 
+# Types d'événement — MIROIR EXACT du registre serveur (`events.TYPE_*`). Le client ne s'en sert que
+# pour RANGER dans le bon onglet ; il n'en déduit aucune règle, aucun effet, aucune date.
+const TYPE_MATCH := "match"
+const TYPE_CHARACTER := "character"
+const TYPE_BONUS := "bonus"
+
+# Onglets, data-driven (patron de la TabsBar de settings.gd / shop.gd). `type` = les événements que
+# l'onglet montre ; "" pour DÉFIS, qui n'affiche pas d'événements du tout.
+const TAB_DEFS := [
+	{"id": "matches", "key": "EVENTS_TAB_MATCHES", "type": TYPE_MATCH},
+	{"id": "characters", "key": "EVENTS_TAB_CHARACTERS", "type": TYPE_CHARACTER},
+	{"id": "bonus", "key": "EVENTS_TAB_BONUS", "type": TYPE_BONUS},
+	{"id": "missions", "key": "MENU_TAB_MISSIONS", "type": ""},
+]
+const DEFAULT_TAB := "matches"
+
+# Onglet d'OUVERTURE, posé par l'appelant AVANT le changement de scène (patron §8.107, comme
+# `CompanyScreen.target_tag`). PURGÉ à la lecture : sans ça, un joueur qui revient au hub par
+# l'onglet de nav rouvrirait l'onglet où l'avait mené sa dernière notification.
+static var target_tab: String = ""
+
 var _font: Font
-var _content: VBoxContainer = null
-# Compte à rebours : UN seul Timer d'1 s pour tout l'écran (la carte principale est la seule à en
-# porter un). Il ne redemande RIEN au serveur — il recalcule un écart contre l'epoch déjà reçu.
-var _tick: Timer = null
-var _countdown_label: Label = null
-var _countdown_epoch: int = 0
-var _countdown_key: String = ""
+var _tabs_bar: HBoxContainer = null
+var _tab_buttons: Dictionary = {}
+var _pages: Dictionary = {}          # id d'onglet -> VBoxContainer (contenu de la page)
+var _active_tab: String = DEFAULT_TAB
+# Panneau DÉFIS : monté UNE SEULE FOIS et conservé (il porte un claim en vol et son propre cycle
+# réseau — le reconstruire à chaque `_render()` annulerait un claim sous les doigts du joueur).
+var _missions_panel: Node = null
 
 
 func _ready() -> void:
@@ -47,9 +78,12 @@ func _ready() -> void:
 	WarzoneUI.animate_screen_enter(self)
 
 	# ⚠️ LA COQUILLE D'ABORD, LA NAV ENSUITE (leçon §8.126) : les Control se dessinent dans l'ORDRE
-	# DE L'ARBRE. Le fond plein écran de cet écran vit dans le `.tscn`, mais le panneau central est
-	# ajouté par ce script — une nav montée AVANT lui passerait derrière. On garde donc l'ordre sûr :
-	# contenu, puis nav.
+	# DE L'ARBRE. Le fond plein écran vit dans le `.tscn`, mais le panneau central est ajouté par ce
+	# script — une nav montée AVANT lui passerait derrière.
+	_active_tab = str(target_tab) if str(target_tab) != "" else DEFAULT_TAB
+	target_tab = ""
+	if not _has_tab(_active_tab):
+		_active_tab = DEFAULT_TAB
 	_build_shell()
 
 	var nav := TopNav.new()
@@ -58,13 +92,7 @@ func _ready() -> void:
 	AudioManager.start_menu_ambient()
 
 	NetworkManager.events_loaded.connect(_on_events)
-	LocaleManager.locale_changed.connect(func(_code: String) -> void: _render())
-
-	_tick = Timer.new()
-	_tick.wait_time = 1.0
-	_tick.timeout.connect(_update_countdown)
-	add_child(_tick)
-	_tick.start()
+	LocaleManager.locale_changed.connect(_on_locale_changed)
 
 	# La nav lance déjà `fetch_events()` de son côté ; on peint immédiatement le cache s'il existe
 	# (navigation depuis un autre écran hub) pour ne pas afficher un écran vide une demi-seconde.
@@ -78,6 +106,16 @@ func _make_font() -> Font:
 	return f
 
 
+func _has_tab(id: String) -> bool:
+	for t in TAB_DEFS:
+		if str(t.get("id")) == id:
+			return true
+	return false
+
+
+# =========================================================
+# COQUILLE & ONGLETS
+# =========================================================
 func _build_shell() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -96,76 +134,193 @@ func _build_shell() -> void:
 	center.add_child(panel)
 	WarzoneUI.add_corner_notches(panel)
 
-	_content = VBoxContainer.new()
-	_content.add_theme_constant_override("separation", 14)
-	panel.add_child(_content)
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 14)
+	panel.add_child(root)
+
+	root.add_child(_label(_t("NAV_EVENTS"), 13, ACCENT))
+	root.add_child(_label(_t("EVENT_SCREEN_TITLE"), 34, TEXT))
+
+	# --- Barre d'onglets (construite en code, comme settings.gd/shop.gd — pas de TabContainer :
+	# aucun helper d'onglets n'existe dans `warzone_ui.gd`, et le style natif de TabContainer ne se
+	# plie pas à l'ADN angulaire de la charte sans plus de code que ceci). ---
+	_tabs_bar = HBoxContainer.new()
+	_tabs_bar.add_theme_constant_override("separation", 4)
+	root.add_child(_tabs_bar)
+	for t in TAB_DEFS:
+		var btn := _make_tab_button(t)
+		_tabs_bar.add_child(btn)
+		_tab_buttons[str(t.get("id"))] = btn
+	WarzoneUI.add_filet(root)
+
+	# --- Pages : toutes créées, une seule VISIBLE. Les garder montées évite de reconstruire le
+	# panneau DÉFIS (et son claim en vol) à chaque aller-retour entre onglets. ---
+	var stack := MarginContainer.new()
+	stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(stack)
+	for t in TAB_DEFS:
+		var page := VBoxContainer.new()
+		page.add_theme_constant_override("separation", 12)
+		page.visible = false
+		stack.add_child(page)
+		_pages[str(t.get("id"))] = page
+	_show_tab(_active_tab)
 
 
+func _make_tab_button(t: Dictionary) -> Button:
+	var btn := Button.new()
+	btn.text = str(t.get("key"))     # clé i18n BRUTE → Godot traduit ET re-traduit tout seul.
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 16)
+	_style_tab(btn, str(t.get("id")) == _active_tab)
+	WarzoneUI.wire_button_sfx(btn)
+	btn.pressed.connect(_show_tab.bind(str(t.get("id"))))
+	return btn
+
+
+func _style_tab(btn: Button, active: bool) -> void:
+	var st := StyleBoxFlat.new()
+	st.set_corner_radius_all(0)
+	st.bg_color = Color(ACCENT, 0.10) if active else Color(1, 1, 1, 0.0)
+	st.content_margin_left = 18.0
+	st.content_margin_right = 18.0
+	st.content_margin_top = 9.0
+	st.content_margin_bottom = 9.0
+	if active:
+		st.border_width_bottom = 3
+		st.border_color = ACCENT
+	var hover := st.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT, 0.16)
+	hover.border_width_bottom = 3
+	hover.border_color = ACCENT if active else Color(ACCENT, 0.5)
+	btn.add_theme_stylebox_override("normal", st)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_stylebox_override("focus", st)
+	btn.add_theme_color_override("font_color", TEXT if active else MUTED)
+	btn.add_theme_color_override("font_hover_color", TEXT)
+
+
+func _show_tab(id: String) -> void:
+	if not _has_tab(id):
+		id = DEFAULT_TAB
+	_active_tab = id
+	for tab_id in _pages:
+		_pages[tab_id].visible = tab_id == id
+	for tab_id in _tab_buttons:
+		_style_tab(_tab_buttons[tab_id], tab_id == id)
+
+
+# =========================================================
+# RENDU
+# =========================================================
 func _on_events(_data: Dictionary) -> void:
 	if not is_inside_tree():
 		return  # garde défensive : signal global reçu pendant un changement de scène.
 	_render()
 
 
-# =========================================================
-# RENDU
-# =========================================================
+func _on_locale_changed(_code: String) -> void:
+	if is_inside_tree():
+		_render()
+
+
 func _render() -> void:
-	if _content == null or not is_instance_valid(_content):
+	if _pages.is_empty():
 		return
-	for c in _content.get_children():
-		_content.remove_child(c)
-		c.queue_free()
-	_countdown_label = null
-	_countdown_epoch = 0
-
-	_content.add_child(_label(_t("NAV_EVENTS"), 13, ACCENT))
-	_content.add_child(_label(_t("EVENT_SCREEN_TITLE"), 34, TEXT))
-	WarzoneUI.add_filet(_content)
-
 	var cfg: Dictionary = NetworkManager.events_config
-	var active: Dictionary = _dict(cfg.get("active_event", {}))
-	var upcoming: Array = cfg.get("upcoming_events", []) if typeof(cfg.get("upcoming_events")) == TYPE_ARRAY else []
-	var nxt: Dictionary = _dict(cfg.get("next_event", {}))
+	var actives: Array = cfg.get("active", []) if typeof(cfg.get("active")) == TYPE_ARRAY else []
+	var upcoming: Array = cfg.get("upcoming", []) if typeof(cfg.get("upcoming")) == TYPE_ARRAY else []
 
-	# --- Carte PRINCIPALE : l'ACTIF, à défaut le PROCHAIN, à défaut l'état vide ---
-	if not active.is_empty():
-		_content.add_child(_headline_card(active, true))
-	elif not nxt.is_empty():
-		_content.add_child(_headline_card(nxt, false))
-	else:
-		_content.add_child(_empty_state())
+	_render_event_tab("matches", TYPE_MATCH, actives, upcoming)
+	_render_characters_tab(_dict(cfg.get("character", {})))
+	_render_event_tab("bonus", TYPE_BONUS, actives, upcoming)
+	_render_missions_tab()
 
-	# --- CALENDRIER : les 3 prochaines opérations, en heure LOCALE du joueur ---
-	# On retire l'événement DÉJÀ mis en avant par la carte principale : le répéter juste en dessous
-	# ferait croire à deux opérations distinctes.
-	var headline_id := str(active.get("id", "")) if not active.is_empty() else str(nxt.get("id", ""))
-	var rows: Array = []
+
+# PARTIES et BONUS partagent le MÊME rendu : un futur événement `bonus` s'affichera sans une ligne
+# de code neuve. C'est exactement ce que « la coquille est prête » veut dire.
+func _render_event_tab(tab_id: String, type_id: String, actives: Array, upcoming: Array) -> void:
+	var page: VBoxContainer = _pages.get(tab_id)
+	if page == null:
+		return
+	_clear(page)
+
+	var mine: Array = []
+	for e in actives:
+		var entry := _dict(e)
+		if str(entry.get("type", "")) == type_id:
+			mine.append(entry)
+	var soon: Array = []
 	for e in upcoming:
 		var entry := _dict(e)
-		if entry.is_empty() or str(entry.get("id", "")) == headline_id:
-			continue
-		rows.append(entry)
-	if not rows.is_empty():
-		_content.add_child(_spacer(6))
-		_content.add_child(_label(_t("EVENT_CALENDAR_TITLE"), 13, ACCENT))
-		for entry in rows:
-			_content.add_child(_calendar_row(entry))
+		if str(entry.get("type", "")) == type_id and not _contains_id(mine, str(entry.get("id", ""))):
+			soon.append(entry)
 
-	# --- NOTE DE PÉRIMÈTRE : permanente, même quand rien n'est programmé ---
-	_content.add_child(_spacer(8))
-	WarzoneUI.add_filet(_content)
-	var scope := _label(_t("EVENT_SCOPE_NOTE"), 13, MUTED)
-	scope.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	scope.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_content.add_child(scope)
+	if not mine.is_empty():
+		page.add_child(_event_card(mine[0], true))
+	elif not soon.is_empty():
+		page.add_child(_event_card(soon[0], false))
+		soon.remove_at(0)
+	else:
+		page.add_child(_empty_state(
+			"EVENTS_BONUS_EMPTY" if type_id == TYPE_BONUS else "EVENT_NONE_PLANNED",
+			"EVENTS_BONUS_EMPTY_HINT" if type_id == TYPE_BONUS else ""))
 
-	_update_countdown()
+	# --- CALENDRIER : les prochaines opérations, en heure LOCALE du joueur ---
+	if not soon.is_empty():
+		page.add_child(_spacer(6))
+		page.add_child(_label(_t("EVENT_CALENDAR_TITLE"), 13, ACCENT))
+		for entry in soon:
+			page.add_child(_calendar_row(entry))
+
+	# --- NOTE DE PÉRIMÈTRE : permanente sur l'onglet PARTIES, même quand rien n'est programmé ---
+	if type_id == TYPE_MATCH:
+		page.add_child(_spacer(8))
+		WarzoneUI.add_filet(page)
+		var scope := _label(_t("EVENT_SCOPE_NOTE"), 13, MUTED)
+		scope.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		scope.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		page.add_child(scope)
 
 
-# Carte principale, cliquable → modal de règles. Liseré OR si l'opération est en cours, CYAN si
+# --- Onglet PERSONNAGES ------------------------------------------------------------------------
+# Structure en LISTE dès le départ (exigence du chantier) : la carte du personnage gratuit est la
+# PREMIÈRE ENTRÉE, pas un cas particulier. Les futurs événements `character` viendront s'empiler
+# dessous sans refonte.
+func _render_characters_tab(character: Dictionary) -> void:
+	var page: VBoxContainer = _pages.get("characters")
+	if page == null:
+		return
+	_clear(page)
+	if character.is_empty() or str(character.get("faction_id", "")) == "":
+		page.add_child(_empty_state("COMMON_SYNCING", ""))
+		return
+	page.add_child(_free_character_card(character))
+
+
+func _render_missions_tab() -> void:
+	var page: VBoxContainer = _pages.get("missions")
+	if page == null:
+		return
+	# ⚠️ MONTÉ UNE SEULE FOIS, et JAMAIS purgé par `_render()` : ce panneau possède son propre cycle
+	# réseau et un verrou de claim EN VOL. Le reconstruire à la réception d'une config d'événements
+	# (qui n'a rien à voir) annulerait un claim en cours sous les doigts du joueur.
+	if _missions_panel != null and is_instance_valid(_missions_panel):
+		return
+	_missions_panel = MissionsPanel.new()
+	_missions_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	page.add_child(_missions_panel)
+
+
+# =========================================================
+# CARTES
+# =========================================================
+# Carte d'événement, cliquable → modal de règles. Liseré OR si l'opération est en cours, CYAN si
 # elle est à venir : la couleur seule dit « ça se joue maintenant » ou « prépare-toi ».
-func _headline_card(event: Dictionary, is_active: bool) -> Control:
+func _event_card(event: Dictionary, is_active: bool) -> Control:
 	var accent: Color = GOLD if is_active else ACCENT
 	var btn := Button.new()
 	btn.focus_mode = Control.FOCUS_NONE
@@ -203,8 +358,7 @@ func _headline_card(event: Dictionary, is_active: bool) -> Control:
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(box)
 
-	box.add_child(_label(_t("EVENT_CARD_ACTIVE" if is_active else "EVENT_CARD_UPCOMING"),
-		13, accent))
+	box.add_child(_label(_eyebrow_text(event, is_active), 13, accent))
 	box.add_child(_label(_t(str(event.get("name_key", ""))).to_upper(), 30, TEXT))
 	var desc := _label(_t(str(event.get("desc_key", ""))), 16, MUTED)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -213,12 +367,125 @@ func _headline_card(event: Dictionary, is_active: bool) -> Control:
 	box.add_child(_spacer(2))
 
 	# Compte à rebours : vers la FIN si l'opération est en cours, vers le DÉBUT sinon.
-	_countdown_epoch = int(event.get("ends_at_epoch", 0)) if is_active \
-		else int(event.get("starts_at_epoch", 0))
-	_countdown_key = "EVENT_ENDS_IN" if is_active else "EVENT_STARTS_IN"
-	_countdown_label = _label("", 18, accent)
-	box.add_child(_countdown_label)
+	var cd = CountdownLabel.make(18, accent)
+	box.add_child(cd)
+	cd.set_target(int(event.get("ends_at_epoch", 0)) if is_active
+		else int(event.get("starts_at_epoch", 0)),
+		"COUNTDOWN_ENDS_IN" if is_active else "COUNTDOWN_STARTS_IN")
+	# La fenêtre vient de basculer : on redemande la configuration plutôt que d'afficher un rebours
+	# figé. Le serveur mémoïse 60 s → aucun risque de marteler l'API.
+	cd.expired.connect(func() -> void: NetworkManager.fetch_events())
+
 	box.add_child(_label(_t("EVENT_OPEN_RULES"), 13, MUTED))
+	return btn
+
+
+# --- Carte « PERSONNAGE GRATUIT DE LA SEMAINE » ------------------------------------------------
+# ⚠️ VUE PURE sur la rotation : le tirage vient de `rotation.py`, le compteur de parties de
+# `access.py`. Rien n'est recalculé ici — pas même le « 5 » du plafond, qui descend du serveur.
+func _free_character_card(character: Dictionary) -> Control:
+	var faction_id := str(character.get("faction_id", ""))
+	var faction = _resolve_faction(faction_id)
+	var accent: Color = faction.accent_color if (faction != null
+		and faction.get("accent_color") != null) else GOLD
+
+	var pan := PanelContainer.new()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(SURFACE, 0.85)
+	st.set_corner_radius_all(0)
+	st.set_border_width_all(1)
+	st.border_width_left = 4
+	st.border_color = accent
+	st.set_content_margin_all(22.0)
+	pan.add_theme_stylebox_override("panel", st)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 20)
+	pan.add_child(row)
+
+	# Portrait du héros — `hero_path` est un CHEMIN (pattern characters_screen/main_menu), pas une
+	# texture. Chargé défensivement : ressource absente ou chemin périmé → aucun cadre, la mise en
+	# page se referme proprement plutôt que d'afficher un carré vide.
+	var img_path := ""
+	if faction != null and faction.get("hero_path") != null:
+		img_path = str(faction.get("hero_path"))
+	var portrait_tex: Texture2D = null
+	if img_path != "" and ResourceLoader.exists(img_path):
+		portrait_tex = load(img_path) as Texture2D
+	if portrait_tex != null:
+		var frame := PanelContainer.new()
+		frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var fst := StyleBoxFlat.new()
+		fst.bg_color = Color(accent, 0.08)
+		fst.set_corner_radius_all(0)
+		fst.set_border_width_all(1)
+		fst.border_color = Color(accent, 0.55)
+		fst.set_content_margin_all(3)
+		frame.add_theme_stylebox_override("panel", fst)
+		var tex := TextureRect.new()
+		tex.texture = portrait_tex
+		tex.custom_minimum_size = Vector2(128, 128)
+		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		frame.add_child(tex)
+		row.add_child(frame)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(box)
+
+	box.add_child(_label(_t("EVENTS_EYEBROW_CHARACTER"), 13, accent))
+	box.add_child(_label(_t("EVENT_FREE_CHAR_TITLE"), 26, TEXT))
+	if faction != null and faction.get("name") != null:
+		var hero := WarzoneUI.faction_leader_title(faction)
+		var who := str(faction.name).to_upper()
+		if hero != "":
+			who = "%s — %s" % [hero.to_upper(), who]
+		box.add_child(_label(who, 18, accent))
+
+	var cd = CountdownLabel.make(18, MUTED)
+	box.add_child(cd)
+	cd.set_target(int(character.get("ends_at_epoch", 0)), "COUNTDOWN_ENDS_IN")
+	cd.expired.connect(func() -> void: NetworkManager.fetch_events())
+
+	# COMPTEUR PERSONNEL. `null` = la question ne se pose pas (faction déjà possédée, ou joueur non
+	# authentifié) → on affiche « FACTION POSSÉDÉE » plutôt qu'un « 0/5 » mensonger.
+	var left = character.get("free_games_left", null)
+	if left == null:
+		box.add_child(_label(_t("EVENT_FACTION_OWNED"), 15, MUTED))
+	else:
+		var maxi_games := int(character.get("free_games_max", 0))
+		box.add_child(_label(_t("EVENT_FREE_GAMES_LEFT") % [int(left), maxi_games],
+			15, GOLD if int(left) > 0 else MUTED))
+
+	var cta_row := HBoxContainer.new()
+	cta_row.add_theme_constant_override("separation", 10)
+	box.add_child(cta_row)
+	cta_row.add_child(_cta(_t("EVENT_TRY_CTA"), accent, func() -> void:
+		# « L'ESSAYER » mémorise le personnage puis part en recherche : le draft proposera celui-là
+		# en premier (même mécanique que l'écran Personnages, §8.93).
+		if faction_id != "":
+			SettingsManager.set_selected_faction(faction_id)
+		TransitionManager.change_scene("res://scenes/ui/search_screen.tscn")))
+	cta_row.add_child(_cta(_t("EVENT_SHOP_CTA"), MUTED, func() -> void:
+		TransitionManager.change_scene("res://scenes/ui/shop.tscn")))
+	return pan
+
+
+func _cta(label: String, color: Color, on_pressed: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.custom_minimum_size = Vector2(190, 46)
+	btn.add_theme_font_override("font", _font)
+	btn.add_theme_font_size_override("font_size", 15)
+	WarzoneUI.apply_ghost_button(btn)
+	btn.add_theme_color_override("font_color", color)
+	WarzoneUI.wire_button_sfx(btn)
+	btn.pressed.connect(on_pressed)
 	return btn
 
 
@@ -240,7 +507,9 @@ func _calendar_row(event: Dictionary) -> Control:
 	return row
 
 
-func _empty_state() -> Control:
+# État vide SOIGNÉ : un titre et, si l'onglet le mérite, une ligne sobre qui dit ce qui viendra là.
+# Jamais un cadre nu — un écran vide sans explication se lit comme une panne.
+func _empty_state(title_key: String, hint_key: String) -> Control:
 	var pan := PanelContainer.new()
 	pan.custom_minimum_size = Vector2(0, 180)
 	var st := StyleBoxFlat.new()
@@ -254,47 +523,40 @@ func _empty_state() -> Control:
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 8)
 	pan.add_child(box)
-	var l := _label(_t("EVENT_NONE_PLANNED"), 20, MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var l := _label(_t(title_key), 20, MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(l)
+	if hint_key != "":
+		var h := _label(_t(hint_key), 14, MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+		h.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		box.add_child(h)
 	return pan
 
 
 # =========================================================
-# COMPTE À REBOURS & DATES
+# OUTILS
 # =========================================================
-# ⚠️ Le rebours se calcule contre l'HORLOGE LOCALE, sans aller-retour serveur : la dérive possible
-# se compte en secondes sur une fenêtre de 54 h — invisible. Les timers de PARTIE, eux, utilisent
-# l'offset serveur (§8.75) parce qu'une seconde y compte vraiment.
-func _update_countdown() -> void:
-	if _countdown_label == null or not is_instance_valid(_countdown_label):
-		return
-	if _countdown_epoch <= 0:
-		_countdown_label.text = ""
-		return
-	var remaining := _countdown_epoch - int(Time.get_unix_time_from_system())
-	if remaining <= 0:
-		# La fenêtre vient de basculer : on redemande la configuration plutôt que d'afficher un
-		# rebours négatif. Le serveur mémoïse 60 s → aucun risque de marteler l'API.
-		_countdown_label.text = _t("COMMON_SYNCING")
-		_countdown_epoch = 0
-		NetworkManager.fetch_events()
-		return
-	_countdown_label.text = _t(_countdown_key) % _duration_label(remaining)
+# Sur-titre d'une carte : « ÉVÉNEMENT — PARTIES » / « — BONUS », ou l'état v1 pour un événement à
+# venir. Le TYPE est dit en toutes lettres : c'est ce qui rattache visuellement la carte du QG à
+# l'onglet où le clic va atterrir.
+func _eyebrow_text(event: Dictionary, is_active: bool) -> String:
+	if not is_active:
+		return _t("EVENT_CARD_UPCOMING")
+	match str(event.get("type", TYPE_MATCH)):
+		TYPE_BONUS:
+			return _t("EVENTS_EYEBROW_BONUS")
+		TYPE_CHARACTER:
+			return _t("EVENTS_EYEBROW_CHARACTER")
+		_:
+			return _t("EVENTS_EYEBROW_MATCH")
 
 
-# « 2 J 06 H » / « 06 H 12 M » / « 12 M 30 S » — deux unités, jamais plus : au-delà, le joueur ne
-# lit plus, il déchiffre.
-func _duration_label(seconds: int) -> String:
-	var d := seconds / 86400
-	var h := (seconds % 86400) / 3600
-	var m := (seconds % 3600) / 60
-	var s := seconds % 60
-	if d > 0:
-		return _t("EVENT_DUR_DH") % [d, h]
-	if h > 0:
-		return _t("EVENT_DUR_HM") % [h, m]
-	return _t("EVENT_DUR_MS") % [m, s]
+func _contains_id(entries: Array, id: String) -> bool:
+	for e in entries:
+		if str(_dict(e).get("id", "")) == id:
+			return true
+	return false
 
 
 # Fenêtre datée en heure LOCALE (`Time.get_datetime_dict_from_unix_time` + décalage système).
@@ -313,9 +575,32 @@ func _local_offset() -> int:
 	return int(tz.get("bias", 0)) * 60
 
 
-# =========================================================
-# FABRIQUES
-# =========================================================
+# Catalogue de factions — mêmes garde-fous que main_menu.gd / top_nav.gd (scan export-safe qui gère
+# les `.remap`, repli sur une liste en dur, duck-typing plutôt qu'une dépendance à un `class_name`).
+var _factions: Dictionary = {}
+var _factions_loaded: bool = false
+const FACTIONS_DIR := "res://resources/factions/"
+
+
+func _resolve_faction(faction_id: String):
+	if not _factions_loaded:
+		_factions_loaded = true
+		var dir := DirAccess.open(FACTIONS_DIR)
+		if dir != null:
+			dir.list_dir_begin()
+			var fn := dir.get_next()
+			while fn != "":
+				if not dir.current_is_dir():
+					var base_name := fn.trim_suffix(".remap")
+					if base_name.ends_with(".tres"):
+						var res = load(FACTIONS_DIR + base_name)
+						if res != null and res.get("id") != null:
+							_factions[str(res.id)] = res
+				fn = dir.get_next()
+			dir.list_dir_end()
+	return _factions.get(faction_id)
+
+
 func _t(key: String) -> String:
 	return String(TranslationServer.translate(key))
 
@@ -343,3 +628,9 @@ func _spacer(h: int) -> Control:
 	c.custom_minimum_size = Vector2(0, h)
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return c
+
+
+func _clear(container: Node) -> void:
+	for c in container.get_children():
+		container.remove_child(c)
+		c.queue_free()
