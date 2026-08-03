@@ -4156,3 +4156,195 @@ ARSENAL_MAX` · `TRENCH_ABANDON_*` · `TRENCH_EQUIP_HINT` / `TRENCH_TITLE_EQUIPP
    sa ligne de tranchée.
 
 ⚠️ **VPS + client partent ENSEMBLE** (cf. `CONTRAT_RESEAU.md §8.136`).
+
+---
+
+## §8.137 — LA TRANCHÉE en VUE PREMIÈRE PERSONNE : composition à 4 couches, blockout, visée
+
+> ⛔ **LA VUE DE CÔTÉ v1 CI-DESSUS N'EXISTE PLUS.** `scenes/game/trench_duel.tscn`,
+> `scripts/game/trench_duel.gd` et `scripts/game/trench_render.gd` ont été **retirés du dépôt** —
+> la section §8.136 reste comme histoire du mode, pas comme description du code. Le flux passe
+> désormais par `scenes/game/trench_fp.tscn` (`events_screen._go_to_duel`). Les clés i18n de la v1
+> sont CONSERVÉES (règle : jamais de suppression de clé).
+
+### 1. La composition à QUATRE COUCHES (le squelette du pivot)
+
+| Couche | Nœud | Rôle |
+|---|---|---|
+| 0 | `TextureRect` (dégradé procédural) | **ciel de repli** — le SubViewport 3D est transparent ; sans lui l'horizon du greybox est illisible (défaut vu en CAPTURE). Masqué dès qu'un décor existe. |
+| 1 | `TextureRect` | **décor PRÉ-RENDU** de la pose courante, `assets/images/trench/pose_{0..4}_{up\|down}.png`. Absent → greybox du blockout. |
+| 2 | `scenes/game/trench_fp_world.tscn` | **SubViewport 3D transparent** (`own_world_3d`, Environment en **BG_CLEAR_COLOR — jamais BG_SKY**) : blockout, soldat adverse, traçantes, grenades + marqueurs au sol, laser, **et le viewmodel**. |
+| 3 | *(fusionnée dans la 2 — **amendée par §8.138**)* | **CHOIX MOTIVÉ** : le viewmodel en PRIMITIVES est enfant de la CAMÉRA du même viewport — aucune géométrie à moins de 2 m devant les yeux (le no man's land fait 35 m), donc le clipping qu'un second viewport éviterait ne peut pas se produire ; un viewport de moins sous GL Compatibility ; un seul éclairage. **Depuis §8.138**, il ne sert plus que de REPLI : dès qu'une arme a ses frames peintes, c'est `trench_viewmodel.gd` (couche 2D) qui rend, et celui-ci s'éteint. |
+| 4 | `Control` | **HUD** (§3 ci-dessous). |
+
+C'est le pattern `hero_viewport_3d.gd` à plus grande échelle. **L'alignement décor/3D est garanti
+par construction** : les décors sont générés PAR-DESSUS les rendus du blockout (`gen_trench_renders`),
+même caméra, même FOV (55° vertical — ⚠️ `trench_fp_world.CAMERA_FOV` et
+`gen_trench_renders.CAMERA_FOV` doivent rester ÉGAUX).
+
+### 2. Le blockout, source de vérité géométrique
+
+- `scripts/game/trench_geometry.gd` — **REGISTRE DE COTES** (métriques) + projection angulaire, 100 %
+  statique. `scenes/game/trench_arena_blockout.tscn` se BÂTIT depuis lui au `_ready()` :
+  **aucune coordonnée en dur dans le `.tscn`**, donc aucune dérive possible entre le blockout, la
+  table angulaire, les rendus et le serveur.
+- Poses nommées `cam_p{0..4}_{up|down}` (Marker3D) — **le nommage EST le contrat** avec les décors.
+- Outils : `tools/gen_trench_angles.tscn` (table angulaire → les DEUX dépôts) et
+  `tools/gen_trench_renders.tscn` (10 PNG 2560×1440 → `user://trench_renders/`).
+  ⛔ Toute retouche d'une cote IMPOSE de régénérer la table (`test_trench_angles.py` le rappelle).
+
+### 3. HUD et visée
+
+- **Poses fixes + visée libre** : le **RÉTICULE suit la visée** (`world.project_aim`), la caméra ne
+  l'accompagne que de ±6°. C'est ce découplage qui permet des poses de caméra fixes.
+- Réticule : **écartement = dispersion de l'arme** convertie en pixels au FOV réel (le joueur LIT
+  sa précision) ; **rouge** chargeur vide ou en rechargement. **Hitmarker uniquement sur événement
+  `hit` CONFIRMÉ par le serveur — jamais optimiste.**
+- PV haut-gauche · manches/chrono haut-centre · munitions bas-droite « 06/24 » en **chiffres
+  tabulaires `tnum`** (recette `countdown_label.gd` §8.134) · cases d'objets bas-centre
+  (1 GRENADE / 2 BANDAGE) · flash directionnel de dégât + teinte rouge sous 25 PV.
+- **Entrées** : Q/D ou ◀▶ (positions) · **S ou CTRL = BASCULE** de posture (pas un maintien : on ne
+  garde pas un doigt en tension 90 s) · souris (visée, `MOUSE_MODE_CAPTURED`) · clic gauche (tir) ·
+  G ou clic droit MAINTENU (grenade) · R (rechargement) · 2 (bandage) · 1/2 (choix d'arme) · ÉCHAP
+  (abandon). ⚠️ La souris est **RELÂCHÉE** dès qu'un panneau attend un clic (choix, abandon, fin).
+- **Redaction §1.6 côté vue** : `pos == null` → le soldat adverse **s'efface en fondu** (0,2 s) en
+  s'enfonçant derrière le parapet, à sa dernière position connue. Jamais de pop sec, et le client
+  N'A PAS l'information.
+
+### ⚠️⚠️ DÉFAUTS VUS EN CAPTURE SEULEMENT (un boot headless « 0 ERROR » ne prouve RIEN)
+
+1. **Marqueur de grenade posé à `GROUND_Y` (1,0 m)** alors que les soldats sont AU FOND de la
+   tranchée : accroupi (œil à 0,90 m), le disque de 3,2 m passait AU-DESSUS des yeux et noyait
+   **tout l'écran de rouge**. → `MARKER_Y = 0.04` (plancher de tranchée).
+2. **Blockout quasiment noir** : le soleil éclairait les faces OPPOSÉES à la caméra. → lacet 200°
+   (soleil DERRIÈRE le joueur) + ambiante remontée à 1,35.
+3. **Soldat adverse invisible** : à 35 m sa part exposée fait ~0,9° (~20 px) et tombait dans
+   l'ombre du parapet. → matériau placeholder **NON ÉCLAIRÉ** (le vrai `.glb` apportera le sien).
+4. **Viewmodel en bloc gris informe** (repris DEUX fois) : une arme dans l'axe de la vue se voit
+   bout-à-bout. → décalée en bas-droite, présentée de **trois quarts**, longueur/teinte variant par
+   palier — c'est la SILHOUETTE qui porte l'information.
+
+⚠️ **VPS + client partent ENSEMBLE** (cf. `CONTRAT_RESEAU.md §8.137`).
+
+---
+
+## §8.138 — LA TRANCHÉE : les PERSONNAGES passent en SPRITES PEINTS (amendement du §8.137)
+
+> **Amendement ciblé du §8.137, 100 % CLIENT — aucun redéploiement serveur.** La couche PERSONNAGES
+> quitte les modèles 3D pour des **billboards de sprites peints** (style « rétro-FPS à frames »),
+> choisis pour leur cohérence avec les décors pré-rendus : même pinceau, même pipeline FLUX. Deux
+> éléments SEULEMENT changent — le soldat adverse et le viewmodel. **Le reste est intouché** :
+> simulation, protocole, redaction, poses de caméra, backdrops, HUD, blockout, table angulaire.
+> **Aucun champ n'a été ajouté au protocole** : `aiming` et les événements `grenade_thrown` / `hit`
+> existaient déjà (§8.137), la mort se lit dans les PV.
+
+### 1. Le contrat de nommage — `scripts/game/trench_sprites.gd`
+
+Module **100 % statique**, source **UNIQUE** de la convention et de la machine à frames. Il existe
+pour une raison précise : une convention en double (une copie côté soldat, une copie côté viewmodel)
+produirait, à un caractère près, un **repli SILENCIEUX** — le pire des symptômes, parce qu'il
+ressemble à « l'asset n'est pas encore fait ».
+
+| Fichier attendu | Quantité |
+|---|---|
+| `assets/images/trench/sprites/enemy_{idle\|aim\|throw\|hit\|death_a\|death_b}.png` | 6 |
+| `assets/images/trench/sprites/vm_{vipere\|frelon\|chacal\|condor}_{idle\|fire\|reload}.png` | 12 |
+
+PNG **avec alpha**, soldat en **gris neutre** (la teinte de faction est appliquée en jeu — sinon il
+faudrait repeindre 6 images par faction). Détection par `ResourceLoader.exists` **et surtout pas
+`FileAccess.file_exists`**, qui échoue en build exporté (leçon `company_emblems.gd` §8.126).
+
+### 2. Le soldat adverse — `Sprite3D` billboard dans le SubViewport 3D
+
+Seule la **représentation** change : placement, échelle et perspective restent 3D, portés par le
+blockout — donc la table angulaire et la visée serveur ne bougent pas d'un iota.
+
+- **`billboard = ENABLED`** → la frame fait toujours face à la caméra. C'est ce qui rend le **flip
+  horizontal inutile** : le quad est reconstruit depuis la base de la vue, la texture n'est jamais
+  en miroir, et un sprite « facing the viewer » fait bien face au joueur depuis les 5 positions.
+- **`alpha_cut = DISABLED`** (fondu alpha), et **non** `DISCARD`/`OPAQUE_PREPASS` : bords doux
+  (sortie rembg antialiasée) **et** — la vraie raison — c'est la seule option qui laisse vivre le
+  **fondu de redaction** (`modulate.a`). Sous un seuil, l'adversaire ne s'effacerait pas : il
+  disparaîtrait d'un coup à mi-fondu. L'occultation par le parapet reste juste (un objet transparent
+  est TESTÉ en profondeur même s'il n'y écrit pas) et le tri n'est pas un sujet : il y a UN sprite.
+- **`shaded = false`** — même raison que le placeholder du §8.137 (défaut n° 3) : à 35 m la part
+  exposée fait ~0,9°, éclairée elle tombe dans l'ombre du parapet et devient invisible. La lumière
+  du personnage est DÉJÀ PEINTE dans la frame.
+- **ÉCHELLE (le réglage critique)** : `pixel_size` est une **CONSTANTE**, `1,80 m / 1024 px` —
+  1,80 m étant `trench_geometry.SILHOUETTE_TOP`, le sommet du crâne. Ce n'est **pas** une
+  normalisation par texture : c'est ce qui garantit que les 6 frames gardent la même échelle entre
+  elles, et qu'une frame de mort livrée moins haute rende un corps **au sol** plutôt qu'un cadavre
+  étiré sur 1,80 m. **Ancrage AUX PIEDS** (ancrage `enemy_p{i}` du blockout) : le quad étant centré,
+  sa demi-hauteur est **recalculée à chaque frame**.
+- **Teinte de faction** : `modulate = lerp(BLANC, accent, 0.35)` ⚙ — la faction se lit sans effacer
+  le travail du pinceau. Sur un `Sprite3D`, `modulate` porte à lui seul teinte + fondu + éclair de
+  touche (il n'y a pas de matériau à repeindre).
+
+**MACHINE À FRAMES** (registre en tête de `trench_sprites.gd`) — priorité **mort > transitoire en
+cours > ambiant** :
+
+| État | Durée | Déclencheur | Suite |
+|---|---|---|---|
+| `idle` | statique | ambiant | — |
+| `aim` | statique | drapeau `aiming` du protocole (§8.137) | — |
+| `throw` | 0,45 s | événement `grenade_thrown` de l'adversaire | ambiant |
+| `hit` | 0,25 s | événement `hit` dont il est la **VICTIME** (pas l'auteur : une grenade peut le toucher sans que ce soit mon tir) | ambiant |
+| `death_a` → `death_b` | 0,40 s puis statique | ses PV tombent à 0 | statique au sol |
+
+`hit` interrompt tout **sauf** la mort ; `throw` ne coupe **pas** un `hit` en cours. La machine tourne
+**même quand la redaction masque l'adversaire** : il peut mourir d'une grenade hors de vue, et il ne
+doit pas ressusciter debout en réapparaissant.
+
+**REPLI — OU EXCLUSIF ASSUMÉ** : fichier manquant → l'état retombe sur `idle` ; `enemy_idle.png`
+absent → le placeholder capsule + casque reprend **INTÉGRALEMENT** le service. Jamais de panaché :
+une capsule à casque au milieu de frames peintes se lirait comme un bug d'affichage, pas comme un
+asset manquant.
+
+### 3. Le viewmodel — `scripts/game/trench_viewmodel.gd`, couche 2D à frames
+
+`TextureRect` ancré **bas-droite**, **45 %** de la hauteur d'écran ⚙, débordant légèrement du coin
+(une arme entièrement contenue dans le cadre ne se lit pas comme tenue en main). Il vit dans la
+couche ÉCRAN, **au-dessus du SubViewport et sous le HUD** — c'est l'**ordre d'ajout** qui décide.
+
+- `fire` **90 ms** ⚙ au tir · `reload` pendant tout le rechargement (+ plongée légère) ·
+  `idle` sinon. **`reload` bat `fire`** : on ne tire pas en rechargeant (règle serveur §8.137),
+  l'afficher serait un mensonge.
+- **RECUL** : le tween de position/rotation s'applique désormais à **ce nœud 2D** (pivot en bas au
+  centre : l'arme pivote autour du poignet, pas autour de son coin supérieur gauche).
+- **ESCALADE** : glissement bas → haut (0,25 s) avec la nouvelle arme. Pas au premier armement : la
+  première arme du duel est déjà en main quand la manche commence.
+- **`reduced_motion`** : frame `fire` **une fois sur deux** ⚙ (à la cadence du FRELON, l'alternance
+  `fire`/`idle` est un stroboscope) et recul **réduit de moitié**.
+- **REPLI PAR ARME** (et non global comme pour le soldat) : arme sans fichiers → ce nœud s'efface et
+  le viewmodel en primitives du SubViewport reprend le service **pour cette arme**. C'est légitime
+  ici parce que **deux armes différentes n'apparaissent jamais à l'écran en même temps** : le
+  panaché qu'on s'interdit chez le soldat ne peut pas exister. Aiguillage **unique** :
+  `trench_fp._apply_weapon()` — les deux viewmodels ne sont jamais allumés ni éteints ensemble.
+
+### ⚠️⚠️ DÉFAUT VU EN CAPTURE SEULEMENT (encore une fois)
+
+**Le viewmodel peint ne se dessinait NULLE PART.** Un `Control` créé **par code** puis ajouté à un
+parent Control ne voit **pas** sa taille résolue par le seul `set_anchors_preset(PRESET_FULL_RECT)` :
+`size` reste `(0, 0)`. `_layout()` sortait par sa porte de secours — écran vide, **aucune erreur,
+aucun symptôme au boot headless, et le harnais était vert** (il assignait la taille à la main).
+→ Le cadrage se prend désormais sur **`get_viewport_rect().size`**, ce qui est aussi ce que dit le
+besoin mot pour mot (« taille relative à la hauteur d'ÉCRAN »). Le reste du dépôt contourne le piège
+autrement : les enfants de `unlock_celebration.gd` sont placés par **ancres et containers**, jamais
+par arithmétique sur `size`.
+
+> 📌 Rappel : ce dépôt en est à **cinq** défauts de cette famille (4 au §8.137 + celui-ci), tous
+> invisibles à un boot « 0 ERROR ». **Toute couche visuelle se recette EN CAPTURE.**
+
+### 4. Recette exécutée
+
+| Épreuve | Résultat |
+|---|---|
+| **Non-régression n° 1** — aucun fichier de sprite | **26 / 26** ; capsule + casque, viewmodel primitives, placement/fondu/éclair identiques au §8.137 (capture à l'appui) |
+| **Jeu de sprites de test** (6 + 12 images unies marquées) | **91 / 91** — chaque état bascule au bon moment, échelle aux 5 positions, teinte, viewmodel ×4 armes, escalade, `reduced_motion` |
+| **Sabotage produit** — `enemy_hit.png` supprimé | **20 / 20** — l'état `hit` retombe sur la frame `idle`, aucune erreur, aucune frame vide ; tout supprimé → capsule intégrale |
+| **Contre-épreuve du harnais** — 4 défauts injectés dans la production | **8 rouges**, production restaurée à l'identique (un test vert qui ne teste rien est un piège connu de ce dépôt) |
+| Boot headless `trench_fp.tscn` | **0 `ERROR`** |
+| `--import` | **0 `ERROR`** |
+
+⚠️ Les fichiers de recette (harnais, outil de capture, 18 PNG de test) ont été **supprimés** — le
+dépôt ne garde que les deux nouveaux scripts de production. **100 % client : aucun redéploiement.**

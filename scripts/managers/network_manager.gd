@@ -470,7 +470,7 @@ func _handle_server_message(msg: Dictionary) -> void:
 			salon_closed.emit(str(msg.get("reason", "")))
 		"trench_init", "trench_state", "trench_result":
 			# LA TRANCHÉE (§8.136) : relayés TELS QUELS à l'écran de duel (aucune logique ici —
-			# l'interpolation, le rendu et le résultat vivent dans trench_duel.gd). `trench_state`
+			# l'interpolation, le rendu et le résultat vivent dans trench_fp.gd). `trench_state`
 			# arrive à 10 Hz : pas de print, pas de traitement, un simple emit.
 			match msg_type:
 				"trench_init":

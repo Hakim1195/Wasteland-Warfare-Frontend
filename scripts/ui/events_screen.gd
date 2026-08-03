@@ -64,7 +64,7 @@ const DEFAULT_TAB := "matches"
 static var target_tab: String = ""
 
 # LA TRANCHÉE (§8.136) : « REJOUER » depuis l'écran de fin de duel — l'onglet BONUS s'ouvre et la
-# file repart tout seul. Posé par `trench_duel.gd`, purgé à la lecture (même hygiène que target_tab).
+# file repart tout seul. Posé par `trench_fp.gd`, purgé à la lecture (même hygiène que target_tab).
 static var pending_trench_requeue: bool = false
 
 # Id de l'événement-porte du mini-jeu — MIROIR du registre serveur (`events.py`), utilisé UNIQUEMENT
@@ -581,7 +581,10 @@ func _empty_state(title_key: String, hint_key: String) -> Control:
 # entraînement), l'état de recherche (poll 2 s, mêmes états d'affichage que search_screen), MA
 # progression de niveau d'événement et le top 50. AUCUNE valeur en dur : paliers, plafonds et
 # classement descendent du serveur (`/trench/leaderboard`).
-const TrenchDuelScript := preload("res://scripts/game/trench_duel.gd")
+# §8.137 — le duel se joue désormais à la PREMIÈRE PERSONNE : la vue de côté v1
+# (`trench_duel.tscn`) est sortie du flux et retirée du dépôt. Le contrat d'entrée est inchangé —
+# on pose `pending_room_id` avant de changer de scène (patron `CompanyScreen.target_tag`).
+const TrenchDuelScript := preload("res://scripts/game/trench_fp.gd")
 
 var _trench_panel: PanelContainer = null
 var _trench_status_label: Label = null
@@ -770,7 +773,7 @@ func _on_trench_training_result(ok: bool, data: Dictionary) -> void:
 func _go_to_duel(room_id: int) -> void:
 	_trench_stop_poll()
 	TrenchDuelScript.pending_room_id = str(int(room_id))
-	TransitionManager.change_scene("res://scenes/game/trench_duel.tscn")
+	TransitionManager.change_scene("res://scenes/game/trench_fp.tscn")
 
 
 func _on_trench_leaderboard(data: Dictionary) -> void:

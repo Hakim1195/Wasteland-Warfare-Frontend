@@ -3006,26 +3006,87 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
 
 - **client → serveur** (À PLAT, comme le chat) — `{"type": "trench_input", "move": -1|0|1,
   "stance": "up"|"down", "fire": bool, "throw": {"charge": 0..1} | null,
-  "pick_weapon": "chacal"|"condor" | null}`. **<= 10 msg/s par connexion, le serveur JETTE le
+  "pick_weapon": "chacal"|"condor" | null, "aim": {"yaw": float, "pitch": float} | null,
+  "reload": bool, "item": "bandage" | null}`. **<= 10 msg/s par connexion, le serveur JETTE le
   surplus** (anti-flood, `TrenchRuntime.allow_message`) ; le tick serveur COALESCE (dernière
-  direction/posture gagnante, un clic de tir n'est jamais perdu, le 11e message d'un tick est
+  direction/posture/VISÉE gagnante, un clic de tir n'est jamais perdu, le 11e message d'un tick est
   ignoré — `trench_sim.coalesce_inputs`). `{"type": "trench_forfeit"}` = abandon (ÉCHAP confirmé).
+  - **`aim` (§8.137)** : direction de visée en DEGRÉS dans le repère de l'arène (yaw 0 = droit
+    devant, + = vers la droite du tireur ; pitch + = vers le haut). Envoyée **seulement quand elle
+    change**, arrondie au dixième de degré. ⚠️ Le serveur ne RE-QUANTIFIE pas : le pas de 0,1° est
+    une mesure de bande passante côté client, pas une règle (re-quantifier obligerait Python et
+    Godot à s'accorder sur un arrondi de demi-pas pour un gain nul). Valeurs non numériques, NaN
+    ou ±inf : l'entrée `aim` est ignorée EN ENTIER.
+  - ⚠️⚠️ **LE CLIENT N'ANNONCE JAMAIS UNE TOUCHE** — il envoie une direction. Le serveur résout
+    contre SA table angulaire et SON état, à l'instant de l'impact. Un client modifié peut mentir
+    sur sa propre présentation, jamais sur les dégâts.
 - **serveur → clients** :
   - `trench_init` (PERSONNEL, à la connexion et à la reconnexion) : `{rules:
     trench_sim.public_rules(), your_slot: 1|2, training: bool, opponent: {name, is_bot},
     state | null}` — le client n'a AUCUNE constante du mini-jeu en dur (patron
-    `battle_royale.public_rules` §8.131) ;
-  - `trench_state` (BROADCAST, 10 Hz — même état pour les deux, il n'y a aucun secret dans une
-    tranchée) : `{tick, phase: intermission|playing|over, round_no, round_start_tick, round_ticks,
-    score: [m1, m2], winner_slot, players: [{slot, pos, stance, hp, weapon, hits_total, grenades,
-    choice_deadline_tick, laser_fire_tick, disconnected}], projectiles: [{id, kind, owner_slot,
-    from_pos, target_pos, launch_tick, impact_tick}], events: [...]}`. ⚠️ Les projectiles voyagent
-    par INSTANTS (lancement, impact) — le CLIENT interpole la trajectoire, le serveur ne calcule
-    que les instants et les dégâts. Événements du tick : `round_start` · `fire` · `impact` · `hit`
-    · `grenade_thrown` (marqueur visible par la cible DÈS le lancer) · `laser` (CONDOR : 5 ticks
-    avant le TIR) · `laser_cancelled` · `escalation` · `weapon_choice` · `weapon_chosen` ·
-    `round_end {winner_slot: 0 = nulle-rejouée, reason: kill|time|afk|disconnect}` · `match_end
-    {reason: score|disconnect|forfeit}` ;
+    `battle_royale.public_rules` §8.131). `rules` porte désormais aussi, par arme,
+    `dispersion_deg`/`mag_size`/`reload_ticks`, le bloc `bandage`, et le bloc `geometry` (cotes du
+    blockout : `no_mans_land`, `positions`, `parapet_y`, `eye_up`, `eye_down`, `aim_quantum_deg`).
+    ⚠️ L'état joint est REDACTÉ lui aussi — sans quoi il suffirait de se reconnecter pour
+    photographier la position d'un accroupi.
+  - `trench_state` (**PERSONNEL, un payload PAR JOUEUR**, 10 Hz) : `{tick, phase:
+    intermission|playing|over, round_no, round_start_tick, round_ticks, score: [m1, m2],
+    winner_slot, players: [{slot, pos, stance, hp, weapon, hits_total, grenades,
+    choice_deadline_tick, laser_fire_tick, disconnected, ammo, reload_until_tick, bandages,
+    bandage_until_tick, aiming, hidden}], projectiles: [{id, kind, owner_slot, from_pos,
+    target_pos, launch_tick, impact_tick, aim_yaw, aim_pitch}], events: [...]}`.
+    ⚠️ Les projectiles voyagent par INSTANTS (lancement, impact) — le CLIENT interpole la
+    trajectoire, le serveur ne calcule que les instants et les dégâts. Depuis §8.137 ils portent
+    AUSSI leur visée réelle (`aim_yaw`/`aim_pitch` = visée du tireur + écart de dispersion figé au
+    départ) : c'est ce qui permet de tracer la traçante dans la VRAIE direction, y compris quand
+    elle rate.
+    Événements du tick : `round_start` · `fire {rounds, ammo}` · `impact` · `hit` ·
+    `grenade_thrown` (marqueur visible par la cible DÈS le lancer) · `laser {fire_tick, from_pos,
+    aim_yaw, aim_pitch}` (CONDOR : 5 ticks avant le TIR) · `laser_cancelled` · `reload_start` ·
+    `reload_end` · `bandage_start` · `bandage_end` · `bandage_interrupted` · `escalation` ·
+    `weapon_choice` · `weapon_chosen` · `round_end {winner_slot: 0 = nulle-rejouée, reason:
+    kill|time|afk|disconnect}` · `match_end {reason: score|disconnect|forfeit}` ;
+
+#### 2 bis. STATE REDACTION du duel (§8.137) — l'état est PAR DESTINATAIRE
+
+> **Ce paragraphe remplace la règle v1 « même état pour les deux, il n'y a aucun secret dans une
+> tranchée ».** Le pivot première personne a rendu la position une INFORMATION.
+
+- `trench_sim.redacted_view(state, viewer_slot)` est le **SEUL point de sortie réseau autorisé**.
+  `public_state()` (vue complète) sert aux tests et à la construction interne — il ne franchit
+  JAMAIS un socket. `trench_runner._broadcast_state` envoie donc DEUX messages personnels par tick.
+- **Règle** : la position de l'adversaire part à `pos: null` + `hidden: true` **dès qu'il est
+  ACCROUPI**. Elle revient dès qu'il se lève (`is_position_revealed` = `stance == "up"`) — et il
+  faut être debout pour tirer, épauler ou lancer, donc « agir » implique « se montrer ».
+  Recharger ACCROUPI reste caché : c'est exactement le dilemme du §1.4.
+- **Ce qui reste TOUJOURS visible, et pourquoi** : les projectiles en vol et les marqueurs
+  d'impact de grenade (la règle d'or exige que toute menace soit lisible et esquivable) ; les PV,
+  l'arme, les munitions, le score et le chrono (rien de cela ne localise personne). Un tir trahit
+  donc son auteur par le `from_pos` de sa balle — c'est voulu et cohérent.
+- **C'est un anti-cheat STRUCTUREL**, pas une politesse d'affichage : le maphack n'existe pas si
+  la carte n'est pas envoyée. Le BOT reçoit lui aussi la vue redactée (`trench_runner` lui passe
+  `redacted_view`) — il tire sur la dernière position connue et se trompe comme un humain.
+- Contre-épreuves : `test_trench_sim.test_redaction` (1 000 ticks, assertion à chaque tick +
+  sabotage de `is_position_revealed`) et `test_trench_bot.test_bot_ne_triche_pas` (nourri de la
+  vue complète, le bot viserait la vraie position — preuve que c'est la redaction qui l'aveugle).
+
+#### 2 ter. LA TABLE ANGULAIRE (§8.137) — la géométrie est une DONNÉE, en double
+
+- La visée est résolue **à l'impact** contre `AIM_WINDOWS` : `(pose du tireur, position cible,
+  posture cible) -> (yaw_min, yaw_max, pitch_min, pitch_max)`, en degrés.
+- **L'ABSENCE D'ENTRÉE EST LA RÈGLE MÉTIER** : une cible ACCROUPIE n'a aucune fenêtre, donc aucune
+  balle ne peut la toucher. L'invariant « accroupi injouable aux balles » est porté par la DONNÉE,
+  pas par un `if` qu'on pourrait oublier.
+- Les fenêtres de deux positions voisines sont **DISJOINTES** (~5,4° d'écart pour ~0,96° de large)
+  et aucun cône de dispersion d'arme ne les franchit : **un pas de côté est toujours une esquive**,
+  et une balle dispersée rate — elle ne se trompe jamais de cible.
+- Le fichier `trench_angles.json` est généré par `frontend/tools/gen_trench_angles.tscn` depuis le
+  BLOCKOUT 3D et écrit **aux deux emplacements** : `backend/api/game/data/` (résolution serveur) et
+  `frontend/resources/trench/` (rendu client). ⛔ **NE JAMAIS L'ÉDITER À LA MAIN.**
+  `test_trench_angles.py` compare les checksums — une divergence géométrique client/serveur devient
+  une suite ROUGE plutôt qu'un « je vise la tête et ça ne touche pas » introuvable.
+- La simulation reste **PURE** : la table est chargée UNE fois à l'import (`trench_angles.py`,
+  patron `map_data.py`), aucune trigonométrie dans la boucle, le REJEU AU BIT PRÈS survit intact.
   - `trench_result` (PERSONNEL, à la fin) : `{your_slot, winner_slot, you_won, score, reason,
     vs_bot, training, rewards: {participation_coins, participation_capped, win_coins, win_capped,
     new_titles: [{threshold, title_id, title_key}], progression: {wins, level, level_max,
