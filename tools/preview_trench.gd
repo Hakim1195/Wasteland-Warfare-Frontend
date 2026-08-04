@@ -18,7 +18,7 @@ const EventsScene := preload("res://scenes/ui/events.tscn")
 const EventsScript := preload("res://scripts/ui/events_screen.gd")
 
 # Répertoire de sortie : la sortie de secours (`user://`) suffit si le scratchpad a changé de nom.
-const OUT_DIR := "C:/Users/Hakim/AppData/Local/Temp/claude/C--Users-Hakim-Documents-Wasteland-Warfare-Project/cde10156-9ac6-4460-b3a7-785ef864bf49/scratchpad"
+const OUT_DIR := "C:/Users/Hakim/AppData/Local/Temp/claude/C--Users-Hakim-Documents-Wasteland-Warfare-Project/d4df68f3-c840-46de-bda7-527ac37350dd/scratchpad"
 
 # Barème de DÉMONSTRATION — miroir de `trench_sim.public_rules()` (données figées de capture).
 const RULES := {
@@ -127,11 +127,52 @@ func _ready() -> void:
 	await get_tree().create_timer(0.3).timeout
 	await _shot(out_dir, "trench_fp_debout")
 
+	# ------------------------------- 1 bis) LE CONTRÔLE DU CIEL (chantier « monde 3D + ciel peint »)
+	# ╔═ LA MESURE QUI CONDAMNAIT L'ANCIEN SYSTÈME ══════════════════════════════════════════════╗
+	# ║ Avec un décor peint, chaque position était une DÉCOUPE différente du même panorama : d'un  ║
+	# ║ bout à l'autre du front, l'horizon glissait de 128 px. Avec un ciel à 300 m, un pas de     ║
+	# ║ 16 m d'un bord à l'autre vaut 3,05° de parallaxe — et l'horizon, lui, ne bouge PAS d'un    ║
+	# ║ pixel, parce qu'un horizon est à l'infini quelle que soit la peinture qu'on lui donne.     ║
+	# ║ On capture donc les deux bords et on compare : c'est le contrôle §2.4 du bon de commande.  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	duel._aim_yaw = 0.0
+	duel._aim_pitch = 0.0
+	for pos in [0, 4]:
+		duel._pred_pos = pos
+		duel._world.set_pose(pos, "up", true)
+		duel._refresh_pose_view()
+		duel._refresh_view(0.016)
+		await get_tree().create_timer(0.2).timeout
+		await _shot(out_dir, "trench_horizon_p%d" % pos)
+	duel._pred_pos = 2
+	duel._world.set_pose(2, "up", true)
+	# La même chose en visant à FOND à droite : c'est là que l'ancien pan linéaire divergeait de
+	# 11 % d'une projection en tangente. Un monde 3D n'a pas de « divergence » à mesurer — la
+	# capture ne sert qu'à le VOIR.
+	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT
+	duel._refresh_view(0.016)
+	await get_tree().create_timer(0.2).timeout
+	await _shot(out_dir, "trench_yaw_max")
+	duel._aim_yaw = 6.3
+
+	# ---------------------------------------- 1 ter) LE PANNEAU DE RÉGLAGE (F10, entraînement)
+	# ⚠️ Cette capture n'est pas décorative : un `Control` bâti par code garde `size = (0,0)` — six
+	# récidives dans ce dépôt, dont la couche d'ambiance de §8.139 qui ne peignait RIEN en affichant
+	# 33/33 verts. Un panneau de réglage invisible tiendrait tous les tests et ne se réglerait pas.
+	duel._training = true
+	duel._tuning.visible = true
+	duel._log_input({"move": 1})
+	duel._refresh_view(0.016)
+	await get_tree().create_timer(0.25).timeout
+	await _shot(out_dir, "trench_tuning_f10")
+	duel._tuning.visible = false
+	duel._training = false
+
 	# ------------------------------------------------- 2) ACCROUPI : couvert total, ennemi masqué
 	duel.set_process(false)              # fige la collecte d'entrées : mise en scène blanche
 	duel._pred_stance = "down"
 	duel._world.set_pose(duel._pred_pos, "down", true)
-	duel._refresh_decor()
+	duel._refresh_pose_view()
 	duel._on_state(_demo_state(102, false, 0, true))
 	duel._refresh_view(0.016)
 	await get_tree().create_timer(0.25).timeout
@@ -140,7 +181,7 @@ func _ready() -> void:
 	# --------------------------------------- 3) DEBOUT : laser CONDOR + choix d'arme + rechargement
 	duel._pred_stance = "up"
 	duel._world.set_pose(duel._pred_pos, "up", true)
-	duel._refresh_decor()
+	duel._refresh_pose_view()
 	duel._enemy_laser_yaw = _aim(3, 2)[0]
 	duel._enemy_laser_pitch = _aim(3, 2)[1]
 	duel._enemy_laser_pos = 3

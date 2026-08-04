@@ -59,12 +59,35 @@ const STANCE_TRANSITION := 0.12
 # ║ table angulaire reste seule juge de la touche. On ne change que ce que la caméra MONTRE.       ║
 # ║ Les POSES restent fixes : c'est la position de l'œil qui ne bouge pas, pas son regard.         ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ╔═ ET DEPUIS LE PIVOT « MONDE 3D + CIEL PEINT », ELLE PEUT ENFIN LA SUIVRE ═════════════════════╗
+# ║ Ce réglage était JUSTE dans son principe et FAUX dans son contexte : faire tourner la caméra   ║
+# ║ devant un décor peint FIXE ne pouvait que détacher le paysage de la scène. Le monde est        ║
+# ║ maintenant de la vraie 3D jusqu'à l'horizon — il répond de lui-même, sans shader ni pan.       ║
+# ║ ⚠️ Ces deux valeurs sont désormais des VALEURS INITIALES, pas des vérités : c'est Hakim qui    ║
+# ║ règle la sensation dans le panneau F10, en jouant. Voir `apply_tuning()` plus bas.             ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const AIM_FOLLOW := 1.0
 # Borne de sécurité, au-delà du débattement client (±32°) : elle n'écrête jamais en jeu, elle
 # empêche seulement une visée aberrante de faire pivoter la caméra à l'envers du monde.
 const AIM_FOLLOW_MAX := 45.0
-# Matière de MON parapet quand un décor est déposé : le mur de sacs peint de la pose accroupie.
-const COVER_TEXTURE := "res://assets/images/trench/pose_2_down.png"
+
+# ╔═ LA BRUME DE PROFONDEUR EST DANS L'ENVIRONNEMENT, PAS SUR L'ÉCRAN ════════════════════════════╗
+# ║ `trench_ambient.gd` peint deux nappes de brume à hauteur d'horizon — en 2D, donc à une         ║
+# ║ ordonnée d'écran FIXE. Tant que la caméra ne bougeait pas, ça tenait ; une caméra qui pique du ║
+# ║ nez emporterait l'horizon et laisserait la brume derrière. On ajoute donc ici la seule brume   ║
+# ║ qui ne peut pas se tromper : celle du moteur, indexée sur la PROFONDEUR. C'est elle qui fond   ║
+# ║ le sol lointain dans le bas du panorama — le raccord peinture/3D que tout le lot cherche.      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ⚠️ CETTE COULEUR EST RELEVÉE SUR LE PANORAMA, PAS CHOISIE. C'est la moyenne de sa bande basse,
+# celle qui touche la ligne d'horizon (mesure : RGB 71 / 86 / 92). Le sol lointain s'y fond donc
+# EXACTEMENT là où l'arc de ciel commence : c'est ce raccord de teinte, et lui seul, qui fait que
+# la peinture et la 3D se lisent comme une seule image. Toute retouche du panorama impose de
+# reprendre cette mesure — `tools/trench_asset_factory.py` la sort en deux lignes.
+const FOG_COLOR := Color(0.279, 0.338, 0.361)
+# Elle ne commence qu'APRÈS le duel : à 80 m, la tranchée adverse (35 m) et son soldat sont encore
+# parfaitement nets. Voiler la cible serait changer le jeu, pas l'habiller.
+const FOG_BEGIN := 80.0
+const FOG_END := 320.0
 
 const COL_ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
 const COL_GOLD := Color(0.878431, 0.698039, 0.286275, 1)
@@ -111,6 +134,10 @@ var _aim_pitch := 0.0
 var _reduced_motion := false
 var _enemy_alpha := 0.0
 var _enemy_last_pos := 2.0
+# Réglages VIVANTS, posés par le panneau F10 (`apply_tuning`). Les constantes ne sont que leur
+# valeur de départ.
+var _follow := AIM_FOLLOW
+var _follow_max := AIM_FOLLOW_MAX
 
 # --- Machine à frames du soldat (§8.138) ----------------------------------------------------------
 # `_enemy_painted` = TRUE quand `enemy_idle.png` existe. C'est un OU EXCLUSIF assumé : soit tout le
@@ -145,9 +172,50 @@ func _build() -> void:
 	_cam_current = Geo.eye_position(_pose_pos, _pose_stance)
 	_cam_target = _cam_current
 
+	_build_fog()
 	_build_enemy()
 	_build_viewmodel()
 	_build_pools()
+
+
+# La brume de profondeur, posée sur l'Environment de la scène. En code plutôt que dans le `.tscn`
+# pour qu'elle vive à côté des cotes qui la justifient (`FOG_BEGIN` se lit contre les 35 m du no
+# man's land) — et parce que ce chantier est 100 % code-driven de bout en bout.
+func _build_fog() -> void:
+	var holder := _root.get_node_or_null("WorldEnvironment") as WorldEnvironment
+	if holder == null or holder.environment == null:
+		return
+	var env := holder.environment
+	# L'AMBIANCE, accordée au panorama elle aussi : sa teinte est relevée sur le ciel MÉDIAN (RGB
+	# 117/139/145). À 1,35 en gris neutre — le réglage d'avant le pivot — la boue ressortait plus
+	# claire que le ciel derrière elle et se lisait comme du béton pâle. Une lumière de ciel couvert
+	# est douce ET froide : c'est la teinte qui fait le travail, pas l'énergie.
+	env.ambient_light_color = Color(0.460, 0.543, 0.568)
+	env.ambient_light_energy = 1.0
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_DEPTH
+	env.fog_light_color = FOG_COLOR
+	env.fog_depth_begin = FOG_BEGIN
+	env.fog_depth_end = FOG_END
+	env.fog_depth_curve = 0.85
+	env.fog_sky_affect = 0.0
+	# ⚙ DENSITÉ RELEVÉE À 3,0 PAR LA MESURE, PAS PAR LA DOCUMENTATION. À 1,0, le sol sortait à
+	# RGB 112/113/112 au ras de l'horizon quand le ciel qui le touche vaut 69/87/97 : un liseré
+	# clair et neutre courait le long de la ligne d'horizon, exactement là où la 3D doit se fondre
+	# dans la peinture. La proportion de brume atteinte à 300 m se mesurait à ~50 %, pas ~93 % :
+	# `fog_density` n'est pas un simple facteur, elle entre dans une exponentielle. À 3,0 on obtient
+	# les ~94 % voulus. (Mesure refaite à chaque retouche : cf. le contrôle d'horizon de
+	# `preview_trench.gd`.)
+	env.fog_density = 3.0
+	# ╔═ ⚠️⚠️ `fog_sky_affect` NE PROTÈGE PAS NOTRE CIEL — VU EN CAPTURE, PAS AUTREMENT ══════════╗
+	# ║ Ce réglage ne concerne que le CIEL DE L'ENVIRONNEMENT (`BG_SKY`). Le nôtre est un MAILLAGE  ║
+	# ║ posé à 300 m : pour le moteur, c'est de la géométrie lointaine comme une autre, et la brume ║
+	# ║ s'y applique à ~95 %. Résultat de la première capture : un aplat gris uniforme, ni nuages,  ║
+	# ║ ni ruines, ni cheminées — le panorama qu'on venait de payer, intégralement effacé. Aucune   ║
+	# ║ ERROR, aucun test au rouge : il fallait REGARDER l'image.                                   ║
+	# ║ On exempte donc l'arc de ciel, matériau par matériau (`disable_fog`), et c'est la brume qui  ║
+	# ║ vient à LUI : `FOG_COLOR` est relevée sur sa bande d'horizon.                                ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 
 
 # =================================================================================================
@@ -396,19 +464,26 @@ func camera_fov() -> float:
 	return _camera.fov if _camera != null else CAMERA_FOV
 
 
-# Bascule greybox / décor pré-rendu. Sans décor déposé, le blockout EST le fond (aligné par
-# définition) ; avec un décor, on masque les volumes pour ne pas doubler les sacs de sable.
-# ⚠️ NE MASQUE QUE LE MONDE LOINTAIN. Ma propre tranchée (`cover_root`) reste rendue quoi qu'il
-# arrive : un décor peint remplace le no man's land, jamais le volume derrière lequel on s'abrite
-# (§8.139.1 — défaut « il n'y a pas de tranchée », vu en partie réelle). Quand un décor existe, ce
-# volume est HABILLÉ de la matière du mur de sacs plutôt que laissé en gris de blockout.
-func show_blockout_geometry(show_geometry: bool) -> void:
-	if _blockout == null:
-		return
-	if _blockout.has_method("set_geometry_visible"):
-		_blockout.set_geometry_visible(show_geometry)
-	if _blockout.has_method("set_cover_texture"):
-		_blockout.set_cover_texture(null if show_geometry else Sprites.texture_at(COVER_TEXTURE))
+# ╔═ `show_blockout_geometry()` A DISPARU AVEC LES DÉCORS PEINTS ═════════════════════════════════╗
+# ║ Elle éteignait le monde 3D dès qu'un décor était déposé. C'est CETTE bascule qui masquait      ║
+# ║ `NearParapet` — « le parapet de sacs qui décide de tout le jeu » — et laissait le joueur       ║
+# ║ debout en terrain découvert derrière une bande peinte de 77 px. Le monde texturé étant         ║
+# ║ désormais le rendu nominal, il n'y a plus rien à éteindre : le défaut est devenu impossible    ║
+# ║ à écrire, ce qui vaut mieux que de le corriger.                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+
+
+# ╔═ LES RÉGLAGES DE SENSATION VIENNENT DU JOUEUR, PAS DU CODE (règle de fer n° 2) ═══════════════╗
+# ║ Suivi de visée, plafond d'angle et champ de vision se règlent EN JEU, au panneau F10, pendant  ║
+# ║ une partie d'entraînement. Le code ne devine plus une sensation qu'il ne peut pas éprouver :   ║
+# ║ il expose des bornes et applique ce que Hakim décide. Les valeurs qu'il retiendra deviendront  ║
+# ║ les défauts d'usine à la clôture du chantier.                                                  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func apply_tuning(tuning: Dictionary) -> void:
+	_follow = clampf(float(tuning.get("aim_follow", AIM_FOLLOW)), 0.0, 1.0)
+	_follow_max = clampf(float(tuning.get("follow_max_deg", AIM_FOLLOW_MAX)), 5.0, 80.0)
+	if _camera != null:
+		_camera.fov = clampf(float(tuning.get("fov", CAMERA_FOV)), 50.0, 100.0)
 
 
 # Teinte le soldat adverse à l'accent de SA faction (système d'accents existant, §5.2).
@@ -507,8 +582,8 @@ func _process(delta: float) -> void:
 
 	# SUIVI DE VISÉE (§1.1) : la caméra accompagne le réticule d'une fraction, plafonnée. Le
 	# reste du débattement se lit sur l'écran, pas dans la rotation — les poses restent FIXES.
-	_cam_yaw = clampf(_aim_yaw * AIM_FOLLOW, -AIM_FOLLOW_MAX, AIM_FOLLOW_MAX)
-	_cam_pitch = clampf(_aim_pitch * AIM_FOLLOW, -AIM_FOLLOW_MAX, AIM_FOLLOW_MAX)
+	_cam_yaw = clampf(_aim_yaw * _follow, -_follow_max, _follow_max)
+	_cam_pitch = clampf(_aim_pitch * _follow, -_follow_max, _follow_max)
 	_camera.position = _cam_current
 	_camera.look_at(_cam_current + _direction(_cam_yaw, _cam_pitch), Vector3.UP)
 

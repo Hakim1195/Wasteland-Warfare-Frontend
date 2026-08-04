@@ -4513,3 +4513,113 @@ pour l'étalonnage, soit **2 % d'un budget 60 FPS**.
 - `_on_state` **n'applique pas** l'arme lue dans l'état : le viewmodel suit les **événements**
   d'escalade et `_on_init`. Couvert en jeu, mais toute mise en scène qui n'envoie pas d'événement
   affiche l'arme de départ sous un HUD qui en annonce une autre (rencontré dans les harnais).
+
+---
+
+## §8.140 — LA TRANCHÉE : PIVOT « MONDE 3D + CIEL PEINT » (sauvetage du §8.139.1)
+
+> Décidé par Hakim le 2026-08-04, après l'échec des correctifs de jeu du §8.139.1.
+> Rapport d'origine : `RAPPORT_SESSION_TRANCHEE_COMPLET.md`. **Lots A+B+C livrés — le chantier
+> s'arrête à la PORTE 1 et attend une partie réelle.**
+
+### 1. Le conflit d'architecture, et pourquoi on ne l'a pas corrigé
+
+Le §8.139.1 a tenté de faire suivre la caméra à un décor **peint et plat**. Deux défauts y étaient
+logés, tous deux relus dans le code plutôt que devinés :
+
+1. **la parallaxe de position comptée DEUX FOIS** — les 5 décors déposés étaient déjà des découpes
+   décalées de 32 px d'un même panorama, et le shader en rajoutait 146 ;
+2. **un décalage LINÉAIRE (`angle / fov`) contre une projection en TANGENTE** — les deux coïncident
+   aux petits angles et divergent d'environ **11 % à 32°**.
+
+Aucun réglage ne les réconcilie : une image plate ne peut pas suivre une caméra libre. On a donc
+changé le **rôle** de la peinture au lieu de corriger son montage.
+
+### 2. L'architecture livrée
+
+| Couche | Avant (§8.139.1) | Maintenant |
+|---|---|---|
+| Fond | 10 décors peints plein écran + shader de pan | **arc de ciel peint à 300 m**, objet 3D ordinaire |
+| Sol, parapets | greybox gris, masqué dès qu'un décor était déposé | **3D texturée**, rendu NOMINAL, jamais masquée |
+| Horizon | peint dans l'image, à recaler | **géométrique** : le sol lointain rencontre l'arc |
+| Parallaxe d'un pas | 32 px + 146 px de shader | celle du monde réel, **gratuite et juste** |
+| Caméra | tournait devant une image fixe | tourne et **TRANSLATE** dans un monde qui existe |
+
+À 300 m, les 4 m d'un pas de côté valent `atan(4/300) = 0,76°` de parallaxe : l'erreur passe sous le
+pixel **par construction**. Plus de shader de compensation, plus de pan, plus de double comptage.
+
+**Le contrat du panorama : son bord inférieur EST la ligne d'horizon.** On ne demande plus à un
+modèle génératif où poser l'horizon (cinq séries d'img2img ont montré qu'il ne sait pas) : le
+panorama est commandé **sans aucun sol**, ses silhouettes coupées par le bord bas du cadre, et ce
+bord est collé à `GROUND_Y`. L'horizon est alors juste à tout angle et depuis les 5 positions.
+
+### 3. Fichiers
+
+| Fichier | Changement |
+|---|---|
+| `scripts/game/trench_blockout.gd` | arc de ciel, cadre de sol lointain jusqu'à 340 m, matières **triplanaires monde**, barbelés et poutres ; `set_cover_texture()` **retirée** |
+| `scripts/game/trench_fp_world.gd` | brume de profondeur + ambiance accordées au panorama ; `apply_tuning()` ; `show_blockout_geometry()` **retirée** |
+| `scripts/game/trench_fp.gd` | couche décor + shader de fond **retirés** ; `_refresh_decor` → `_refresh_pose_view` ; F10 ; journal des entrées ; suivi de l'horizon |
+| `scripts/game/trench_tuning.gd` | **NOUVEAU** — panneau de réglage en jeu, persisté dans `user://trench_tuning.json` |
+| `scripts/game/trench_ambient.gd` | `set_horizon_ratio()` : la brume suit l'horizon RÉEL, plus 50 % d'écran |
+| `assets/images/trench/sky_panorama.png` + `textures/{jute,mud,planks,earth}.png` | **NOUVEAUX** |
+| `tools/trench_asset_factory.py` | commandes `sky` et `textures` + `make_seamless()` |
+| `tools/perf_trench.gd/.tscn` | **NOUVEAU** — budget de frame, vsync coupée |
+| `tools/test_trench_ambient.gd` | recette réécrite sur la nouvelle architecture (49 contrôles) |
+
+⚠️ `shaders/trench_backdrop.gdshader` **n'est plus référencé** par aucun script. Le fichier reste sur
+disque (règle maison : on ne touche ni aux `.uid` ni à git) — il est mort, pas supprimé.
+
+### 4. Le panneau de réglage F10 (règle de fer n° 2)
+
+Touche **F10**, **entraînement uniquement** (en duel il relâcherait la souris et clouerait le joueur
+sur place). Curseurs LIVE : sensibilité souris · inversion Y · suivi de visée · plafond d'angle ·
+FOV. Plus un **journal des entrées** à l'écran — `move`, position prédite *contre* position serveur,
+posture, verrou de déplacement, visée — pour que le symptôme **« les déplacements ne fonctionnent
+pas »**, jamais reproduit ni diagnostiqué, soit lisible s'il revient.
+
+⚖ **ARBITRAGE** : le bon de commande demande « FOV (60-90) », le jeu tourne à 55 (`CAMERA_FOV`). Une
+plage qui ne contient pas la valeur courante n'est pas un réglage, c'est un changement déguisé — vu
+en capture, le curseur affichait 60 pour une caméra à 55. Borne basse descendue à **50**.
+
+### 5. Ce que la recette dit — et ce qu'elle ne dit pas
+
+| Contrôle | Résultat |
+|---|---|
+| Harnais `test_trench_ambient` | **49 contrôles verts, 0 rouge**, 7 sabotages injectés et vus |
+| **Dérive d'horizon entre les positions 0 et 4** | **0 px** (l'ancien système : 128 px) |
+| Perf, ms/frame, **vsync coupée** | greybox 1,115 ms · texturé 1,112 ms · **écart +0,00 ms** (budget +2 ms) |
+| `--import` · boot `main_menu` | **0 `ERROR`** |
+| Dépense OpenRouter | **0,277 $** (budget des lots A+B : 1,60 $) — cumul **4,74 $** |
+
+⚠️⚠️ **ET CE N'EST PAS UNE VALIDATION.** La leçon du §5 du rapport précédent est que 33/33 verts en
+chambre blanche n'ont rien dit du JEU, et que le premier essai réel a sorti six problèmes en dix
+minutes. Ces chiffres sont des outils de DÉVELOPPEMENT. La recette est la **PORTE 1**.
+
+### 6. Quatre défauts trouvés en CAPTURE, par aucun autre moyen
+
+1. **Le panorama était intégralement effacé.** L'arc est un maillage à 300 m : la brume de
+   profondeur s'y appliquait comme à n'importe quelle géométrie lointaine et le remplaçait par un
+   aplat gris. `fog_sky_affect` ne le protège PAS — ce réglage ne vaut que pour un ciel `BG_SKY`.
+   Correctif : `disable_fog` sur le matériau de l'arc.
+2. **Les barbelés sortaient en six bandes noires** en travers du no man's land : à 2,6 m de l'œil,
+   un brin de 3,5 cm couvre 0,77° sur toute la largeur de l'écran. Ils étaient pourtant SOUS la
+   ligne de vue, donc « neutres » au sens du jeu, et parfaitement hideux. Éloignés à 10/15 m et
+   **brisés** (chaque brin ne relie que deux piquets voisins).
+3. **Le panneau F10 était hors écran** — 7ᵉ récidive de « un `Control` créé par code garde
+   `size = (0,0)` » : ancré en haut à DROITE d'un parent de largeur nulle, il atterrissait à
+   `x = −400`. `visible` disait `true`, les réglages fonctionnaient, il n'y avait rien à régler.
+4. **Le sol ne se fondait pas dans l'horizon** : RGB 112/113/112 au ras d'un ciel à 69/87/97.
+   `fog_density` n'est pas un simple facteur (elle entre dans une exponentielle) — relevée à 3,0 par
+   la mesure. `FOG_COLOR` est **relevée sur le panorama**, pas choisie.
+
+### 7. Ce qui reste ouvert — les questions de la PORTE 1
+
+- ⛔ **Aucune partie réelle n'a été jouée.** Le chantier s'arrête ici, par construction.
+- **Accroupi, la vue est très serrée** : l'œil est à 0,50 m du parapet, on voit donc environ une
+  rangée et demie de sacs. C'est géométriquement exact et ça peut se lire comme abstrait. Le seul
+  levier honnête est `JUTE_METRES` (2,4 m/tuile) — à ne toucher qu'après verdict.
+- Les **10 décors peints** ne sont plus chargés. Ils restent sur disque : réserve, et
+  `pose_2_up.png` est promis à la carte BONUS de l'événement après la PORTE 2.
+- La fenêtre de playtest est **déployée et ouverte** (vérifiée sur l'API : 4 août 00:00 →
+  7 août 18:00 UTC). Démontage rappelé au §2 du rapport.

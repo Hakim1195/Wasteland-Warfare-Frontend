@@ -106,7 +106,7 @@ func _ready() -> void:
 	for pair in [[0, 4], [2, 2], [4, 0]]:
 		_duel._pred_pos = int(pair[0])
 		_duel._world.set_pose(int(pair[0]), "up", true)
-		_duel._refresh_decor()
+		_duel._refresh_pose_view()
 		_push(int(pair[1]), "idle")
 		await get_tree().create_timer(0.35).timeout     # > 0,2 s : le fondu d'apparition est fini
 		var tag := "soldat_moi%d_lui%d" % [int(pair[0]), int(pair[1])]
@@ -120,7 +120,7 @@ func _ready() -> void:
 
 	_duel._pred_pos = 2
 	_duel._world.set_pose(2, "up", true)
-	_duel._refresh_decor()
+	_duel._refresh_pose_view()
 	for state in ENEMY_STATES:
 		_push(3, state)
 		await get_tree().create_timer(0.15).timeout

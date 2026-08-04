@@ -189,7 +189,7 @@ func _pose(pos: int, stance: String) -> void:
 	_duel._pred_pos = pos
 	_duel._pred_stance = stance
 	_duel._world.set_pose(pos, stance, true)
-	_duel._refresh_decor()
+	_duel._refresh_pose_view()
 
 
 func _state(my_pos: int, their_pos: int, stance: String, aiming: bool, projectiles: Array) -> void:

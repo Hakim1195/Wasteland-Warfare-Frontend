@@ -53,6 +53,17 @@ const HAZE_SHADER := preload("res://shaders/trench_haze.gdshader")
 # L'horizon est à 50 % de la hauteur : c'est LA cote du chantier (le blockout y place la ligne de
 # tranchée adverse, cf. `trench_geometry.gd` projeté). Les décors sont produits sur cette cote.
 const HORIZON_RATIO := 0.5
+# ╔═ …MAIS L'HORIZON N'EST PLUS À UNE ORDONNÉE FIXE ══════════════════════════════════════════════╗
+# ║ C'était vrai tant que la caméra ne bougeait pas : le décor était peint pour poser l'horizon à  ║
+# ║ 50 % de la hauteur, et la brume s'y accrochait. Depuis le pivot « monde 3D + ciel peint », la  ║
+# ║ caméra pique du nez et se redresse avec la visée — un horizon cloué à 50 % laisserait la brume ║
+# ║ flotter au milieu du ciel et les braises brûler en l'air. `trench_fp.gd` pousse donc à chaque  ║
+# ║ frame l'ordonnée RÉELLE, obtenue en projetant la direction de site nul par la caméra 3D.       ║
+# ║ La constante ci-dessus reste la valeur de départ, avant le premier `set_horizon_ratio`.        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Écart minimal (en fraction de hauteur) qui justifie de refaire la mise en page : sous ce seuil,
+# rien ne se verrait bouger, et on relayouterait 60 fois par seconde pour rien.
+const HORIZON_EPSILON := 0.004
 # Deux nappes : hauteur de bande (en fraction d'écran), décalage vertical, échelle et vitesse.
 # ⚠️ Les vitesses sont dans un rapport IRRATIONNEL (0,013 / 0,0071 ≈ 1,83) : deux vitesses en rapport
 # simple se remettraient périodiquement en phase et la brume « battrait » à intervalle régulier.
@@ -66,6 +77,7 @@ const GRADE_SHADER := preload("res://shaders/trench_grade.gdshader")
 
 var _reduced_motion := false
 var _standing := true
+var _horizon_ratio := HORIZON_RATIO
 var _ash: GPUParticles2D = null
 var _embers: Array = []
 var _haze: Array = []                          # [{node: TextureRect, mat: ShaderMaterial, speed: float}]
@@ -114,6 +126,13 @@ func set_reduced_motion(value: bool) -> void:
 # ║ serait peindre un lointain à travers un mur — et allumer trois feux à l'intérieur des sacs.    ║
 # ║ Les CENDRES, elles, restent : elles tombent du ciel et tombent aussi dans la tranchée.         ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func set_horizon_ratio(ratio: float) -> void:
+	if absf(ratio - _horizon_ratio) < HORIZON_EPSILON:
+		return
+	_horizon_ratio = ratio
+	_layout()
+
+
 func set_stance(stance: String) -> void:
 	var standing := stance != "down"
 	if standing == _standing:
@@ -282,7 +301,7 @@ func _layout() -> void:
 	var h := canvas.y
 	if w <= 0.0 or h <= 0.0:
 		return
-	var horizon := h * HORIZON_RATIO
+	var horizon := h * _horizon_ratio
 
 	for band in _haze:
 		var rect: ColorRect = band["node"]

@@ -26,6 +26,10 @@ extends Node
 const Ambient := preload("res://scripts/game/trench_ambient.gd")
 const DuelScene := preload("res://scenes/game/trench_fp.tscn")
 const DuelScript := preload("res://scripts/game/trench_fp.gd")
+const Blockout := preload("res://scripts/game/trench_blockout.gd")
+const Geo := preload("res://scripts/game/trench_geometry.gd")
+const Tuning := preload("res://scripts/game/trench_tuning.gd")
+const World := preload("res://scripts/game/trench_fp_world.gd")
 
 var _checks := 0
 var _fails: Array = []
@@ -74,21 +78,23 @@ func _ready() -> void:
 	var order := {}
 	for i in duel.get_child_count():
 		order[duel.get_child(i)] = i
-	var i_decor: int = order.get(duel._decor, -1)
+	var i_sky: int = order.get(duel._sky, -1)
 	var i_world: int = order.get(duel._world, -1)
 	var i_amb: int = order.get(duel._ambient, -1)
 	var i_vm: int = order.get(duel._viewmodel, -1)
 	var i_grade: int = order.get(duel._grade, -1)
 	var i_hud: int = order.get(duel._hud, -1)
 	_ok("les 6 couches existent",
-		mini(mini(i_decor, i_world), mini(mini(i_amb, i_vm), mini(i_grade, i_hud))) >= 0,
-		"decor=%d monde=%d ambiance=%d viewmodel=%d etalonnage=%d hud=%d"
-		% [i_decor, i_world, i_amb, i_vm, i_grade, i_hud])
+		mini(mini(i_sky, i_world), mini(mini(i_amb, i_vm), mini(i_grade, i_hud))) >= 0,
+		"ciel=%d monde=%d ambiance=%d viewmodel=%d etalonnage=%d hud=%d"
+		% [i_sky, i_world, i_amb, i_vm, i_grade, i_hud])
 	_ok("l'ambiance est AU-DESSUS du monde 3D (la brume voile le soldat a 35 m)", i_amb > i_world)
 	_ok("l'ambiance est SOUS le viewmodel (rien ne passe devant mon arme a 0,60 m)", i_amb < i_vm)
 	_ok("l'etalonnage est AU-DESSUS du viewmodel", i_grade > i_vm)
 	_ok("l'etalonnage est SOUS le HUD (le cyan de charte n'est PAS etalonne)", i_grade < i_hud)
-	_ok("le decor est la couche la plus basse des cinq", i_decor < i_world)
+	_ok("le ciel de secours est la couche la plus basse", i_sky < i_world)
+	_ok("le ciel de secours reste ALLUME (un trou doit sortir gris, jamais en neant)",
+		duel._sky.visible)
 	var grade_mat := duel._grade.material as ShaderMaterial
 	_ok("l'etalonnage porte bien le shader d'etalonnage",
 		grade_mat != null and grade_mat.shader == Ambient.GRADE_SHADER)
@@ -190,78 +196,176 @@ func _ready() -> void:
 		haze_back = haze_back and bool(h.visible)
 	_ok("debout : la brume et les braises reviennent", haze_back and bool(embers[0].emitting))
 
-	# --- 5) LE FOND SUIT LA CAMÉRA (§8.139.1) ---------------------------------------------------
-	# ⚠️ Ce bloc REMPLACE l'ancien contrôle de « micro-parallaxe » (±2 px à contre-sens). Cette ruse
-	# est devenue fausse le jour où la caméra s'est mise à tourner pour de bon : ce qu'on vérifie
-	# désormais, c'est que le fond se décale de l'angle EXACT, dans le BON sens.
-	# ⚠️⚠️ LE CONTRÔLE QUI MANQUAIT (§8.139.1). Le shader échantillonne SON PROPRE uniforme, pas la
-	# texture du nœud. Oublié de le lier, l'écran sort intégralement BLANC — et RIEN ne le signale :
-	# ni au boot, ni à l'import, ni au rendu. Un sampler non lié est du blanc silencieux.
-	var demo := PlaceholderTexture2D.new()
-	demo.size = Vector2(1280, 720)
-	duel._decor.texture = demo
-	if duel._backdrop_mat != null:
-		duel._backdrop_mat.set_shader_parameter("backdrop", duel._decor.texture)
-	_ok("le shader de fond est LIE a la texture du decor (sinon : ecran blanc muet)",
-		duel._backdrop_mat != null
-		and duel._backdrop_mat.get_shader_parameter("backdrop") == duel._decor.texture
-		and duel._decor.texture != null)
-	_ok("le cadrage « couvrir » est fait par le SHADER, pas par le noeud",
-		duel._decor.stretch_mode == TextureRect.STRETCH_SCALE,
-		"sinon Godot remappe les UV et le decalage panoramique vise a cote")
+	# --- 5) LE MONDE EST 3D, ET IL EST COMPLET ---------------------------------------------------
+	# ╔═ CE BLOC REMPLACE TOUTE LA RECETTE DU FOND PEINT ════════════════════════════════════════╗
+	# ║ On y vérifiait qu'un shader décalait une image plate du bon angle. Le pivot rend la         ║
+	# ║ question sans objet : il n'y a plus d'image plate à décaler. Ce qu'il faut contrôler        ║
+	# ║ maintenant, ce sont les trois promesses du monde 3D — le ciel est LOIN, le sol va JUSQU'À   ║
+	# ║ lui, et rien de décoratif ne s'interpose entre le joueur et sa cible.                       ║
+	# ╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+	var blockout = duel._world._blockout
+	var sky_arc := blockout.sky_root.get_node_or_null("SkyArc") as MeshInstance3D
+	_ok("l'arc de ciel existe dans le monde 3D", sky_arc != null and sky_arc.mesh != null)
+	var sky_aabb: AABB = sky_arc.get_aabb()
+	var sky_mat := sky_arc.material_override as StandardMaterial3D
+	_ok("le ciel est a 300 m (la parallaxe d'un pas de cote y vaut 0,76 deg, sous le pixel)",
+		absf(maxf(sky_aabb.size.x, sky_aabb.size.z) * 0.5 - Blockout.SKY_RADIUS) < 1.0,
+		"rayon mesure %.1f m" % (maxf(sky_aabb.size.x, sky_aabb.size.z) * 0.5))
+	_ok("le ciel est NON ECLAIRE (sa lumiere est deja peinte)",
+		sky_mat != null and sky_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED)
+	_ok("le ciel ne se REPETE pas (sinon le haut du ciel repasse sous l'horizon)",
+		sky_mat != null and not sky_mat.texture_repeat)
+	# LE CONTRAT : le bord BAS du panorama tombe sur `GROUND_Y`. C'est lui qui rend l'horizon juste
+	# a tout angle — et c'est la seule cote de ce lot qui, fausse, se verrait immediatement.
+	_ok("la jupe du ciel plonge SOUS le sol (aucun lisere de vide a l'horizon)",
+		sky_aabb.position.y < Geo.GROUND_Y - 1.0,
+		"bas de l'arc a %.1f m, sol a %.1f m" % [sky_aabb.position.y, Geo.GROUND_Y])
+	var sky_top: float = sky_aabb.position.y + sky_aabb.size.y
+	# Le champ de vision demande 41,5 deg au-dessus de l'horizon (site max 14 + demi-FOV 27,5).
+	var needed_top: float = Geo.GROUND_Y + Blockout.SKY_RADIUS * tan(deg_to_rad(41.5))
+	_ok("le ciel monte plus haut que le champ de vision ne porte", sky_top > needed_top,
+		"sommet %.0f m, exige %.0f m" % [sky_top, needed_top])
 
-	duel._decor.visible = true                    # le pan ne s'applique qu'à un décor affiché
-	var view: Vector2 = get_viewport().get_visible_rect().size
-	var fov_v: float = duel._world.camera_fov()
-	var fov_h: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(fov_v) * 0.5) * view.x / view.y))
+	# LE SOL VA JUSQU'A L'HORIZON — sans quoi une bande de neant s'ouvre entre les tranchees et le
+	# ciel. C'est le defaut que le decor peint masquait, et qu'il ne masque plus.
+	var ground_reach := 0.0
+	for child in blockout.geometry_root.get_children():
+		var mi := child as MeshInstance3D
+		if mi == null or not String(mi.name).begins_with("FarGround"):
+			continue
+		var box := mi.get_aabb()
+		ground_reach = maxf(ground_reach, absf(mi.position.z) + box.size.z * 0.5)
+	_ok("le sol lointain atteint le pied du ciel", ground_reach >= Blockout.SKY_RADIUS,
+		"portee %.0f m, ciel a %.0f m" % [ground_reach, Blockout.SKY_RADIUS])
+
+	# ⚠️⚠️ LE DEFAUT DE §8.139.1, RENDU IMPOSSIBLE. « Il n'y a pas de tranchee » venait d'une
+	# bascule qui masquait `NearParapet` des qu'un decor etait depose. La bascule n'existe plus ;
+	# on verifie ici que le volume est bel et bien la, visible, et habille de sa matiere.
+	var parapet := blockout.cover_root.get_node_or_null("NearParapet") as MeshInstance3D
+	_ok("MON parapet existe et est rendu", parapet != null and parapet.visible
+		and blockout.cover_root.visible)
+	var parapet_mat := (parapet.mesh as BoxMesh).material as StandardMaterial3D
+	_ok("MON parapet porte la matiere de jute (et non un gris de blockout)",
+		parapet_mat != null and parapet_mat.albedo_texture != null)
+	_ok("accroupi, l'oeil passe SOUS l'arete du parapet (l'abri se VOIT)",
+		Geo.EYE_DOWN < Geo.PARAPET_Y,
+		"oeil %.2f m, arete %.2f m" % [Geo.EYE_DOWN, Geo.PARAPET_Y])
+
+	# ⚠️⚠️ NEUTRALITE DE JEU DES ACCESSOIRES. Le serveur tranche sur sa table angulaire, qui ne
+	# connait que le parapet : un barbele qui masquerait la silhouette adverse serait un changement
+	# de REGLE deguise en decor. On mesure chaque accessoire contre la ligne de vue la plus basse.
+	var tallest := 0.0
+	var offenders := 0
+	for child in blockout.props_root.get_children():
+		var prop := child as MeshInstance3D
+		if prop == null or not (prop.mesh is BoxMesh):
+			continue
+		var top: float = prop.position.y + (prop.mesh as BoxMesh).size.y * 0.5
+		tallest = maxf(tallest, top - Geo.GROUND_Y)
+		if top > Geo.GROUND_Y + blockout._prop_ceiling(prop.position.z):
+			offenders += 1
+	_ok("aucun accessoire ne depasse la ligne de vue vers la cible", offenders == 0,
+		"%d fautif(s), le plus haut a %.2f m au-dessus du sol" % [offenders, tallest])
+
+	# --- 5 bis) LA CAMERA SUIT LA VISEE, ET ELLE TRANSLATE ---------------------------------------
+	var world = duel._world
 	duel._positions = 5
-	duel._pred_pos = 2                            # position CENTRALE : aucun décalage latéral
-	duel._aim_yaw = 0.0
-	duel._aim_pitch = 0.0
-	duel._apply_backdrop_pan()
-	var pan0: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
-	_ok("visee au centre, position centrale : le fond est a son assiette de repos",
-		pan0.is_equal_approx(Vector2.ZERO), "pan=%s" % pan0)
+	world.set_pose(2, "up", true)
+	world.set_aim(0.0, 0.0)
+	world._process(0.016)
+	var cam: Camera3D = world._camera
+	var rest_basis := cam.global_transform.basis
+	var rest_pos := cam.position
+	world.set_aim(DuelScript.AIM_YAW_LIMIT, 0.0)
+	world._process(0.016)
+	# Regarder a +32 deg doit tourner la camera de +32 deg : c'est TOUT le pivot en une mesure.
+	# `pose_basis` fait deja demi-tour (on regarde +Z), d'ou la comparaison sur l'ecart.
+	var turned: float = rad_to_deg(rest_basis.get_euler().y - cam.global_transform.basis.get_euler().y)
+	_ok("la camera tourne de l'ANGLE VISE, pas d'une fraction",
+		absf(absf(turned) - DuelScript.AIM_YAW_LIMIT) < 1.0,
+		"tourne de %.1f deg pour %.1f deg vises" % [absf(turned), DuelScript.AIM_YAW_LIMIT])
+	world.set_aim(0.0, 0.0)
+	world.set_pose(4, "up", true)
+	world._process(0.016)
+	_ok("un pas de cote DEPLACE physiquement l'oeil (la parallaxe devient celle du monde reel)",
+		absf(cam.position.x - rest_pos.x) > 1.0,
+		"deplacement %.2f m" % absf(cam.position.x - rest_pos.x))
+	world.set_pose(2, "up", true)
+	world._process(0.016)
 
-	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT
-	duel._apply_backdrop_pan()
-	var pan_r: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
-	# Regarder à DROITE doit faire glisser le monde vers la GAUCHE : on échantillonne plus loin à
-	# droite dans la texture, donc `pan.x` AUGMENTE. Un signe inversé ici, c'est exactement la
-	# sensation « la souris est inversée » que ce lot corrige.
-	_ok("visee a DROITE : le fond glisse vers la gauche (pan.x > 0)", pan_r.x > 0.0,
-		"pan.x=%.4f" % pan_r.x)
-	_ok("l'amplitude vaut l'ANGLE divise par le champ de vision (au degre pres)",
-		absf(pan_r.x - DuelScript.AIM_YAW_LIMIT / fov_h) < 0.002,
-		"mesure %.4f, attendu %.4f (fov_h %.1f deg)"
-		% [pan_r.x, DuelScript.AIM_YAW_LIMIT / fov_h, fov_h])
+	# --- 5 ter) LE PANNEAU DE REGLAGE (regle de fer n. 2) ----------------------------------------
+	var tuning = duel._tuning
+	_ok("le panneau de reglage existe et demarre ferme", tuning != null and not tuning.visible)
+	# ⚠️⚠️ LE CONTROLE QUI MANQUAIT — un panneau HORS ECRAN passe tous les autres. Vu en CAPTURE :
+	# `size = (0,0)` sur la racine, donc un panneau ancre EN HAUT A DROITE atterrissait a x = -400.
+	# `visible` disait `true`, les reglages fonctionnaient, et il n'y avait rien a regler.
+	# ⚠️ CHAQUE DEFAUT DOIT TENIR DANS SA PROPRE PLAGE. Sinon le curseur s'ecrete a l'ouverture et
+	# le panneau CHANGE le jeu par le seul fait d'exister — vu sur le FOV (defaut 55, plage 60-90).
+	var out_of_range: Array = []
+	for key in Tuning.SLIDERS:
+		var b: Array = Tuning.SLIDERS[key]
+		var d: float = float(Tuning.DEFAULTS[key])
+		if d < float(b[0]) or d > float(b[1]):
+			out_of_range.append("%s=%.3f hors [%.3f, %.3f]" % [key, d, b[0], b[1]])
+	_ok("aucun defaut d'usine ne tombe hors de sa plage de reglage", out_of_range.is_empty(),
+		", ".join(out_of_range))
+	_ok("le defaut de FOV est bien celui de la camera 3D",
+		absf(float(Tuning.DEFAULTS["fov"]) - World.CAMERA_FOV) < 0.01,
+		"panneau %.1f, camera %.1f" % [Tuning.DEFAULTS["fov"], World.CAMERA_FOV])
 
-	duel._aim_yaw = 0.0
-	duel._aim_pitch = DuelScript.AIM_PITCH_LIMIT
-	duel._apply_backdrop_pan()
-	var pan_u: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
-	_ok("visee vers le HAUT : le fond descend (pan.y < 0)", pan_u.y < 0.0, "pan.y=%.4f" % pan_u.y)
+	var frame: Vector2 = tuning.get_viewport_rect().size
+	var box := tuning.get_child(0) as Control
+	_ok("la racine du panneau a une taille REELLE (pas 0x0)",
+		tuning.size.x > 1.0 and tuning.size.y > 1.0, "size=%s" % tuning.size)
+	_ok("le panneau est DANS l'ecran (il ne sert a rien s'il est a cote)",
+		box.global_position.x >= 0.0 and box.global_position.y >= 0.0
+		and box.global_position.x + box.size.x <= frame.x + 1.0
+		and box.global_position.y + box.size.y <= frame.y + 1.0,
+		"panneau %s a %s, ecran %s" % [box.size, box.global_position, frame])
+	tuning._values["fov"] = 84.0
+	tuning._values["aim_follow"] = 0.4
+	tuning._commit()
+	_ok("un reglage de FOV atteint la camera 3D", absf(cam.fov - 84.0) < 0.01,
+		"fov camera %.1f" % cam.fov)
+	world.set_aim(DuelScript.AIM_YAW_LIMIT, 0.0)
+	world._process(0.016)
+	var partial: float = rad_to_deg(rest_basis.get_euler().y
+		- cam.global_transform.basis.get_euler().y)
+	_ok("un suivi a 0,4 ne fait tourner la camera que de 40 % de la visee",
+		absf(absf(partial) - DuelScript.AIM_YAW_LIMIT * 0.4) < 1.0,
+		"tourne de %.1f deg" % absf(partial))
+	# ⚠️ Une valeur aberrante dans `trench_tuning.json` ne doit pas pouvoir poser un FOV de 300 :
+	# le fichier est une commodite, jamais une autorite.
+	tuning._values["fov"] = 900.0
+	tuning._commit()
+	_ok("une valeur aberrante est ECRETEE avant d'atteindre la camera", cam.fov <= 100.0,
+		"fov camera %.1f" % cam.fov)
+	tuning._on_reset()
+	_ok("« PAR DEFAUT » rend bien les valeurs d'usine",
+		absf(cam.fov - float(Tuning.DEFAULTS["fov"])) < 0.01)
 
-	# Le PAS DE CÔTÉ doit se voir : 6,52° pour 4 m a 35 m, pas 32 px arbitraires.
-	duel._aim_pitch = 0.0
-	duel._pred_pos = 3
-	duel._apply_backdrop_pan()
-	var pan_step: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
-	var expected_step: float = DuelScript.POSITION_PARALLAX_DEG / fov_h
-	_ok("un pas de cote decale le fond de 6,52 deg",
-		absf(pan_step.x - expected_step) < 0.002,
-		"mesure %.4f, attendu %.4f (soit %.0f px sur %.0f)"
-		% [pan_step.x, expected_step, pan_step.x * view.x, view.x])
-	_ok("ce decalage vaut plus de 60 px a l'ecran (l'ancien en donnait 32)",
-		absf(pan_step.x) * view.x > 60.0, "%.0f px" % (absf(pan_step.x) * view.x))
-	duel._pred_pos = 2
+	# --- 5 quater) L'HABILLAGE SUIT L'HORIZON REEL -----------------------------------------------
+	# Un horizon cloue a 50 % laisserait la brume flotter en plein ciel des que la camera pique.
+	world.set_aim(0.0, 0.0)
+	world._process(0.016)
+	duel._track_horizon()
+	var flat_ratio: float = amb._horizon_ratio
+	world.set_aim(0.0, DuelScript.AIM_PITCH_LIMIT)
+	world._process(0.016)
+	duel._track_horizon()
+	_ok("viser vers le HAUT fait DESCENDRE l'horizon a l'ecran",
+		amb._horizon_ratio > flat_ratio + 0.02,
+		"%.3f -> %.3f" % [flat_ratio, amb._horizon_ratio])
+	world.set_aim(0.0, 0.0)
+	world._process(0.016)
+	duel._track_horizon()
 
 	# --- 6) CONTRE-ÉPREUVE PAR SABOTAGE ---------------------------------------------------------
 	# Un test vert ne vaut que s'il sait devenir rouge. On casse volontairement chaque famille et on
 	# vérifie que le contrôle correspondant AURAIT échoué.
 	print("\n  --- contre-epreuve (chaque ligne doit dire OUI) ---")
 	var caught := 0
-	var expected := 5
+	var expected := 7
 
 	var real_w: float = haze_nodes[0].size.x
 	haze_nodes[0].size = Vector2.ZERO                      # SABOTAGE : nappe à taille nulle
@@ -284,14 +388,38 @@ func _ready() -> void:
 		print("  OUI  une braise rallumee accroupi serait vue")
 	amb.set_stance("up")
 
-	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT
-	duel._apply_backdrop_pan()
-	var real_pan: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
-	duel._backdrop_mat.set_shader_parameter("pan", Vector2(-real_pan.x, real_pan.y))  # SABOTAGE
-	if float((duel._backdrop_mat.get_shader_parameter("pan") as Vector2).x) < 0.0:
+	# SABOTAGE : on masque MON parapet — exactement le défaut vécu en partie réelle (§8.139.1).
+	var real_cover: bool = blockout.cover_root.visible
+	blockout.cover_root.visible = false
+	if not (parapet.visible and blockout.cover_root.visible):
 		caught += 1
-		print("  OUI  un fond qui glisse dans le mauvais sens serait vu")
-	duel._apply_backdrop_pan()
+		print("  OUI  un parapet masque (« il n'y a pas de tranchee ») serait vu")
+	blockout.cover_root.visible = real_cover
+
+	# SABOTAGE : un barbelé dressé en travers de la ligne de vue.
+	var victim := blockout.props_root.get_child(0) as MeshInstance3D
+	var real_y: float = victim.position.y
+	victim.position.y = Geo.GROUND_Y + 2.0
+	var saboted_prop: bool = victim.position.y \
+		> Geo.GROUND_Y + blockout._prop_ceiling(victim.position.z)
+	if saboted_prop:
+		caught += 1
+		print("  OUI  un accessoire qui masque la cible serait vu")
+	victim.position.y = real_y
+
+	# SABOTAGE : le suivi de visée ramené à la valeur qui a fait échouer le premier essai (0,25).
+	tuning._values["aim_follow"] = 0.25
+	tuning._commit()
+	world.set_aim(DuelScript.AIM_YAW_LIMIT, 0.0)
+	world._process(0.016)
+	var crippled: float = absf(rad_to_deg(rest_basis.get_euler().y
+		- cam.global_transform.basis.get_euler().y))
+	if crippled < DuelScript.AIM_YAW_LIMIT * 0.5:
+		caught += 1
+		print("  OUI  une camera qui ne suit plus la visee serait vue")
+	tuning._on_reset()
+	world.set_aim(0.0, 0.0)
+	world._process(0.016)
 
 	duel.move_child(duel._grade, duel.get_child_count() - 1)    # SABOTAGE : étalonnage au-dessus du HUD
 	var saboted_order: bool = int(duel._grade.get_index()) > int(duel._hud.get_index())

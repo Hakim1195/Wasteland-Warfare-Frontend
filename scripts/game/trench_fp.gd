@@ -34,7 +34,7 @@ const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 const WorldScene := preload("res://scenes/game/trench_fp_world.tscn")
 const ViewmodelScript := preload("res://scripts/game/trench_viewmodel.gd")
 const AmbientScript := preload("res://scripts/game/trench_ambient.gd")
-const BackdropShader := preload("res://shaders/trench_backdrop.gdshader")
+const TuningScript := preload("res://scripts/game/trench_tuning.gd")
 const CelebrationScript := preload("res://scripts/ui/unlock_celebration.gd")
 
 # Arme de départ du duel (miroir de `trench_sim.STARTING_WEAPON`) — sert AVANT le premier état,
@@ -51,14 +51,14 @@ const CHARGE_TIME := 1.2
 const RECONNECT_DELAY := 2.0
 
 # --- Visée ---------------------------------------------------------------------------------------
-# Sensibilité souris en degrés par pixel ⚙ (réglage produit à exposer aux Paramètres si le
-# playtest le demande — hors périmètre de ce chantier).
-# ⚙ Sensibilité RÉDUITE de 0,055 à 0,040 °/px (§8.139.1, demande de Hakim après essai). Elle n'avait
-# jamais été jugée dans de bonnes conditions : tant que la caméra ne tournait que de 6°, la souris
-# ne pilotait qu'un réticule et paraissait de toute façon incontrôlable. Maintenant qu'elle tourne
-# la vue, un mouvement plus posé se justifie — le débattement utile (±32° de lacet) demande environ
-# 1 600 px de souris, soit un geste ample mais franc.
-const AIM_SENSITIVITY := 0.040
+# ╔═ LA SENSIBILITÉ N'EST PLUS UNE CONSTANTE : ELLE SE RÈGLE EN JEU (touche F10) ═════════════════╗
+# ║ 0,055 puis 0,040 °/px ont été choisis par raisonnement, sans jamais avoir été éprouvés — et le ║
+# ║ verdict du seul essai réel a été « le mouvement de la souris est inversé et pas du tout facile ║
+# ║ à gérer ». Le code cesse donc de deviner : `trench_tuning.gd` expose sensibilité, inversion Y, ║
+# ║ suivi de caméra, plafond et FOV à Hakim, qui règle en jouant. 0,040 reste la valeur de départ. ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+var _sensitivity: float = TuningScript.DEFAULTS["mouse_sensitivity"]
+var _invert_y: bool = TuningScript.DEFAULTS["invert_y"]
 # Débattement autorisé. Le lacet doit couvrir la position adverse la plus lointaine (±24,4° depuis
 # un bord) avec de la marge ; le site reste étroit — il n'y a rien à viser au ciel.
 const AIM_YAW_LIMIT := 32.0
@@ -128,11 +128,10 @@ var _enemy_laser_pos := 2
 
 # --- Nœuds ---------------------------------------------------------------------------------------
 var _sky: TextureRect
-var _decor: TextureRect
 var _world: Control
 var _ambient: Control
 var _grade: ColorRect
-var _backdrop_mat: ShaderMaterial
+var _tuning: Control
 var _viewmodel: Control
 var _hud: Control
 var _reticle: Control
@@ -152,6 +151,7 @@ var _slot_bandage: Label
 var _banner: Label
 var _waiting_label: Label
 var _conn_banner: Label
+var _tune_hint: Label
 var _charge_back: Panel
 var _charge_bar: ColorRect
 var _hurt_overlay: ColorRect
@@ -201,10 +201,11 @@ func _capture_mouse(capture: bool) -> void:
 # COUCHES 1 & 2
 # =================================================================================================
 func _build_layers() -> void:
-	# COUCHE 0 — LE CIEL DE REPLI. Le SubViewport 3D est TRANSPARENT : sans rien derrière lui, le
-	# « ciel » du greybox est la couleur d'effacement de la fenêtre, et l'horizon devient
-	# illisible (défaut vu en CAPTURE). Ce dégradé donne au blockout un haut et un bas, donc une
-	# ligne d'horizon — et il disparaît dès qu'un vrai décor est déposé.
+	# COUCHE 0 — LE CIEL DE DERNIER RECOURS. Le SubViewport 3D est TRANSPARENT : partout où le
+	# monde 3D ne peint rien, c'est la couleur d'effacement de la fenêtre qui sort. Depuis le
+	# pivot, l'arc de ciel peint couvre ±100° sur 56° de haut et ne peut pas laisser de trou — ce
+	# dégradé n'est donc plus qu'un filet de sécurité, coûtant un quad. Il reste TOUJOURS allumé :
+	# la seule façon de le voir est un défaut, et un défaut doit se voir en gris, pas en néant.
 	var sky := TextureRect.new()
 	sky.set_anchors_preset(Control.PRESET_FULL_RECT)
 	sky.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -221,26 +222,18 @@ func _build_layers() -> void:
 	add_child(sky)
 	_sky = sky
 
-	# COUCHE 1 — le décor pré-rendu. Vide tant qu'aucun asset n'est déposé : le greybox du
-	# blockout (couche 2) fait alors le fond, et il est aligné par construction.
-	_decor = TextureRect.new()
-	_decor.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_decor.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	# ⚠️⚠️ `STRETCH_SCALE`, ET SURTOUT PAS `KEEP_ASPECT_COVERED` : le cadrage « couvrir » est
-	# désormais fait PAR LE SHADER (§8.139.1). Laissé à Godot, il dessine une SOUS-RÉGION de la
-	# texture et remappe les UV en conséquence — le décalage panoramique, qui raisonne en largeurs
-	# d'écran, se serait alors appliqué dans un repère qui n'est pas le sien. Le contrat 16:9 est
-	# inchangé : c'est le même cadrage, calculé au même endroit que le décalage qui en dépend.
-	_decor.stretch_mode = TextureRect.STRETCH_SCALE
-	_decor.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Le fond PANORAMIQUE : le shader décale l'image de l'angle dont la caméra a tourné, avec un
-	# pavage miroir qui rend le décalage sans limite (§8.139.1).
-	_backdrop_mat = ShaderMaterial.new()
-	_backdrop_mat.shader = BackdropShader
-	_decor.material = _backdrop_mat
-	add_child(_decor)
+	# ╔═ LA COUCHE « DÉCOR PRÉ-RENDU » A ÉTÉ RETIRÉE ════════════════════════════════════════════╗
+	# ║ C'était un `TextureRect` plein écran portant l'un des 10 décors peints, et depuis §8.139.1 ║
+	# ║ un shader qui tentait de le faire suivre la caméra. Deux défauts s'y logeaient, tous deux  ║
+	# ║ mesurés dans le code : la parallaxe de position comptée DEUX FOIS (32 px de découpe + 146  ║
+	# ║ px de shader), et un décalage LINÉAIRE opposé à une projection en TANGENTE (~11 % à 32°).  ║
+	# ║ Aucun réglage ne les réconciliait : une image plate ne peut pas suivre une caméra libre.   ║
+	# ║ Le monde 3D texturé la remplace intégralement — il répond juste parce qu'il EST le monde.  ║
+	# ║ Les 10 PNG restent sur disque : ils ne sont plus chargés, ils sont une réserve (§6.4).     ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 
-	# COUCHE 2 — le monde 3D transparent.
+	# COUCHE 1 — le monde 3D transparent. Il porte désormais TOUT ce qui se voit : le sol jusqu'à
+	# l'horizon, les deux parapets, les barbelés, et le ciel peint sur son arc à 300 m.
 	_world = WorldScene.instantiate()
 	add_child(_world)
 	_world.set_reduced_motion(_reduced_motion)
@@ -269,6 +262,14 @@ func _build_layers() -> void:
 	_grade = AmbientScript.make_grade_layer()
 	add_child(_grade)
 
+	# COUCHE 3 ter — LE PANNEAU DE RÉGLAGE (F10). Au-dessus de l'étalonnage : c'est un outil, pas
+	# une image du jeu — le teinter reviendrait à rendre moins lisibles les chiffres qu'on règle.
+	# Il reste caché jusqu'à ce que `_on_init` sache qu'on est bien en ENTRAÎNEMENT.
+	_tuning = TuningScript.new()
+	add_child(_tuning)
+	_tuning.changed.connect(_apply_tuning)
+	_apply_tuning(_tuning.values())
+
 
 # L'AIGUILLAGE peint / primitives, en UN seul endroit : les deux viewmodels ne doivent jamais être
 # allumés ensemble, ni éteints ensemble.
@@ -288,68 +289,18 @@ func _apply_weapon_check(weapon_id: String) -> bool:
 	return painted
 
 
-# Chemin d'un décor de pose. ⚠️ `ResourceLoader.exists` et SURTOUT PAS `FileAccess.file_exists` :
-# ce dernier échoue en build exporté (leçon `company_emblems.gd` §8.126).
-func _decor_path(pos_index: int, stance: String) -> String:
-	return "res://assets/images/trench/pose_%d_%s.png" % [pos_index, stance]
-
-
 # =================================================================================================
-# MICRO-PARALLAXE DU DÉCOR (§8.139, LOT D)
+# LA POSE A CHANGÉ — CE QUI RESTE À FAIRE CÔTÉ VUE
 # =================================================================================================
-# ╔═ ⚠️⚠️ LA MICRO-PARALLAXE DE ±2 px A ÉTÉ RETIRÉE (§8.139.1) ══════════════════════════════════╗
-# ║ Elle décalait le décor À CONTRE-SENS de la visée pour simuler de la profondeur. C'était une    ║
-# ║ ruse acceptable tant que le fond était FIXE — elle est devenue FAUSSE dès que le fond s'est mis║
-# ║ à suivre la caméra pour de bon : deux mécanismes tiraient l'image en sens contraires, l'un de  ║
-# ║ 2 px arbitraires, l'autre de l'angle réel. On garde celui qui dit la vérité.                   ║
+# ╔═ IL N'Y A PLUS RIEN À RECALER, ET C'EST TOUT L'INTÉRÊT DU PIVOT ══════════════════════════════╗
+# ║ Cette fonction chargeait un décor peint, poussait sa texture dans un shader, éteignait le      ║
+# ║ greybox et rallumait un ciel de repli — quatre états à tenir synchronisés à chaque pas de      ║
+# ║ côté. C'est là que le défaut « il n'y a pas de tranchée » s'est logé.                          ║
+# ║ La caméra TRANSLATE désormais physiquement entre les positions (`set_pose`) dans un monde qui  ║
+# ║ existe : la parallaxe d'un pas de côté est celle du monde réel, gratuite et juste. Il ne reste ║
+# ║ donc à prévenir que l'habillage, qui suit la POSTURE — accroupi, il n'y a plus de lointain.    ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-# Écart angulaire vu par le joueur quand il fait UN pas de côté, pour une scène à 35 m :
-# atan(4 m / 35 m) = 6,52°. C'est CE décalage que le fond doit encaisser — pas 32 px arbitraires
-# (le découpage d'origine en donnait 2,5 % de la largeur d'écran, invisible : « les déplacements
-# à droite et à gauche sont complètement inutiles »).
-const POSITION_PARALLAX_DEG := 6.52
-
-
-# Décale le fond peint de l'angle EXACT dont la caméra a tourné, plus le pas latéral. Le fond et la
-# scène 3D restent ainsi solidaires : c'est ce qui rend le mouvement de souris lisible.
-func _apply_backdrop_pan() -> void:
-	if _decor == null or _backdrop_mat == null or not _decor.visible:
-		return
-	var view: Vector2 = get_viewport_rect().size
-	if view.x <= 0.0 or view.y <= 0.0:
-		return
-	# Champ de vision HORIZONTAL déduit du vertical et du rapport d'écran — jamais recopié en dur :
-	# le jour où `CAMERA_FOV` bouge, le fond suit sans qu'on y pense.
-	var fov_v: float = _world.camera_fov() if _world != null else 55.0
-	var fov_h: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(fov_v) * 0.5) * view.x / view.y))
-	var yaw: float = _aim_yaw + float(_pred_pos - (_positions - 1) * 0.5) * POSITION_PARALLAX_DEG
-	_backdrop_mat.set_shader_parameter("pan", Vector2(yaw / fov_h, -_aim_pitch / fov_v))
-	_backdrop_mat.set_shader_parameter("rect_size", view)
-	var tex: Texture2D = _decor.texture
-	if tex != null:
-		_backdrop_mat.set_shader_parameter("tex_size", Vector2(tex.get_size()))
-
-
-# Applique le décor de la pose courante — ou bascule sur le greybox s'il n'existe pas.
-# LE NOMMAGE EST LE SEUL CONTRAT (§7.1) : déposer les 10 PNG suffit, aucune ligne à recoder.
-func _refresh_decor() -> void:
-	var path := _decor_path(_pred_pos, _pred_stance)
-	var has_decor := ResourceLoader.exists(path)
-	_decor.texture = load(path) if has_decor else null
-	_decor.visible = has_decor
-	# ⚠️ LE SHADER NE VOIT PAS `TextureRect.texture` : il échantillonne SON PROPRE uniforme. Oublié
-	# une première fois, l'écran est ressorti intégralement BLANC (un sampler non lié rend du blanc)
-	# — et aucune erreur n'est levée, ni au boot ni à l'import. On le pousse donc ICI, au même
-	# endroit que la texture du nœud, pour que les deux ne puissent pas diverger.
-	if _backdrop_mat != null:
-		_backdrop_mat.set_shader_parameter("backdrop", _decor.texture)
-	# Le ciel de repli ne sert QUE le greybox : un vrai décor porte le sien.
-	if _sky != null:
-		_sky.visible = not has_decor
-	if _world != null:
-		_world.show_blockout_geometry(not has_decor)
-	# L'habillage suit la POSTURE, pas le décor : accroupi, il n'y a plus de lointain à habiller,
-	# que le décor soit peint ou greybox.
+func _refresh_pose_view() -> void:
 	if _ambient != null:
 		_ambient.set_stance(_pred_stance)
 
@@ -367,12 +318,14 @@ func _on_init(msg: Dictionary) -> void:
 	_pred_pos = _positions / 2
 	_world.set_pose(_pred_pos, _pred_stance, true)
 	_world.set_enemy_accent(_enemy_accent())
-	_refresh_decor()
+	_refresh_pose_view()
 
 	var opp_name := str(_opponent.get("name", ""))
 	if bool(_opponent.get("is_bot", false)) or opp_name == "":
 		opp_name = tr("TRENCH_BOT_NAME")
 	_their_name.text = opp_name + ("  ·  " + tr("TRENCH_VS_BOT_NOTE") if _training else "")
+	if _tune_hint != null:
+		_tune_hint.visible = _training
 	var state = msg.get("state")
 	if typeof(state) == TYPE_DICTIONARY:
 		_push_state(state)
@@ -426,7 +379,7 @@ func _push_state(state: Dictionary) -> void:
 			_mismatch_streak += 1
 			if _mismatch_streak >= 2:
 				_pred_pos = int(me.get("pos"))
-				_refresh_decor()
+				_refresh_pose_view()
 				_mismatch_streak = 0
 		else:
 			_mismatch_streak = 0
@@ -554,17 +507,42 @@ func _input(event: InputEvent) -> void:
 					_queue_pick(1)
 				else:
 					_item_queued = "bandage"
+			KEY_F10:
+				# LE PANNEAU DE RÉGLAGE — ENTRAÎNEMENT SEULEMENT. En duel, il relâcherait la souris
+				# et clouerait le joueur sur place pendant qu'un adversaire, lui, continue de
+				# jouer : ce serait offrir une manche par accident.
+				if _training and _tuning != null and not _match_over:
+					accept_event()
+					_tuning.toggle()
+					_capture_mouse(not _tuning.visible)
+					return
 	if _match_over or _abandon_overlay.visible or _choice_panel.visible:
 		return
 	# VISÉE : mouvement souris relatif → lacet/site, bornés.
+	# ⚠️ Le SIGNE du site vient maintenant du panneau. Le testeur a rapporté « le mouvement de la
+	# souris est inversé » sur un axe qui ne l'était pas — parce qu'une caméra qui ne tourne que de
+	# 6° pour ±32° de visée donne exactement la même impression qu'un axe à l'envers. On lui donne
+	# donc l'interrupteur plutôt qu'un avis, et on saura à la porte 1 lequel des deux c'était.
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := (event as InputEventMouseMotion).relative
-		_aim_yaw = clampf(_aim_yaw + motion.x * AIM_SENSITIVITY, -AIM_YAW_LIMIT, AIM_YAW_LIMIT)
-		_aim_pitch = clampf(_aim_pitch - motion.y * AIM_SENSITIVITY,
+		var pitch_sign: float = 1.0 if _invert_y else -1.0
+		_aim_yaw = clampf(_aim_yaw + motion.x * _sensitivity, -AIM_YAW_LIMIT, AIM_YAW_LIMIT)
+		_aim_pitch = clampf(_aim_pitch + pitch_sign * motion.y * _sensitivity,
 			-AIM_PITCH_LIMIT, AIM_PITCH_LIMIT)
 	if event is InputEventMouseButton and event.pressed \
 			and event.button_index == MOUSE_BUTTON_LEFT:
 		_fire_queued = true
+
+
+# Les réglages du panneau F10, appliqués À LA FRAME. Le lacet et le site ENVOYÉS au serveur ne
+# changent pas de nature : seules la vitesse à laquelle la souris les fait varier et ce que la
+# caméra en montre vivent ici. Aucune règle, aucun barème, aucun message réseau n'en dépend —
+# c'est la condition pour que ce panneau reste un réglage de CONFORT et pas un avantage.
+func _apply_tuning(values: Dictionary) -> void:
+	_sensitivity = float(values.get("mouse_sensitivity", _sensitivity))
+	_invert_y = bool(values.get("invert_y", _invert_y))
+	if _world != null:
+		_world.apply_tuning(values)
 
 
 func _gather_move_dir() -> int:
@@ -623,7 +601,7 @@ func _process(delta: float) -> void:
 			pose_changed = true
 	if pose_changed:
 		_world.set_pose(_pred_pos, _pred_stance)
-		_refresh_decor()
+		_refresh_pose_view()
 
 	# --- Envoi coalescé (10 Hz max) ---
 	_send_accum += delta
@@ -647,6 +625,7 @@ func _process(delta: float) -> void:
 		if _item_queued != "":
 			payload["item"] = _item_queued
 		NetworkManager.send_trench_input(payload)
+		_log_input(payload)
 		_fire_queued = false
 		_throw_queued = {}
 		_pick_queued = ""
@@ -654,8 +633,36 @@ func _process(delta: float) -> void:
 		_item_queued = ""
 
 	_world.set_aim(_aim_yaw, _aim_pitch)
-	_apply_backdrop_pan()
+	_track_horizon()
 	_refresh_view(delta)
+
+
+# ╔═ LE JOURNAL DES ENTRÉES — POUR NE PLUS JAMAIS PERDRE UN SYMPTÔME ═════════════════════════════╗
+# ║ « Les déplacements ne fonctionnent pas » a été rapporté en partie réelle et n'a JAMAIS été     ║
+# ║ reproduit ni diagnostiqué : le chantier s'est arrêté avant. L'hypothèse retenue est que le     ║
+# ║ mensonge visuel du fond peint le donnait à voir (un pas de côté décalait le décor de 2,5 %     ║
+# ║ d'écran, invisible) — un monde 3D vrai devrait donc le faire disparaître.                      ║
+# ║ Mais si le symptôme PERSISTE, on ne repartira pas pour une session d'hypothèses : ce journal   ║
+# ║ montre à l'écran ce que le client croit envoyer, à côté de ce que le serveur lui répond.       ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _log_input(payload: Dictionary) -> void:
+	if _tuning == null or not _tuning.visible:
+		return
+	var server_pos = _player_of(_latest(), _my_slot).get("pos")
+	_tuning.set_journal("move %+d · pos %d (serveur %s) · %s · verrou %.2f s\naim %.1f / %.1f"
+		% [int(payload.get("move", 0)), _pred_pos,
+			"?" if server_pos == null else str(int(server_pos)), _pred_stance,
+			maxf(0.0, _pred_move_ready - _clock), _aim_yaw, _aim_pitch])
+
+
+# L'habillage 2D (brume, braises) est posé sur une ordonnée d'écran, pas dans le monde : il lui
+# faut donc savoir où la caméra a emmené l'horizon. On ne la recalcule pas — on demande au monde 3D
+# de PROJETER la direction de site nul, ce qui tient compte du FOV, de l'aspect et du suivi de
+# visée d'un seul coup. Une seule source, comme partout ailleurs dans ce chantier.
+func _track_horizon() -> void:
+	if _ambient == null or _world == null or size.y <= 0.0:
+		return
+	_ambient.set_horizon_ratio(clampf(_world.project_aim(_aim_yaw, 0.0).y / size.y, -0.5, 1.5))
 
 
 func _decay(delta: float) -> void:
@@ -920,6 +927,14 @@ func _build_center() -> void:
 	_conn_banner.visible = false
 	_hud.add_child(_conn_banner)
 	_anchored(_conn_banner, Control.PRESET_CENTER_TOP, Vector2(-220, 108), Vector2(440, 26))
+
+	# Le rappel de la touche F10. Il ne s'allume qu'en ENTRAÎNEMENT, quand `_on_init` l'a confirmé :
+	# annoncer un raccourci qui ne répond pas serait pire que de ne rien annoncer.
+	_tune_hint = _label(tr("TRENCH_TUNE_HOTKEY"), 13, COL_MUTED)
+	_tune_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_tune_hint.visible = false
+	_hud.add_child(_tune_hint)
+	_anchored(_tune_hint, Control.PRESET_TOP_RIGHT, Vector2(-320, 22), Vector2(296, 20))
 
 
 # Munitions bas-droite (« 06/15 », chiffres tabulaires) + arme courante — §6.
