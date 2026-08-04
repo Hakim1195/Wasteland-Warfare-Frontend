@@ -291,7 +291,34 @@ func _ready() -> void:
 		absf(cam.position.x - rest_pos.x) > 1.0,
 		"deplacement %.2f m" % absf(cam.position.x - rest_pos.x))
 	world.set_pose(2, "up", true)
+	world.set_aim(0.0, 0.0)
 	world._process(0.016)
+
+	# ╔═ ⚠️⚠️ L'ORIENTATION DE L'ECRAN — CE QUE PERSONNE N'AVAIT MESURE ═══════════════════════════╗
+	# ║ `trench_geometry.gd` annonce « +X = ma droite ». Personne ne l'a jamais verifie CONTRE LA   ║
+	# ║ CAMERA. Or on regarde vers +Z : dans un repere DROITIER, un observateur tourne vers +Z avec  ║
+	# ║ +Y en haut a sa droite en -X. Si c'est vrai, alors tout ce que le code appelle « droite »    ║
+	# ║ sort a GAUCHE de l'ecran — la souris comme les fleches. C'est un CONTROLE, pas une opinion.  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	# ⚠️ ON TESTE LA CHAINE DE L'ENTREE, PAS LE REPERE DU MONDE. Le monde reste tel quel — son +X
+	# est a GAUCHE de l'ecran et le RESTE, parce que le serveur partage ce repere. Ce qui doit etre
+	# vrai, c'est ce que le joueur RESSENT : main a droite -> ca part a droite. Deux symptomes de
+	# partie reelle sont couverts ici, et ils n'avaient qu'une seule cause.
+	var far_z: float = Geo.far_soldier_z()
+	var aim_center: Vector2 = world.project_aim(0.0, 0.0)
+	var swipe_right: float = DuelScript.SCREEN_TO_WORLD_X * 12.0     # 12 deg de souris VERS LA DROITE
+	var aim_right: Vector2 = world.project_aim(swipe_right, 0.0)
+	_ok("SOURIS vers la DROITE : la visee se deplace vers la DROITE de l'ecran",
+		aim_right.x > aim_center.x + 1.0,
+		"centre x=%.0f px, apres un geste a droite x=%.0f px" % [aim_center.x, aim_right.x])
+
+	# « Fleche droite » : `_gather_move_dir` rend deja le pas CORRIGE. Le point du monde vers lequel
+	# il emmene doit donc se projeter a DROITE de celui d'ou l'on part.
+	var step: int = int(DuelScript.SCREEN_TO_WORLD_X)
+	var from_x: Vector2 = cam.unproject_position(Vector3(Geo.position_x(2), Geo.EYE_UP, far_z))
+	var to_x: Vector2 = cam.unproject_position(Vector3(Geo.position_x(2 + step), Geo.EYE_UP, far_z))
+	_ok("FLECHE DROITE : le pas emmene vers la DROITE de l'ecran", to_x.x > from_x.x + 1.0,
+		"depart x=%.0f px, arrivee x=%.0f px (pas = %+d)" % [from_x.x, to_x.x, step])
 
 	# --- 5 ter) LE PANNEAU DE REGLAGE (regle de fer n. 2) ----------------------------------------
 	var tuning = duel._tuning

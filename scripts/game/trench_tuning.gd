@@ -24,6 +24,18 @@ signal changed(values: Dictionary)
 
 const SETTINGS_PATH := "user://trench_tuning.json"
 
+# ╔═ ⚠️⚠️ LES RÉGLAGES SONT VERSIONNÉS, ET C'EST UN CORRECTIF, PAS UNE PRÉCAUTION ════════════════╗
+# ║ Attrapé au harnais après le passage de l'arène à 12 m : un `trench_tuning.json` écrit AVANT le ║
+# ║ changement portait `follow_max_deg = 45`. La valeur est parfaitement légale — elle passe les   ║
+# ║ bornes — mais son SENS a changé : le débattement de visée est monté à ±58°, donc une caméra    ║
+# ║ plafonnée à 45° cesse de suivre le réticule dans les 13 derniers degrés. Le joueur viserait    ║
+# ║ une cible que sa propre vue refuse de rejoindre, et il aurait mis ça sur le compte du jeu.     ║
+# ║ Un fichier relu tel quel aurait donc SILENCIEUSEMENT dégradé la partie suivante de Hakim, avec ║
+# ║ ses propres réglages, sans un message. On INCRÉMENTE donc à chaque fois qu'une borne change de ║
+# ║ signification, et un fichier d'une autre version repart des défauts.                           ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const SETTINGS_VERSION := 2
+
 const COL_ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
 const COL_TEXT := Color(0.933333, 0.952941, 0.968627, 1)
 const COL_MUTED := Color(0.541176, 0.592157, 0.647059, 1)
@@ -38,7 +50,7 @@ const DEFAULTS := {
 	"mouse_sensitivity": 0.040,      # degrés de visée par pixel de souris
 	"invert_y": false,
 	"aim_follow": 1.0,               # part de la visée que la caméra accompagne (0 = tête fixe)
-	"follow_max_deg": 45.0,          # plafond de rotation de la caméra
+	"follow_max_deg": 70.0,          # plafond de rotation de la caméra (> AIM_YAW_LIMIT = 58°)
 	"fov": 55.0,                     # champ de vision VERTICAL
 }
 
@@ -46,7 +58,9 @@ const DEFAULTS := {
 const SLIDERS := {
 	"mouse_sensitivity": [0.010, 0.150, 0.002, "TRENCH_TUNE_SENSITIVITY", 3],
 	"aim_follow": [0.0, 1.0, 0.05, "TRENCH_TUNE_FOLLOW", 2],
-	"follow_max_deg": [10.0, 60.0, 1.0, "TRENCH_TUNE_FOLLOW_MAX", 0],
+	# ⚙ Plage ouverte à 80° avec le passage à 12 m : le débattement de visée est monté à ±58°, et
+	# une borne de caméra plus basse que lui empêcherait de suivre le réticule dans les extrêmes.
+	"follow_max_deg": [10.0, 80.0, 1.0, "TRENCH_TUNE_FOLLOW_MAX", 0],
 	# ⚖ ARBITRAGE — le bon de commande demande « FOV (60-90) », le jeu tourne à 55 (`CAMERA_FOV`).
 	# Une plage qui ne contient pas la valeur COURANTE n'est pas un réglage : c'est un changement
 	# déguisé. Vu en capture — le curseur affichait 60 pour une caméra à 55, et la première
@@ -108,6 +122,12 @@ func _load() -> Dictionary:
 	file.close()
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return out
+	if int(parsed.get("version", 1)) != SETTINGS_VERSION:
+		# Réglages d'une arène qui n'existe plus : on repart des défauts EN LE DISANT, plutôt que
+		# de laisser le joueur jouer une partie dégradée avec ses propres anciens chiffres.
+		print("[trench] reglages v%s ignores (version courante %d) : retour aux defauts"
+			% [parsed.get("version", 1), SETTINGS_VERSION])
+		return out
 	for key in DEFAULTS:
 		if not parsed.has(key):
 			continue
@@ -125,7 +145,9 @@ func _save() -> void:
 	var file := FileAccess.open(SETTINGS_PATH, FileAccess.WRITE)
 	if file == null:
 		return
-	file.store_string(JSON.stringify(_values, "  "))
+	var payload := _values.duplicate()
+	payload["version"] = SETTINGS_VERSION
+	file.store_string(JSON.stringify(payload, "  "))
 	file.close()
 
 

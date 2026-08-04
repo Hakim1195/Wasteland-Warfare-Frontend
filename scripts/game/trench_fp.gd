@@ -59,9 +59,34 @@ const RECONNECT_DELAY := 2.0
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 var _sensitivity: float = TuningScript.DEFAULTS["mouse_sensitivity"]
 var _invert_y: bool = TuningScript.DEFAULTS["invert_y"]
-# Débattement autorisé. Le lacet doit couvrir la position adverse la plus lointaine (±24,4° depuis
-# un bord) avec de la marge ; le site reste étroit — il n'y a rien à viser au ciel.
-const AIM_YAW_LIMIT := 32.0
+
+# ╔═ ⚠️⚠️ LE +X DU MONDE EST À GAUCHE DE L'ÉCRAN — MESURÉ, PAS SUPPOSÉ ═══════════════════════════╗
+# ║ `trench_geometry.gd` annonce « +X = ma droite » depuis le §8.137. Personne ne l'avait jamais    ║
+# ║ vérifié CONTRE LA CAMÉRA, et c'est faux : on regarde vers +Z, et dans un repère DROITIER un     ║
+# ║ observateur tourné vers +Z avec +Y en haut a sa droite en −X. Mesure au harnais, position       ║
+# ║ centrale, visée nulle : la position adverse 4 (x = +8 m) se projette à 719 px et la position 0  ║
+# ║ (x = −8 m) à 1201 px. Le « +X » du registre sort donc bel et bien à GAUCHE.                     ║
+# ║                                                                                                 ║
+# ║ Conséquence, et c'est UNE SEULE CAUSE pour DEUX symptômes rapportés en partie réelle :          ║
+# ║   • « quand je bouge la souris vers la droite, le soldat vise vers la gauche » ;                ║
+# ║   • « les flèches droite et gauche sont également inversées ».                                  ║
+# ║ Le §8.139.1 ne pouvait pas le voir : à 6° de rotation de caméra, rien ne tournait assez pour    ║
+# ║ qu'un sens s'affirme. Le pivot, en rendant la caméra libre, a rendu le défaut évident.          ║
+# ║                                                                                                 ║
+# ║ ⚠️ ON CORRIGE À L'ENTRÉE, PAS DANS LA GÉOMÉTRIE. `trench_geometry.gd` est la source de vérité   ║
+# ║ PARTAGÉE AVEC LE SERVEUR : y toucher au signe rendrait la table angulaire fausse et imposerait  ║
+# ║ un redéploiement pour un défaut de PRÉSENTATION. Le lacet et le déplacement envoyés restent     ║
+# ║ ceux du monde ; on ne change que la façon dont la main du joueur s'y traduit.                   ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const SCREEN_TO_WORLD_X := -1.0
+# Débattement autorisé. Le lacet doit couvrir la position adverse la plus lointaine AVEC de la
+# marge ; le site reste étroit — il n'y a rien à viser au ciel.
+# ⚠️⚠️ 32° → 58° AVEC LE PASSAGE À 12 m (§8.140.1). Ce n'est pas un confort, c'est une NÉCESSITÉ :
+# depuis un bord, la position adverse opposée est à 50,9° (`atan(16 m / 13 m)`). Laissé à 32°, le
+# joueur aurait été mécaniquement incapable de viser les positions extrêmes — la balle n'aurait
+# même pas pu être déclarée. Rapprocher l'arène sans ouvrir le débattement, c'était livrer un mode
+# où trois positions sur cinq deviennent invulnérables depuis les bords.
+const AIM_YAW_LIMIT := 58.0
 const AIM_PITCH_LIMIT := 14.0
 # Quantum d'envoi (§2.4) : la visée part arrondie au dixième de degré, et SEULEMENT si elle a bougé.
 const AIM_QUANTUM := 0.1
@@ -98,9 +123,16 @@ var _mismatch_streak := 0
 var _aim_yaw := 0.0
 var _aim_pitch := 0.0
 var _sent_aim := Vector2(9999.0, 9999.0)
+# Visée FIGÉE à l'instant du clic — c'est elle qui part avec le tir, pas celle de l'envoi.
+var _fire_aim := Vector2.ZERO
+# Fenêtre pendant laquelle l'événement `fire` du serveur ne REJOUE pas le retour d'arme déjà joué
+# localement. Un seul événement `fire` par pression côté serveur (la rafale naît dedans), donc une
+# fenêtre suffit — elle n'avalera jamais un second tir légitime.
+var _fire_fx_mute := 0.0
 
 # --- Entrées coalescées entre deux envois --------------------------------------------------------
 var _send_accum := 0.0
+var _sent_at: Array = []           # horodatages des envois de la dernière seconde (anti-flood)
 var _fire_queued := false
 var _throw_queued: Dictionary = {}
 var _pick_queued := ""
@@ -182,6 +214,11 @@ func _ready() -> void:
 	if pending_room_id == "":
 		_back_to_hub()
 		return
+	# ⚠️ LE SON NE CHANGEAIT PAS EN ENTRANT EN PARTIE — verdict de partie réelle. Ce n'était pas un
+	# réglage à corriger : le duel n'appelait tout simplement JAMAIS `AudioManager`, et jouait donc
+	# sur la nappe des menus, du début à la fin. La bascule existe pourtant depuis le §8.66 et les
+	# autres modes s'en servent ; celui-ci l'avait oubliée.
+	AudioManager.start_battle_ambient()
 	_capture_mouse(true)
 	NetworkManager.connect_to_server(pending_room_id)
 
@@ -189,6 +226,9 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	pending_room_id = ""
 	_capture_mouse(false)
+	# On rend la radio du QG en sortant : sans ça, la musique de combat suivrait le joueur dans les
+	# menus (symétrique exact de `start_battle_ambient`).
+	AudioManager.start_menu_ambient()
 
 
 # La souris est CAPTURÉE pendant le duel (c'est une visée libre) et RELÂCHÉE dès qu'un panneau
@@ -400,13 +440,23 @@ func _on_duel_event(event: Dictionary) -> void:
 			_show_banner(tr("TRENCH_ROUND") % int(event.get("round_no", 1)), COL_ACCENT)
 		"fire":
 			if int(event.get("slot", 0)) == _my_slot:
-				# RECUL : kick de caméra + recul du modèle (§5.4).
-				_recoil = 1.0
-				# Depuis §8.138, le tween de recul s'applique au VIEWMODEL 2D peint.
-				_viewmodel.notify_fire()
+				# ⚠️ Le retour d'arme a DÉJÀ été joué au clic (`_local_fire_feedback`) : attendre
+				# l'aller-retour serveur laissait ~250 ms de silence après la pression, et le tir
+				# paraissait « en retard » même quand il ne l'était pas. On ne le rejoue donc ici
+				# que si le tir ne vient PAS de ma main — reconnexion en pleine manche, ou tir que
+				# le client n'avait pas anticipé (chargeur que je croyais vide, par exemple).
+				if _fire_fx_mute <= 0.0:
+					_recoil = 1.0
+					# Depuis §8.138, le tween de recul s'applique au VIEWMODEL 2D peint.
+					_viewmodel.notify_fire()
+					AudioManager.play_sfx("trench_shot")
+			else:
+				# LE DÉPART DE FEU ADVERSE — le danger s'annonce à l'oreille avant de se voir.
+				AudioManager.play_sfx("trench_shot")
 		"grenade_thrown":
 			# L'ADVERSAIRE arme et lance : frame `throw` du sprite peint (§8.138). Mon propre
 			# lancer ne déclenche rien — je ne me vois pas lancer, je vois mes mains.
+			AudioManager.play_sfx("trench_grenade")
 			if int(event.get("slot", 0)) != _my_slot:
 				_world.set_enemy_action("throw")
 		"laser":
@@ -424,9 +474,14 @@ func _on_duel_event(event: Dictionary) -> void:
 				_world.set_enemy_action("hit")
 			if int(event.get("by", 0)) == _my_slot:
 				# HITMARKER — UNIQUEMENT sur confirmation serveur (§5.5). Jamais optimiste.
+				# ⚠️ C'est LA seule chose qu'on refuse de jouer en avance : la détonation et le
+				# recul disent « j'ai tiré », et le joueur le sait déjà — il vient de cliquer. Le
+				# hitmarker, lui, dit « j'ai TOUCHÉ » : ça, seul le serveur le sait.
 				_hitmarker = 0.35
 				_enemy_hit = 0.35
+				AudioManager.play_sfx("trench_hitmarker")
 			if victim == _my_slot:
+				AudioManager.play_sfx("trench_hit")
 				_hurt_flash = 0.5
 				_hurt_dir = _last_seen_enemy_pos - float(_pred_pos)
 		"escalation", "weapon_chosen":
@@ -497,6 +552,16 @@ func _input(event: InputEvent) -> void:
 				# POSTURE = une BASCULE (§5.6), pas un maintien : le joueur doit pouvoir rester
 				# à couvert sans garder un doigt en tension pendant 90 s.
 				_stance_toggle = not _stance_toggle
+			KEY_DOWN:
+				# ⚠️ LA FLÈCHE BAS N'ÉTAIT LIÉE À RIEN — verdict de partie réelle : « la touche pour
+				# se cacher ne fonctionne pas ». Ce n'était pas un bug, c'était une absence : le
+				# §8.137 avait retenu S et CTRL, et il ne l'a écrit que dans un commentaire. Or un
+				# joueur qui se déplace aux FLÈCHES cherche naturellement à s'accroupir avec ↓.
+				# Bas = SE CACHER, Haut = SE RELEVER : deux touches EXPLICITES plutôt qu'une
+				# bascule, parce qu'à couvert on ne se souvient plus dans quel état on est.
+				_stance_toggle = true
+			KEY_UP:
+				_stance_toggle = false
 			KEY_R:
 				_reload_queued = true
 			KEY_1:
@@ -526,12 +591,44 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := (event as InputEventMouseMotion).relative
 		var pitch_sign: float = 1.0 if _invert_y else -1.0
-		_aim_yaw = clampf(_aim_yaw + motion.x * _sensitivity, -AIM_YAW_LIMIT, AIM_YAW_LIMIT)
+		_aim_yaw = clampf(_aim_yaw + SCREEN_TO_WORLD_X * motion.x * _sensitivity,
+			-AIM_YAW_LIMIT, AIM_YAW_LIMIT)
 		_aim_pitch = clampf(_aim_pitch + pitch_sign * motion.y * _sensitivity,
 			-AIM_PITCH_LIMIT, AIM_PITCH_LIMIT)
 	if event is InputEventMouseButton and event.pressed \
 			and event.button_index == MOUSE_BUTTON_LEFT:
-		_fire_queued = true
+		_queue_fire()
+
+
+# ╔═ ⚠️⚠️ LE TIR PARTAIT OÙ LA SOURIS ÉTAIT AU MOMENT DE L'ENVOI, PAS DU CLIC ════════════════════╗
+# ║ Verdict de partie réelle : « le projectile suit la variation de la souris qui se fait entre le  ║
+# ║ clic et le démarrage du tir ». C'est exact, et c'était un vrai défaut : le clic ne posait qu'un ║
+# ║ drapeau, et la visée jointe au message était relue jusqu'à 105 ms plus tard, à l'instant de     ║
+# ║ l'envoi coalescé. Toute la souris parcourue dans l'intervalle déviait la balle — d'autant plus  ║
+# ║ que le joueur suivait une cible.                                                                ║
+# ║ On FIGE donc la visée à l'instant du clic et c'est ELLE qui part avec le tir. Le serveur reste  ║
+# ║ seul juge de la touche : on ne change pas qui décide, on change QUELLE direction on déclare.    ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _queue_fire() -> void:
+	if _fire_queued:
+		return
+	_fire_queued = true
+	_fire_aim = Vector2(_aim_yaw, _aim_pitch)
+	_local_fire_feedback()
+
+
+# Le RETOUR D'ARME, joué à l'instant du clic. Il ne prétend RIEN sur la touche — le hitmarker reste
+# strictement serveur (règle maison §5.5). Mais attendre l'aller-retour pour bouger l'arme et faire
+# le bruit, c'est ~250 ms de silence après un clic : le tir paraît « en retard » même quand il ne
+# l'est pas. On garde donc l'honnêteté là où elle porte (la TOUCHE) et on rend la main immédiate.
+func _local_fire_feedback() -> void:
+	if int(_my("ammo")) <= 0:
+		return
+	_recoil = 1.0
+	_fire_fx_mute = 0.45          # l'événement serveur de CE tir ne doit pas le rejouer
+	if _viewmodel != null:
+		_viewmodel.notify_fire()
+	AudioManager.play_sfx("trench_shot")
 
 
 # Les réglages du panneau F10, appliqués À LA FRAME. Le lacet et le site ENVOYÉS au serveur ne
@@ -559,7 +656,12 @@ func _gather_move_dir() -> int:
 			dir = -1
 		elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT):
 			dir = 1
-	return dir
+	# ⚠️ La MÊME correction que pour la souris, au MÊME endroit unique : « flèche droite » doit
+	# emmener le joueur vers la droite de son ÉCRAN, c'est-à-dire vers les x décroissants du monde.
+	# ⚠️⚠️ Et elle s'applique AVANT que `dir` ne serve : la valeur corrigée alimente à la fois la
+	# prédiction locale ET le champ `move` du message réseau. Corriger l'une sans l'autre ferait
+	# diverger le client du serveur d'un pas à chaque appui — soit le pire des deux mondes.
+	return int(SCREEN_TO_WORLD_X) * dir
 
 
 func _process(delta: float) -> void:
@@ -584,7 +686,7 @@ func _process(delta: float) -> void:
 		_throw_queued = {"charge": _charge}
 	if Input.get_connected_joypads().size() > 0 \
 			and Input.is_joy_button_pressed(0, JOY_BUTTON_A):
-		_fire_queued = true
+		_queue_fire()
 
 	# --- Prédiction locale : posture et position immédiates (le ressenti ne dépend jamais du réseau) ---
 	var wanted_stance := "down" if _stance_toggle else "up"
@@ -605,12 +707,26 @@ func _process(delta: float) -> void:
 
 	# --- Envoi coalescé (10 Hz max) ---
 	_send_accum += delta
-	if _send_accum >= SEND_INTERVAL:
+	# ╔═ UN TIR NE FAIT PAS LA QUEUE ════════════════════════════════════════════════════════════╗
+	# ║ La cadence de 0,105 s existe pour tenir SOUS les 10 msg/s de l'anti-flood serveur — pas    ║
+	# ║ pour retarder les tirs. Une pression pouvait donc attendre jusqu'à 105 ms avant même de     ║
+	# ║ partir, et ces 105 ms s'ajoutaient au tick serveur puis au retard de rendu.                 ║
+	# ║ On autorise UN envoi anticipé quand un tir ou une grenade est en attente, mais seulement    ║
+	# ║ si le budget de la seconde écoulée le permet — le plafond reste MATÉRIEL, pas déclaratif.   ║
+	# ╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+	var urgent: bool = _fire_queued or not _throw_queued.is_empty()
+	if _send_accum >= SEND_INTERVAL or (urgent and _send_budget_left()):
 		_send_accum = 0.0
+		_sent_at.append(_clock)
 		var payload := {"move": dir, "stance": _pred_stance}
 		# La VISÉE ne part QUE si elle a bougé (§2.4), arrondie au quantum — moins d'octets, et
 		# le serveur garde la dernière direction connue entre deux envois.
 		var quantized := Vector2(snappedf(_aim_yaw, AIM_QUANTUM), snappedf(_aim_pitch, AIM_QUANTUM))
+		if _fire_queued:
+			# ⚠️ LE TIR IMPOSE SA PROPRE VISÉE, celle du CLIC, et elle écrase la visée courante
+			# dans ce message. Sans ça, la balle partait là où la souris se trouvait à l'instant de
+			# l'ENVOI — et le joueur qui suit sa cible voyait son tir dériver.
+			quantized = Vector2(snappedf(_fire_aim.x, AIM_QUANTUM), snappedf(_fire_aim.y, AIM_QUANTUM))
 		if not quantized.is_equal_approx(_sent_aim):
 			payload["aim"] = {"yaw": quantized.x, "pitch": quantized.y}
 			_sent_aim = quantized
@@ -665,7 +781,21 @@ func _track_horizon() -> void:
 	_ambient.set_horizon_ratio(clampf(_world.project_aim(_aim_yaw, 0.0).y / size.y, -0.5, 1.5))
 
 
+# Reste-t-il de la place sous les 10 msg/s du serveur pour un envoi ANTICIPÉ ?
+# ⚠️ On compte les envois de la DERNIÈRE SECONDE GLISSANTE, pas depuis un compteur remis à zéro :
+# c'est la seule mesure qui corresponde à ce que le serveur, lui, observe. On s'arrête à 9 et non à
+# 10 — la marge d'un message absorbe la gigue, exactement comme les 0,105 s en absorbent déjà une.
+const SEND_BUDGET_PER_SECOND := 9
+
+
+func _send_budget_left() -> bool:
+	while not _sent_at.is_empty() and _clock - float(_sent_at[0]) > 1.0:
+		_sent_at.pop_front()
+	return _sent_at.size() < SEND_BUDGET_PER_SECOND
+
+
 func _decay(delta: float) -> void:
+	_fire_fx_mute = maxf(0.0, _fire_fx_mute - delta)
 	_hitmarker = maxf(0.0, _hitmarker - delta)
 	_hurt_flash = maxf(0.0, _hurt_flash - delta)
 	_enemy_hit = maxf(0.0, _enemy_hit - delta * 3.0)

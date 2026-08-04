@@ -67,9 +67,11 @@ const STANCE_TRANSITION := 0.12
 # ║ règle la sensation dans le panneau F10, en jouant. Voir `apply_tuning()` plus bas.             ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const AIM_FOLLOW := 1.0
-# Borne de sécurité, au-delà du débattement client (±32°) : elle n'écrête jamais en jeu, elle
-# empêche seulement une visée aberrante de faire pivoter la caméra à l'envers du monde.
-const AIM_FOLLOW_MAX := 45.0
+# Borne de sécurité, au-delà du débattement client (±58° depuis §8.140.1) : elle n'écrête jamais en
+# jeu, elle empêche seulement une visée aberrante de faire pivoter la caméra à l'envers du monde.
+# ⚠️ Elle DOIT rester au-dessus de `AIM_YAW_LIMIT`, sans quoi la caméra cesserait de suivre le
+# réticule dans les derniers degrés — le joueur viserait une cible que sa vue refuse d'atteindre.
+const AIM_FOLLOW_MAX := 70.0
 
 # ╔═ LA BRUME DE PROFONDEUR EST DANS L'ENVIRONNEMENT, PAS SUR L'ÉCRAN ════════════════════════════╗
 # ║ `trench_ambient.gd` peint deux nappes de brume à hauteur d'horizon — en 2D, donc à une         ║
@@ -102,6 +104,12 @@ const ENEMY_TINT_MIX := 0.35
 const ENEMY_HIT_WHITEN := 0.6
 
 const TRACER_POOL := 24
+# Distance au-delà de laquelle MA traçante devient visible : elle naît à l'œil du tireur, il faut
+# donc la laisser sortir du cadre proche avant de la dessiner ⚙.
+const MUZZLE_CLEAR := 2.0
+# Longueur apparente de la balle. ⚙ Elle porte la lisibilité du vol : trop courte, la traçante est
+# un point qui saute d'une frame à l'autre ; trop longue, c'est un trait fixe entre les tranchées.
+const TRACER_LENGTH := 3.0
 const GRENADE_POOL := 6
 # Hauteur du PLANCHER DE TRANCHÉE (+ un rien pour éviter le z-fighting avec le sol). C'est là que
 # tombent les grenades et que se posent leurs marqueurs — pas au niveau du no man's land.
@@ -134,6 +142,7 @@ var _aim_pitch := 0.0
 var _reduced_motion := false
 var _enemy_alpha := 0.0
 var _enemy_last_pos := 2.0
+var _enemy_x := 0.0                # abscisse RENDUE, tweenée par pas discrets (cf. `_stepped_enemy_x`)
 # Réglages VIVANTS, posés par le panneau F10 (`apply_tuning`). Les constantes ne sont que leur
 # valeur de départ.
 var _follow := AIM_FOLLOW
@@ -296,7 +305,20 @@ func _build_enemy_sprite() -> void:
 	#    DÉJÀ PEINTE dans la frame — la rééclairer serait de toute façon la peindre deux fois.
 	_enemy_sprite.shaded = false
 	_enemy_sprite.double_sided = true
-	_enemy_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	# ╔═ ⚠️⚠️ LE SOLDAT ADVERSE ÉTAIT UN RECTANGLE BLANC — DEPUIS LE §8.138 ═══════════════════════╗
+	# ║ Ce filtre demandait des MIPMAPS. Les 6 frames sont importées avec `mipmaps/generate=false`  ║
+	# ║ (réglage d'import, que la règle maison interdit de toucher). En OpenGL, une texture dont la ║
+	# ║ chaîne de mips est absente alors que le sampler en réclame une est INCOMPLÈTE, et le spec   ║
+	# ║ dit qu'elle s'échantillonne en BLANC OPAQUE. Le sprite se dessinait donc à la bonne place,  ║
+	# ║ à la bonne taille, avec le bon alpha de nœud — en aplat blanc teinté par `modulate`, soit   ║
+	# ║ un carré jaune pâle.                                                                        ║
+	# ║ Personne ne pouvait le voir : à 35 m, la part exposée du soldat faisait une vingtaine de    ║
+	# ║ pixels, et un carré de 20 px ressemble à un homme de 20 px. C'est le rapprochement de       ║
+	# ║ l'arène à 12 m (§8.140.1) qui l'a rendu flagrant — et la recette du §8.138, qui mesurait    ║
+	# ║ l'alpha des FICHIERS et l'état de la machine à frames, n'avait aucune raison de l'attraper. ║
+	# ║ ⚠️ On accorde donc le filtre à l'asset, et surtout PAS l'inverse.                            ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	_enemy_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	_enemy_sprite.pixel_size = Sprites.PIXEL_SIZE
 	_enemy_sprite.centered = true
 	_enemy.add_child(_enemy_sprite)
@@ -642,7 +664,7 @@ func _render_enemy(enemy: Dictionary) -> void:
 	_enemy.visible = _enemy_alpha > 0.01
 	if not _enemy.visible:
 		return
-	var x := _lerp_position_x(_enemy_last_pos)
+	var x := _stepped_enemy_x()
 	# En s'effaçant, il s'enfonce derrière le parapet : la disparition RACONTE quelque chose.
 	var sink := (1.0 - _enemy_alpha) * 0.55
 	_enemy.position = Vector3(x, -sink, Geo.far_soldier_z())
@@ -665,10 +687,28 @@ func _render_enemy(enemy: Dictionary) -> void:
 			mat.emission_energy_multiplier = flash * 3.0
 
 
-func _lerp_position_x(pos: float) -> float:
-	var low := int(floor(pos))
-	var high: int = mini(low + 1, Geo.POSITIONS - 1)
-	return lerpf(Geo.position_x(low), Geo.position_x(high), pos - float(low))
+# ╔═ ⚠️ L'ADVERSAIRE SE DÉPLACE COMME MOI, PAS EN GLISSANT ═══════════════════════════════════════╗
+# ║ Verdict de partie réelle : « le mouvement du bot est trop rapide, je ne sais pas si ça          ║
+# ║ correspond bien au mouvement de mon soldat ». VÉRIFIÉ CÔTÉ SERVEUR : il n'est PAS plus rapide.  ║
+# ║ `_apply_input` fait passer le bot par la MÊME porte que moi (`move_ready_tick`, 3 ticks), et il ║
+# ║ ne tente un pas qu'avec une probabilité de 0,22 par tick — soit ~2,2 pas/s là où un joueur qui  ║
+# ║ tient sa flèche en demande à chaque envoi et atteint le plafond de 3,33 pas/s. Mécaniquement,   ║
+# ║ c'est le JOUEUR le plus rapide.                                                                 ║
+# ║                                                                                                 ║
+# ║ Ce qui différait, c'est le RENDU. Sa position était interpolée en continu entre deux états      ║
+# ║ serveur : il TRAVERSAIT le front d'un glissé fluide. La mienne, elle, est une suite de poses    ║
+# ║ discrètes reliées par un fondu de 0,15 s. Un adversaire qui glisse se lit « rapide » ; un       ║
+# ║ soldat qui pose ses pas se lit « lent ». On aligne donc les deux lectures sur la MÊME mécanique.║
+# ║ ⚠️ Et c'est aussi plus FIDÈLE : la position serveur est un ENTIER — le glissé était l'artefact. ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _stepped_enemy_x() -> float:
+	var target: float = Geo.position_x(int(round(_enemy_last_pos)))
+	if _reduced_motion or MOVE_TRANSITION <= 0.0:
+		_enemy_x = target
+		return _enemy_x
+	var step: float = minf(1.0, get_process_delta_time() / MOVE_TRANSITION)
+	_enemy_x = lerpf(_enemy_x, target, step)
+	return _enemy_x
 
 
 # Origine d'un tir : l'œil du tireur, dans SA tranchée.
@@ -699,8 +739,21 @@ func _render_tracers(tracers: Array) -> void:
 		var dir := _shot_direction(float(shot.get("yaw", 0.0)), float(shot.get("pitch", 0.0)), mine)
 		var travelled: float = clampf(float(shot.get("t", 0.0)), 0.0, 1.0) * Geo.NO_MANS_LAND
 		var head := origin + dir * travelled
-		# La traçante est un SEGMENT (la balle a une longueur apparente), pas un point.
-		var tail := origin + dir * maxf(0.0, travelled - 3.0)
+		# ╔═ ⚠️⚠️ MA PROPRE TRAÇANTE NAÎT DANS MON ŒIL — VU EN CAPTURE ═════════════════════════╗
+		# ║ L'origine d'un tir est `_muzzle_origin`, c'est-à-dire l'ŒIL du tireur. Pour l'ADVERSE ║
+		# ║ c'est sans conséquence (il est en face) ; pour le MIEN, la boîte dorée se retrouve à  ║
+		# ║ quelques centimètres de la caméra et, vue de face, elle couvre un carré de ~10° au    ║
+		# ║ milieu de l'écran. Le rapprochement de l'arène à 12 m l'a AGGRAVÉ : à `t` égal, la    ║
+		# ║ balle a parcouru trois fois moins de mètres, donc elle s'attarde trois fois plus      ║
+		# ║ longtemps devant l'œil. On ne la montre donc qu'une fois le canon dégagé.             ║
+		# ╚═══════════════════════════════════════════════════════════════════════════════════════╝
+		if mine and travelled < MUZZLE_CLEAR:
+			node.visible = false
+			continue
+		# La traçante est un SEGMENT (la balle a une longueur apparente), pas un point. Sa queue ne
+		# recule jamais en deçà du canon dégagé, sinon elle repointerait vers l'œil.
+		var tail_at: float = maxf(MUZZLE_CLEAR if mine else 0.0, travelled - TRACER_LENGTH)
+		var tail := origin + dir * tail_at
 		node.visible = true
 		node.position = (head + tail) * 0.5
 		node.look_at(head, Vector3.UP)
@@ -724,8 +777,11 @@ func _render_grenades(grenades: Array, markers: Array) -> void:
 		var target := Vector3(Geo.position_x(int(g.get("target_pos", 2))), MARKER_Y, land_z)
 		var t: float = clampf(float(g.get("t", 0.0)), 0.0, 1.0)
 		# CLOCHE : une parabole franche — c'est elle qui rend le temps de vol lisible à l'œil.
+		# ⚠️ Sa hauteur est une FRACTION de la portée, pas 6 m en dur : avec le passage de 35 m à
+		# 12 m (§8.140.1), une cloche de 6 m sur 12 m de portée aurait envoyé la grenade quasiment
+		# à la verticale — une lune, pas un lancer.
 		var flat := origin.lerp(target, t)
-		flat.y += sin(t * PI) * 6.0
+		flat.y += sin(t * PI) * Geo.NO_MANS_LAND * 0.17
 		node.visible = true
 		node.position = flat
 

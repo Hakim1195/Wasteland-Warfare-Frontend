@@ -206,6 +206,22 @@ func _ready() -> void:
 	# comprendre AVANT de lire le bandeau que la promesse vient d'être brisée.
 	_register_sfx("betrayal", func(): return _make_chord(370.0, 261.0, 0.55))
 
+	# --- LA TRANCHÉE (§8.140.1) : 4 SFX neufs, même mécanique d'override. ---
+	# ⚠️ Verdict de partie réelle : « quand on rentre dans la partie, le son ne change pas, ça reste
+	# le même que celui du menu, donc aucun effet sonore ». Le duel FP n'appelait AUCUN son — ni
+	# ambiance, ni arme. Il jouait littéralement sur la nappe des menus.
+	# `trench_shot` : la détonation. Sèche et COURTE (0,18 s) — elle part à chaque pression, jusqu'à
+	# 24 fois par chargeur : la moindre queue de réverbération deviendrait une bouillie.
+	_register_sfx("trench_shot", func(): return _make_trench_shot())
+	# `trench_hit` : le coup ENCAISSÉ par le joueur. Grave et mat, il doit se distinguer d'un tir.
+	_register_sfx("trench_hit", func(): return _make_blip(180.0, 0.14, 0.30))
+	# `trench_hitmarker` : MA touche confirmée par le serveur. Aigu, très court — c'est la
+	# récompense, et elle ne doit jamais couvrir la détonation qui la précède de 200 ms.
+	_register_sfx("trench_hitmarker", func(): return _make_blip(1900.0, 0.05, 0.16))
+	# `trench_grenade` : le départ du lancer. La DÉTONATION, elle, réutilise `explosion` — même
+	# événement physique que la flèche de guerre, aucune raison d'en synthétiser un second.
+	_register_sfx("trench_grenade", func(): return _make_blip(420.0, 0.09, 0.18))
+
 # Enregistre un SFX par nom : vrai fichier prioritaire (assets/audio/sfx/<nom>), sinon repli
 # synthétisé (Callable() -> AudioStreamWAV). Factorise le pattern _load_override / _make_*.
 func _register_sfx(sfx_name: String, synth: Callable) -> void:
@@ -728,6 +744,27 @@ func _make_impact() -> AudioStreamWAV:
 # Explosion (lot F) : impact de la flèche de guerre. Sub très court + burst de bruit filtré qui
 # se referme + traînée de débris. Plus « sale » et plus grave que `impact` (pertes de troupes),
 # pour que les deux ne se confondent pas à l'oreille.
+# LA DÉTONATION DE LA TRANCHÉE (§8.140.1). Une arme d'épaule, pas une explosion : une claque de
+# bruit filtré qui s'éteint en 0,18 s, avec un très bref « corps » grave pour le poids. Le repli
+# synthétisé n'a pas à être beau — il a à être COURT, distinct, et à ne jamais masquer le suivant.
+func _make_trench_shot() -> AudioStreamWAV:
+	var dur := 0.18
+	var n := int(MIX_RATE * dur)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4471
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / MIX_RATE
+		# Corps : chute très rapide 220 → 70 Hz, c'est ce qui donne le « coup » sans traîner.
+		var body := sin(TAU * lerpf(220.0, 70.0, clampf(t / 0.05, 0.0, 1.0)) * t) * exp(-t * 42.0)
+		# Claque : bruit blanc à peine filtré, éteint en quelques dizaines de millisecondes.
+		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.72)
+		s[i] = body * 0.55 + lp * exp(-t * 55.0) * 0.7
+	return _finalize(s)
+
+
 func _make_explosion() -> AudioStreamWAV:
 	var dur := 0.7
 	var n := int(MIX_RATE * dur)

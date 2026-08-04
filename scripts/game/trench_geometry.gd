@@ -16,7 +16,17 @@ extends RefCounted
 # REPÈRE (main droite, Godot : +Y haut, -Z devant la caméra par défaut — on travaille en +Z « en
 # face » et on oriente les caméras d'un demi-tour, cf. `pose_basis`) :
 #   • ORIGINE = plancher de MA tranchée, position centrale (index 2), au ras du parapet.
-#   • +X = ma droite · +Y = le ciel · +Z = vers la tranchée ADVERSE (le no man's land).
+#   • +X · +Y = le ciel · +Z = vers la tranchée ADVERSE (le no man's land).
+#
+# ⚠️⚠️ CE FICHIER A LONGTEMPS ÉCRIT « +X = ma droite ». C'EST FAUX, ET ÇA A COÛTÉ UNE PARTIE.
+# Le repère est DROITIER : un observateur tourné vers +Z, avec +Y en haut, a sa droite en **−X**.
+# Mesuré au harnais (position centrale, visée nulle) : la position adverse 4, à x = +8 m, se
+# projette à 719 px, et la position 0, à x = −8 m, à 1201 px. Le « +X » du registre sort donc à
+# GAUCHE de l'écran. Deux symptômes rapportés en partie réelle en découlaient : « la souris vers la
+# droite fait viser à gauche » et « les flèches droite et gauche sont inversées ».
+# ⚠️ La correction vit dans `trench_fp.gd` (`SCREEN_TO_WORLD_X`), au niveau des ENTRÉES, et surtout
+# PAS ici : ce registre est partagé avec le serveur, et lui retourner un signe rendrait la table
+# angulaire fausse pour tout le monde. Le repère n'a rien d'incorrect — seul son commentaire l'était.
 #
 # ⚠️ CONVENTION DE MIROIR (la règle qui évite le bug classique du duel symétrique) : la table est
 # calculée UNE fois dans CE repère local, et sert aux DEUX joueurs. Chacun se rend « en bas »
@@ -27,9 +37,25 @@ extends RefCounted
 
 # --- Le no man's land et les tranchées ------------------------------------------------------------
 # Largeur du no man's land (§2.1) ⚙. C'est LA cote de ressenti : elle fixe la taille apparente de
-# la cible (cf. `silhouette_span_deg` — à 35 m un soldat exposé fait ~1° de large, soit ~25 px de
-# large en 1920 px à 75° de FOV : petit mais franchement visable, calibre « ennemi lointain »).
-const NO_MANS_LAND := 35.0
+# la cible.
+# ╔═ ⚠️⚠️ 35 m → 12 m, SUR VERDICT DE PARTIE RÉELLE (§8.140.1) ═══════════════════════════════════╗
+# ║ « L'adversaire est trop loin, je le vois minuscule, c'est très compliqué de le voir et encore  ║
+# ║ plus de le viser. » La cote de 35 m avait été calculée pour un « ennemi lointain » — le calcul ║
+# ║ était juste et la sensation mauvaise : à 35 m, la part EXPOSÉE du soldat fait 0,96° de large,  ║
+# ║ soit une vingtaine de pixels en 1920. On ne vise pas vingt pixels au pistolet.                  ║
+# ║ À 12 m, la même silhouette fait **2,64°** — environ 2,8 fois plus large. C'est le tiers demandé.║
+# ║                                                                                                 ║
+# ║ ⚠️ CETTE COTE N'EST PAS LOCALE. Elle voyage dans `trench_angles.json`, que le SERVEUR charge et ║
+# ║ ne recalcule jamais. La changer IMPOSE de régénérer la table (les deux copies) et de           ║
+# ║ REDÉPLOYER le backend — sans quoi le serveur résout les touches sur une arène qui n'existe      ║
+# ║ plus. `test_trench_angles.py` compare les checksums et le rappelle brutalement.                 ║
+# ║                                                                                                 ║
+# ║ ⚠️ CONSÉQUENCE À JUGER EN JEU : le front reste large de 16 m pour 12 m de profondeur. Depuis un ║
+# ║ bord, la position adverse opposée est à **±50,9° de lacet** (contre ±24,4° à 35 m). Le          ║
+# ║ débattement client a été ouvert en conséquence (`AIM_YAW_LIMIT`) — mais viser d'un bout à       ║
+# ║ l'autre demande désormais un vrai geste, et le pas de côté pèse deux fois plus lourd.           ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const NO_MANS_LAND := 12.0
 
 # Positions discrètes par tranchée et leur espacement (§2.1) ⚙ — 5 × 4 m = 16 m de front utile.
 const POSITIONS := 5
@@ -60,7 +86,8 @@ const SILHOUETTE_TOP_DOWN := 1.05
 # Quantum d'envoi de la visée au serveur (§2.4) : le client arrondit yaw/pitch à ce pas.
 const AIM_QUANTUM_DEG := 0.1
 # Version de la table : à INCRÉMENTER dès qu'une cote ci-dessus bouge (voyage dans le JSON).
-const TABLE_VERSION := 1
+# v2 : `NO_MANS_LAND` 35 → 12 m (§8.140.1, verdict de partie réelle).
+const TABLE_VERSION := 2
 
 
 # =================================================================================================

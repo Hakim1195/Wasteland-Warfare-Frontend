@@ -387,8 +387,11 @@ func _build_props() -> void:
 	# ║   2. on les BRISE — chaque brin ne relie que deux piquets voisins, à une hauteur qui varie. ║
 	# ║      Une ligne continue lit « barre » ; une ligne rompue lit « enchevêtrement ».            ║
 	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
-	for row in [{"z": 10.0, "n": 6}, {"z": 15.0, "n": 5}]:
-		var z: float = float(row["z"])
+	# ⚠️ Profondeurs exprimées en FRACTION du no man's land, jamais en mètres absolus : la cote est
+	# passée de 35 m à 12 m sur verdict de partie réelle (§8.140.1), et deux rangs posés « à 10 et
+	# 15 m » se seraient retrouvés l'un au milieu du terrain, l'autre DERRIÈRE la tranchée adverse.
+	for row in [{"t": 0.30, "n": 6}, {"t": 0.50, "n": 5}]:
+		var z: float = Geo.NO_MANS_LAND * float(row["t"])
 		var ceiling: float = _prop_ceiling(z)
 		# ⚠️ 0,85 × le plafond, et non le plafond : bâtir PILE sur la limite la faisait franchir à
 		# l'erreur d'arrondi près (5 fautifs relevés par le contrôle, à 0,42 m pour une limite de
@@ -418,7 +421,7 @@ func _build_props() -> void:
 				Vector3((x + prev_x) * 0.5, ground + h, z), wire_mat)
 	# Deux poutres échouées, à plat : du relief au sol, aucune hauteur.
 	for i in range(2):
-		var z: float = 7.5 + 6.0 * float(i)
+		var z: float = Geo.NO_MANS_LAND * (0.22 + 0.34 * float(i))
 		var beam_h: float = minf(0.22, _prop_ceiling(z) * 0.85)
 		if beam_h <= 0.05:
 			continue
