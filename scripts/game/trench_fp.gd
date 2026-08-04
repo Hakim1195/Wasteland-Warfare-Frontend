@@ -33,6 +33,7 @@ extends Control
 const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 const WorldScene := preload("res://scenes/game/trench_fp_world.tscn")
 const ViewmodelScript := preload("res://scripts/game/trench_viewmodel.gd")
+const AmbientScript := preload("res://scripts/game/trench_ambient.gd")
 const CelebrationScript := preload("res://scripts/ui/unlock_celebration.gd")
 
 # Arme de départ du duel (miroir de `trench_sim.STARTING_WEAPON`) — sert AVANT le premier état,
@@ -123,6 +124,8 @@ var _enemy_laser_pos := 2
 var _sky: TextureRect
 var _decor: TextureRect
 var _world: Control
+var _ambient: Control
+var _grade: ColorRect
 var _viewmodel: Control
 var _hud: Control
 var _reticle: Control
@@ -219,12 +222,20 @@ func _build_layers() -> void:
 	_decor.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_decor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_decor)
+	_apply_parallax(true)
 
 	# COUCHE 2 — le monde 3D transparent.
 	_world = WorldScene.instantiate()
 	add_child(_world)
 	_world.set_reduced_motion(_reduced_motion)
 	_world.set_pose(_pred_pos, _pred_stance, true)
+
+	# COUCHE 2 bis — L'HABILLAGE PROCÉDURAL (§8.139) : brume de profondeur, cendres, braises.
+	# Il s'intercale ICI, entre le monde et le viewmodel, et les deux bornes sont motivées dans
+	# `trench_ambient.gd` (la brume doit voiler le soldat à 35 m, jamais mon arme à 0,60 m).
+	_ambient = AmbientScript.new()
+	add_child(_ambient)
+	_ambient.set_reduced_motion(_reduced_motion)
 
 	# COUCHE 3 — LE VIEWMODEL PEINT (§8.138). Il vit dans la couche ÉCRAN, AU-DESSUS du SubViewport
 	# et SOUS le HUD : c'est l'ORDRE D'AJOUT qui décide, et `_build_hud()` est appelé après nous.
@@ -235,21 +246,70 @@ func _build_layers() -> void:
 	_viewmodel.set_reduced_motion(_reduced_motion)
 	_apply_weapon(STARTING_WEAPON)
 
+	# COUCHE 3 bis — L'ÉTALONNAGE UNIFIANT (§8.139). Il LIT L'ÉCRAN : il doit donc venir après tout
+	# ce qu'il teinte (décor, monde, ambiance, viewmodel) et avant le HUD — que `_build_hud()`
+	# ajoutera juste après. Le HUD reste HORS étalonnage : son cyan est une convention de lecture,
+	# pas une image, et l'aplatir reviendrait à dégrader la lisibilité pour un gain esthétique.
+	_grade = AmbientScript.make_grade_layer()
+	add_child(_grade)
+
 
 # L'AIGUILLAGE peint / primitives, en UN seul endroit : les deux viewmodels ne doivent jamais être
 # allumés ensemble, ni éteints ensemble.
 func _apply_weapon(weapon_id: String) -> void:
+	_apply_weapon_check(weapon_id)
+
+
+# Même aiguillage, mais il REND ce qu'il a décidé : `true` = viewmodel peint, `false` = repli en
+# primitives. Le jeu n'a pas besoin de cette réponse ; le harnais de recette, si — sans elle il
+# capturerait un viewmodel de repli en croyant recetter un asset peint (§8.139).
+func _apply_weapon_check(weapon_id: String) -> bool:
 	if weapon_id == "" or _world == null or _viewmodel == null:
-		return
+		return false
 	_world.set_weapon(weapon_id)
 	var painted: bool = _viewmodel.set_weapon(weapon_id)
 	_world.set_viewmodel_visible(not painted)
+	return painted
 
 
 # Chemin d'un décor de pose. ⚠️ `ResourceLoader.exists` et SURTOUT PAS `FileAccess.file_exists` :
 # ce dernier échoue en build exporté (leçon `company_emblems.gd` §8.126).
 func _decor_path(pos_index: int, stance: String) -> String:
 	return "res://assets/images/trench/pose_%d_%s.png" % [pos_index, stance]
+
+
+# =================================================================================================
+# MICRO-PARALLAXE DU DÉCOR (§8.139, LOT D)
+# =================================================================================================
+# ╔═ CE QUE ÇA ACHÈTE, ET POURQUOI SI PEU DE PIXELS ═════════════════════════════════════════════╗
+# ║ Le décor est une texture PLATE : quoi qu'il montre, il est à distance infinie et l'œil le sait.║
+# ║ Le décaler à CONTRE-SENS de la visée le fait reculer derrière le monde 3D, qui lui bouge       ║
+# ║ vraiment — c'est de la profondeur pour deux lignes de code. Le débattement est minuscule À     ║
+# ║ DESSEIN : le décor porte l'horizon sur lequel le soldat d'en face pose les pieds. Au-delà de   ║
+# ║ 2-3 px, on ne donne plus de la profondeur, on DÉSALIGNE la seule cote du chantier.             ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const PARALLAX_PX := 2.0
+# Marge d'assiette : le rect du décor est élargi de ce nombre de pixels sur les quatre bords, sinon
+# un décalage de 2 px découvrirait une bande vide au bord opposé. Invisible : `KEEP_ASPECT_COVERED`
+# recadre déjà largement.
+const PARALLAX_SLACK := 4.0
+
+
+# ⚠️ On pose les OFFSETS D'ANCRE, pas `position` : sur un Control en `PRESET_FULL_RECT`, `position`
+# recalcule les offsets et se fait écraser au prochain redimensionnement (piège documenté §8.136 et
+# rappelé dans `_anchored()` plus bas).
+func _apply_parallax(force := false) -> void:
+	if _decor == null:
+		return
+	var dx := 0.0
+	var dy := 0.0
+	if not force and not _reduced_motion:
+		dx = -clampf(_aim_yaw / AIM_YAW_LIMIT, -1.0, 1.0) * PARALLAX_PX
+		dy = -clampf(_aim_pitch / AIM_PITCH_LIMIT, -1.0, 1.0) * PARALLAX_PX
+	_decor.offset_left = -PARALLAX_SLACK + dx
+	_decor.offset_right = PARALLAX_SLACK + dx
+	_decor.offset_top = -PARALLAX_SLACK + dy
+	_decor.offset_bottom = PARALLAX_SLACK + dy
 
 
 # Applique le décor de la pose courante — ou bascule sur le greybox s'il n'existe pas.
@@ -264,6 +324,10 @@ func _refresh_decor() -> void:
 		_sky.visible = not has_decor
 	if _world != null:
 		_world.show_blockout_geometry(not has_decor)
+	# L'habillage suit la POSTURE, pas le décor : accroupi, il n'y a plus de lointain à habiller,
+	# que le décor soit peint ou greybox.
+	if _ambient != null:
+		_ambient.set_stance(_pred_stance)
 
 
 # =================================================================================================
@@ -566,6 +630,7 @@ func _process(delta: float) -> void:
 		_item_queued = ""
 
 	_world.set_aim(_aim_yaw, _aim_pitch)
+	_apply_parallax()
 	_refresh_view(delta)
 
 

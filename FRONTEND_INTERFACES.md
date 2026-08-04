@@ -4348,3 +4348,168 @@ par arithmétique sur `size`.
 
 ⚠️ Les fichiers de recette (harnais, outil de capture, 18 PNG de test) ont été **supprimés** — le
 dépôt ne garde que les deux nouveaux scripts de production. **100 % client : aucun redéploiement.**
+
+---
+
+## §8.139 — LA TRANCHÉE HABILLÉE : 10 décors + 18 sprites peints + habillage procédural
+
+> **100 % CLIENT — aucun redéploiement serveur.** Le mini-jeu quitte le greybox : les 10 décors de
+> pose, les 6 frames du soldat adverse et les 12 viewmodels sont produits et déposés, et une couche
+> d'ambiance procédurale (brume, cendres, braises, étalonnage, micro-parallaxe) soude le tout.
+> **Aucune ligne de simulation, de protocole, de redaction, de HUD ou de blockout n'a été touchée** :
+> le nommage était déjà le contrat (§8.137 pour les décors, §8.138 pour les sprites), déposer les
+> fichiers suffit. Planche de comparaison : **`TRANCHEE_AVANT_APRES.png`** (racine).
+
+### 1. Changement de moteur d'images — pourquoi, et ce qu'il coûte
+
+Le moteur local (FLUX dev fp8 / RTX 3060) a été **condamné par la mesure** lors de la session
+précédente : pas de peinture sous `denoise` 0,85 (donc aucun réglage ne peint *tout en* respectant
+la mise en page du blockout), plafond pratique ~1,2 Mpix, 3 hallucinations sur 25 tirages. On passe
+à un modèle **à édition**, qui prend le rendu du blockout **en entrée**.
+
+| Rôle | Modèle (slug relevé sur `/models`, jamais deviné) | Coût réel constaté |
+|---|---|---|
+| Finales | `google/gemini-3-pro-image` | **0,134 – 0,141 $** / image |
+| Brouillons | `google/gemini-3.1-flash-lite-image` | **0,034 $** / image |
+
+**Coût total réel de la session : 4,46 $** pour 30 images facturées, sur un plafond de 10 $.
+Le prix vit dans `pricing.image_output` et il est libellé **au token** (~1 120 tokens/image) — lu
+naïvement sur `pricing.image`, il donnait « 0,0000 $ » partout.
+
+`tools/trench_asset_factory.py` porte désormais **deux moteurs derrière une seule interface**
+(`--backend openrouter` par défaut, `comfy` conservé). Tout l'aval — recalage d'horizon, parapet
+composé, découpage des fenêtres, détourage `rembg`, mesures de contrôle — ignore quel moteur tourne.
+Le plafond de dépense est **appliqué et persistant** (journal sur disque relu à chaque lancement,
+arrêt à 80 %), et la clé ne peut apparaître nulle part (`scrub()` filtre tout ce qui s'imprime).
+
+### 2. Décors — l'édition bat la peinture libre, et la mesure le dit
+
+Départage sur `pose_2_up`, 2 brouillons par voie :
+
+| Voie | Écart d'horizon (cible 50 % de la hauteur) | `detail` |
+|---|---|---|
+| **(a) édition depuis le greybox** | **−50 px, −28 px** | 18,7 / 17,8 |
+| (b) peinture libre + recalage (recette §4.1 du rapport) | −126 px, −153 px | 30,5 / 29,2 |
+
+Les deux peignent réellement (`detail` très au-dessus du seuil de 8) — le contrôle n'est donc pas un
+faux vert. **(a) gagne d'un facteur 3,5 sur la seule cote du chantier**, et gagne aussi à l'œil : la
+voie (b) a reproduit le défaut historique (`strategy_paint_1` montre un **couloir de tranchée qui
+fuit vers la gauche**, exactement le piège §4.2 du rapport). Après recalage, **horizon mesuré à
+y = 360 px pour une cible de 360**.
+
+- **Parallaxe** : le blockout ne rend que du 16:9, mais les 5 positions debout doivent se décaler.
+  Le gabarit est donc **élargi à 21:9 par réplication de bord** — exact ici, parce que le rendu `up`
+  est fait de bandes **horizontales** ; un étirement, lui, aurait faussé la perspective. On peint un
+  panorama, on y découpe 5 fenêtres décalées de 32 px : **un seul tableau payé pour 5 poses**.
+- **Accroupi** : le rendu `down` du blockout est un aplat (écart-type 0,27/255) et ne porte aucune
+  mise en page — l'éditer ne transmet rien. C'est **la référence de matière** (`ref_jute.png`, le
+  meilleur tirage de la session précédente) qui est éditée : sa jute est juste, seul son cadrage
+  était faux. **3 itérations**, arbitrées par un compteur de trouées claires.
+
+### 3. Sprites — la constance du personnage, et l'échelle
+
+**Une seule référence est payée**, validée à l'œil ; les 5 autres états du soldat et les 2 autres
+états de chaque arme sont des **éditions de cette référence**. C'est la parade au piège n° 1 du
+guide (« six tirages = six hommes ») — et elle marche : même homme, même capote, même bufflèterie,
+même casque sur les 6 frames.
+
+Le contrat d'échelle du §8.138 (`pixel_size` **constant**) impose **un seul** facteur mètre/pixel,
+dérivé d'`idle` et appliqué aux cinq autres. Mesuré après dépôt :
+
+| Frame | PNG | Hauteur rendue en jeu |
+|---|---|---|
+| `idle` | 562×1024 | 1,80 m |
+| `aim` | 427×880 | 1,55 m (posture braquée, genoux fléchis) |
+| `throw` | 567×1023 | 1,80 m |
+| `hit` | 779×1001 | 1,76 m |
+| `death_a` | 552×806 | 1,42 m |
+| `death_b` | **788×238** | **0,42 m — un corps AU SOL**, pas un cadavre dressé |
+
+Contrôle in-game par **différence d'images** (sprite visible / sprite masqué, habillage figé) :
+**52 px de haut à 35 m, soit 1,75 m rendus pour 1,80 m attendus**. Halo de détourage : le bord des
+6 frames est mesuré **plus sombre** que le corps (−11 à +1,6 niveau) — l'érosion d'1 px fait son
+travail, aucun liseré clair sur le fond gunmetal.
+
+⚖ **ARBITRAGE armes.** Le guide demandait des armes « originales improvisées wasteland », le rapport
+de séance impose la Grande Guerre 14-18. On tranche pour le **rapport** (qui fait loi sur ce
+chantier) en gardant ce que le guide protégeait vraiment : **aucun modèle réel n'est nommé**, et les
+4 silhouettes restent **distinctes** — c'est une information de jeu, le joueur doit reconnaître son
+arme d'un coup d'œil.
+
+### 4. LOT D — l'habillage procédural (`scripts/game/trench_ambient.gd`, 2 shaders)
+
+La couche qui soude quatre chaînes de production sans lumière commune. **Ordre des couches — c'est
+le contrat du lot**, et les deux bornes portent tout le sens :
+
+```
+décor  <  monde 3D  <  AMBIANCE  <  viewmodel  <  ÉTALONNAGE  <  HUD
+```
+
+- l'ambiance est **au-dessus** du monde 3D (la brume doit voiler le soldat à 35 m — une brume
+  derrière lui ne l'assiérait pas, elle le découperait) et **sous** le viewmodel (rien ne passe
+  devant mon arme à 0,60 m) ;
+- l'étalonnage **lit l'écran** (`hint_screen_texture`) : il vient après tout ce qu'il teinte et
+  **avant le HUD**, dont le cyan est une convention de lecture, pas une image.
+
+**Accroupi, la brume et les braises s'ÉTEIGNENT** (`emitting = false`, pas seulement invisibles) :
+à 0,90 m d'œil le parapet remplit le champ, peindre un lointain reviendrait à peindre à travers un
+mur et allumer trois feux dans les sacs. Les cendres restent — elles tombent aussi dans la tranchée.
+`reduced_motion` **fige sans éteindre** (`speed_scale = 0`, défilement de brume arrêté) : le réglage
+supprime le mouvement, pas la matière. Le défilement vient d'un **uniforme poussé par le script**,
+jamais de `TIME` — `TIME` continue de courir, un confort écrit avec lui ne figerait rien.
+**Micro-parallaxe** : ±2 px à contre-sens de la visée, posés en **offsets d'ancre** (pas `position`),
+et bornés à dessein — le décor porte l'horizon sur lequel le soldat pose les pieds.
+
+**Budget particules : 100 / 200.** Coût mesuré (vsync désactivée) : **+0,33 ms/frame** dont 0,13 ms
+pour l'étalonnage, soit **2 % d'un budget 60 FPS**.
+
+### 5. ⚠️⚠️ SEPT défauts trouvés — six par la mesure, aucun par un boot « 0 ERROR »
+
+1. **La couche d'ambiance ne peignait RIEN.** Un `Control` créé par code garde `size = (0,0)` malgré
+   `set_anchors_preset(PRESET_FULL_RECT)`, et `resized` ne part jamais : nappes en 0×0, trois foyers
+   empilés en (0,0), cendres émises dans une boîte de 1 px. **Sixième cas de cette famille dans le
+   dépôt** (§8.121, §8.138…). Invisible : une nappe de taille nulle et une nappe transparente
+   rendent exactement la même image. → le viewport fait foi, plus `size`.
+2. **Les cendres ne descendaient que de ~200 px en 8 s** : les 800 px du bas restaient
+   *rigoureusement* vides (0,00 % de pixels touchés). → émission sur tout le cadre.
+3. **L'arme rétrécissait au tir.** Recadré sur sa propre boîte, le `fire` du CONDOR sortait 23 % plus
+   haut que son `idle` — et le viewmodel est dimensionné à 45 % de la **hauteur** d'écran, donc une
+   frame plus haute affiche une arme **plus petite**. → **cadre commun aux 3 états d'une arme**.
+4. **Ma mesure de trouées claires était fausse** et a failli faire jeter la bonne image : seuil
+   *relatif* à la médiane, donc sur un tirage sombre il comptait les **sacs clairs** comme des trous.
+   → critère absolu **et** désaturé (un ciel couvert est quasi-blanc *et* gris ; un reflet humide sur
+   la jute ne l'est pas).
+5. **La recette « fire » photographiait la frame `idle`.** La fenêtre dure 90 ms, une capture en
+   coûte plus : `current_state()` disait « fire » (vert), et l'image saisie deux frames plus tard
+   montrait `idle` — **0 pixel de départ de feu, mesuré**. → réarmement à chaque frame.
+6. **La mesure de performance mesurait la vsync.** Les trois configurations rendaient 13,33 ms, soit
+   **75,00 FPS pile** — la fréquence de l'écran. Trois nombres identiques ne prouvaient rien.
+7. Le harnais **criait au loup** sur les viewmodels (un viewmodel touche normalement le bas et les
+   côtés du cadre : les bras entrent par le bord de l'écran). Une alarme qui se déclenche sur le
+   fonctionnement nominal finit par être ignorée.
+
+### 6. Recette exécutée
+
+| Épreuve | Résultat |
+|---|---|
+| Harnais `test_trench_ambient.tscn` (ordre des couches, budget, `reduced_motion`, posture, parallaxe) | **31 / 31**, 0 rouge |
+| **Contre-épreuve** — 5 sabotages injectés | **5 / 5 vus** (un test qui ne sait pas échouer ne prouve rien) |
+| Preuve que l'habillage **peint** (fond plat, comptage de pixels) | **22,3 % du cadre touché**, 65 % dans la bande de brume, 971 px chauds pour les braises ; **0,15 % accroupi** |
+| Décors déposés | **10 / 10**, tous en **1280×720 = 16:9 exact** (contrat `STRETCH_KEEP_ASPECT_COVERED`) |
+| Trouées claires, décors accroupis | **0,0000 %** sur les 5 (seuil 0,05 %) |
+| Sprites déposés | **18 / 18**, 4 armes en mode peint, bascule des 6 + 12 états vérifiée en capture |
+| **Sabotage total** — les 28 assets retirés (PNG **et** `.import`) | **0 `ERROR`, 0 `SCRIPT ERROR`** ; greybox + placeholders ; **56 / 56 fichiers restaurés au bit près** (empreintes) |
+| **Sabotage ciblé** — `pose_2_up` + `enemy_hit` retirés | la pose sabotée est à **4,19** du greybox et **81,3** du peint ; la pose voisine à **0,02** du peint — repli **par pose**, sans contagion |
+| `ui_scale` 0,9 et 1,3 · `reduced_motion` | capturés (`trench_delivery/05_*`, `06_*`) |
+| Performance | **+0,33 ms/frame** (2 % du budget 60 FPS) |
+| `--import` · boot `main_menu` | **0 `ERROR`** |
+
+### 7. Ce qui reste ouvert
+
+- ⛔ **Aucune partie réelle à deux comptes n'a été jouée.** Tout est recetté en mise en scène blanche.
+- La **teinte de faction** frappe surtout le casque (l'élément le plus clair du sprite) et se lit
+  comme une tache vive à fort accent. C'est le comportement voulu du §8.138 (`lerp` à 0,35) et un
+  repère de lisibilité utile à 20 px — mais c'est un arbitrage de goût à confirmer par Hakim.
+- `_on_state` **n'applique pas** l'arme lue dans l'état : le viewmodel suit les **événements**
+  d'escalade et `_on_init`. Couvert en jeu, mais toute mise en scène qui n'envoie pas d'événement
+  affiche l'arme de départ sous un HUD qui en annonce une autre (rencontré dans les harnais).
