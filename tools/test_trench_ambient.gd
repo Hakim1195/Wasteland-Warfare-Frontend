@@ -190,36 +190,71 @@ func _ready() -> void:
 		haze_back = haze_back and bool(h.visible)
 	_ok("debout : la brume et les braises reviennent", haze_back and bool(embers[0].emitting))
 
-	# --- 5) MICRO-PARALLAXE ---------------------------------------------------------------------
+	# --- 5) LE FOND SUIT LA CAMÉRA (§8.139.1) ---------------------------------------------------
+	# ⚠️ Ce bloc REMPLACE l'ancien contrôle de « micro-parallaxe » (±2 px à contre-sens). Cette ruse
+	# est devenue fausse le jour où la caméra s'est mise à tourner pour de bon : ce qu'on vérifie
+	# désormais, c'est que le fond se décale de l'angle EXACT, dans le BON sens.
+	# ⚠️⚠️ LE CONTRÔLE QUI MANQUAIT (§8.139.1). Le shader échantillonne SON PROPRE uniforme, pas la
+	# texture du nœud. Oublié de le lier, l'écran sort intégralement BLANC — et RIEN ne le signale :
+	# ni au boot, ni à l'import, ni au rendu. Un sampler non lié est du blanc silencieux.
+	var demo := PlaceholderTexture2D.new()
+	demo.size = Vector2(1280, 720)
+	duel._decor.texture = demo
+	if duel._backdrop_mat != null:
+		duel._backdrop_mat.set_shader_parameter("backdrop", duel._decor.texture)
+	_ok("le shader de fond est LIE a la texture du decor (sinon : ecran blanc muet)",
+		duel._backdrop_mat != null
+		and duel._backdrop_mat.get_shader_parameter("backdrop") == duel._decor.texture
+		and duel._decor.texture != null)
+	_ok("le cadrage « couvrir » est fait par le SHADER, pas par le noeud",
+		duel._decor.stretch_mode == TextureRect.STRETCH_SCALE,
+		"sinon Godot remappe les UV et le decalage panoramique vise a cote")
+
+	duel._decor.visible = true                    # le pan ne s'applique qu'à un décor affiché
+	var view: Vector2 = get_viewport().get_visible_rect().size
+	var fov_v: float = duel._world.camera_fov()
+	var fov_h: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(fov_v) * 0.5) * view.x / view.y))
+	duel._positions = 5
+	duel._pred_pos = 2                            # position CENTRALE : aucun décalage latéral
 	duel._aim_yaw = 0.0
 	duel._aim_pitch = 0.0
-	duel._apply_parallax()
-	var base_l: float = duel._decor.offset_left
-	var base_t: float = duel._decor.offset_top
-	_ok("visee au centre : le decor est a son assiette de repos",
-		is_equal_approx(base_l, -DuelScript.PARALLAX_SLACK)
-		and is_equal_approx(base_t, -DuelScript.PARALLAX_SLACK),
-		"gauche=%.2f haut=%.2f" % [base_l, base_t])
+	duel._apply_backdrop_pan()
+	var pan0: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
+	_ok("visee au centre, position centrale : le fond est a son assiette de repos",
+		pan0.is_equal_approx(Vector2.ZERO), "pan=%s" % pan0)
 
-	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT          # visée à fond à DROITE
-	duel._aim_pitch = DuelScript.AIM_PITCH_LIMIT      # et vers le HAUT
-	duel._apply_parallax()
-	var dx: float = duel._decor.offset_left - base_l
-	var dy: float = duel._decor.offset_top - base_t
-	_ok("le decor part a CONTRE-SENS du lacet", dx < 0.0, "dx=%.2f px" % dx)
-	_ok("le decor part a CONTRE-SENS du site", dy < 0.0, "dy=%.2f px" % dy)
-	_ok("le debattement reste borne a PARALLAX_PX",
-		absf(dx) <= DuelScript.PARALLAX_PX + 0.001 and absf(dy) <= DuelScript.PARALLAX_PX + 0.001,
-		"|dx|=%.2f |dy|=%.2f (max %.2f)" % [absf(dx), absf(dy), DuelScript.PARALLAX_PX])
-	_ok("le rect ne CHANGE PAS DE TAILLE en se decalant",
-		is_equal_approx(duel._decor.offset_right - duel._decor.offset_left,
-			2.0 * DuelScript.PARALLAX_SLACK)
-		and is_equal_approx(duel._decor.offset_bottom - duel._decor.offset_top,
-			2.0 * DuelScript.PARALLAX_SLACK))
-	duel._aim_yaw = -DuelScript.AIM_YAW_LIMIT
-	duel._apply_parallax()
-	_ok("visee a gauche : le decor part a droite",
-		duel._decor.offset_left - base_l > 0.0)
+	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT
+	duel._apply_backdrop_pan()
+	var pan_r: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
+	# Regarder à DROITE doit faire glisser le monde vers la GAUCHE : on échantillonne plus loin à
+	# droite dans la texture, donc `pan.x` AUGMENTE. Un signe inversé ici, c'est exactement la
+	# sensation « la souris est inversée » que ce lot corrige.
+	_ok("visee a DROITE : le fond glisse vers la gauche (pan.x > 0)", pan_r.x > 0.0,
+		"pan.x=%.4f" % pan_r.x)
+	_ok("l'amplitude vaut l'ANGLE divise par le champ de vision (au degre pres)",
+		absf(pan_r.x - DuelScript.AIM_YAW_LIMIT / fov_h) < 0.002,
+		"mesure %.4f, attendu %.4f (fov_h %.1f deg)"
+		% [pan_r.x, DuelScript.AIM_YAW_LIMIT / fov_h, fov_h])
+
+	duel._aim_yaw = 0.0
+	duel._aim_pitch = DuelScript.AIM_PITCH_LIMIT
+	duel._apply_backdrop_pan()
+	var pan_u: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
+	_ok("visee vers le HAUT : le fond descend (pan.y < 0)", pan_u.y < 0.0, "pan.y=%.4f" % pan_u.y)
+
+	# Le PAS DE CÔTÉ doit se voir : 6,52° pour 4 m a 35 m, pas 32 px arbitraires.
+	duel._aim_pitch = 0.0
+	duel._pred_pos = 3
+	duel._apply_backdrop_pan()
+	var pan_step: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
+	var expected_step: float = DuelScript.POSITION_PARALLAX_DEG / fov_h
+	_ok("un pas de cote decale le fond de 6,52 deg",
+		absf(pan_step.x - expected_step) < 0.002,
+		"mesure %.4f, attendu %.4f (soit %.0f px sur %.0f)"
+		% [pan_step.x, expected_step, pan_step.x * view.x, view.x])
+	_ok("ce decalage vaut plus de 60 px a l'ecran (l'ancien en donnait 32)",
+		absf(pan_step.x) * view.x > 60.0, "%.0f px" % (absf(pan_step.x) * view.x))
+	duel._pred_pos = 2
 
 	# --- 6) CONTRE-ÉPREUVE PAR SABOTAGE ---------------------------------------------------------
 	# Un test vert ne vaut que s'il sait devenir rouge. On casse volontairement chaque famille et on
@@ -250,10 +285,13 @@ func _ready() -> void:
 	amb.set_stance("up")
 
 	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT
-	duel._decor.offset_left = base_l + DuelScript.PARALLAX_PX   # SABOTAGE : parallaxe DANS le sens
-	if duel._decor.offset_left - base_l > 0.0:
+	duel._apply_backdrop_pan()
+	var real_pan: Vector2 = duel._backdrop_mat.get_shader_parameter("pan")
+	duel._backdrop_mat.set_shader_parameter("pan", Vector2(-real_pan.x, real_pan.y))  # SABOTAGE
+	if float((duel._backdrop_mat.get_shader_parameter("pan") as Vector2).x) < 0.0:
 		caught += 1
-		print("  OUI  une parallaxe dans le mauvais sens serait vue")
+		print("  OUI  un fond qui glisse dans le mauvais sens serait vu")
+	duel._apply_backdrop_pan()
 
 	duel.move_child(duel._grade, duel.get_child_count() - 1)    # SABOTAGE : étalonnage au-dessus du HUD
 	var saboted_order: bool = int(duel._grade.get_index()) > int(duel._hud.get_index())

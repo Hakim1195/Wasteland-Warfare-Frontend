@@ -32,7 +32,19 @@ const COL_WALL := Color(0.26, 0.25, 0.23)
 # Racines nommées : `trench_fp.gd` et les outils s'y accrochent (jamais par index d'enfant).
 var poses_root: Node3D          # les 10 Marker3D de MON camp
 var enemy_root: Node3D          # les 5 Marker3D des positions ADVERSES (ancrage du soldat)
-var geometry_root: Node3D       # les volumes (masquables pour un rendu « décor seul »)
+var geometry_root: Node3D       # le monde LOINTAIN (masquable : un décor peint le remplace)
+# ╔═ MA PROPRE TRANCHÉE VIT À PART, ET ELLE NE SE MASQUE PAS AVEC LE RESTE ═══════════════════════╗
+# ║ ⚠️⚠️ DÉFAUT VÉCU EN PARTIE RÉELLE (§8.139.1). `set_geometry_visible(false)` masquait TOUT dès   ║
+# ║ qu'un décor peint était déposé — y compris `NearParapet`, que le commentaire de ce fichier      ║
+# ║ appelle lui-même « le parapet de sacs qui décide de tout le jeu ». Le joueur se retrouvait      ║
+# ║ DEBOUT EN TERRAIN DÉCOUVERT, avec pour seule couverture une bande peinte de 77 px au bas du     ║
+# ║ décor : elle n'occulte rien, ne tourne pas avec la caméra, ne se décale pas quand on fait un    ║
+# ║ pas. Verdict du testeur, littéral : « il n'y a pas de tranchée ».                               ║
+# ║ Un décor remplace le LOINTAIN (le no man's land, la tranchée d'en face). Il ne remplace JAMAIS  ║
+# ║ le volume derrière lequel le joueur s'abrite : celui-là doit rester de la vraie géométrie, pour ║
+# ║ occulter juste et bouger juste.                                                                 ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+var cover_root: Node3D          # MA tranchée : plancher, mur arrière, parapet — TOUJOURS rendue
 
 
 func _ready() -> void:
@@ -44,6 +56,7 @@ func _build() -> void:
 	for child in get_children():
 		child.queue_free()
 	geometry_root = _named_child("Geometry")
+	cover_root = _named_child("Cover")
 	poses_root = _named_child("Poses")
 	enemy_root = _named_child("EnemyAnchors")
 	_build_terrain()
@@ -87,11 +100,12 @@ func _build_terrain() -> void:
 		Vector3(0.0, Geo.GROUND_Y - 0.1, Geo.PARAPET_THICKNESS + land_depth * 0.5), COL_GROUND)
 
 	# MA tranchée : plancher, mur arrière, et le parapet de sacs qui décide de tout le jeu.
-	_box(geometry_root, "NearFloor", Vector3(front, 0.2, Geo.TRENCH_WIDTH),
+	# ⚠️ Sous `cover_root`, PAS sous `geometry_root` : un décor peint ne doit jamais l'effacer.
+	_box(cover_root, "NearFloor", Vector3(front, 0.2, Geo.TRENCH_WIDTH),
 		Vector3(0.0, -0.1, -Geo.TRENCH_WIDTH * 0.5), COL_TRENCH)
-	_box(geometry_root, "NearBackWall", Vector3(front, Geo.GROUND_Y + 0.4, 0.4),
+	_box(cover_root, "NearBackWall", Vector3(front, Geo.GROUND_Y + 0.4, 0.4),
 		Vector3(0.0, (Geo.GROUND_Y + 0.4) * 0.5, -Geo.TRENCH_WIDTH - 0.2), COL_WALL)
-	_box(geometry_root, "NearParapet", Vector3(front, Geo.PARAPET_Y, Geo.PARAPET_THICKNESS),
+	_box(cover_root, "NearParapet", Vector3(front, Geo.PARAPET_Y, Geo.PARAPET_THICKNESS),
 		Vector3(0.0, Geo.PARAPET_Y * 0.5, Geo.PARAPET_THICKNESS * 0.5), COL_PARAPET)
 
 	# La tranchée ADVERSE, en miroir : son parapet a son arête PROCHE à `far_parapet_near_edge_z`
@@ -165,3 +179,44 @@ func enemy_anchor(pos_index: int) -> Vector3:
 func set_geometry_visible(visible_geometry: bool) -> void:
 	if geometry_root != null:
 		geometry_root.visible = visible_geometry
+
+
+# Habille MA tranchée avec la matière du décor accroupi — le mur de sacs de jute déjà peint.
+# `null` remet le gris du greybox.
+#
+# ╔═ POURQUOI TEXTURER PLUTÔT QUE LAISSER LE VOLUME GRIS ════════════════════════════════════════╗
+# ║ Avec un décor photoréaliste derrière lui, un parapet gris uni ne se lit pas comme « mon abri » ║
+# ║ mais comme un défaut d'affichage — un rectangle mat posé sur une photo. Or on tient déjà LA    ║
+# ║ bonne matière : `pose_2_down.png` EST un mur de sacs de jute plein cadre, peint dans la même   ║
+# ║ passe et sous la même lumière que le paysage. On la réutilise, coût nul, cohérence garantie.   ║
+# ║ ⚠️ Le pavage est calculé en MÈTRES (`uv1_scale`), pas en fraction de face : sans ça, la même   ║
+# ║ image s'étirerait sur 26 m de front et les sacs feraient trois mètres de large.                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const COVER_SANDBAG_METRES := 2.4     # largeur réelle représentée par une tuile de texture ⚙
+# ⚠️ Le parapet est À CONTRE-JOUR (le soleil vient de derrière le joueur, cf. `_build_light`) : sa
+# face tournée vers l'œil ne reçoit presque rien. Teinté à 0,62 il sortait en BANDEAU NOIR — la
+# matière de jute ne se lisait pas, et l'abri se lisait donc comme un défaut d'affichage plutôt que
+# comme un mur de sacs. On compense par l'albédo plutôt qu'en tordant l'éclairage, qui sert aussi à
+# sculpter le soldat d'en face.
+const COVER_TINT := Color(1.30, 1.28, 1.24)
+
+
+func set_cover_texture(tex: Texture2D) -> void:
+	if cover_root == null:
+		return
+	for child in cover_root.get_children():
+		var instance := child as MeshInstance3D
+		if instance == null or not (instance.mesh is BoxMesh):
+			continue
+		var box := instance.mesh as BoxMesh
+		var material := box.material as StandardMaterial3D
+		if material == null:
+			continue
+		material.albedo_texture = tex
+		if tex == null:
+			material.uv1_scale = Vector3.ONE
+			material.albedo_color = COL_PARAPET if instance.name == "NearParapet" else COL_TRENCH
+			continue
+		material.uv1_scale = Vector3(box.size.x / COVER_SANDBAG_METRES,
+			maxf(box.size.y, box.size.z) / COVER_SANDBAG_METRES, 1.0)
+		material.albedo_color = COVER_TINT

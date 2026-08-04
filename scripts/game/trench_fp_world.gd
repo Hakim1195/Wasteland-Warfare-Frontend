@@ -47,8 +47,24 @@ const CAMERA_NEAR := 0.05
 const MOVE_TRANSITION := 0.15
 const STANCE_TRANSITION := 0.12
 # Suivi de caméra par la visée (§1.1) : la tête accompagne le réticule, le CORPS ne tourne pas.
-const AIM_FOLLOW := 0.25
-const AIM_FOLLOW_MAX := 6.0
+# ╔═ LA CAMÉRA SUIT LA VISÉE, ET ELLE LA SUIT ENTIÈREMENT (§8.139.1) ════════════════════════════╗
+# ║ ⚠️⚠️ RÉGLAGE D'ORIGINE : 0,25 plafonné à 6°. Sur ±32° de visée, la caméra ne tournait donc que ║
+# ║ de ±6° : le reste du débattement n'était qu'un RÉTICULE qui glissait sur l'écran. C'était      ║
+# ║ tenable tant que le paysage était le blockout 3D — il tournait, on voyait quelque chose bouger.║
+# ║ Depuis qu'un décor PEINT le remplace, le paysage est une image FIXE : on bougeait la souris et ║
+# ║ plus rien ne bougeait. Verdict du testeur : « le mouvement de la souris est inversé et pas du  ║
+# ║ tout facile à gérer » — et c'est exactement ce que produit une vue qui ne répond pas.          ║
+# ║                                                                                                ║
+# ║ ⚠️ CE N'EST PAS UN CHANGEMENT DE RÈGLE. Le lacet/site ENVOYÉS au serveur sont inchangés ; la   ║
+# ║ table angulaire reste seule juge de la touche. On ne change que ce que la caméra MONTRE.       ║
+# ║ Les POSES restent fixes : c'est la position de l'œil qui ne bouge pas, pas son regard.         ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const AIM_FOLLOW := 1.0
+# Borne de sécurité, au-delà du débattement client (±32°) : elle n'écrête jamais en jeu, elle
+# empêche seulement une visée aberrante de faire pivoter la caméra à l'envers du monde.
+const AIM_FOLLOW_MAX := 45.0
+# Matière de MON parapet quand un décor est déposé : le mur de sacs peint de la pose accroupie.
+const COVER_TEXTURE := "res://assets/images/trench/pose_2_down.png"
 
 const COL_ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
 const COL_GOLD := Color(0.878431, 0.698039, 0.286275, 1)
@@ -382,9 +398,17 @@ func camera_fov() -> float:
 
 # Bascule greybox / décor pré-rendu. Sans décor déposé, le blockout EST le fond (aligné par
 # définition) ; avec un décor, on masque les volumes pour ne pas doubler les sacs de sable.
+# ⚠️ NE MASQUE QUE LE MONDE LOINTAIN. Ma propre tranchée (`cover_root`) reste rendue quoi qu'il
+# arrive : un décor peint remplace le no man's land, jamais le volume derrière lequel on s'abrite
+# (§8.139.1 — défaut « il n'y a pas de tranchée », vu en partie réelle). Quand un décor existe, ce
+# volume est HABILLÉ de la matière du mur de sacs plutôt que laissé en gris de blockout.
 func show_blockout_geometry(show_geometry: bool) -> void:
-	if _blockout != null and _blockout.has_method("set_geometry_visible"):
+	if _blockout == null:
+		return
+	if _blockout.has_method("set_geometry_visible"):
 		_blockout.set_geometry_visible(show_geometry)
+	if _blockout.has_method("set_cover_texture"):
+		_blockout.set_cover_texture(null if show_geometry else Sprites.texture_at(COVER_TEXTURE))
 
 
 # Teinte le soldat adverse à l'accent de SA faction (système d'accents existant, §5.2).

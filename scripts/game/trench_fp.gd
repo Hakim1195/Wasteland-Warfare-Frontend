@@ -34,6 +34,7 @@ const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 const WorldScene := preload("res://scenes/game/trench_fp_world.tscn")
 const ViewmodelScript := preload("res://scripts/game/trench_viewmodel.gd")
 const AmbientScript := preload("res://scripts/game/trench_ambient.gd")
+const BackdropShader := preload("res://shaders/trench_backdrop.gdshader")
 const CelebrationScript := preload("res://scripts/ui/unlock_celebration.gd")
 
 # Arme de départ du duel (miroir de `trench_sim.STARTING_WEAPON`) — sert AVANT le premier état,
@@ -52,7 +53,12 @@ const RECONNECT_DELAY := 2.0
 # --- Visée ---------------------------------------------------------------------------------------
 # Sensibilité souris en degrés par pixel ⚙ (réglage produit à exposer aux Paramètres si le
 # playtest le demande — hors périmètre de ce chantier).
-const AIM_SENSITIVITY := 0.055
+# ⚙ Sensibilité RÉDUITE de 0,055 à 0,040 °/px (§8.139.1, demande de Hakim après essai). Elle n'avait
+# jamais été jugée dans de bonnes conditions : tant que la caméra ne tournait que de 6°, la souris
+# ne pilotait qu'un réticule et paraissait de toute façon incontrôlable. Maintenant qu'elle tourne
+# la vue, un mouvement plus posé se justifie — le débattement utile (±32° de lacet) demande environ
+# 1 600 px de souris, soit un geste ample mais franc.
+const AIM_SENSITIVITY := 0.040
 # Débattement autorisé. Le lacet doit couvrir la position adverse la plus lointaine (±24,4° depuis
 # un bord) avec de la marge ; le site reste étroit — il n'y a rien à viser au ciel.
 const AIM_YAW_LIMIT := 32.0
@@ -126,6 +132,7 @@ var _decor: TextureRect
 var _world: Control
 var _ambient: Control
 var _grade: ColorRect
+var _backdrop_mat: ShaderMaterial
 var _viewmodel: Control
 var _hud: Control
 var _reticle: Control
@@ -219,10 +226,19 @@ func _build_layers() -> void:
 	_decor = TextureRect.new()
 	_decor.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_decor.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_decor.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	# ⚠️⚠️ `STRETCH_SCALE`, ET SURTOUT PAS `KEEP_ASPECT_COVERED` : le cadrage « couvrir » est
+	# désormais fait PAR LE SHADER (§8.139.1). Laissé à Godot, il dessine une SOUS-RÉGION de la
+	# texture et remappe les UV en conséquence — le décalage panoramique, qui raisonne en largeurs
+	# d'écran, se serait alors appliqué dans un repère qui n'est pas le sien. Le contrat 16:9 est
+	# inchangé : c'est le même cadrage, calculé au même endroit que le décalage qui en dépend.
+	_decor.stretch_mode = TextureRect.STRETCH_SCALE
 	_decor.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Le fond PANORAMIQUE : le shader décale l'image de l'angle dont la caméra a tourné, avec un
+	# pavage miroir qui rend le décalage sans limite (§8.139.1).
+	_backdrop_mat = ShaderMaterial.new()
+	_backdrop_mat.shader = BackdropShader
+	_decor.material = _backdrop_mat
 	add_child(_decor)
-	_apply_parallax(true)
 
 	# COUCHE 2 — le monde 3D transparent.
 	_world = WorldScene.instantiate()
@@ -281,35 +297,37 @@ func _decor_path(pos_index: int, stance: String) -> String:
 # =================================================================================================
 # MICRO-PARALLAXE DU DÉCOR (§8.139, LOT D)
 # =================================================================================================
-# ╔═ CE QUE ÇA ACHÈTE, ET POURQUOI SI PEU DE PIXELS ═════════════════════════════════════════════╗
-# ║ Le décor est une texture PLATE : quoi qu'il montre, il est à distance infinie et l'œil le sait.║
-# ║ Le décaler à CONTRE-SENS de la visée le fait reculer derrière le monde 3D, qui lui bouge       ║
-# ║ vraiment — c'est de la profondeur pour deux lignes de code. Le débattement est minuscule À     ║
-# ║ DESSEIN : le décor porte l'horizon sur lequel le soldat d'en face pose les pieds. Au-delà de   ║
-# ║ 2-3 px, on ne donne plus de la profondeur, on DÉSALIGNE la seule cote du chantier.             ║
+# ╔═ ⚠️⚠️ LA MICRO-PARALLAXE DE ±2 px A ÉTÉ RETIRÉE (§8.139.1) ══════════════════════════════════╗
+# ║ Elle décalait le décor À CONTRE-SENS de la visée pour simuler de la profondeur. C'était une    ║
+# ║ ruse acceptable tant que le fond était FIXE — elle est devenue FAUSSE dès que le fond s'est mis║
+# ║ à suivre la caméra pour de bon : deux mécanismes tiraient l'image en sens contraires, l'un de  ║
+# ║ 2 px arbitraires, l'autre de l'angle réel. On garde celui qui dit la vérité.                   ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-const PARALLAX_PX := 2.0
-# Marge d'assiette : le rect du décor est élargi de ce nombre de pixels sur les quatre bords, sinon
-# un décalage de 2 px découvrirait une bande vide au bord opposé. Invisible : `KEEP_ASPECT_COVERED`
-# recadre déjà largement.
-const PARALLAX_SLACK := 4.0
+# Écart angulaire vu par le joueur quand il fait UN pas de côté, pour une scène à 35 m :
+# atan(4 m / 35 m) = 6,52°. C'est CE décalage que le fond doit encaisser — pas 32 px arbitraires
+# (le découpage d'origine en donnait 2,5 % de la largeur d'écran, invisible : « les déplacements
+# à droite et à gauche sont complètement inutiles »).
+const POSITION_PARALLAX_DEG := 6.52
 
 
-# ⚠️ On pose les OFFSETS D'ANCRE, pas `position` : sur un Control en `PRESET_FULL_RECT`, `position`
-# recalcule les offsets et se fait écraser au prochain redimensionnement (piège documenté §8.136 et
-# rappelé dans `_anchored()` plus bas).
-func _apply_parallax(force := false) -> void:
-	if _decor == null:
+# Décale le fond peint de l'angle EXACT dont la caméra a tourné, plus le pas latéral. Le fond et la
+# scène 3D restent ainsi solidaires : c'est ce qui rend le mouvement de souris lisible.
+func _apply_backdrop_pan() -> void:
+	if _decor == null or _backdrop_mat == null or not _decor.visible:
 		return
-	var dx := 0.0
-	var dy := 0.0
-	if not force and not _reduced_motion:
-		dx = -clampf(_aim_yaw / AIM_YAW_LIMIT, -1.0, 1.0) * PARALLAX_PX
-		dy = -clampf(_aim_pitch / AIM_PITCH_LIMIT, -1.0, 1.0) * PARALLAX_PX
-	_decor.offset_left = -PARALLAX_SLACK + dx
-	_decor.offset_right = PARALLAX_SLACK + dx
-	_decor.offset_top = -PARALLAX_SLACK + dy
-	_decor.offset_bottom = PARALLAX_SLACK + dy
+	var view: Vector2 = get_viewport_rect().size
+	if view.x <= 0.0 or view.y <= 0.0:
+		return
+	# Champ de vision HORIZONTAL déduit du vertical et du rapport d'écran — jamais recopié en dur :
+	# le jour où `CAMERA_FOV` bouge, le fond suit sans qu'on y pense.
+	var fov_v: float = _world.camera_fov() if _world != null else 55.0
+	var fov_h: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(fov_v) * 0.5) * view.x / view.y))
+	var yaw: float = _aim_yaw + float(_pred_pos - (_positions - 1) * 0.5) * POSITION_PARALLAX_DEG
+	_backdrop_mat.set_shader_parameter("pan", Vector2(yaw / fov_h, -_aim_pitch / fov_v))
+	_backdrop_mat.set_shader_parameter("rect_size", view)
+	var tex: Texture2D = _decor.texture
+	if tex != null:
+		_backdrop_mat.set_shader_parameter("tex_size", Vector2(tex.get_size()))
 
 
 # Applique le décor de la pose courante — ou bascule sur le greybox s'il n'existe pas.
@@ -319,6 +337,12 @@ func _refresh_decor() -> void:
 	var has_decor := ResourceLoader.exists(path)
 	_decor.texture = load(path) if has_decor else null
 	_decor.visible = has_decor
+	# ⚠️ LE SHADER NE VOIT PAS `TextureRect.texture` : il échantillonne SON PROPRE uniforme. Oublié
+	# une première fois, l'écran est ressorti intégralement BLANC (un sampler non lié rend du blanc)
+	# — et aucune erreur n'est levée, ni au boot ni à l'import. On le pousse donc ICI, au même
+	# endroit que la texture du nœud, pour que les deux ne puissent pas diverger.
+	if _backdrop_mat != null:
+		_backdrop_mat.set_shader_parameter("backdrop", _decor.texture)
 	# Le ciel de repli ne sert QUE le greybox : un vrai décor porte le sien.
 	if _sky != null:
 		_sky.visible = not has_decor
@@ -630,7 +654,7 @@ func _process(delta: float) -> void:
 		_item_queued = ""
 
 	_world.set_aim(_aim_yaw, _aim_pitch)
-	_apply_parallax()
+	_apply_backdrop_pan()
 	_refresh_view(delta)
 
 
