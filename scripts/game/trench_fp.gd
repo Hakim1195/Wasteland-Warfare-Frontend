@@ -796,7 +796,7 @@ func _process(delta: float) -> void:
 			# se croirait plus rapide qu'il n'est — donc ferait un pas de trop, puis se ferait
 			# rappeler à l'ordre par la réconciliation. C'est-à-dire EXACTEMENT le symptôme « mes
 			# flèches ne répondent pas ». Le repli n'est censé servir que si `trench_init` manque.
-			_pred_move_ready = _clock + float(_rules.get("move_ticks", 4)) / _tick_rate
+			_pred_move_ready = _clock + float(_rules.get("move_ticks", 5)) / _tick_rate
 			pose_changed = true
 	if pose_changed:
 		_world.set_pose(_pred_pos, _pred_stance)

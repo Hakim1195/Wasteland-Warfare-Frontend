@@ -5102,3 +5102,35 @@ bandeau · **taille réelle 660 × 500 et ENTIÈREMENT dans l'écran** (le pièg
 « un `Control` créé par code garde `size = (0,0)` », dont le panneau F10 atterri à x = −400) ·
 n'intercepte pas la souris · **les 22 libellés sont traduits** (une clé absente s'afficherait en
 clair) · se referme au coup d'envoi. Capture jointe.
+
+---
+
+## §8.141.4 — LA TRANCHÉE : LE PAS RALENTI DE 20 % (porte, manche 4)
+
+> Verdict de Hakim : « il faut réduire la vitesse des déplacements droite/gauche d'au moins 20 %,
+> sinon c'est trop dur, personne n'arrivera à jouer ».
+
+`move_ticks` **4 → 5**. C'est **exactement −20 %**, et c'est la marche que le bon de commande du
+§8.141 avait écrite d'avance (« si la porte le juge encore nerveux : 5 ticks — UNE marche à la
+fois, jamais deux »). On prend la valeur prévue, pas une valeur inventée sous le coup du verdict.
+
+| | avant | après |
+|---|---|---|
+| joueur (touche tenue) | 2,50 pas/s | **2,00 pas/s** (−20 %) |
+| bot (`move_prob` 0,22) | 1,17 pas/s | **1,05 pas/s** (−10 %) |
+| traversée du front (4 pas, 13,6 m) | 1,6 s | **2,0 s** |
+
+**Ce que ça corrige vraiment** : à 2,5 pas/s on traversait les cinq positions en 1,6 s — le joueur
+dépassait sa cible à chaque pression. À 2,0 pas/s un appui bref donne UN pas, ce qui était déjà
+l'intention du verrou.
+
+> ⚠️ **VALEUR PARTAGÉE : les deux camps la subissent** (règle du §6.5 — on module le rythme des
+> deux, on ne « nerfe » pas un adversaire). L'effet est **asymétrique et assumé** : le bot ne perd
+> que 10 % parce que sa cadence est dominée par `move_prob` et non par ce verrou. C'est la mesure
+> du §8.141.1, et elle vaut toujours.
+
+### Recette
+
+**256 contrôles backend** · **77 clients** · 8 contrôles du guide · 0 rouge. **Aucun test n'a
+rougi** — parce qu'ils ont été réécrits la veille contre `TRENCH_RULES["move_ticks"]` au lieu de
+recopier « 3 » puis « 4 ». Le filet a fait exactement ce pour quoi il avait été refait.
