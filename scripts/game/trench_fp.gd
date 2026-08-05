@@ -214,6 +214,9 @@ var _banner: Label
 var _waiting_label: Label
 var _conn_banner: Label
 var _tune_hint: Label
+var _help_panel: PanelContainer   # guide des commandes (F1)
+var _help_hint: Label
+var _help_shown_once := false
 var _diag: Label            # bandeau de diagnostic F3 — les DEUX modes, lecture seule
 var _hurt_overlay: ColorRect
 var _low_hp_vignette: ColorRect
@@ -473,6 +476,11 @@ func _on_duel_event(event: Dictionary) -> void:
 	var kind := str(event.get("type", ""))
 	match kind:
 		"round_start":
+			# ⚠️ LE GUIDE SE REFERME SEUL AU COUP D'ENVOI. Un panneau qu'il faut penser à fermer
+			# pour jouer serait un obstacle, pas une aide — et le joueur qui le lit encore n'a pas
+			# à choisir entre finir sa lecture et rater le début de la manche.
+			if _help_panel != null:
+				_help_panel.visible = false
 			_show_banner(tr("TRENCH_ROUND") % int(event.get("round_no", 1)), COL_ACCENT)
 		"fire":
 			if int(event.get("slot", 0)) == _my_slot:
@@ -632,6 +640,14 @@ func _input(event: InputEvent) -> void:
 				_stance_toggle = true
 			KEY_UP:
 				_stance_toggle = false
+			KEY_F1:
+				# LE GUIDE DES COMMANDES — les DEUX modes, lecture seule, aucune pause, la souris
+				# reste capturée. Il ne peut rien offrir à personne, donc rien ne justifierait de
+				# l'interdire en duel classé (contrairement au panneau F10, qui relâche la souris).
+				if _help_panel != null:
+					accept_event()
+					_help_panel.visible = not _help_panel.visible
+					return
 			KEY_F3:
 				# LE BANDEAU DE DIAGNOSTIC — disponible DANS LES DEUX MODES (cf. `_log_input`).
 				# Lecture seule : il ne relâche pas la souris et ne cloue pas le joueur sur place.
@@ -1162,6 +1178,7 @@ func _build_hud() -> void:
 	_build_ammo()
 	_build_item_slots()
 	_build_reticle()
+	_build_help_panel()
 	_build_choice_panel()
 	_build_abandon_overlay()
 
@@ -1361,6 +1378,91 @@ func _dispersion_pixels() -> float:
 	return tan(deg_to_rad(degrees)) / maxf(0.001, tan(half_fov)) * (size.y * 0.5)
 
 
+# =================================================================================================
+# LE GUIDE DES COMMANDES (F1) — §8.141.3
+# =================================================================================================
+# ╔═ POURQUOI IL EXISTE, ET POURQUOI IL S'OUVRE TOUT SEUL LA PREMIÈRE FOIS ═══════════════════════╗
+# ║ Deux verdicts de partie réelle sur trois portaient sur des commandes que le joueur ne pouvait  ║
+# ║ PAS deviner : « la touche pour se cacher ne fonctionne pas » (elle n'était liée à rien) et     ║
+# ║ « comment utiliser les bandages ? ». Le duel a NEUF commandes, dont trois — le maintien de     ║
+# ║ grenade, le bandage, le choix d'arme — n'existent nulle part ailleurs dans le jeu. Les          ║
+# ║ annoncer une fois coûte un panneau ; ne pas les annoncer coûte une partie à chaque nouveau     ║
+# ║ joueur, et ça s'est produit deux fois de suite.                                                 ║
+# ║                                                                                                 ║
+# ║ ⚠️ IL S'OUVRE PENDANT LE BANDEAU D'AVANT-MANCHE, pas en pleine action : c'est le seul moment    ║
+# ║ où le jeu ne demande rien au joueur (`intermission`, 3 s). Et il se referme au coup d'envoi     ║
+# ║ SANS que le joueur ait à s'en occuper — un panneau qu'il faut fermer pour jouer serait un       ║
+# ║ obstacle, pas une aide.                                                                         ║
+# ║ ⚠️ IL NE RELÂCHE PAS LA SOURIS et ne met rien en pause (même règle que le bandeau F3, et        ║
+# ║ contrairement au panneau F10) : il ne peut donc rien offrir à personne, et n'a aucune raison    ║
+# ║ d'être interdit en duel classé.                                                                 ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _build_help_panel() -> void:
+	_help_panel = PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = COL_PANEL
+	sb.border_color = COL_ACCENT
+	sb.set_border_width_all(1)
+	sb.content_margin_left = 22
+	sb.content_margin_right = 22
+	sb.content_margin_top = 14
+	sb.content_margin_bottom = 16
+	_help_panel.add_theme_stylebox_override("panel", sb)
+	_help_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_help_panel.visible = false
+	_hud.add_child(_help_panel)
+	# ⚠️ Taille POSÉE et ancrage par offsets explicites : 8ᵉ récidive évitée de « un Control créé par
+	# code garde size = (0,0) » — le panneau F10 avait atterri à x = −400 pour cette raison exacte.
+	_anchored(_help_panel, Control.PRESET_CENTER, Vector2(-330, -250), Vector2(660, 500))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_help_panel.add_child(column)
+
+	var title := _label(tr("TRENCH_HELP_TITLE"), 22, COL_ACCENT)
+	column.add_child(title)
+	column.add_child(HSeparator.new())
+
+	# Chaque ligne : la TOUCHE en or, ce qu'elle fait en texte clair. L'ordre suit celui dans lequel
+	# un joueur découvre le duel — bouger, se cacher, viser, tirer, puis les objets.
+	for pair in [["TRENCH_HELP_MOVE", "TRENCH_HELP_MOVE_D"],
+			["TRENCH_HELP_STANCE", "TRENCH_HELP_STANCE_D"],
+			["TRENCH_HELP_AIM", "TRENCH_HELP_AIM_D"],
+			["TRENCH_HELP_FIRE", "TRENCH_HELP_FIRE_D"],
+			["TRENCH_HELP_GRENADE", "TRENCH_HELP_GRENADE_D"],
+			["TRENCH_HELP_RELOAD", "TRENCH_HELP_RELOAD_D"],
+			["TRENCH_HELP_BANDAGE", "TRENCH_HELP_BANDAGE_D"],
+			["TRENCH_HELP_CHOICE", "TRENCH_HELP_CHOICE_D"],
+			["TRENCH_HELP_ESCAPE", "TRENCH_HELP_ESCAPE_D"]]:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 14)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var key := _label(tr(String(pair[0])), 15, COL_GOLD)
+		key.custom_minimum_size = Vector2(230, 0)
+		row.add_child(key)
+		var what := _label(tr(String(pair[1])), 15, COL_TEXT)
+		what.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		what.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(what)
+		column.add_child(row)
+
+	column.add_child(HSeparator.new())
+	var tip := _label(tr("TRENCH_HELP_TIP"), 14, COL_ACCENT)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.custom_minimum_size = Vector2(600, 0)
+	column.add_child(tip)
+	var close := _label(tr("TRENCH_HELP_CLOSE"), 13, COL_MUTED)
+	close.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	column.add_child(close)
+
+	# Le rappel discret, toujours à l'écran : un raccourci qu'on n'annonce pas n'existe pas.
+	_help_hint = _label(tr("TRENCH_HELP_HOTKEY"), 13, COL_MUTED)
+	_help_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_hud.add_child(_help_hint)
+	_anchored(_help_hint, Control.PRESET_TOP_RIGHT, Vector2(-320, 42), Vector2(296, 20))
+
+
 # ╔═ LA JAUGE DE CHARGE A DISPARU (§8.141) ═══════════════════════════════════════════════════════╗
 # ║ C'était une barre dorée au bas de l'écran, remplie par le maintien, dont la valeur choisissait  ║
 # ║ une des cinq positions adverses. Elle demandait au joueur de lire une abstraction PENDANT qu'il ║
@@ -1422,6 +1524,13 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 
 	# --- Chrono / manche / score ---
 	var phase := str(latest.get("phase", ""))
+	# ⚠️ LE GUIDE S'OUVRE TOUT SEUL, UNE FOIS, PENDANT LE PREMIER BANDEAU D'AVANT-MANCHE. C'est le
+	# seul instant où le jeu ne demande rien au joueur (3 s d'intermission), et c'est aussi le seul
+	# où l'ignorer ne coûte rien. Deux verdicts de partie réelle sur trois portaient sur des
+	# commandes indevinables — les annoncer une fois coûte moins cher que de les faire découvrir.
+	if not _help_shown_once and phase == "intermission" and _help_panel != null:
+		_help_shown_once = true
+		_help_panel.visible = true
 	if phase == "playing":
 		var remaining := maxi(0, int(_rules.get("round_ticks", 900))
 			- int(render_tick - float(latest.get("round_start_tick", 0))))

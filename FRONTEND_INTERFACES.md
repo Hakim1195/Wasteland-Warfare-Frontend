@@ -5047,3 +5047,58 @@ des conséquences.
 0 rouge. Cinq contrôles ont rougi au changement et ont été **réécrits contre le registre** plutôt
 que contre des valeurs recopiées — dont un qui comparait une échéance à un tick 84 écrit en dur et
 accusait la fenêtre de choix alors que seule sa propre hypothèse de date avait bougé.
+
+---
+
+## §8.141.3 — LA TRANCHÉE : LE GUIDE DES COMMANDES (F1)
+
+> Question de Hakim : « comment utiliser les bandages ? » — après « la touche pour se cacher ne
+> fonctionne pas » (§8.140.1, point 3). **Deux verdicts sur trois portaient sur des commandes que
+> le joueur ne pouvait pas deviner.** Le duel en compte neuf, dont trois n'existent nulle part
+> ailleurs dans le jeu : le maintien de grenade, le bandage, le choix d'arme.
+
+### 1. Le panneau
+
+`F1`, 9 lignes + une phrase de doctrine, en fr/en/it (**22 clés** ajoutées à `ui_strings.csv`).
+
+- **Il s'ouvre TOUT SEUL, une fois, pendant le premier bandeau d'avant-manche** — le seul instant
+  où le jeu ne demande rien au joueur (3 s d'intermission) et où l'ignorer ne coûte rien.
+- **Il se referme SEUL au coup d'envoi.** Un panneau qu'il faut penser à fermer pour jouer serait
+  un obstacle, pas une aide : le joueur qui le lit encore n'a pas à choisir entre finir sa lecture
+  et rater le début de la manche.
+- **Il ne relâche PAS la souris et ne met rien en pause** — même règle que le bandeau de diagnostic
+  F3, et contrairement au panneau de réglage F10. Ne pouvant rien offrir à personne, rien ne
+  justifierait de l'interdire en duel classé.
+- Rappel discret permanent en haut à droite : **un raccourci qu'on n'annonce pas n'existe pas.**
+
+La ligne de doctrine, en bas : « Debout on agit, accroupi on survit. **Un pas de côté ne sauve plus
+d'une balle — il sauve d'une grenade.** » C'est la conséquence du §8.141.2 dite en une phrase, et
+c'est la seule chose qu'un joueur doit ré-apprendre après ce changement.
+
+### 2. Ce que le guide a obligé à écrire noir sur blanc — le BANDAGE
+
+En le rédigeant, les règles réelles ont dû être relues dans `trench_sim.step` plutôt que dans les
+commentaires. Elles sont plus riches que ce que le HUD laissait deviner :
+
+| | |
+|---|---|
+| touche | `2` · +25 PV · 2 s de canalisation · **1 par manche** |
+| refusé | à PV pleins (on ne gaspille pas sa seule charge) |
+| coût | la charge est consommée **au départ**, pas à l'arrivée |
+| interruption | **le moindre dégât** annule : bandage perdu ET PV non rendus |
+| posture | **fonctionne accroupi**, et le déplacement ne l'interrompt pas — c'est tout l'intérêt |
+| pendant | **le tir est bloqué**… mais **le lancer de grenade ne l'est pas** |
+
+> ⚠️ **ASYMÉTRIE RELEVÉE, NON CORRIGÉE.** `step` teste `bandage_until_tick` dans la branche de TIR
+> (« on ne tire ni pendant un rechargement, ni pendant un pansement ») mais le bloc de LANCER, qui
+> s'exécute juste avant, ne le teste pas. On peut donc lancer une grenade en se pansant. Ce n'est
+> pas forcément faux — mais ce n'est écrit nulle part, donc c'est un accident et non une décision.
+> **Signalé à Hakim, laissé en l'état : c'est un arbitrage de jeu, pas un défaut technique.**
+
+### 3. Recette
+
+`tools/shot_trench_help.tscn` — 8 contrôles verts : le panneau existe · démarre fermé · s'ouvre au
+bandeau · **taille réelle 660 × 500 et ENTIÈREMENT dans l'écran** (le piège des sept récidives de
+« un `Control` créé par code garde `size = (0,0)` », dont le panneau F10 atterri à x = −400) ·
+n'intercepte pas la souris · **les 22 libellés sont traduits** (une clé absente s'afficherait en
+clair) · se referme au coup d'envoi. Capture jointe.
