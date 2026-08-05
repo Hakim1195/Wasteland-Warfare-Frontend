@@ -46,8 +46,18 @@ const STARTING_WEAPON := "vipere"
 # gigue ferait parfois tomber 11 messages dans la même seconde serveur et le 11ᵉ (peut-être un
 # TIR) serait jeté. 0,105 s garantit <= 10 par seconde pleine. (Leçon conservée de la v1.)
 const SEND_INTERVAL := 0.105
-# Retard de rendu : 150 ms derrière le dernier état (tampon 2 états à 10 Hz, §2.4).
-const RENDER_DELAY := 0.15
+# ╔═ RETARD DE RENDU — 150 → 100 ms AVEC LE VOL À 1 TICK (§8.141.2) ══════════════════════════════╗
+# ║ C'est un tampon de gigue : à 10 Hz, rendre en retard garantit qu'on a toujours deux états      ║
+# ║ entre lesquels interpoler même si l'un arrive en retard. Il coûtait 150 ms sur les 696 ms du   ║
+# ║ budget clic → touche, et il coûtait DEUX FOIS : il retarde la touche, et il fait viser une     ║
+# ║ image vieille de 150 ms — c'est-à-dire, mot pour mot, « dès que je clique il s'est déjà        ║
+# ║ déplacé ».                                                                                      ║
+# ║ ⚠️ 100 ms = EXACTEMENT un tick : c'est le plancher défendable, pas un chiffre rond. En dessous ║
+# ║ on n'a plus d'état d'avance du tout et la moindre gigue fait figer l'adversaire.                ║
+# ║ ⚠️ Ce qu'on peut se permettre depuis le §8.140 : l'adversaire est rendu par PAS DISCRETS, plus ║
+# ║ par un glissé continu — il a donc bien moins besoin d'interpolation qu'avant.                   ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const RENDER_DELAY := 0.10
 const RECONNECT_DELAY := 2.0
 
 # --- Visée ---------------------------------------------------------------------------------------
@@ -204,6 +214,7 @@ var _banner: Label
 var _waiting_label: Label
 var _conn_banner: Label
 var _tune_hint: Label
+var _diag: Label            # bandeau de diagnostic F3 — les DEUX modes, lecture seule
 var _hurt_overlay: ColorRect
 var _low_hp_vignette: ColorRect
 var _choice_panel: PanelContainer
@@ -621,6 +632,14 @@ func _input(event: InputEvent) -> void:
 				_stance_toggle = true
 			KEY_UP:
 				_stance_toggle = false
+			KEY_F3:
+				# LE BANDEAU DE DIAGNOSTIC — disponible DANS LES DEUX MODES (cf. `_log_input`).
+				# Lecture seule : il ne relâche pas la souris et ne cloue pas le joueur sur place.
+				# C'est l'outil qui manquait quand « les flèches ne fonctionnent pas ».
+				if _diag != null:
+					accept_event()
+					_diag.visible = not _diag.visible
+					return
 			KEY_R:
 				_reload_queued = true
 			KEY_1:
@@ -742,11 +761,26 @@ func _process(delta: float) -> void:
 	if wanted_stance != _pred_stance:
 		_pred_stance = wanted_stance
 		pose_changed = true
-	if dir != 0 and _clock >= _pred_move_ready:
+	# ╔═ ⚠️⚠️ ON NE PRÉDIT PAS TANT QUE LE SERVEUR NE SIMULE PAS ════════════════════════════════╗
+	# ║ En COMPÉTITION, `_run_duel` attend que les DEUX humains soient connectés — jusqu'à 20 s   ║
+	# ║ (`CONNECT_TIMEOUT_S`). Pendant cette attente `rt.state is None` : aucun tick ne tourne, et  ║
+	# ║ les `trench_input` s'empilent dans un tampon plafonné à 30 avant d'être JETÉS. Le client,   ║
+	# ║ lui, prédisait librement : le joueur faisait des pas, sa caméra bougeait… puis tout était    ║
+	# ║ ramené au centre au coup d'envoi (`_begin_round`). En ENTRAÎNEMENT cette fenêtre est quasi   ║
+	# ║ nulle (un seul humain à attendre), d'où un symptôme qui n'existe QU'EN COMPÉTITION.         ║
+	# ║ On refuse donc de prédire un pas tant qu'aucun état serveur n'est arrivé : mieux vaut une    ║
+	# ║ touche qui ne répond pas encore qu'une touche qui répond puis se dédit.                      ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	if dir != 0 and _clock >= _pred_move_ready and not _buffer.is_empty():
 		var next_pos: int = clampi(_pred_pos + dir, 0, _positions - 1)
 		if next_pos != _pred_pos:
 			_pred_pos = next_pos
-			_pred_move_ready = _clock + float(_rules.get("move_ticks", 3)) / _tick_rate
+			# ⚠️ DÉFAUT À 4, PAS À 3 : le registre serveur est passé à 4 ticks (§8.141) et ce repli
+			# était resté à l'ancienne valeur. Un client qui prédirait 3 quand le serveur applique 4
+			# se croirait plus rapide qu'il n'est — donc ferait un pas de trop, puis se ferait
+			# rappeler à l'ordre par la réconciliation. C'est-à-dire EXACTEMENT le symptôme « mes
+			# flèches ne répondent pas ». Le repli n'est censé servir que si `trench_init` manque.
+			_pred_move_ready = _clock + float(_rules.get("move_ticks", 4)) / _tick_rate
 			pose_changed = true
 	if pose_changed:
 		_world.set_pose(_pred_pos, _pred_stance)
@@ -764,6 +798,11 @@ func _process(delta: float) -> void:
 	var urgent: bool = _fire_queued or not _throw_queued.is_empty()
 	if _send_accum >= SEND_INTERVAL or (urgent and _send_budget_left()):
 		_send_accum = 0.0
+		# ⚠️ LA PURGE DE LA FENÊTRE GLISSANTE VIT ICI, PAS DANS `_send_budget_left()`. Elle n'était
+		# faite que sur la branche URGENTE : sur une partie sans tir, `_sent_at` grossissait de 10
+		# entrées par seconde sans jamais être élagué (~900 au bout d'une manche), et le budget
+		# anti-flood se croyait épuisé pour toujours — donc plus aucun envoi anticipé.
+		_prune_send_window()
 		_sent_at.append(_clock)
 		var payload := {"move": dir, "stance": _pred_stance}
 		# La VISÉE ne part QUE si elle a bougé (§2.4), arrondie au quantum — moins d'octets, et
@@ -900,13 +939,30 @@ func _cancel_grenade() -> void:
 
 
 func _log_input(payload: Dictionary) -> void:
-	if _tuning == null or not _tuning.visible:
-		return
 	var server_pos = _player_of(_latest(), _my_slot).get("pos")
-	_tuning.set_journal("move %+d · pos %d (serveur %s) · %s · verrou %.2f s\naim %.1f / %.1f"
+	var line := "move %+d · pos %d (serveur %s) · %s · verrou %.2f s\naim %.1f / %.1f" \
 		% [int(payload.get("move", 0)), _pred_pos,
 			"?" if server_pos == null else str(int(server_pos)), _pred_stance,
-			maxf(0.0, _pred_move_ready - _clock), _aim_yaw, _aim_pitch])
+			maxf(0.0, _pred_move_ready - _clock), _aim_yaw, _aim_pitch]
+	if _tuning != null and _tuning.visible:
+		_tuning.set_journal(line)
+	if _diag != null and _diag.visible:
+		# ╔═ ⚠️⚠️ CE JOURNAL ÉTAIT AVEUGLE DANS LE SEUL MODE OÙ LE DÉFAUT SE PRODUIT ════════════╗
+		# ║ Il a été écrit au §8.140 précisément pour « les déplacements ne fonctionnent pas » —  ║
+		# ║ un symptôme jamais reproduit. Mais il ne s'affichait QUE dans le panneau F10, lui-même ║
+		# ║ réservé à l'ENTRAÎNEMENT… et le défaut, lui, n'apparaît QU'EN COMPÉTITION. L'outil de  ║
+		# ║ diagnostic était donc éteint exactement là où il servait, et personne ne l'a vu parce  ║
+		# ║ que les deux verrous sont dans deux fichiers différents.                               ║
+		# ║ ⚠️ On ne lève PAS le verrou du panneau F10 pour autant : lui relâche la souris et       ║
+		# ║ clouerait le joueur sur place pendant qu'un adversaire continue de jouer (§8.140). Ce   ║
+		# ║ bandeau-ci est en LECTURE SEULE — aucun curseur, aucune capture de souris touchée. Il   ║
+		# ║ ne peut rien offrir à personne, donc il n'a aucune raison d'être interdit en duel.      ║
+		# ╚═══════════════════════════════════════════════════════════════════════════════════════╝
+		_diag.text = "F3 · slot %d · %s\n%s\netat serveur : %s · phase %s" \
+			% [_my_slot, "ENTRAINEMENT" if _training else "COMPETITION", line,
+				"AUCUN (le serveur ne simule pas encore)" if _buffer.is_empty()
+					else "%d recu(s)" % _buffer.size(),
+				str(_latest().get("phase", "—"))]
 
 
 # L'habillage 2D (brume, braises) est posé sur une ordonnée d'écran, pas dans le monde : il lui
@@ -926,9 +982,13 @@ func _track_horizon() -> void:
 const SEND_BUDGET_PER_SECOND := 9
 
 
-func _send_budget_left() -> bool:
+func _prune_send_window() -> void:
 	while not _sent_at.is_empty() and _clock - float(_sent_at[0]) > 1.0:
 		_sent_at.pop_front()
+
+
+func _send_budget_left() -> bool:
+	_prune_send_window()
 	return _sent_at.size() < SEND_BUDGET_PER_SECOND
 
 
@@ -1206,6 +1266,12 @@ func _build_center() -> void:
 	_tune_hint.visible = false
 	_hud.add_child(_tune_hint)
 	_anchored(_tune_hint, Control.PRESET_TOP_RIGHT, Vector2(-320, 22), Vector2(296, 20))
+
+	# LE BANDEAU DE DIAGNOSTIC (F3) — éteint par défaut, disponible dans les DEUX modes.
+	_diag = _label("", 13, COL_GOLD)
+	_diag.visible = false
+	_hud.add_child(_diag)
+	_anchored(_diag, Control.PRESET_TOP_LEFT, Vector2(26, 118), Vector2(620, 90))
 
 
 # Munitions bas-droite (« 06/15 », chiffres tabulaires) + arme courante — §6.

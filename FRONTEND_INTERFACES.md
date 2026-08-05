@@ -4852,3 +4852,198 @@ ment sur le rayon » et « un soldat qui rétrécit en épaulant ») · **253 co
 (sim 151 · bot 26 · flux 56 · table 20) · `--import` et harnais à 0 `ERROR`.
 
 ⚠️ **CE NE SONT PAS DES VALIDATIONS.** La seule validation est une partie jouée — c'est la **PORTE**.
+
+---
+
+## §8.141.1 — LA TRANCHÉE : PORTE DE PLAYTEST, MANCHE 1 (2026-08-06)
+
+> Verdict de Hakim : « c'est un peu mieux quand même, mais **le bot est trop rapide, je n'arrive
+> pas à l'atteindre** » · « **la grenade n'a pas l'air d'arriver dans la tranchée** au niveau du
+> soldat, mais plutôt au milieu entre les deux tranchées » · « **ÉNORME BUG : en compétition mon
+> soldat ne bouge pas**, les flèches ne fonctionnent pas ».
+
+### 1. Le bot — j'ai eu tort d'abord, la mesure m'a corrigé
+
+Premier réflexe : mesurer 40 duels d'un joueur PARFAIT. Conclusion « le mouvement n'est pas le
+sujet, c'est le plongeon » — et **c'était une mauvaise mesure** : elle comptait aussi les tirs
+lâchés sur un bot CACHÉ, qui ne prouvent rien. En ne comptant que les tirs sur un bot **debout et
+visible** — le seul tir que le joueur croit mériter :
+
+| `move_prob` · `move_ticks` | touche | raté « il a bougé » | pas/s du bot |
+|---|---|---|---|
+| 0,22 · 4 (avant) | **36 %** | 35 % | 1,17 |
+| **0,10 · 4 (retenu)** | **43 %** | 21 % | 0,71 |
+| 0,06 · 5 | 50 % | 14 % | 0,46 |
+
+Une balle vole 0,3-0,4 s ; le bot faisait un pas toutes les 0,85 s → ~47 % de chances de bouger
+pendant le trajet. Les fenêtres de deux positions voisines étant **disjointes**, un seul pas suffit
+à rater. **Hakim visait juste et voyait sa balle passer à côté.**
+
+> ⚠️ **ET LE REPLI PRÉVU AU BON DE COMMANDE AURAIT AGGRAVÉ LES CHOSES.** `move_ticks` 4 → 5, mesuré :
+> **35 % de touches, inchangé**. La cadence du bot est dominée par sa PROBABILITÉ de bouger, pas par
+> la porte de déplacement — on aurait ralenti le JOUEUR sans toucher au problème. Le §6.5 disait
+> « le bot n'est pas plus rapide » : c'est vrai de ses PAS PAR SECONDE, c'était faux de sa
+> PROPENSION À BOUGER.
+
+Corrigé au passage, sans effet mesurable (+0,5 pt) mais c'est un vrai désaccord code/registre :
+`bullet_react_prob` était relancé **à chaque tick** pendant tout le vol, donc un 0,45 annoncé valait
+**90,8 %** sur la VIPÈRE. Décision désormais prise **une fois par balle** (`judged_shots`).
+
+### 2. La grenade — la perception de Hakim était exacte, c'est l'IMAGE qui mentait
+
+Projection à 9 m, œil à 1,70 m : le cercle d'impact tombe à **725 px**, soit **128 px SOUS le
+sommet du parapet adverse (597 px)**, dans la même bande d'écran que le sol du **milieu du terrain**
+(696 px). Et le §8.141 lui avait retiré le test de profondeur pour le rendre visible — donc plus
+rien ne disait qu'il était derrière les sacs. **On avait rendu le cercle visible en lui retirant sa
+profondeur ; il fallait la lui rendre autrement.**
+
+Correctif : une **colonne translucide** (cylindre ouvert aux deux bouts, 1,55 m) monte du cercle et
+dépasse franchement le parapet, sans masquer la silhouette debout. Le rayon n'a pas bougé — la
+contre-épreuve mesurée tient à **+3,3 %**.
+
+⚠️ **ET LA RÈGLE A UN PROBLÈME RÉEL, LUI AUSSI — À ARBITRER.** Mesuré : un pas (3,4 m) sort TOUJOURS
+du rayon (2,5 m), et le préavis minimal (1,6 s) dépasse toujours le seuil de réaction du bot
+(0,8 s). Résultat : **16,9 % des grenades touchent**. Esquiver est gratuit et total. En portant le
+rayon à 4,2 m, un pas ne sauverait plus complètement (7 dégâts au lieu de 0). **Non appliqué —
+décision d'équilibrage, elle appartient à Hakim.**
+
+### 3. « En compétition mon soldat ne bouge pas » — quatre défauts certains, une cause probable
+
+Le chemin du déplacement est **strictement identique** dans les deux modes (même scène, même
+fonction, aucune garde `training` côté serveur hors récompenses/log). Ce qui diffère est
+**contextuel**, et quatre défauts réels en découlent :
+
+1. **Le client prédisait AVANT que le serveur ne simule.** `_run_duel` attend que les DEUX humains
+   soient connectés — **jusqu'à 20 s** (`CONNECT_TIMEOUT_S`). Pendant ce temps `rt.state is None` :
+   aucun tick, et les `trench_input` s'empilent dans un tampon plafonné à 30 avant d'être JETÉS. Le
+   client, lui, prédisait librement, puis tout était ramené au centre au coup d'envoi. En
+   entraînement la fenêtre est quasi nulle — d'où un symptôme **qui n'existe qu'en compétition**.
+   → On ne prédit plus tant qu'aucun état serveur n'est arrivé.
+2. **Le tampon d'entrées n'était pas vidé pendant une coupure de socket.** Une seconde de coupure
+   laissait jusqu'à 30 messages périmés ; à la reconnexion `coalesce_inputs` ne relit que les **10
+   plus VIEUX**. Le joueur revenait dans un soldat qui rejouait son passé et ignorait ses touches.
+3. **Le repli client de `move_ticks` valait encore 3** alors que le registre serveur est passé à 4
+   (§8.141). Un client qui prédit 3 contre un serveur à 4 fait un pas de trop, puis se fait rappeler
+   à l'ordre — exactement le symptôme rapporté.
+4. **La fenêtre glissante anti-flood n'était élaguée que sur la branche urgente** : sur une partie
+   sans tir, `_sent_at` grossissait de 10 entrées/s sans jamais être purgé, et le budget se croyait
+   épuisé pour toujours.
+
+> ╔═ ⚠️⚠️ LA LEÇON DE CETTE MANCHE ════════════════════════════════════════════════════════════╗
+> ║ Le JOURNAL DES ENTRÉES a été écrit au §8.140 **précisément** pour le symptôme « les            ║
+> ║ déplacements ne fonctionnent pas », jamais reproduit. Il ne s'affichait que dans le panneau    ║
+> ║ F10 — lui-même réservé à l'ENTRAÎNEMENT. Et le défaut, lui, n'apparaît qu'en COMPÉTITION.      ║
+> ║ **L'outil de diagnostic était éteint exactement là où il servait**, et personne ne l'a vu      ║
+> ║ parce que les deux verrous vivent dans deux fichiers différents.                                ║
+> ║ → Bandeau **F3**, LECTURE SEULE, disponible dans les deux modes : slot, mode, `move` envoyé,   ║
+> ║ position client vs serveur, verrou de pas, visée, **et le nombre d'états serveur reçus**. Il   ║
+> ║ ne relâche pas la souris et ne cloue personne sur place — il n'y a donc aucune raison de       ║
+> ║ l'interdire en duel, contrairement au panneau F10 qui, lui, reste verrouillé.                   ║
+> ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+
+### 4. Un défaut de production trouvé dans les journaux du joueur
+
+`user://logs/godot.log` : **849 erreurs par partie** — `Node origin and target are in the same
+position, look_at() failed`, crachées à chaque frame depuis `_render_tracers`. En début de vol la
+tête et la queue de la traçante sont confondues. La ligne suivante avait DÉJÀ son garde
+(`maxf(0.4, …)` sur l'échelle) : le cas dégénéré était connu d'une ligne et oublié de l'autre. On
+oriente désormais sur la **direction de tir** (un vecteur unitaire, jamais nul) — plus juste, en
+outre : l'axe d'une traçante EST sa trajectoire.
+
+### 5. Recette
+
+**77 contrôles clients** (73 → 77) · **253 backend** · 0 rouge · **0 erreur `look_at`**.
+
+---
+
+## §8.141.2 — LA TRANCHÉE : LA RÈGLE D'OR AMENDÉE (porte, manche 2)
+
+> Verdict de Hakim : « le vrai problème, c'est que **mes coups sont beaucoup trop lents**. Dès que
+> le soldat est dans mon viseur et que je clique, il s'est déjà déplacé. Concrètement mes
+> projectiles sont extrêmement lents et ça gâche l'expérience — c'est injouable. »
+
+### 1. Le défaut de cascade que trois sessions ont laissé passer
+
+**Le temps de vol n'a JAMAIS été re-dérivé quand l'arène a rétréci.** `NO_MANS_LAND` est passé de
+35 m à 12 m (§8.140.1) puis à 9 m (§8.141), sur deux verdicts de playtest ; `flight_ticks`, lui,
+n'a pas bougé d'un tick :
+
+| arène | VIPÈRE à 4 ticks |
+|---|---|
+| 35 m (conception) | **90 m/s** — une balle |
+| 12 m | 32 m/s |
+| **9 m** | **25 m/s** — une pierre lancée |
+
+Le §8.140.1 avait pourtant établi *la cascade d'un rapprochement* — table, débattement, plafond de
+caméra, cloche de grenade, accessoires. **`flight_ticks` n'y figurait pas**, et personne ne l'a
+remarqué parce que la règle d'or le présentait comme un plancher intouchable plutôt que comme une
+cote dérivée de la portée.
+
+### 2. Le budget mesuré, poste par poste
+
+| | avant | après |
+|---|---|---|
+| envoi client (branche urgente) | 16 ms | 16 ms |
+| réseau (aller) | ~40 ms | ~40 ms |
+| attente du tick serveur | ~50 ms | ~50 ms |
+| **VOL** | **400 ms** | **100 ms** |
+| réseau (retour) | ~40 ms | ~40 ms |
+| **tampon de rendu** | **150 ms** | **100 ms** |
+| **TOTAL clic → touche** | **696 ms** | **346 ms** |
+
+Le tampon de rendu coûtait DEUX FOIS : il retardait la touche, **et** il faisait viser une image
+vieille de 150 ms — c'est-à-dire, mot pour mot, « dès que je clique il s'est déjà déplacé ». Ramené
+à 100 ms = exactement un tick, le plancher défendable (en dessous il n'y a plus d'état d'avance et
+la moindre gigue fige l'adversaire). On peut se le permettre depuis le §8.140 : l'adversaire est
+rendu par **pas discrets**, il n'a donc plus besoin d'être interpolé.
+
+### 3. ⚖ CE QUE HAKIM A CHOISI, ET CE QUE ÇA COÛTE
+
+Trois options chiffrées lui ont été présentées ; il a choisi **le vol à 1 tick**, en connaissance
+des conséquences.
+
+**CE QU'ON ABANDONNE, explicitement :**
+- l'esquive d'une **BALLE** par un pas ou un plongeon n'existe plus — 100 ms est sous le temps de
+  réaction humain. Se baisser reste une **COUVERTURE** (un accroupi n'a aucune fenêtre de tir
+  contre lui, l'invariant de la table angulaire est intact), ce n'est plus une **RÉACTION** ;
+- le mini-jeu cesse d'être un jeu de cache-cache au profit d'un jeu de **VISÉE**. C'est un
+  changement de nature, il est assumé, et il est écrit en tête de `trench_sim.py`.
+
+**CE QUI SURVIT — et c'est ce qui comptait pour l'architecture :**
+- le spawn d'un projectile reste **l'unique canal de dégâts** ; la résolution a toujours lieu **à
+  l'impact**, contre l'état du moment, **côté serveur** ;
+- la simulation reste **10 Hz, autoritaire, sans prédiction ni compensation de lag** — un vol d'un
+  tick n'y change rien : l'impact tombe au tick suivant, déterministe et rejouable ;
+- **le plancher de 1 tick est structurel, pas un goût.** À 0, la résolution lirait un état que
+  l'entrée adverse du même tick vient de modifier : l'**ordre interne du tick** deviendrait une
+  règle de jeu et le rejeu au bit près cesserait de vouloir dire quelque chose ;
+- la **GRENADE** garde son plancher de 15 ticks : elle reste la menace lente, annoncée et
+  esquivable, et tout le design anti-camping repose sur elle ;
+- le **CONDOR** garde son laser de 5 ticks — il devient le **seul tir télégraphié du jeu**, donc le
+  seul contre lequel une réaction existe encore. Son identité y gagne.
+
+### 4. Deux conséquences traitées, pas seulement signalées
+
+1. **⚠️ ÉQUITÉ — `bullet_react_prob` passe à 0,00.** Avec un vol d'un tick, la balle part au tick N
+   et frappe au tick N+1 ; or l'ordre du tick traite les **entrées avant les impacts**. Le bot,
+   qui décide chaque tick sur l'état frais, pourrait donc encore plonger au tick N+1 — pendant
+   qu'un humain voit ce même état 100 ms plus tard. La justification d'origine (« un humain
+   dispose de la même information : la traçante qu'il voit arriver ») était vraie à 0,4 s de vol
+   et est **fausse** à 0,1 s. **On ne garde pas une justification qui a cessé d'être vraie : on
+   retire la capacité qu'elle justifiait.** Le bot conserve ses autres esquives (laser, grenade),
+   où un humain le peut aussi.
+2. **`move_prob` REVIENT à 0,22.** Il avait été baissé à 0,10 quelques heures plus tôt pour
+   compenser des balles trop lentes ; cette cause a disparu. Mesuré au même harnais, vol à 1 tick :
+   0,10 → **80 %** de touches (le bot devient une cible fixe), 0,22 → **59 %** (il patrouille, et
+   le tir se mérite encore). Garder les deux, ce serait régler deux fois la même cause et ne plus
+   savoir laquelle tient le résultat — la faute exacte que le §8.139.1 a payée d'une session.
+3. **Traçante allongée** (`TRACER_LENGTH_RATIO` 0,25 → 0,45) : à 100 ms de vol, la balle traverse
+   le no man's land en ~6 images. Une traçante courte y devient un point qui clignote une fois. La
+   strie longue est ce qui rend un projectile rapide lisible.
+
+### 5. Recette
+
+**256 contrôles backend** (sim 153 · bot 27 · flux 56 · table 20) · **77 contrôles clients** ·
+0 rouge. Cinq contrôles ont rougi au changement et ont été **réécrits contre le registre** plutôt
+que contre des valeurs recopiées — dont un qui comparait une échéance à un tick 84 écrit en dur et
+accusait la fenêtre de choix alors que seule sa propre hypothèse de date avait bougé.

@@ -126,7 +126,11 @@ const MUZZLE_CLEAR := 2.0
 # entre les tranchées — et c'est précisément ce que 3 m en dur seraient devenus sur 9 m de no man's
 # land (un tiers du terrain, occupé en permanence). Un quart de la portée garde le même rapport
 # qu'à 12 m, où le réglage avait été jugé bon.
-const TRACER_LENGTH_RATIO := 0.25
+# ⚠️ 0,25 → 0,45 AVEC LE VOL À 1 TICK (§8.141.2) : la balle traverse le no man's land en 100 ms,
+# soit ~6 images à 60 Hz. Une traçante courte y devient un point qui clignote une fois et que l'œil
+# ne relie à rien. Une STRIE LONGUE est ce qui rend un projectile rapide lisible — c'est la même
+# raison qui fait qu'on dessine une comète avec une queue.
+const TRACER_LENGTH_RATIO := 0.45
 const GRENADE_POOL := 6
 # Hauteur du PLANCHER DE TRANCHÉE (+ un rien pour éviter le z-fighting avec le sol). C'est là que
 # tombent les grenades et que se posent leurs marqueurs — pas au niveau du no man's land.
@@ -197,10 +201,9 @@ var _viewmodel: Node3D
 var _laser: MeshInstance3D
 var _tracers: Array[MeshInstance3D] = []
 var _grenades: Array[MeshInstance3D] = []
-var _markers: Array[MeshInstance3D] = []
+var _markers: Array[Node3D] = []
 # --- §8.141 : la visée de grenade, les explosions, la secousse ------------------------------------
-var _aim_decal: MeshInstance3D
-var _aim_decal_mat: StandardMaterial3D
+var _aim_decal: Node3D
 var _explosions: Array = []
 # RAYON D'ACTION EN MÈTRES-MONDE — posé par l'hôte depuis `rules.grenade.radius_m`. La valeur de
 # départ n'est qu'un repli le temps que `trench_init` arrive : dès la première frame de duel réel,
@@ -698,6 +701,77 @@ func _ring_mesh() -> TorusMesh:
 	return ring
 
 
+# ╔═ ⚠️⚠️ UN CERCLE AU SOL NE SUFFIT PAS : IL FAUT DIRE QU'IL EST *DERRIÈRE* LES SACS ════════════╗
+# ║ Verdict de partie réelle : « la grenade n'a pas l'air d'arriver dans la tranchée au niveau du  ║
+# ║ soldat, mais plutôt au milieu entre les deux tranchées ». **Hakim a raison, et c'est l'image    ║
+# ║ qui ment — pas la règle.** Calcul de projection, œil à 1,70 m, arène 9 m :                     ║
+# ║                                                                                                 ║
+# ║     sommet du parapet adverse ............ y =  597 px                                          ║
+# ║     sol du no man's land, À MI-CHEMIN .... y =  696 px                                          ║
+# ║     **le cercle d'impact** ............... y =  725 px   ← 128 px SOUS le parapet               ║
+# ║                                                                                                 ║
+# ║ Le plancher de la tranchée d'en face se projette DANS LA MÊME BANDE D'ÉCRAN que le sol du       ║
+# ║ milieu du terrain. Et comme on a retiré le test de profondeur (sans quoi le cercle serait       ║
+# ║ invisible, cf. `_see_through`), plus RIEN ne dit qu'il est derrière les sacs. L'œil le lit donc  ║
+# ║ exactement là où Hakim l'a lu. On avait rendu le cercle visible en lui retirant sa profondeur — ║
+# ║ il fallait la lui rendre autrement.                                                             ║
+# ║                                                                                                 ║
+# ║ LA COLONNE : un cylindre OUVERT (sans couvercles) monté du point d'impact jusqu'AU-DESSUS du    ║
+# ║ parapet. Sa partie haute émerge donc dans une zone d'écran que le joueur sait être « au-delà    ║
+# ║ des sacs », et elle est reliée sans ambiguïté au cercle par sa paroi. La profondeur redevient   ║
+# ║ lisible sans qu'on ait touché à un seul mètre du rayon — l'invariant §C.1 est intact.           ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Hauteur de la colonne ⚙ : elle doit dépasser franchement le sommet du parapet (1,25 m) tout en
+# restant sous la silhouette d'un soldat debout (1,80 m), qu'elle n'a pas à masquer.
+const ZONE_COLUMN_HEIGHT := 1.55
+
+
+func _zone_marker(node_name: String, color: Color) -> Node3D:
+	var root := Node3D.new()
+	root.name = node_name
+
+	var ring := MeshInstance3D.new()
+	ring.name = "Ring"
+	ring.mesh = _ring_mesh()
+	ring.material_override = _zone_material(color, 0.85)
+	root.add_child(ring)
+
+	var wall := CylinderMesh.new()
+	wall.top_radius = 1.0
+	wall.bottom_radius = 1.0
+	wall.height = ZONE_COLUMN_HEIGHT
+	wall.radial_segments = 40
+	# ⚠️ SANS COUVERCLES : un cylindre plein masquerait le soldat qui se tient dans la zone —
+	# c'est-à-dire exactement ce qu'on demande au joueur de regarder.
+	wall.cap_top = false
+	wall.cap_bottom = false
+	var column := MeshInstance3D.new()
+	column.name = "Column"
+	column.mesh = wall
+	# La paroi est BEAUCOUP plus discrète que l'anneau : elle porte la profondeur, pas la zone.
+	column.material_override = _zone_material(color, 0.16)
+	column.position = Vector3(0.0, ZONE_COLUMN_HEIGHT * 0.5, 0.0)
+	root.add_child(column)
+	return root
+
+
+func _zone_material(color: Color, alpha: float) -> StandardMaterial3D:
+	var mat := _material(Color(color.r, color.g, color.b, alpha), true)
+	_see_through(mat)
+	return mat
+
+
+# Repeint un marqueur de zone (anneau + colonne) sans reconstruire ses matériaux.
+func _tint_zone(marker: Node3D, color: Color, ring_alpha: float) -> void:
+	var ring_mat: StandardMaterial3D = (marker.get_node("Ring") as MeshInstance3D).material_override
+	var column_mat: StandardMaterial3D = \
+		(marker.get_node("Column") as MeshInstance3D).material_override
+	ring_mat.albedo_color = Color(color.r, color.g, color.b, ring_alpha)
+	ring_mat.emission = color
+	column_mat.albedo_color = Color(color.r, color.g, color.b, ring_alpha * 0.19)
+	column_mat.emission = color
+
+
 func _build_pools() -> void:
 	# Traçantes : des boîtes très étirées, non éclairées — lisibles de jour comme de nuit.
 	for i in range(TRACER_POOL):
@@ -732,23 +806,14 @@ func _build_pools() -> void:
 		# ║ ⚠️ UN ANNEAU, pas un disque : un disque plein posé sur une position masque les pieds de ║
 		# ║ celui qui s'y trouve, c'est-à-dire l'information qu'on vient regarder.                  ║
 		# ╚═══════════════════════════════════════════════════════════════════════════════════════╝
-		var marker := MeshInstance3D.new()
-		marker.mesh = _ring_mesh()
-		var marker_mat := _material(Color(COL_DANGER.r, COL_DANGER.g, COL_DANGER.b, 0.55), true)
-		_see_through(marker_mat)
-		marker.material_override = marker_mat
+		var marker := _zone_marker("GrenadeMarker_%d" % i, COL_DANGER)
 		marker.visible = false
 		_root.add_child(marker)
 		_markers.append(marker)
 
 	# LE DÉCALQUE DE VISÉE (§B.1) — le mien, celui que je pose en maintenant la touche. Même maille
 	# et même rayon que les marqueurs de vol : ce que je vise et ce qui explose sont le même cercle.
-	_aim_decal = MeshInstance3D.new()
-	_aim_decal.name = "GrenadeAimDecal"
-	_aim_decal.mesh = _ring_mesh()
-	_aim_decal_mat = _material(COL_GRENADE_OK, true)
-	_see_through(_aim_decal_mat)
-	_aim_decal.material_override = _aim_decal_mat
+	_aim_decal = _zone_marker("GrenadeAimDecal", COL_GRENADE_OK)
 	_aim_decal.visible = false
 	_root.add_child(_aim_decal)
 
@@ -848,11 +913,10 @@ func show_grenade_aim(active: bool, at_x: float = 0.0, at_z: float = 0.0,
 	if not active:
 		return
 	_aim_decal.position = Vector3(at_x, MARKER_Y, at_z)
+	# ⚠️ Seuls X et Z portent le rayon : la COLONNE garde sa hauteur, sinon un grand rayon la
+	# ferait monter jusqu'au ciel et un petit la ferait disparaître sous les sacs.
 	_aim_decal.scale = Vector3(_grenade_radius, 1.0, _grenade_radius)
-	var color: Color = COL_GRENADE_OK if valid else COL_GRENADE_OUT
-	color.a = 0.85
-	_aim_decal_mat.albedo_color = color
-	_aim_decal_mat.emission = color
+	_tint_zone(_aim_decal, COL_GRENADE_OK if valid else COL_GRENADE_OUT, 0.85)
 
 
 # ╔═ L'EXPLOSION — DÉCLENCHÉE PAR L'ÉVÉNEMENT `impact` DU SERVEUR, JAMAIS PAR UNE HORLOGE LOCALE ═╗
@@ -1310,7 +1374,19 @@ func _render_tracers(tracers: Array) -> void:
 		var tail := origin + dir * tail_at
 		node.visible = true
 		node.position = (head + tail) * 0.5
-		node.look_at(head, Vector3.UP)
+		# ╔═ ⚠️⚠️ `look_at(head)` ÉCHOUAIT 849 FOIS PAR PARTIE — TROUVÉ DANS `user://logs/godot.log` ═╗
+		# ║ « Node origin and target are in the same position, look_at() failed. » En début de vol,   ║
+		# ║ `travelled == tail_at` : la tête et la queue sont CONFONDUES, donc `position == head` et  ║
+		# ║ `look_at` reçoit une cible à distance nulle. Ça se produit à CHAQUE traçante adverse au   ║
+		# ║ tick de son lancer, et à chaque traçante mienne à l'instant où elle dégage le canon —     ║
+		# ║ soit des centaines d'erreurs par duel, crachées depuis `_process`.                        ║
+		# ║ ⚠️ La ligne suivante avait DÉJÀ son garde (`maxf(0.4, …)` sur l'échelle) : le cas          ║
+		# ║ dégénéré était connu d'une ligne et oublié de l'autre.                                    ║
+		# ║ On oriente donc sur la DIRECTION DE TIR — un vecteur unitaire, jamais nul — au lieu d'un  ║
+		# ║ point qui peut coïncider avec l'origine. C'est aussi plus juste : l'axe d'une traçante    ║
+		# ║ EST sa trajectoire, pas le segment qu'il lui reste à parcourir.                           ║
+		# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+		node.look_at(node.position + dir, Vector3.UP)
 		node.scale = Vector3(1.0, 1.0, maxf(0.4, head.distance_to(tail)))
 
 
@@ -1353,6 +1429,7 @@ func _render_grenades(grenades: Array, markers: Array) -> void:
 		var z: float = Geo.near_soldier_z() if on_my_side else Geo.far_soldier_z()
 		node.visible = true
 		node.position = Vector3(float(m.get("target_x", 0.0)), MARKER_Y, z)
+		var incoming: bool = bool(m.get("on_my_side", false))
 		# ╔═ L'ANNEAU PULSE, MAIS SON RAYON MOYEN NE MENT PAS ═══════════════════════════════════╗
 		# ║ La pulsation accélère à l'approche de l'impact — c'est la lecture de la menace sans   ║
 		# ║ chiffre ni compte à rebours. Mais elle bat AUTOUR du rayon réel (±8 %), et non de 75 % ║
@@ -1364,8 +1441,11 @@ func _render_grenades(grenades: Array, markers: Array) -> void:
 		var pulse: float = 1.0 if _reduced_motion else (1.0 + 0.08 * sin((1.0 - eta) * 26.0))
 		var open: float = _grenade_radius * pulse
 		node.scale = Vector3(open, 1.0, open)
-		if node.material_override is StandardMaterial3D:
-			(node.material_override as StandardMaterial3D).albedo_color.a = 0.30 + 0.45 * (1.0 - eta)
+		# ⚠️ ROUGE quand elle tombe CHEZ MOI, OR quand elle tombe chez lui. Un marqueur d'une seule
+		# couleur laissait le joueur décider, en pleine action, si le cercle qu'il voit est une
+		# menace ou son propre lancer — deux lectures opposées pour la même image.
+		_tint_zone(node, COL_DANGER if incoming else COL_GRENADE_OK,
+			0.30 + 0.45 * (1.0 - eta))
 
 
 func _render_laser(laser: Dictionary) -> void:

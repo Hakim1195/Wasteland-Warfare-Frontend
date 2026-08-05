@@ -440,16 +440,15 @@ func _ready() -> void:
 	const SERVER_RADIUS := 2.5
 	world.set_grenade_radius(SERVER_RADIUS)
 	world.show_grenade_aim(true, 1.0, Geo.far_soldier_z(), true)
-	var decal: MeshInstance3D = world.get_node("SubViewport/Arena/GrenadeAimDecal")
+	var decal: Node3D = world.get_node("SubViewport/Arena/GrenadeAimDecal")
 	_ok("le DECALQUE DE VISEE est ouvert au rayon du registre serveur",
 		absf(decal.scale.x - SERVER_RADIUS) < 0.001 and absf(decal.scale.z - SERVER_RADIUS) < 0.001,
 		"%.3f m" % decal.scale.x)
 	world.render_world({"enemy": {}, "tracers": [], "grenades": [],
 		"markers": [{"target_x": 1.0, "on_my_side": true, "eta": 0.0}], "laser": {}})
-	var marker: MeshInstance3D = null
+	var marker: Node3D = null
 	for child in world.get_node("SubViewport/Arena").get_children():
-		if child is MeshInstance3D and child.mesh is TorusMesh and child.visible \
-				and child != decal:
+		if child.name.begins_with("GrenadeMarker_") and child.visible:
 			marker = child
 			break
 	_ok("le MARQUEUR DE VOL bat AUTOUR du rayon reel (jamais SOUS : un cercle trop petit ment)",
@@ -471,6 +470,26 @@ func _ready() -> void:
 	_ok("un rayon SERVEUR different ouvre le cercle d'autant (aucune valeur en dur cote client)",
 		absf(decal.scale.x - 4.0) < 0.001, "%.3f m" % decal.scale.x)
 	world.set_grenade_radius(SERVER_RADIUS)
+	# ╔═ LA COLONNE DE PROFONDEUR — verdict de porte : « la grenade tombe au milieu » ═══════════╗
+	# ║ Le cercle d'impact se projette 128 px SOUS le sommet du parapet adverse, dans la MEME     ║
+	# ║ bande d'ecran que le sol du MILIEU du terrain — et il est dessine sans test de profondeur. ║
+	# ║ Sans un element qui DEPASSE les sacs, rien ne dit qu'il est derriere eux, et l'oeil le lit  ║
+	# ║ au milieu du no man's land. C'est exactement ce que le testeur a rapporte.                  ║
+	# ╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+	world.show_grenade_aim(true, 0.0, Geo.far_soldier_z(), true)
+	var column: MeshInstance3D = decal.get_node("Column")
+	var column_top: float = decal.position.y + column.position.y \
+		+ (column.mesh as CylinderMesh).height * 0.5
+	_ok("la colonne de zone DEPASSE le sommet du parapet (sinon le cercle se lit au milieu du "
+		+ "terrain)", column_top > Geo.PARAPET_Y,
+		"sommet colonne %.2f m, parapet %.2f m" % [column_top, Geo.PARAPET_Y])
+	_ok("… sans masquer la silhouette debout de l'adversaire", column_top < Geo.SILHOUETTE_TOP,
+		"%.2f m < %.2f m" % [column_top, Geo.SILHOUETTE_TOP])
+	_ok("la colonne est OUVERTE aux deux bouts (pleine, elle cacherait le soldat vise)",
+		not (column.mesh as CylinderMesh).cap_top
+		and not (column.mesh as CylinderMesh).cap_bottom)
+	_ok("l'echelle du marqueur porte le RAYON sans toucher la HAUTEUR de la colonne",
+		is_equal_approx(decal.scale.y, 1.0) and absf(decal.scale.x - SERVER_RADIUS) < 0.001)
 	world.show_grenade_aim(false)
 
 	# --- 6d) LA VISÉE AU SOL : bande valide, aimantation, et signalement -------------------------
