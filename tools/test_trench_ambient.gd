@@ -276,14 +276,14 @@ func _ready() -> void:
 	var cam: Camera3D = world._camera
 	var rest_basis := cam.global_transform.basis
 	var rest_pos := cam.position
-	world.set_aim(DuelScript.AIM_YAW_LIMIT, 0.0)
+	world.set_aim(DuelScript.aim_yaw_limit(), 0.0)
 	world._process(0.016)
 	# Regarder a +32 deg doit tourner la camera de +32 deg : c'est TOUT le pivot en une mesure.
 	# `pose_basis` fait deja demi-tour (on regarde +Z), d'ou la comparaison sur l'ecart.
 	var turned: float = rad_to_deg(rest_basis.get_euler().y - cam.global_transform.basis.get_euler().y)
 	_ok("la camera tourne de l'ANGLE VISE, pas d'une fraction",
-		absf(absf(turned) - DuelScript.AIM_YAW_LIMIT) < 1.0,
-		"tourne de %.1f deg pour %.1f deg vises" % [absf(turned), DuelScript.AIM_YAW_LIMIT])
+		absf(absf(turned) - DuelScript.aim_yaw_limit()) < 1.0,
+		"tourne de %.1f deg pour %.1f deg vises" % [absf(turned), DuelScript.aim_yaw_limit()])
 	world.set_aim(0.0, 0.0)
 	world.set_pose(4, "up", true)
 	world._process(0.016)
@@ -329,16 +329,16 @@ func _ready() -> void:
 	# ⚠️ CHAQUE DEFAUT DOIT TENIR DANS SA PROPRE PLAGE. Sinon le curseur s'ecrete a l'ouverture et
 	# le panneau CHANGE le jeu par le seul fait d'exister — vu sur le FOV (defaut 55, plage 60-90).
 	var out_of_range: Array = []
-	for key in Tuning.SLIDERS:
-		var b: Array = Tuning.SLIDERS[key]
-		var d: float = float(Tuning.DEFAULTS[key])
+	for key in Tuning.sliders():
+		var b: Array = Tuning.sliders()[key]
+		var d: float = float(Tuning.defaults()[key])
 		if d < float(b[0]) or d > float(b[1]):
 			out_of_range.append("%s=%.3f hors [%.3f, %.3f]" % [key, d, b[0], b[1]])
 	_ok("aucun defaut d'usine ne tombe hors de sa plage de reglage", out_of_range.is_empty(),
 		", ".join(out_of_range))
 	_ok("le defaut de FOV est bien celui de la camera 3D",
-		absf(float(Tuning.DEFAULTS["fov"]) - World.CAMERA_FOV) < 0.01,
-		"panneau %.1f, camera %.1f" % [Tuning.DEFAULTS["fov"], World.CAMERA_FOV])
+		absf(float(Tuning.defaults()["fov"]) - World.CAMERA_FOV) < 0.01,
+		"panneau %.1f, camera %.1f" % [Tuning.defaults()["fov"], World.CAMERA_FOV])
 
 	var frame: Vector2 = tuning.get_viewport_rect().size
 	var box := tuning.get_child(0) as Control
@@ -354,12 +354,12 @@ func _ready() -> void:
 	tuning._commit()
 	_ok("un reglage de FOV atteint la camera 3D", absf(cam.fov - 84.0) < 0.01,
 		"fov camera %.1f" % cam.fov)
-	world.set_aim(DuelScript.AIM_YAW_LIMIT, 0.0)
+	world.set_aim(DuelScript.aim_yaw_limit(), 0.0)
 	world._process(0.016)
 	var partial: float = rad_to_deg(rest_basis.get_euler().y
 		- cam.global_transform.basis.get_euler().y)
 	_ok("un suivi a 0,4 ne fait tourner la camera que de 40 % de la visee",
-		absf(absf(partial) - DuelScript.AIM_YAW_LIMIT * 0.4) < 1.0,
+		absf(absf(partial) - DuelScript.aim_yaw_limit() * 0.4) < 1.0,
 		"tourne de %.1f deg" % absf(partial))
 	# ⚠️ Une valeur aberrante dans `trench_tuning.json` ne doit pas pouvoir poser un FOV de 300 :
 	# le fichier est une commodite, jamais une autorite.
@@ -369,7 +369,7 @@ func _ready() -> void:
 		"fov camera %.1f" % cam.fov)
 	tuning._on_reset()
 	_ok("« PAR DEFAUT » rend bien les valeurs d'usine",
-		absf(cam.fov - float(Tuning.DEFAULTS["fov"])) < 0.01)
+		absf(cam.fov - float(Tuning.defaults()["fov"])) < 0.01)
 
 	# --- 5 quater) L'HABILLAGE SUIT L'HORIZON REEL -----------------------------------------------
 	# Un horizon cloue a 50 % laisserait la brume flotter en plein ciel des que la camera pique.
@@ -387,12 +387,179 @@ func _ready() -> void:
 	world._process(0.016)
 	duel._track_horizon()
 
+	# =============================================================================================
+	# 6) §8.141 — LE SOLDAT, LA GRENADE, L'EXPLOSION
+	# =============================================================================================
+	print("\n  --- §8.141 : soldat, grenade, explosion ---")
+
+	# --- 6a) LE SOLDAT NE RÉTRÉCIT PLUS QUAND IL ÉPAULE -----------------------------------------
+	# La frame `aim` est livrée à 880 px pour un contrat à 1024 : à `pixel_size` constant elle
+	# rendait 1,547 m au lieu de 1,80 m — 43 % de bande exposée en moins, PRÉCISÉMENT dans l'état
+	# où l'adversaire est une cible. Le contrôle porte sur les QUATRE poses debout, pas seulement
+	# sur celle qui était fautive : c'est la règle qu'on vérifie, pas le symptôme d'hier.
+	var Sprites := preload("res://scripts/game/trench_sprites.gd")
+	var wrong_height: Array = []
+	for frame_state in ["idle", "aim", "throw", "hit"]:
+		var tex: Texture2D = Sprites.enemy_texture(frame_state)
+		if tex == null:
+			continue
+		var rendered: float = float(tex.get_height()) \
+			* Sprites.pixel_size_for(frame_state, tex.get_height())
+		if absf(rendered - Geo.SILHOUETTE_TOP) > 0.01:
+			wrong_height.append("%s=%.3f" % [frame_state, rendered])
+	_ok("toutes les frames DEBOUT rendent la taille du registre (SILHOUETTE_TOP)",
+		wrong_height.is_empty(), "hors cote : %s" % ", ".join(wrong_height))
+	var death: Texture2D = Sprites.enemy_texture("death_b")
+	if death != null:
+		var body: float = float(death.get_height()) \
+			* Sprites.pixel_size_for("death_b", death.get_height())
+		_ok("… et un CORPS AU SOL garde sa hauteur reelle (il n'est pas etire a 1,80 m)",
+			body < 0.8, "%.3f m" % body)
+
+	# --- 6b) LE LISERÉ EXISTE, ET IL EST DERRIÈRE ------------------------------------------------
+	var rim: Sprite3D = world.get_node("SubViewport/Arena/EnemySoldier/PaintedSoldierRim")
+	var painted: Sprite3D = world.enemy_sprite_node()
+	_ok("le lisere de silhouette existe et porte la MEME frame que le soldat",
+		rim != null and rim.texture == painted.texture)
+	_ok("il est plus GRAND que le soldat (sinon il ne depasserait pas) et dessine DESSOUS",
+		rim.scale.x > 1.0 and rim.render_priority < painted.render_priority,
+		"echelle %.3f, priorite %d < %d" % [rim.scale.x, rim.render_priority,
+			painted.render_priority])
+	_ok("le soldat est un billboard VERTICAL (il ne se couche pas quand la camera pique)",
+		painted.billboard == BaseMaterial3D.BILLBOARD_FIXED_Y)
+
+	# --- 6c) ⚠️⚠️ L'INVARIANT D'HONNÊTETÉ DU RAYON (§C.1) ----------------------------------------
+	# ╔═════════════════════════════════════════════════════════════════════════════════════════╗
+	# ║ C'EST LE CONTRÔLE CENTRAL DU LOT C. Le cercle que le joueur voit — décalque de visée,     ║
+	# ║ marqueur de vol, anneau de choc, cratère — doit avoir EXACTEMENT le rayon qui décide des  ║
+	# ║ dégâts côté serveur. L'ancien disque valait 1,6 m en dur pour une arme qui couvrait 8 m :  ║
+	# ║ le joueur se croyait à l'abri à côté du marqueur et prenait 15 dégâts. Ici on part de la   ║
+	# ║ valeur SERVEUR, on la pousse par le vrai chemin (`trench_init`), et on mesure ce qui est   ║
+	# ║ RENDU — pas ce qui est déclaré.                                                            ║
+	# ╚═════════════════════════════════════════════════════════════════════════════════════════╝
+	const SERVER_RADIUS := 2.5
+	world.set_grenade_radius(SERVER_RADIUS)
+	world.show_grenade_aim(true, 1.0, Geo.far_soldier_z(), true)
+	var decal: MeshInstance3D = world.get_node("SubViewport/Arena/GrenadeAimDecal")
+	_ok("le DECALQUE DE VISEE est ouvert au rayon du registre serveur",
+		absf(decal.scale.x - SERVER_RADIUS) < 0.001 and absf(decal.scale.z - SERVER_RADIUS) < 0.001,
+		"%.3f m" % decal.scale.x)
+	world.render_world({"enemy": {}, "tracers": [], "grenades": [],
+		"markers": [{"target_x": 1.0, "on_my_side": true, "eta": 0.0}], "laser": {}})
+	var marker: MeshInstance3D = null
+	for child in world.get_node("SubViewport/Arena").get_children():
+		if child is MeshInstance3D and child.mesh is TorusMesh and child.visible \
+				and child != decal:
+			marker = child
+			break
+	_ok("le MARQUEUR DE VOL bat AUTOUR du rayon reel (jamais SOUS : un cercle trop petit ment)",
+		marker != null and absf(marker.scale.x - SERVER_RADIUS) <= SERVER_RADIUS * 0.09,
+		"" if marker == null else "%.3f m pour %.2f attendu" % [marker.scale.x, SERVER_RADIUS])
+	# L'ANNEAU DE CHOC de l'explosion : il doit ATTEINDRE le rayon exact, et le cratère l'occuper.
+	var boom = world._explosions[0]
+	boom.play(Vector3(1.0, 0.04, Geo.far_soldier_z()), SERVER_RADIUS)
+	boom._process(0.36)          # au-delà de RING_END : l'anneau a fini sa course
+	_ok("l'ANNEAU DE CHOC atteint EXACTEMENT le rayon d'action a la fin de sa course",
+		absf(boom.ring_world_radius() - SERVER_RADIUS) < 0.01,
+		"%.3f m" % boom.ring_world_radius())
+	_ok("le CRATERE occupe le meme rayon (il continue de dire la zone apres l'anneau)",
+		absf(boom.crater_world_radius() - SERVER_RADIUS) < 0.01,
+		"%.3f m" % boom.crater_world_radius())
+	# … ET IL SUIT UN CHANGEMENT DE BARÈME : c'est ça, « une seule source ».
+	world.set_grenade_radius(4.0)
+	world.show_grenade_aim(true, 0.0, Geo.far_soldier_z(), true)
+	_ok("un rayon SERVEUR different ouvre le cercle d'autant (aucune valeur en dur cote client)",
+		absf(decal.scale.x - 4.0) < 0.001, "%.3f m" % decal.scale.x)
+	world.set_grenade_radius(SERVER_RADIUS)
+	world.show_grenade_aim(false)
+
+	# --- 6d) LA VISÉE AU SOL : bande valide, aimantation, et signalement -------------------------
+	var limit_x: float = float(Geo.POSITIONS - 1) * Geo.POSITION_SPACING * 0.5 + 1.5
+	world.set_pose(2, "up", true)
+	world.set_aim(0.0, -8.0)
+	world._process(0.016)
+	var down: Dictionary = world.grenade_aim_point(0.0, -8.0, limit_x)
+	_ok("viser DEVANT SOI, legerement vers le bas, est un lancer VALIDE",
+		bool(down.get("valid", false)),
+		"x=%.2f z=%.2f" % [down.get("x", 0.0), down.get("z", 0.0)])
+	# ⚠️ LE DÉCALQUE EST TOUJOURS POSÉ AU PLAN DES SOLDATS ADVERSES : la profondeur n'est pas une
+	# variable du jeu (le serveur ne reçoit que `target_x`). Un décalque qui glisserait en
+	# profondeur laisserait croire à un réglage de portée qui n'existe pas.
+	_ok("le decalque est POSE au plan des soldats adverses, quel que soit le site",
+		absf(float(down.get("z", 0.0)) - Geo.far_soldier_z()) < 0.001)
+	var steep: Dictionary = world.grenade_aim_point(0.0, -13.5, limit_x)
+	_ok("viser SES PROPRES PIEDS est refuse (la ligne de visee touche le sol avant le parapet "
+		+ "adverse)", not bool(steep.get("valid", true)))
+	var up: Dictionary = world.grenade_aim_point(0.0, 12.0, limit_x)
+	_ok("viser VERS LE CIEL n'est PAS valide, mais rend quand meme un point aimante"
+		+ " (le joueur voit ou sa grenade partirait — on ne corrige jamais en silence)",
+		not bool(up.get("valid", true)) and absf(float(up.get("x", 99.0))) <= limit_x)
+	var side: Dictionary = world.grenade_aim_point(80.0, -8.0, limit_x)
+	_ok("viser HORS du front est refuse et le point est borne au front",
+		not bool(side.get("valid", true)) and absf(float(side.get("x", 99.0))) <= limit_x + 0.001,
+		"x=%.2f" % side.get("x", 0.0))
+	world.set_aim(0.0, 0.0)
+	world._process(0.016)
+
+	# --- 6e) LA SECOUSSE NE TOURNE JAMAIS LA CAMÉRA ----------------------------------------------
+	# ⚠️ C'est une PROMESSE de jouabilité, pas un détail de rendu : une secousse qui ferait tourner
+	# la vue déplacerait la ligne de mire par rapport à la visée envoyée au serveur, au moment
+	# précis où le joueur doit riposter. On mesure l'orientation avant/après une explosion proche.
+	world._process(0.016)
+	var before_basis: Basis = cam.global_transform.basis
+	world.play_explosion(0.0, true)
+	world._process(0.016)
+	world._process(0.016)
+	var after_basis: Basis = cam.global_transform.basis
+	var rotated: float = rad_to_deg(absf(before_basis.get_euler().y - after_basis.get_euler().y)) \
+		+ rad_to_deg(absf(before_basis.get_euler().x - after_basis.get_euler().x))
+	_ok("la SECOUSSE ne fait tourner la camera d'AUCUN degre (elle translate l'oeil)",
+		rotated < 0.001, "%.5f deg" % rotated)
+	_ok("… mais elle la DEPLACE bien (sinon il n'y aurait pas de secousse du tout)",
+		world._shake > 0.0, "trauma %.3f" % world._shake)
+	world._shake = 0.0
+	world._process(0.016)
+
+	# --- 6f) `reduced_motion` COUPE LE SPECTACLE, PAS L'INFORMATION -------------------------------
+	boom.set_reduced_motion(true)
+	boom.play(Vector3.ZERO, SERVER_RADIUS)
+	_ok("en `reduced_motion`, l'anneau est POSE au rayon final des la premiere frame"
+		+ " (la zone reste lisible, seul le spectacle s'eteint)",
+		absf(boom.ring_world_radius() - SERVER_RADIUS) < 0.01)
+	var shake_before: float = world._shake
+	world.set_reduced_motion(true)
+	world.play_explosion(0.0, true)
+	_ok("… et AUCUNE secousse n'est declenchee", is_equal_approx(world._shake, shake_before))
+	world.set_reduced_motion(false)
+	boom.set_reduced_motion(false)
+
+	# --- 6g) LE PAS SE PAIE, MAIS UN SAUT DE MANCHE NE SE PAIE PAS -------------------------------
+	# ⚠️ Le garde « exactement une position » est ce qui empêche un nuage de poussière et un bruit
+	# de botte au COUP D'ENVOI (retour au centre, jusqu'à 2 crans) ou à la REAPPARITION d'un
+	# adversaire caché. Sans lui, le jeu raconterait un pas qui n'a jamais eu lieu — dans un duel
+	# où le bruit de pas sert justement à localiser l'ennemi.
+	world._enemy_step_pos = 2
+	world._enemy_dip = 0.0
+	world._notice_step(3)
+	_ok("un PAS d'une position declenche l'affaissement (le pas coute quelque chose)",
+		world._enemy_dip > 0.0, "%.3f m" % world._enemy_dip)
+	world._enemy_dip = 0.0
+	world._enemy_step_pos = 4
+	world._notice_step(2)
+	_ok("un SAUT de 2 positions (debut de manche, reapparition) ne raconte AUCUN pas",
+		is_equal_approx(world._enemy_dip, 0.0))
+	world._enemy_dip = 0.0
+	world._enemy_step_pos = -1
+	world._notice_step(2)
+	_ok("la PREMIERE apparition ne raconte aucun pas non plus",
+		is_equal_approx(world._enemy_dip, 0.0))
+
 	# --- 6) CONTRE-ÉPREUVE PAR SABOTAGE ---------------------------------------------------------
 	# Un test vert ne vaut que s'il sait devenir rouge. On casse volontairement chaque famille et on
 	# vérifie que le contrôle correspondant AURAIT échoué.
 	print("\n  --- contre-epreuve (chaque ligne doit dire OUI) ---")
 	var caught := 0
-	var expected := 7
+	var expected := 9
 
 	var real_w: float = haze_nodes[0].size.x
 	haze_nodes[0].size = Vector2.ZERO                      # SABOTAGE : nappe à taille nulle
@@ -437,11 +604,11 @@ func _ready() -> void:
 	# SABOTAGE : le suivi de visée ramené à la valeur qui a fait échouer le premier essai (0,25).
 	tuning._values["aim_follow"] = 0.25
 	tuning._commit()
-	world.set_aim(DuelScript.AIM_YAW_LIMIT, 0.0)
+	world.set_aim(DuelScript.aim_yaw_limit(), 0.0)
 	world._process(0.016)
 	var crippled: float = absf(rad_to_deg(rest_basis.get_euler().y
 		- cam.global_transform.basis.get_euler().y))
-	if crippled < DuelScript.AIM_YAW_LIMIT * 0.5:
+	if crippled < DuelScript.aim_yaw_limit() * 0.5:
 		caught += 1
 		print("  OUI  une camera qui ne suit plus la visee serait vue")
 	tuning._on_reset()
@@ -454,6 +621,26 @@ func _ready() -> void:
 		caught += 1
 		print("  OUI  un etalonnage passe au-dessus du HUD serait vu")
 	duel.move_child(duel._grade, i_grade)                        # remise en place IMMÉDIATE
+
+	# ⚠️⚠️ SABOTAGE §8.141 n° 1 : LE CERCLE QUI MENT. C'est le défaut EXACT qu'on vient de corriger
+	# (un disque de 1,6 m pour une zone de 4 m). Si ce sabotage n'était pas vu, l'invariant §C.1 ne
+	# serait qu'une déclaration d'intention.
+	world.set_grenade_radius(SERVER_RADIUS)
+	world.show_grenade_aim(true, 0.0, Geo.far_soldier_z(), true)
+	decal.scale = Vector3(1.6, 1.0, 1.6)                        # SABOTAGE : rayon dessiné faux
+	if absf(decal.scale.x - SERVER_RADIUS) > 0.001:
+		caught += 1
+		print("  OUI  un cercle de zone qui ment sur le rayon serait vu")
+	world.show_grenade_aim(false)
+
+	# ⚠️ SABOTAGE §8.141 n° 2 : LE SOLDAT QUI RÉTRÉCIT EN ÉPAULANT. La frame `aim` ramenée à
+	# l'échelle constante — c'est-à-dire l'état d'avant le correctif.
+	var aim_tex: Texture2D = Sprites.enemy_texture("aim")
+	if aim_tex != null:
+		var constant_scale: float = float(aim_tex.get_height()) * Sprites.PIXEL_SIZE
+		if absf(constant_scale - Geo.SILHOUETTE_TOP) > 0.01:
+			caught += 1
+			print("  OUI  un soldat qui retrecit en epaulant serait vu")
 
 	_ok("la contre-epreuve voit les %d sabotages" % expected, caught == expected,
 		"%d / %d" % [caught, expected])

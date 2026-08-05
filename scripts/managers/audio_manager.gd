@@ -222,6 +222,27 @@ func _ready() -> void:
 	# événement physique que la flèche de guerre, aucune raison d'en synthétiser un second.
 	_register_sfx("trench_grenade", func(): return _make_blip(420.0, 0.09, 0.18))
 
+	# --- LA TRANCHÉE (§8.141) : 4 SFX neufs — le PAS de l'adversaire et l'EXPLOSION complète. ---
+	# ⚠️ Ces quatre entrées sont AUSSI un bon de commande : déposer un fichier du même nom dans
+	# `assets/audio/sfx/` remplace le repli synthétisé sans toucher une ligne (cf. `_register_sfx`).
+	# `trench_step` : le pas de l'adversaire. Verdict de partie réelle « il bouge trop vite » — on a
+	# ralenti la sim (`move_ticks` 3 → 4), mais un pas qui ne COÛTE rien à l'œil ni à l'oreille se
+	# lit toujours comme une téléportation. Assourdi et mat : de la terre, pas du bois.
+	_register_sfx("trench_step", func(): return _make_trench_step())
+	# `trench_explosion_near` (< 6 m) : le grave DANS la poitrine + le claquement. C'est celui qui
+	# accompagne une secousse de caméra — il doit justifier qu'on soit secoué.
+	_register_sfx("trench_explosion_near", func(): return _make_explosion())
+	# `trench_explosion_far` : le MÊME événement entendu de loin — le claquement a disparu, il ne
+	# reste que le roulement. C'est la distance qui doit s'entendre, pas le volume seul.
+	_register_sfx("trench_explosion_far", func(): return _make_trench_explosion_far())
+	# `trench_debris` : les retombées de terre, 0,4 s APRÈS la détonation. Un crépitement épars —
+	# c'est lui qui fait durer l'explosion au-delà de son flash, et qui la rend physique.
+	_register_sfx("trench_debris", func(): return _make_trench_debris())
+	# `trench_refused` : le geste ENTENDU et REFUSÉ (lancer sans stock). Un clic sec et grave, très
+	# court. ⚠️ Il ne ressemble à AUCUN son d'action : un refus qui sonnerait comme un tir raté
+	# laisserait croire que le geste est parti. Ici, l'oreille comprend « rien n'a eu lieu ».
+	_register_sfx("trench_refused", func(): return _make_blip(140.0, 0.045, 0.22))
+
 # Enregistre un SFX par nom : vrai fichier prioritaire (assets/audio/sfx/<nom>), sinon repli
 # synthétisé (Callable() -> AudioStreamWAV). Factorise le pattern _load_override / _make_*.
 func _register_sfx(sfx_name: String, synth: Callable) -> void:
@@ -230,12 +251,17 @@ func _register_sfx(sfx_name: String, synth: Callable) -> void:
 
 
 # Joue un SFX par nom (silencieux si inconnu). Round-robin sur le pool.
-func play_sfx(sfx_name: String) -> void:
+# ⚠️ `volume_db` (§8.141) : ATTÉNUATION seulement, jamais d'amplification. Un appelant qui pourrait
+# monter le volume d'un son pourrait le rendre plus fort que le mixage réglé par le joueur — on
+# borne donc à 0 dB par le haut. Le pool étant partagé et réutilisé en round-robin, la valeur est
+# REPOSÉE à chaque lecture : sans ça, un pas lointain laisserait le joueur suivant à −18 dB.
+func play_sfx(sfx_name: String, volume_db: float = 0.0) -> void:
 	if not _enabled or not _sfx.has(sfx_name) or _sfx[sfx_name] == null or _sfx_players.is_empty():
 		return
 	var p: AudioStreamPlayer = _sfx_players[_sfx_next]
 	_sfx_next = (_sfx_next + 1) % _sfx_players.size()
 	p.stream = _sfx[sfx_name]
+	p.volume_db = clampf(volume_db, -40.0, 0.0)
 	p.play()
 
 
@@ -762,6 +788,72 @@ func _make_trench_shot() -> AudioStreamWAV:
 		# Claque : bruit blanc à peine filtré, éteint en quelques dizaines de millisecondes.
 		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.72)
 		s[i] = body * 0.55 + lp * exp(-t * 55.0) * 0.7
+	return _finalize(s)
+
+
+# LE PAS DE L'ADVERSAIRE (§8.141). Court (0,12 s), MAT et sourd : de la terre détrempée sous une
+# botte, pas une semelle sur du parquet. Deux couches seulement — un « thump » très grave qui donne
+# le poids, et une pincée de bruit très filtré qui donne la matière. Il est joué jusqu'à deux fois
+# par seconde et atténué par la distance : la moindre résonance en ferait un tambour.
+func _make_trench_step() -> AudioStreamWAV:
+	var dur := 0.12
+	var n := int(MIX_RATE * dur)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6203
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / MIX_RATE
+		var thump := sin(TAU * lerpf(120.0, 55.0, clampf(t / 0.04, 0.0, 1.0)) * t) * exp(-t * 46.0)
+		# Passe-bas très fermé (0,10) : le bruit perd tout son aigu et se lit comme de la terre.
+		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.10)
+		s[i] = thump * 0.42 + lp * exp(-t * 38.0) * 0.30
+	return _finalize(s)
+
+
+# L'EXPLOSION ENTENDUE DE LOIN (§8.141). Le MÊME événement que `trench_explosion_near`, moins le
+# claquement : la haute fréquence est ce que l'air mange en premier. On n'écrit donc PAS « la même
+# chose moins fort » — un son distant est un son plus SOMBRE et plus ÉTALÉ, et c'est cette
+# différence de timbre (et non le seul volume) qui dit au joueur « ce n'est pas tombé sur moi ».
+func _make_trench_explosion_far() -> AudioStreamWAV:
+	var dur := 0.95
+	var n := int(MIX_RATE * dur)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3371
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / MIX_RATE
+		# Attaque MOLLE (0,06 s de montée) : de loin, le front d'onde arrive émoussé.
+		var swell: float = clampf(t / 0.06, 0.0, 1.0)
+		var sub := sin(TAU * lerpf(70.0, 30.0, clampf(t / 0.25, 0.0, 1.0)) * t) * exp(-t * 4.2)
+		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.05)   # coupe très basse, figée : le roulement
+		s[i] = swell * (sub * 0.5 + lp * exp(-t * 3.0) * 0.55)
+	return _finalize(s)
+
+
+# LES RETOMBÉES (§8.141), jouées 0,4 s après la détonation. Un crépitement ÉPARS et décroissant —
+# des mottes de terre qui reviennent au sol. C'est ce qui donne une DURÉE à l'explosion : sans lui,
+# la détonation s'arrête net et la scène redevient silencieuse comme si rien n'avait été soulevé.
+func _make_trench_debris() -> AudioStreamWAV:
+	var dur := 0.55
+	var n := int(MIX_RATE * dur)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5519
+	# Un « grain » = une motte : quelques dizaines d'échantillons de bruit qui s'éteint tout de
+	# suite. La densité décroît, donc l'oreille entend la pluie de terre RALENTIR.
+	var grain := 0.0
+	for i in n:
+		var t := float(i) / MIX_RATE
+		var density: float = 0.035 * exp(-t * 3.4)
+		if rng.randf() < density:
+			grain = rng.randf_range(-1.0, 1.0) * rng.randf_range(0.25, 1.0)
+		grain *= 0.86
+		s[i] = grain * 0.42
 	return _finalize(s)
 
 

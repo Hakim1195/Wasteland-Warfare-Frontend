@@ -57,8 +57,20 @@ func _ready() -> void:
 
 	print("gen_trench_angles: %d fenetres generees (version %d)" % [entries.size(),
 		Geo.TABLE_VERSION])
-	print("gen_trench_angles: silhouette debout au centre = %.3f deg de large" %
-		Geo.silhouette_span_deg())
+	# ╔═ LE BULLETIN DE LISIBILITÉ ═══════════════════════════════════════════════════════════════╗
+	# ║ Ces quatre nombres sont LE critère du chantier §8.141 (« un torse de plus de 60 px se VISE, ║
+	# ║ il ne se devine plus ») et les deux bornes qui en découlent. Les imprimer ICI, à la          ║
+	# ║ génération, c'est refuser qu'un futur rapprochement se juge de mémoire : quiconque touche    ║
+	# ║ une cote voit immédiatement ce que ça fait à la cible ET au débattement.                     ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	var pixels_per_deg: float = 1080.0 / 55.0     # 1080p au FOV vertical nominal
+	print("gen_trench_angles: silhouette debout au centre = %.3f deg de large (~%d px en 1080p)"
+		% [Geo.silhouette_span_deg(), int(Geo.silhouette_span_deg() * pixels_per_deg)])
+	print("gen_trench_angles: bande exposee              = %.3f deg de haut  (~%d px en 1080p)"
+		% [Geo.silhouette_height_deg(), int(Geo.silhouette_height_deg() * pixels_per_deg)])
+	print("gen_trench_angles: fenetre la plus excentree  = %.2f deg" % Geo.max_window_yaw_deg())
+	print("gen_trench_angles: debattement de visee       = %.2f deg (camera plafonnee a %.2f)"
+		% [Geo.aim_yaw_limit_deg(), Geo.camera_follow_max_deg()])
 	for path in written:
 		print("gen_trench_angles: ecrit -> %s" % path)
 	if written.size() < 2:

@@ -4623,3 +4623,232 @@ minutes. Ces chiffres sont des outils de DÉVELOPPEMENT. La recette est la **POR
   `pose_2_up.png` est promis à la carte BONUS de l'événement après la PORTE 2.
 - La fenêtre de playtest est **déployée et ouverte** (vérifiée sur l'API : 4 août 00:00 →
   7 août 18:00 UTC). Démontage rappelé au §2 du rapport.
+
+---
+
+## §8.140.1 — LA TRANCHÉE : LES CORRECTIONS DE LA PORTE 1 (dette du §8.140)
+
+> **Dette explicite.** Le §8.140 ne consignait que les lots A-C (le pivot). Les SEPT points relevés
+> par Hakim en partie réelle, et leurs correctifs, n'avaient jamais été écrits ici — ils ne
+> vivaient que dans `RAPPORT_SESSION_PIVOT_3D.md`. Ce paragraphe solde la dette.
+
+### 1. Les sept points, et ce qu'ils étaient vraiment
+
+| # | Verdict de partie réelle | Diagnostic | Correctif |
+|---|---|---|---|
+| 1 | « la souris est inversée » | **le commentaire du registre mentait** : `trench_geometry.gd` annonçait « +X = ma droite » depuis le §8.137. Le repère est DROITIER — tourné vers +Z avec +Y en haut, la droite est en **−X**. Mesuré au harnais : la position adverse 4 (x = +8 m) se projetait à **719 px**, la position 0 (x = −8 m) à **1201 px** | `SCREEN_TO_WORLD_X = −1.0` dans `trench_fp.gd`, **à l'entrée** — jamais dans la géométrie, qui est partagée avec le serveur |
+| 2 | « les flèches sont inversées » | **la même cause**, un seul défaut pour deux symptômes | la même correction, au même endroit unique (`_gather_move_dir`) |
+| 3 | « la touche pour se cacher ne fonctionne pas » | **ce n'était pas un bug, c'était une ABSENCE** : la flèche bas n'était liée à rien. Le §8.137 avait retenu S et CTRL, et ne l'avait écrit que dans un commentaire | ↓ = se cacher, ↑ = se relever, en touches **explicites** plutôt qu'en bascule (à couvert, on ne se souvient plus de son état) |
+| 4 | « le projectile suit la souris entre le clic et le tir » | **exact, et grave** : le clic ne posait qu'un drapeau ; la visée jointe au message était relue jusqu'à **105 ms** plus tard, à l'envoi coalescé | visée **figée au clic** · le tir **ne fait plus la queue** (envoi anticipé sous budget glissant de 9 msg/s) · retour d'arme immédiat. ⚠️ Le **hitmarker reste strictement serveur** |
+| 5 | « le son ne change pas en entrant en partie » | le duel n'appelait **jamais** `AudioManager` — il jouait sur la nappe des menus du début à la fin, alors que la bascule existe depuis le §8.66 | ambiance de combat à l'entrée, retour menu à la sortie, 4 SFX de tranchée |
+| 6 | « le bot est trop rapide » | **VÉRIFIÉ : il ne l'est pas.** Il passe par la MÊME porte que le joueur et ne tente un pas qu'à 22 %/tick (~2,2 pas/s) là où un joueur atteint 3,33. Ce qui différait était le **RENDU** : sa position était interpolée en continu — il *glissait* | il pose ses pas comme moi. Plus fidèle, en outre : la position serveur est un ENTIER, le glissé était l'artefact |
+| 7 | « l'adversaire est trop loin » | à 35 m, la part exposée fait **0,955°** — une vingtaine de pixels | `NO_MANS_LAND` 35 → **12 m** (2,644°), et toute la cascade du §2 ci-dessous |
+
+### 2. La cascade d'un rapprochement — la check-list qui est née ici
+
+Changer `NO_MANS_LAND` n'est **jamais** un changement local. Le §8.140.1 a établi la liste, et le
+§8.141 l'a rejouée telle quelle :
+
+`TABLE_VERSION` → 2 · table angulaire régénérée (**les deux copies**, checksums comparés) ·
+`AIM_YAW_LIMIT` 32 → 58° · `AIM_FOLLOW_MAX` 45 → 70° · plage du curseur F10 · hauteur de la cloche
+de grenade **en fraction** de la portée · profondeurs des accessoires **en fraction** du no man's
+land · `trench_tuning.json` **re-versionné**.
+
+### 3. Trois défauts découverts pendant la reprise
+
+1. **Les réglages persistés auraient dégradé la partie suivante EN SILENCE.** Le
+   `trench_tuning.json` de Hakim portait `follow_max_deg = 45` — valeur parfaitement légale, mais
+   dont le SENS avait changé (le débattement était monté à ±58°). Sa caméra aurait cessé de suivre
+   son réticule dans les 13 derniers degrés, avec ses propres réglages, sans un message. Les
+   réglages sont désormais **versionnés** (`SETTINGS_VERSION`).
+2. **Ma propre traçante naissait dans mon œil.** L'origine d'un tir est `_muzzle_origin`, c'est-à-
+   dire l'ŒIL du tireur : la boîte dorée se retrouvait à quelques centimètres de la caméra et
+   couvrait un carré de ~10° au milieu de l'écran. Le rapprochement l'a **aggravé** (à `t` égal la
+   balle parcourt trois fois moins de mètres). Correctif : `MUZZLE_CLEAR`.
+3. ⛔ **« Le soldat adverse est un rectangle blanc »** — diagnostic laissé ouvert, et **INFIRMÉ par
+   la mesure au §8.141**. Voir ci-dessous.
+
+---
+
+## §8.141 — LA TRANCHÉE : RÉGLAGES DE COMBAT V2 (soldat lisible, grenade au point visé, explosion)
+
+> Trois retours de Hakim après de nombreux essais sur la version §8.140 : **(1)** le soldat adverse
+> est trop petit et bouge trop vite ; **(2)** la grenade doit partir au point visé, pas au dosage
+> d'une jauge ; **(3)** l'explosion n'a ni rayon d'action visible ni animation.
+> **Dépense : 0 $** — aucune génération d'image.
+
+### 1. ⚖ LE RECTANGLE BLANC N'EXISTE PAS — le §8 du rapport de pivot est INFIRMÉ
+
+Le §8.140 léguait un défaut « non résolu » et une piste bornée : remplacer le `Sprite3D` par un quad
++ `StandardMaterial3D`. **Les deux ont été éprouvés avant d'être crus, et la piste était fausse.**
+
+| Sonde | Ce qu'elle a mesuré |
+|---|---|
+| `tools/probe_trench_quad.tscn` | même texture, même SubViewport, 4 modes côte à côte : `Sprite3D` **58/59/58** · quad scissor 61/61/59 · quad blend 61/62/60 · `Sprite3D` NEAREST 59/60/58 — pour une source à **60/61/60**. Les quatre peignent (σ de luminance 0,13) |
+| `tools/probe_trench_soldier.tscn` | dans le VRAI duel, **par différence** (sprite visible / masqué), aux 3 profondeurs (monde 3D seul · écran habillé · écran nu) : RGB 98/76/71, σ 0,17 — une image peinte. La loupe ×8 montre un homme au casque, l'arme à l'épaule |
+
+**Ce que le §8 avait probablement mesuré : le PARAPET DE JUTE**, teinté `COVER_TINT` (1,70/1,67/1,62
+— un multiplicateur d'albédo **supérieur à 1**). Il occupe la majeure partie du quad du sprite, il
+est tan clair, et il donne exactement le « blanc teinté d'or » relevé. Le harnais de l'époque n'y
+aidait pas : il ne poussait qu'**un** état, donc `_enemy_alpha` plafonnait à 0,12 et le soldat
+restait **enfoncé de 0,48 m** derrière les sacs (`sink = (1 − alpha) × 0,55`) — invisible.
+
+> ⚠️ **LA LEÇON : une mesure qui ne SOUSTRAIT pas le fond ne mesure pas le sujet.** Les deux sondes
+> travaillent par différence, et c'est pour cela qu'elles ont tranché. Le harnais
+> `shot_trench_sprites` est corrigé (20 appels à `_refresh_view`, le fondu va au bout).
+
+### 2. Le VRAI défaut de taille : **le soldat rétrécissait de 25 cm en épaulant**
+
+Mesure des six frames, `pixel_size` constant (`SPRITE_REFERENCE_M / 1024`) :
+
+| frame | cadre | rendu | verdict |
+|---|---|---|---|
+| `idle` | 1024 px | 1,800 m | ✅ |
+| `throw` | 1023 px | 1,798 m | ✅ |
+| `hit` | 1001 px | 1,760 m | ✅ |
+| **`aim`** | **880 px** | **1,547 m** | ⛔ **−0,25 m** |
+| `death_a` | 806 px | 1,417 m | chute — légitime |
+| `death_b` | 238 px | 0,418 m | corps au sol — légitime |
+
+`aim` est **l'état ambiant de tout adversaire qui menace** (drapeau `aiming`, §8.137) : c'est la
+frame que le joueur voit **chaque fois qu'il a quelque chose à viser**. À 12 m, le parapet coupant à
+1,208 m, la part exposée passait de 0,592 m à 0,339 m — **43 % de cible en moins au moment précis où
+on tire dessus**, et un soldat qui « s'enfonce » quand il épaule, ce qui se lit comme une esquive.
+
+**Correctif : `Sprites.pixel_size_for(state, height)`.** Les frames marquées `standing` sont
+normalisées à `Geo.SILHOUETTE_TOP` ; les autres gardent l'échelle constante. Le code cesse de faire
+confiance à la hauteur du fichier là où elle décrit une **taille d'homme**, et lui fait confiance là
+où elle décrit une **pose**. `SPRITE_REFERENCE_M` est désormais **lu dans la géométrie**, pas recopié.
+
+**Effet mesuré, à géométrie inchangée (12 m) : silhouette exposée 292 → 725 px (× 2,5).**
+
+### 3. Le rapprochement 12 → 9 m, front 16 → 13,6 m
+
+On rapproche **et** on resserre, les deux ensemble : à 16 m de front sur 9 m de profondeur, voir la
+position opposée depuis un bord demanderait ±58,0° de lacet — le duel se jouerait de profil.
+
+| | 35 m | 12 m | **9 m** |
+|---|---|---|---|
+| largeur apparente du torse exposé | 0,955° (~19 px) | 2,644° (~52 px) | **3,437° (~67 px)** |
+| hauteur de la bande exposée | — | 2,608° (~51 px) | **3,467° (~68 px)** |
+| fenêtre la plus excentrée | ±24,4° | ±51,4° | **±54,3°** |
+
+**Cascade §8.140.1 rejouée intégralement** — `TABLE_VERSION` → **3** · table régénérée (2 copies,
+checksums verts) · `trench_tuning.json` re-versionné (**v3**) · cloche de grenade et accessoires
+déjà en fractions (ils ont traversé les deux rapprochements sans une ligne).
+
+> ⚠️⚠️ **ET ON RETIRE LE PIÈGE À LA SOURCE.** `AIM_YAW_LIMIT` a valu 32° puis 58°, **deux fois reposé
+> à la main**. Un chiffre qu'il faut penser à remettre à jour est un chiffre qui sera oublié — et
+> l'oublier une fois de plus rendrait trois positions sur cinq mécaniquement injoignables. Le
+> débattement est désormais **DÉRIVÉ** : `Geo.max_window_yaw_deg()` balaie les mêmes fenêtres que
+> celles que le serveur résout, `aim_yaw_limit_deg()` y ajoute sa marge, `camera_follow_max_deg()`
+> ajoute la sienne. Les trois consommateurs (entrée souris, caméra, curseur F10) lisent la **même**
+> source. Valeurs du jour : fenêtres ±54,27° → débattement ±60,27° → plafond caméra 72,27°.
+
+**Défaut trouvé en passant : l'arc de ciel devenait trop étroit.** ±100°, dimensionné quand le
+débattement valait ±32° ; à ±60,3° de lacet et ~43° de demi-champ, la direction de vue extrême
+atteint **103°**. On sépare donc `SKY_ARC_DEG` (géométrie bâtie, 260°) de `SKY_IMAGE_ARC_DEG`
+(mappage de l'image, **inchangé à 200°**) : la composition validée reste au pixel près, et au-delà
+le mode « pas de répétition » étire la colonne de bord. Aucun trou, aucun panorama étiré.
+
+### 4. Le rythme : `move_ticks` 3 → 4, et un pas qui COÛTE quelque chose
+
+Le §6.5 avait prouvé que le bot n'est pas plus rapide, et le §8.140 avait corrigé le rendu. Le
+verdict est revenu quand même : ce n'est pas une disparité, c'est le **rythme absolu**. On ralentit
+donc **les deux camps** — joueur 3,33 → **2,5 pas/s**, bot ~2,2 → ~1,9.
+
+Mais un pas qui ne coûte rien à l'œil se lit encore comme une téléportation. Ajoutés : **poussière
+au pied** (8 grains, 0,3 s, `one_shot`), **affaissement vertical de 4 cm** au poser, **`trench_step`
+atténué par la distance réelle**, **liseré clair** sur la silhouette (double homothétique à 4,5 %,
+`render_priority` négatif), **départ de feu adverse** (parité d'information : le bot voyait mon tir
+par le `from_pos` de ma traçante, je n'avais que le son du sien).
+
+> ⚠️ **UN PAS EST UN ÉCART DE EXACTEMENT UNE POSITION.** Trois choses déplacent l'adversaire sans
+> qu'il ait marché : le coup d'envoi le ramène au centre (2 crans), il réapparaît ailleurs après
+> s'être caché, une reconnexion resynchronise. Sans ce garde, chacune lèverait un nuage et un bruit
+> de botte pour un pas qui n'a jamais eu lieu — **une information fausse** dans un jeu où le bruit
+> de pas sert à localiser l'ennemi.
+
+### 5. La grenade au point visé — la jauge de charge est abandonnée
+
+**Le geste :** maintenir **G** (ou clic droit) → décalque au sol au point visé, **au rayon réel** ;
+relâcher → la grenade part **de la main** (+0,35 m latéral, −0,25 m vertical — jamais de la caméra,
+leçon §7.2), trajectoire figée à cet instant ; **ÉCHAP ou re-taper G** annule, sans coût. Stock vide
+→ refus **visible et sonore** (case qui tremble, `trench_refused`), jamais un silence.
+
+**Contrat serveur** (détail dans `CONTRAT_RESEAU.md` §2) : `throw` devient `{"target_x": float}` en
+mètres sur l'axe du front ; `{"charge": 0..1}` reste **accepté en repli** et se traduit au centre de
+la position correspondante. Dégâts **continus** : `dmg = damage_max × max(0, 1 − d / radius_m)`,
+`radius_m = 2,5 m`. Temps de vol proportionnel à la **distance parcourue** (`0,9 s + 0,07 s/m`,
+plancher 15 ticks porté par la règle d'or).
+
+Conséquence assumée : un lancer **parfait** sur une position vaut 40 et ne touche **plus** son voisin
+(3,4 m > 2,5 m) ; un lancer **entre** deux positions les touche toutes les deux à 12. On ne peut plus
+arroser large ET fort — il faut lire les déplacements et parier.
+
+> ⚠️ **LE DÉCALQUE N'A QU'UN SEUL DEGRÉ DE LIBERTÉ, ET C'EST UNE DÉCOUVERTE DE GÉOMÉTRIE.** Le bon de
+> commande décrivait une bande de profondeur de ±1,5 m. Deux mesures l'ont condamnée : **(a)** cette
+> bande ne couvre que **2,9° de site** — un geste de précision au pixel pour une arme de zone ;
+> **(b)** le point d'impact est **invisible** (la ligne de vue rasant l'arête du parapet adverse
+> coupe à **1,194 m** : tout ce qui est plus bas est occulté). Et surtout la profondeur **n'est pas
+> une variable du jeu** — le serveur ne reçoit que `target_x`. Le décalque est donc posé au plan des
+> soldats adverses, son abscisse suit le **lacet**, et le site ne sert qu'à deux garde-fous honnêtes.
+
+### 6. L'explosion — et l'invariant d'honnêteté du rayon
+
+`scenes/game/trench_explosion.tscn`, poolée (2 simultanées max) : flash 2 frames · cœur de feu
+additif · **anneau de choc qui s'étend de 0 au rayon EXACT** · fontaine de terre à gravité réelle ·
+fumée · cratère à fondu lent. Secousse en modèle « trauma », **par translation de l'œil, jamais par
+rotation** — une rotation déplacerait la ligne de mire par rapport à la visée envoyée au serveur.
+Audio : `trench_explosion_near` / `_far` (deux TIMBRES, pas un volume) + `trench_debris` à +0,4 s.
+
+> ⚠️⚠️ **LE VISUEL N'A PAS DE VALEUR PROPRE.** Le rayon dessiné — décalque, marqueur de vol, anneau,
+> cratère — vient de `rules.grenade.radius_m`, c'est-à-dire du registre **qui décide des dégâts**.
+> L'ancien marqueur valait **1,6 m en dur** pour une arme qui couvrait 2 × 4 m : le joueur se croyait
+> à l'abri à côté du disque et prenait 15 dégâts.
+> **Contre-épreuve par capture mesurée (`tools/probe_trench_grenade.tscn`) : cercle rendu 535 px,
+> projection théorique des bords ±R = 519 px — écart +3,1 %, sous la tolérance de 5 %, et dans le
+> sens SÛR (le cercle n'est jamais plus petit que la zone).**
+
+### 7. Trois défauts que seules les sondes ont vus
+
+1. **L'anneau de choc naissait et mourait entre deux images.** Croissance et fondu couvraient la
+   même durée : le cercle atteignait son rayon exact au moment où son alpha valait **zéro**. La
+   seule image qui porte l'information n'était jamais montrée. Pire, une frame de 150 ms le faisait
+   sauter entièrement — et **la première explosion d'un duel est celle qui compile les shaders**,
+   donc celle qui produit la frame la plus longue. Correctifs : croissance achevée à 70 % de la
+   durée, fondu **sur place**, et un minimum de **frames affichées** garanti quelle que soit
+   l'horloge (avec l'alpha tenu à 1 pendant le rattrapage — un objet transparent et un objet caché
+   rendent la même image).
+2. **L'explosion entière était cachée derrière le parapet adverse** (« aucun pixel ne change »).
+   L'anneau — et lui seul, parce qu'il est une *information* et non une matière — s'affranchit du
+   test de profondeur. Le feu, la terre et la fumée le gardent : voir des flammes à travers un mur
+   de sacs se lirait comme un défaut.
+3. **Le harnais photographiait un soldat à alpha 0,12** (cf. §1).
+
+### 8. ⚖ ARBITRAGE — la dispersion des armes n'est PAS touchée
+
+Recalculé sur la géométrie finale : la fenêtre centrale fait **±1,72° de lacet sur ±1,73° de site**.
+En dessous de `d = 1,72°`, **la dispersion n'a strictement aucun effet** sur une cible immobile bien
+visée.
+
+| arme | `dispersion_deg` | P(toucher) aujourd'hui | avec le ×2,0 proposé | P |
+|---|---|---|---|---|
+| VIPÈRE | 0,30 | 100 % | 0,60 | 100 % |
+| FRELON | 0,85 | 100 % | **1,70** | **100 %** |
+| CHACAL | 0,45 | 100 % | 0,90 | 100 % |
+| CONDOR | 0,00 | 100 % | 0,00 | 100 % |
+
+**Le ×2,0 du bon de commande porterait le FRELON à 1,70° — juste SOUS le seuil : il ne changerait
+rien.** Il faudrait ×3,4 (FRELON à 2,89°, 36 % de touches) pour restaurer l'équilibre de 35 m.
+**Décision de Hakim : ne rien toucher.** La cible doit rester facile à VOIR — c'est l'objet du
+chantier — et le duel se joue sur le timing, l'esquive et le pas de côté, pas sur le hasard du canon.
+À rejuger après une partie, sur un verdict de jeu plutôt que sur un calcul.
+
+### 9. Recette
+
+**73 contrôles clients verts** (51 → 73), **9 sabotages vus sur 9** (dont « un cercle de zone qui
+ment sur le rayon » et « un soldat qui rétrécit en épaulant ») · **253 contrôles backend verts**
+(sim 151 · bot 26 · flux 56 · table 20) · `--import` et harnais à 0 `ERROR`.
+
+⚠️ **CE NE SONT PAS DES VALIDATIONS.** La seule validation est une partie jouée — c'est la **PORTE**.

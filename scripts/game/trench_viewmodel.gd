@@ -50,6 +50,10 @@ var _reload_dip := 0.0
 var _slide := 0.0
 var _recoil := 0.0
 var _reduced_motion := false
+# §8.141 — le geste de grenade : `_grenade_aim` est l'état demandé, `_grenade_dip` sa progression
+# amenée en douceur (0 = arme en main, 1 = arme abaissée / grenade au poing).
+var _grenade_aim := false
+var _grenade_dip := 0.0
 
 
 func _ready() -> void:
@@ -107,6 +111,26 @@ func set_recoil(recoil: float) -> void:
 	_recoil = recoil
 
 
+# ╔═ LA POSE « GRENADE EN MAIN » (§B.1.1) — ET SON REPLI HONNÊTE ═════════════════════════════════╗
+# ║ Le bon de commande demande la frame `vm_grenade` « si présente, sinon abaisse l'arme ». Le      ║
+# ║ contrat de nommage du chantier n'a JAMAIS prévu cette frame : les 18 fichiers livrés sont       ║
+# ║ 6 soldats + 4 armes × 3 états, et `vm_grenade.png` n'existe pas. On ne l'invente donc pas dans  ║
+# ║ le registre (ce serait ouvrir un 19ᵉ nom que personne n'a commandé) — mais on le CHERCHE, pour  ║
+# ║ que le jour où Hakim déposera le fichier, il prenne sans une ligne de code, comme tout le reste.║
+# ║ En attendant, l'arme S'ABAISSE : c'est le langage universel de « j'ai les mains occupées », et  ║
+# ║ ça se lit sans texte. ⚠️ Elle s'abaisse assez pour dégager la vue du décalque au sol, qui est LA ║
+# ║ chose qu'on demande au joueur de regarder pendant ce geste — la descendre à moitié cacherait     ║
+# ║ précisément l'information qu'on vient d'ajouter.                                                 ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const GRENADE_FRAME := "res://assets/images/trench/sprites/vm_grenade.png"
+const GRENADE_LOWER_RATIO := 0.55      # fraction de la hauteur d'arme dont elle plonge ⚙
+const GRENADE_LOWER_SPEED := 9.0
+
+
+func set_grenade_aim(aiming: bool) -> void:
+	_grenade_aim = aiming
+
+
 func _process(delta: float) -> void:
 	if not _sprite_mode:
 		return
@@ -118,14 +142,32 @@ func _process(delta: float) -> void:
 		_reload_dip = lerpf(_reload_dip, dip_target, minf(1.0, delta * RELOAD_DIP_SPEED))
 	if _slide > 0.0:
 		_slide = maxf(0.0, _slide - delta / SWAP_SLIDE_TIME)
+	var grenade_target := 1.0 if _grenade_aim else 0.0
+	if _reduced_motion:
+		_grenade_dip = grenade_target
+	else:
+		_grenade_dip = lerpf(_grenade_dip, grenade_target, minf(1.0, delta * GRENADE_LOWER_SPEED))
 
-	# ORDRE DE PRIORITÉ : le rechargement gagne sur le tir — on ne tire pas pendant un rechargement
-	# (règle serveur §8.137), donc afficher `fire` par-dessus `reload` serait un mensonge.
-	var wanted := "reload" if _reloading else ("fire" if _fire_left > 0.0 else "idle")
+	# ORDRE DE PRIORITÉ : la GRENADE gagne sur tout (les deux mains y sont, on ne tire pas et on ne
+	# recharge pas en armant), puis le rechargement gagne sur le tir — on ne tire pas pendant un
+	# rechargement (règle serveur §8.137), donc afficher `fire` par-dessus `reload` serait un
+	# mensonge. L'ordre du `match` EST la règle : il n'y a pas de second endroit où elle vive.
+	var wanted := "idle"
+	if _grenade_aim and _grenade_texture() != null:
+		wanted = "grenade"
+	elif _reloading:
+		wanted = "reload"
+	elif _fire_left > 0.0:
+		wanted = "fire"
 	if wanted != _state:
 		_state = wanted
 		_apply_state()
 	_layout()
+
+
+# La frame de grenade, si Hakim l'a déposée. `null` = repli par l'abaissement de l'arme.
+func _grenade_texture() -> Texture2D:
+	return Sprites.texture_at(GRENADE_FRAME)
 
 
 func _apply_state() -> void:
@@ -136,6 +178,11 @@ func _apply_state() -> void:
 		return
 	if _state == "":
 		_state = "idle"
+	# La frame de grenade n'appartient à AUCUNE arme : elle vit hors du contrat `vm_<arme>_<état>`,
+	# parce que la main qui arme est la même quelle que soit l'arme rangée.
+	if _state == "grenade":
+		_rect.texture = _grenade_texture()
+		return
 	_rect.texture = Sprites.viewmodel_texture(_weapon, _state)
 
 
@@ -166,6 +213,10 @@ func _layout() -> void:
 	place.y += kick * RECOIL_KICK_PX
 	place.y += _reload_dip * box_h * RELOAD_DIP_RATIO
 	place.y += _slide * box_h
+	# L'ABAISSEMENT DE GRENADE — n'a d'effet que quand `vm_grenade.png` MANQUE : avec la frame
+	# déposée, c'est elle qui montre la main, et la faire plonger en plus la sortirait du cadre.
+	if _state != "grenade":
+		place.y += _grenade_dip * box_h * GRENADE_LOWER_RATIO
 	_rect.position = place
 	_rect.rotation = deg_to_rad(kick * RECOIL_ROLL_DEG + _reload_dip * RELOAD_DIP_DEG)
 

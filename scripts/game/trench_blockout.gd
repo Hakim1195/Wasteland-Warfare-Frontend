@@ -54,9 +54,25 @@ const SKY_PATH := "res://assets/images/trench/sky_panorama.png"
 # pixel (cf. pavé ci-dessus). La caméra porte `far = 400` : le laisser croître demanderait de
 # rouvrir CE réglage-là aussi.
 const SKY_RADIUS := 300.0
-# Arc couvert ⚙. Le débattement de lacet est de ±32°, le demi-champ horizontal d'environ 43° en
-# 16:9 et 50° en 21:9 : ±82° suffisent. On prend ±100° — de la marge, sans payer l'arrière.
-const SKY_ARC_DEG := 200.0
+# ╔═ ⚠️ DEUX ARCS, ET C'EST LA CORRECTION DU §8.141 ══════════════════════════════════════════════╗
+# ║ L'arc valait ±100°, dimensionné quand le débattement de lacet était de ±32°. Il est passé à     ║
+# ║ ±58° (12 m) puis ±60,3° (9 m), et le demi-champ horizontal vaut ~43° en 16:9 : la direction de  ║
+# ║ vue extrême atteint donc **103°**, soit 3° AU-DELÀ du ciel. Un liseré du dégradé de secours     ║
+# ║ (brun, rien à voir avec le panorama) apparaîtrait au bord de l'écran en visée extrême — et      ║
+# ║ personne ne l'aurait vu sans regarder une capture prise à plein débattement.                    ║
+# ║                                                                                                 ║
+# ║ ⚠️ ÉLARGIR L'ARC EN GARDANT UNE SEULE COTE ÉTIRERAIT LE PANORAMA de 30 % : on repeindrait une   ║
+# ║ image déjà validée, pour une bande de 3°. On sépare donc les deux rôles :                       ║
+# ║   • `SKY_ARC_DEG`       = la GÉOMÉTRIE bâtie (large, gratuite : 144 triangles) ;                ║
+# ║   • `SKY_IMAGE_ARC_DEG` = l'arc sur lequel l'IMAGE est mappée — INCHANGÉ, donc la composition   ║
+# ║     que Hakim a validée reste au pixel près dans les ±100° qui comptent.                         ║
+# ║ Au-delà, `u` sort de [0,1] et le mode « pas de répétition » CLAMPE : la colonne de bord du       ║
+# ║ panorama (une ligne d'arbres noyée de brume) s'étire horizontalement. Invisible, et surtout      ║
+# ║ jamais un trou. La hauteur de l'arc se déduit de l'arc de l'IMAGE, sans quoi le panorama         ║
+# ║ perdrait son rapport d'aspect.                                                                   ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const SKY_ARC_DEG := 260.0
+const SKY_IMAGE_ARC_DEG := 200.0
 const SKY_SEGMENTS := 72
 # Jupe sous l'horizon : elle passe DERRIÈRE le sol lointain. Elle n'est jamais vue, elle interdit
 # seulement qu'un liseré de vide apparaisse si le sol et l'arc se ratent d'un cheveu.
@@ -269,7 +285,8 @@ func _build_far_ground(front: float, no_mans_land: float) -> void:
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 func _build_sky() -> void:
 	var tex := load(SKY_PATH) as Texture2D if ResourceLoader.exists(SKY_PATH) else null
-	var arc_length: float = deg_to_rad(SKY_ARC_DEG) * SKY_RADIUS
+	# ⚠️ L'arc de l'IMAGE, pas celui de la géométrie : c'est lui qui porte le rapport d'aspect.
+	var arc_length: float = deg_to_rad(SKY_IMAGE_ARC_DEG) * SKY_RADIUS
 	var height := SKY_FALLBACK_HEIGHT
 	if tex != null and tex.get_width() > 0:
 		height = arc_length * float(tex.get_height()) / float(tex.get_width())
@@ -328,11 +345,14 @@ func _sky_arc_mesh(height: float) -> ArrayMesh:
 	# `v` = 0 en haut de l'image, 1 sur son bord bas — qui tombe pile sur `GROUND_Y`. La jupe
 	# poursuit au-delà de 1 ; le mode « pas de répétition » y étire la dernière ligne de pixels.
 	var v_bottom: float = (height + SKY_SKIRT) / maxf(0.01, height)
+	# `u` est mappé sur l'arc de l'IMAGE et laissé SORTIR de [0,1] sur les ailes de l'arc bâti : le
+	# mode « pas de répétition » clampe alors sur la colonne de bord (cf. le pavé de `SKY_ARC_DEG`).
+	var image_span := deg_to_rad(SKY_IMAGE_ARC_DEG)
 	for i in range(SKY_SEGMENTS):
 		var a0: float = -span * 0.5 + span * float(i) / float(SKY_SEGMENTS)
 		var a1: float = -span * 0.5 + span * float(i + 1) / float(SKY_SEGMENTS)
-		var u0: float = float(i) / float(SKY_SEGMENTS)
-		var u1: float = float(i + 1) / float(SKY_SEGMENTS)
+		var u0: float = 0.5 + a0 / image_span
+		var u1: float = 0.5 + a1 / image_span
 		var top0 := Vector3(sin(a0) * SKY_RADIUS, y_top, cos(a0) * SKY_RADIUS)
 		var top1 := Vector3(sin(a1) * SKY_RADIUS, y_top, cos(a1) * SKY_RADIUS)
 		var low0 := Vector3(sin(a0) * SKY_RADIUS, y_bottom, cos(a0) * SKY_RADIUS)
@@ -353,7 +373,7 @@ func _sky_arc_mesh(height: float) -> ArrayMesh:
 # ║ qu'il croit couverte. Ce serait un changement de RÈGLE déguisé en décor — précisément ce que   ║
 # ║ le hors-périmètre interdit.                                                                    ║
 # ║ On borne donc la hauteur de chaque accessoire SOUS la ligne de vue la plus basse : celle qui   ║
-# ║ va d'un œil debout (1,70 m) au BAS de la bande exposée d'en face (1,15 m à 35,5 m). La borne   ║
+# ║ va d'un œil debout (1,70 m) au BAS de la bande exposée d'en face (1,15 m au plan des soldats). ║
 # ║ est CALCULÉE ici, pas recopiée : si une cote de `trench_geometry.gd` bouge, elle suit.         ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const PROP_SAFETY := 0.12          # marge sous la ligne de vue ⚙
@@ -388,8 +408,9 @@ func _build_props() -> void:
 	# ║      Une ligne continue lit « barre » ; une ligne rompue lit « enchevêtrement ».            ║
 	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 	# ⚠️ Profondeurs exprimées en FRACTION du no man's land, jamais en mètres absolus : la cote est
-	# passée de 35 m à 12 m sur verdict de partie réelle (§8.140.1), et deux rangs posés « à 10 et
-	# 15 m » se seraient retrouvés l'un au milieu du terrain, l'autre DERRIÈRE la tranchée adverse.
+	# passée de 35 m à 12 m (§8.140.1) puis à 9 m (§8.141) sur verdict de partie réelle, et deux
+	# rangs posés « à 10 et 15 m » se seraient retrouvés l'un au milieu du terrain, l'autre DERRIÈRE
+	# la tranchée adverse. Écrites ainsi, elles ont traversé les deux rapprochements sans une ligne.
 	for row in [{"t": 0.30, "n": 6}, {"t": 0.50, "n": 5}]:
 		var z: float = Geo.NO_MANS_LAND * float(row["t"])
 		var ceiling: float = _prop_ceiling(z)

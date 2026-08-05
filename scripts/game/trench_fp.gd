@@ -31,6 +31,7 @@ extends Control
 # =================================================================================================
 
 const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
+const Geo := preload("res://scripts/game/trench_geometry.gd")
 const WorldScene := preload("res://scenes/game/trench_fp_world.tscn")
 const ViewmodelScript := preload("res://scripts/game/trench_viewmodel.gd")
 const AmbientScript := preload("res://scripts/game/trench_ambient.gd")
@@ -47,7 +48,6 @@ const STARTING_WEAPON := "vipere"
 const SEND_INTERVAL := 0.105
 # Retard de rendu : 150 ms derrière le dernier état (tampon 2 états à 10 Hz, §2.4).
 const RENDER_DELAY := 0.15
-const CHARGE_TIME := 1.2
 const RECONNECT_DELAY := 2.0
 
 # --- Visée ---------------------------------------------------------------------------------------
@@ -57,8 +57,12 @@ const RECONNECT_DELAY := 2.0
 # ║ à gérer ». Le code cesse donc de deviner : `trench_tuning.gd` expose sensibilité, inversion Y, ║
 # ║ suivi de caméra, plafond et FOV à Hakim, qui règle en jouant. 0,040 reste la valeur de départ. ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-var _sensitivity: float = TuningScript.DEFAULTS["mouse_sensitivity"]
-var _invert_y: bool = TuningScript.DEFAULTS["invert_y"]
+var _sensitivity: float = TuningScript.defaults()["mouse_sensitivity"]
+var _invert_y: bool = TuningScript.defaults()["invert_y"]
+# Le plafond de lacet, résolu une fois : c'est une conséquence de la géométrie, pas un réglage
+# (cf. `aim_yaw_limit()` plus bas). Le relire à chaque événement souris serait refaire 25 arc-
+# tangentes par mouvement de main.
+var _yaw_limit: float = aim_yaw_limit()
 
 # ╔═ ⚠️⚠️ LE +X DU MONDE EST À GAUCHE DE L'ÉCRAN — MESURÉ, PAS SUPPOSÉ ═══════════════════════════╗
 # ║ `trench_geometry.gd` annonce « +X = ma droite » depuis le §8.137. Personne ne l'avait jamais    ║
@@ -79,15 +83,24 @@ var _invert_y: bool = TuningScript.DEFAULTS["invert_y"]
 # ║ ceux du monde ; on ne change que la façon dont la main du joueur s'y traduit.                   ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const SCREEN_TO_WORLD_X := -1.0
-# Débattement autorisé. Le lacet doit couvrir la position adverse la plus lointaine AVEC de la
-# marge ; le site reste étroit — il n'y a rien à viser au ciel.
-# ⚠️⚠️ 32° → 58° AVEC LE PASSAGE À 12 m (§8.140.1). Ce n'est pas un confort, c'est une NÉCESSITÉ :
-# depuis un bord, la position adverse opposée est à 50,9° (`atan(16 m / 13 m)`). Laissé à 32°, le
-# joueur aurait été mécaniquement incapable de viser les positions extrêmes — la balle n'aurait
-# même pas pu être déclarée. Rapprocher l'arène sans ouvrir le débattement, c'était livrer un mode
-# où trois positions sur cinq deviennent invulnérables depuis les bords.
-const AIM_YAW_LIMIT := 58.0
+# ╔═ LE DÉBATTEMENT N'EST PLUS UNE CONSTANTE — IL SORT DE LA GÉOMÉTRIE (§8.141) ══════════════════╗
+# ║ Il a valu 32°, puis 58°, chaque fois reposé À LA MAIN après un changement de cote. La première ║
+# ║ fois, l'oublier aurait rendu trois positions sur cinq mécaniquement INJOIGNABLES depuis les    ║
+# ║ bords : le joueur aurait visé une cible que son propre plafond lui interdisait d'atteindre, et ║
+# ║ la balle n'aurait même pas pu être déclarée. Un chiffre qu'il faut penser à remettre à jour est ║
+# ║ un chiffre qui sera oublié — celui-ci est donc DÉRIVÉ du plus grand lacet que les fenêtres de  ║
+# ║ tir réclament (`Geo.max_window_yaw_deg()`), plus une marge.                                    ║
+# ║ La marge elle-même vit dans le registre (`Geo.AIM_YAW_MARGIN`), avec les cotes dont elle       ║
+# ║ dépend. Valeurs du jour : fenêtres à ±54,3° → débattement ±60,3°.                              ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Le site reste étroit — il n'y a rien à viser au ciel.
 const AIM_PITCH_LIMIT := 14.0
+
+
+# STATIQUE, et pas une variable d'instance : les harnais de recette et l'aperçu s'y réfèrent SANS
+# instancier de duel, exactement comme ils le faisaient de l'ancienne constante.
+static func aim_yaw_limit() -> float:
+	return Geo.aim_yaw_limit_deg()
 # Quantum d'envoi (§2.4) : la visée part arrondie au dixième de degré, et SEULEMENT si elle a bougé.
 const AIM_QUANTUM := 0.1
 
@@ -138,8 +151,15 @@ var _throw_queued: Dictionary = {}
 var _pick_queued := ""
 var _reload_queued := false
 var _item_queued := ""
-var _charging := false
-var _charge := 0.0
+# --- §8.141 : LE GESTE DE GRENADE (la jauge de charge est abandonnée) ---------------------------
+# `_aiming_grenade` = la touche est maintenue et le décalque est à l'écran.
+# `_grenade_point`  = l'abscisse VISÉE, en mètres sur l'axe du front, recalculée à chaque frame.
+# `_grenade_cancelled` = verrou d'annulation, levé seulement quand la touche est VRAIMENT relâchée.
+# `_grenade_refuse` = durée restante du refus visuel (stock vide) — jamais un silence.
+var _aiming_grenade := false
+var _grenade_point := 0.0
+var _grenade_cancelled := false
+var _grenade_refuse := 0.0
 var _stance_toggle := false
 
 # --- FX éphémères --------------------------------------------------------------------------------
@@ -184,8 +204,6 @@ var _banner: Label
 var _waiting_label: Label
 var _conn_banner: Label
 var _tune_hint: Label
-var _charge_back: Panel
-var _charge_bar: ColorRect
 var _hurt_overlay: ColorRect
 var _low_hp_vignette: ColorRect
 var _choice_panel: PanelContainer
@@ -358,6 +376,13 @@ func _on_init(msg: Dictionary) -> void:
 	_pred_pos = _positions / 2
 	_world.set_pose(_pred_pos, _pred_stance, true)
 	_world.set_enemy_accent(_enemy_accent())
+	# ⚠️ L'INVARIANT D'HONNÊTETÉ (§C.1) PASSE PAR ICI, ET PAR NULLE PART AILLEURS. Le rayon
+	# dessiné — décalque de visée, marqueurs de vol, anneau de choc — est CELUI DU REGISTRE
+	# SERVEUR, qui décide des dégâts. Un rayon recopié côté client aurait sa propre vie et
+	# finirait par mentir : c'est exactement ce que faisait l'ancien disque de 1,6 m pour une zone
+	# qui en couvrait quatre.
+	var grenade_rules: Dictionary = _rules.get("grenade", {})
+	_world.set_grenade_radius(float(grenade_rules.get("radius_m", 2.5)))
 	_refresh_pose_view()
 
 	var opp_name := str(_opponent.get("name", ""))
@@ -453,6 +478,25 @@ func _on_duel_event(event: Dictionary) -> void:
 			else:
 				# LE DÉPART DE FEU ADVERSE — le danger s'annonce à l'oreille avant de se voir.
 				AudioManager.play_sfx("trench_shot")
+				# … ET À L'ŒIL (§8.141). Le bot voit MON tir — ma traçante naît à ma position, et
+				# `from_pos` la trahit. Moi je n'avais que le SON du sien, alors que sa balle met un
+				# temps de vol à arriver : je savais qu'on tirait, jamais d'où. Une lueur de deux
+				# frames à son canon rétablit la parité d'information, et elle ne révèle rien qui ne
+				# le soit déjà — tirer, c'est se montrer (§1.6, la même règle que le `from_pos` des
+				# projectiles, publics eux aussi).
+				_world.notify_enemy_fire(int(round(_last_seen_enemy_pos)))
+		"impact":
+			# ╔═ L'EXPLOSION NAÎT DE L'ÉVÉNEMENT SERVEUR, JAMAIS D'UNE HORLOGE LOCALE ═════════╗
+			# ║ Le client connaît le tick d'impact dès le lancer : il POURRAIT jouer l'explosion ║
+			# ║ « à l'heure ». Il ne le fait pas — ce serait rejouer la simulation, et 100 ms de  ║
+			# ║ dérive feraient exploser la grenade avant que le serveur ne l'ait résolue. Le     ║
+			# ║ joueur se verrait épargné, puis mourrait. C'est la règle du hitmarker (§5.5),     ║
+			# ║ appliquée à la seule autre chose qui annonce un dégât.                            ║
+			# ╚═════════════════════════════════════════════════════════════════════════════════╝
+			if str(event.get("kind", "")) == "grenade":
+				# `on_my_side` : la grenade tombe chez CELUI QUI N'EST PAS son lanceur.
+				_world.play_explosion(float(event.get("target_x", 0.0)),
+					int(event.get("slot", 0)) != _my_slot)
 		"grenade_thrown":
 			# L'ADVERSAIRE arme et lance : frame `throw` du sprite peint (§8.138). Mon propre
 			# lancer ne déclenche rien — je ne me vois pas lancer, je vois mes mains.
@@ -505,7 +549,8 @@ func _on_duel_event(event: Dictionary) -> void:
 				_show_banner(tr("TRENCH_ROUND_LOST"), COL_DANGER)
 		"match_end":
 			_match_over = true
-			_charging = false
+			_aiming_grenade = false
+			_world.show_grenade_aim(false)
 			get_tree().create_timer(1.2).timeout.connect(func():
 				if _result.is_empty():
 					_show_result({}))
@@ -544,10 +589,24 @@ func _input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_ESCAPE:
 				accept_event()
+				# ⚠️ ÉCHAP ANNULE D'ABORD LA VISÉE DE GRENADE, et n'ouvre l'abandon qu'ensuite.
+				# L'ordre n'est pas discutable : proposer « abandonner la partie ? » à quelqu'un
+				# qui voulait juste ranger sa grenade serait une réponse absurde à son geste.
+				if _aiming_grenade:
+					_cancel_grenade()
+					return
 				if not _match_over:
 					_abandon_overlay.visible = not _abandon_overlay.visible
 					_capture_mouse(not _abandon_overlay.visible)
 				return
+			KEY_G:
+				# RE-TAPER G pendant la visée annule, comme ÉCHAP. Deux chemins pour un même geste :
+				# celui qui vise à la souris (clic droit) lâchera ÉCHAP, celui qui vise au clavier
+				# retapera sa touche. Aucun des deux ne doit coûter une grenade.
+				if _aiming_grenade:
+					accept_event()
+					_cancel_grenade()
+					return
 			KEY_S, KEY_CTRL:
 				# POSTURE = une BASCULE (§5.6), pas un maintien : le joueur doit pouvoir rester
 				# à couvert sans garder un doigt en tension pendant 90 s.
@@ -592,7 +651,7 @@ func _input(event: InputEvent) -> void:
 		var motion := (event as InputEventMouseMotion).relative
 		var pitch_sign: float = 1.0 if _invert_y else -1.0
 		_aim_yaw = clampf(_aim_yaw + SCREEN_TO_WORLD_X * motion.x * _sensitivity,
-			-AIM_YAW_LIMIT, AIM_YAW_LIMIT)
+			-_yaw_limit, _yaw_limit)
 		_aim_pitch = clampf(_aim_pitch + pitch_sign * motion.y * _sensitivity,
 			-AIM_PITCH_LIMIT, AIM_PITCH_LIMIT)
 	if event is InputEventMouseButton and event.pressed \
@@ -671,19 +730,7 @@ func _process(delta: float) -> void:
 		_refresh_view(delta)
 		return
 
-	# --- Grenade : maintien (G ou clic droit) pour doser, lâcher pour lancer ---
-	var holding := Input.is_key_pressed(KEY_G) \
-		or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) \
-		or (Input.get_connected_joypads().size() > 0
-			and Input.is_joy_button_pressed(0, JOY_BUTTON_X))
-	if holding and not _charging and _pred_stance == "up" and int(_my("grenades")) > 0:
-		_charging = true
-		_charge = 0.0
-	elif holding and _charging:
-		_charge = minf(1.0, _charge + delta / CHARGE_TIME)
-	elif not holding and _charging:
-		_charging = false
-		_throw_queued = {"charge": _charge}
+	_update_grenade_aim(delta)
 	if Input.get_connected_joypads().size() > 0 \
 			and Input.is_joy_button_pressed(0, JOY_BUTTON_A):
 		_queue_fire()
@@ -761,6 +808,97 @@ func _process(delta: float) -> void:
 # ║ Mais si le symptôme PERSISTE, on ne repartira pas pour une session d'hypothèses : ce journal   ║
 # ║ montre à l'écran ce que le client croit envoyer, à côté de ce que le serveur lui répond.       ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# =================================================================================================
+# LA GRENADE : MAINTENIR POUR VISER, RELÂCHER POUR LANCER (§8.141)
+# =================================================================================================
+# ╔═ CE QUI REMPLACE LA JAUGE DE CHARGE, ET POURQUOI ═════════════════════════════════════════════╗
+# ║ L'ancien geste : maintenir 1,2 s pour remplir une jauge dont la valeur choisissait une des cinq ║
+# ║ positions adverses. Il demandait au joueur d'apprendre une correspondance abstraite, rendait la ║
+# ║ souris inutile pendant tout le geste, et interdisait de viser ENTRE deux positions — c'est-à-  ║
+# ║ dire là où un adversaire qui fait des pas de côté se trouve la moitié du temps.                 ║
+# ║ Le geste neuf : on MAINTIENT pour voir où ça tombe (décalque au sol, au rayon RÉEL), on RELÂCHE ║
+# ║ pour lancer. La trajectoire est FIGÉE à l'instant du relâchement — la souris n'a plus aucun     ║
+# ║ effet sur le vol, et c'est déjà la physique de la simulation (lancement et impact sont fixés au ║
+# ║ départ) : le client ne fait ici que ne pas mentir à ce sujet.                                    ║
+# ║                                                                                                 ║
+# ║ ⚠️ ANNULER NE COÛTE RIEN, et ce n'est pas une gentillesse : sans annulation, tout maintien       ║
+# ║ accidentel (le clic droit est à un doigt du clic gauche) dépenserait une grenade sur deux. Un   ║
+# ║ geste qu'on ne peut pas reprendre est un geste qu'on n'ose pas commencer.                        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _update_grenade_aim(_delta: float) -> void:
+	var holding := Input.is_key_pressed(KEY_G) \
+		or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) \
+		or (Input.get_connected_joypads().size() > 0
+			and Input.is_joy_button_pressed(0, JOY_BUTTON_X))
+	# Une annulation (ÉCHAP ou re-tape de G) verrouille le maintien jusqu'à ce que la touche soit
+	# VRAIMENT relâchée : sans ce verrou, garder G enfoncé après avoir annulé relancerait la visée
+	# à la frame suivante et le geste d'annulation n'existerait pas.
+	if _grenade_cancelled and not holding:
+		_grenade_cancelled = false
+	if _grenade_cancelled:
+		holding = false
+
+	if holding and not _aiming_grenade:
+		if _pred_stance != "up":
+			holding = false            # on ne lance pas accroupi (la sim le refuse aussi)
+		elif int(_my("grenades")) <= 0:
+			_refuse_grenade()
+			holding = false
+		else:
+			_aiming_grenade = true
+			_viewmodel.set_grenade_aim(true)
+
+	if _aiming_grenade and holding:
+		var point: Dictionary = _world.grenade_aim_point(_aim_yaw, _aim_pitch, _grenade_limit_x())
+		_grenade_point = float(point.get("x", 0.0))
+		_world.show_grenade_aim(true, _grenade_point, float(point.get("z", 0.0)),
+			bool(point.get("valid", true)))
+		return
+
+	if _aiming_grenade and not holding:
+		_aiming_grenade = false
+		_world.show_grenade_aim(false)
+		_viewmodel.set_grenade_aim(false)
+		if not _grenade_cancelled:
+			# ⚠️ LE POINT PART TEL QU'IL ÉTAIT À CET INSTANT, quantifié au décimètre (contrat §2).
+			# C'est l'exacte transposition de la leçon du TIR FIGÉ AU CLIC (§6.3 du rapport de
+			# pivot) : ce que le joueur voyait au moment de son geste est ce qui part.
+			_throw_queued = {"target_x": snappedf(_grenade_point, 0.1)}
+
+
+# La borne de visée, servie par le SERVEUR (`rules.grenade.target_margin_m` + les cotes de l'arène).
+# ⚠️ Le client ne la recalcule pas depuis ses propres constantes : il la DÉRIVE des mêmes cotes que
+# celles que le serveur clampe. Deux arithmétiques séparées finiraient par se contredire d'un
+# décimètre, et le décalque promettrait un point que le serveur ramènerait ailleurs.
+func _grenade_limit_x() -> float:
+	var grenade: Dictionary = _rules.get("grenade", {})
+	var geometry: Dictionary = _rules.get("geometry", {})
+	var positions := int(geometry.get("positions", _positions))
+	var spacing := float(geometry.get("position_spacing", Geo.POSITION_SPACING))
+	var margin := float(grenade.get("target_margin_m", 1.5))
+	return float(positions - 1) * spacing * 0.5 + margin
+
+
+# LE REFUS, JAMAIS SILENCIEUX (§B.1.3). Une case qui tremble deux frames et un son sec : le joueur
+# doit savoir que le jeu l'a ENTENDU et a dit non — sinon il croit à une touche qui ne répond pas,
+# et c'est exactement le symptôme qu'il a rapporté pour la flèche bas (§6.2 du rapport de pivot).
+func _refuse_grenade() -> void:
+	if _grenade_refuse > 0.0:
+		return
+	_grenade_refuse = 0.18
+	AudioManager.play_sfx("trench_refused", -4.0)
+
+
+# ANNULER : on range la grenade, on éteint le décalque, et on VERROUILLE jusqu'au vrai relâchement
+# de la touche. Sans le verrou, garder G enfoncé après ÉCHAP relancerait la visée à la frame
+# suivante — l'annulation n'existerait tout simplement pas pour qui n'a pas les doigts rapides.
+func _cancel_grenade() -> void:
+	_aiming_grenade = false
+	_grenade_cancelled = true
+	_world.show_grenade_aim(false)
+	_viewmodel.set_grenade_aim(false)
+
+
 func _log_input(payload: Dictionary) -> void:
 	if _tuning == null or not _tuning.visible:
 		return
@@ -796,6 +934,7 @@ func _send_budget_left() -> bool:
 
 func _decay(delta: float) -> void:
 	_fire_fx_mute = maxf(0.0, _fire_fx_mute - delta)
+	_grenade_refuse = maxf(0.0, _grenade_refuse - delta)
 	_hitmarker = maxf(0.0, _hitmarker - delta)
 	_hurt_flash = maxf(0.0, _hurt_flash - delta)
 	_enemy_hit = maxf(0.0, _enemy_hit - delta * 3.0)
@@ -868,10 +1007,13 @@ func _refresh_view(delta: float) -> void:
 		var t := clampf((render_tick - launch) / maxf(1.0, impact - launch), 0.0, 1.0)
 		var mine := int(proj.get("owner_slot", 1)) == _my_slot
 		if str(proj.get("kind", "")) == "grenade":
+			# ⚠️ `target_x` EN MÈTRES (§8.141) — le point exact, pas l'abscisse d'une case. C'est
+			# la même valeur que le serveur utilise pour ses dégâts : le marqueur que la cible voit
+			# et le cercle qui la blesse ne peuvent donc pas diverger.
+			var impact_x := float(proj.get("target_x", 0.0))
 			grenades.append({"from_pos": int(proj.get("from_pos", 2)),
-				"target_pos": int(proj.get("target_pos", 2)), "mine": mine, "t": t})
-			markers.append({"target_pos": int(proj.get("target_pos", 2)),
-				"on_my_side": not mine,
+				"target_x": impact_x, "mine": mine, "t": t})
+			markers.append({"target_x": impact_x, "on_my_side": not mine,
 				"eta": clampf((impact - render_tick) / maxf(1.0, impact - launch), 0.0, 1.0)})
 		else:
 			tracers.append({"from_pos": int(proj.get("from_pos", 2)), "mine": mine, "t": t,
@@ -960,7 +1102,6 @@ func _build_hud() -> void:
 	_build_ammo()
 	_build_item_slots()
 	_build_reticle()
-	_build_charge_gauge()
 	_build_choice_panel()
 	_build_abandon_overlay()
 
@@ -1154,22 +1295,13 @@ func _dispersion_pixels() -> float:
 	return tan(deg_to_rad(degrees)) / maxf(0.001, tan(half_fov)) * (size.y * 0.5)
 
 
-func _build_charge_gauge() -> void:
-	_charge_back = Panel.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0, 0, 0, 0.6)
-	sb.border_color = COL_GOLD
-	sb.set_border_width_all(1)
-	_charge_back.add_theme_stylebox_override("panel", sb)
-	_charge_back.visible = false
-	_charge_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud.add_child(_charge_back)
-	_anchored(_charge_back, Control.PRESET_CENTER_BOTTOM, Vector2(-90, -86), Vector2(180, 10))
-	_charge_bar = ColorRect.new()
-	_charge_bar.color = COL_GOLD
-	_charge_bar.position = Vector2(1, 1)
-	_charge_bar.size = Vector2(0, 8)
-	_charge_back.add_child(_charge_bar)
+# ╔═ LA JAUGE DE CHARGE A DISPARU (§8.141) ═══════════════════════════════════════════════════════╗
+# ║ C'était une barre dorée au bas de l'écran, remplie par le maintien, dont la valeur choisissait  ║
+# ║ une des cinq positions adverses. Elle demandait au joueur de lire une abstraction PENDANT qu'il ║
+# ║ armait — c'est-à-dire de quitter des yeux le seul endroit qui compte. Le décalque au sol la     ║
+# ║ remplace intégralement : il montre le point ET le rayon, LÀ où la grenade va tomber, et il se   ║
+# ║ lit sans quitter la cible du regard. Il n'y a plus rien à afficher au bas de l'écran.           ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 
 
 func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
@@ -1196,6 +1328,21 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 
 	# --- Cases d'objets ---
 	_slot_grenade.text = "1  " + tr("TRENCH_GRENADES") % int(me.get("grenades", 0))
+	# ╔═ LE REFUS SE VOIT ET S'ENTEND — IL N'EST JAMAIS SILENCIEUX (§B.1.3) ══════════════════════╗
+	# ║ Tenter un lancer sans stock secoue la case et la passe au rouge, deux frames. C'est la      ║
+	# ║ leçon directe de « la touche pour se cacher ne fonctionne pas » (§6.2 du rapport de pivot) :║
+	# ║ ce n'était pas un bug, c'était une absence de réponse — et une absence de réponse EST un    ║
+	# ║ bug du point de vue du joueur. Une case qui tremble dit « entendu, mais non ».              ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	if _grenade_refuse > 0.0:
+		var wobble: float = 0.0 if _reduced_motion else sin(_grenade_refuse * 90.0) * 4.0
+		_slot_grenade.offset_left = -190.0 + wobble
+		_slot_grenade.offset_right = -10.0 + wobble
+		_slot_grenade.add_theme_color_override("font_color", COL_DANGER)
+	else:
+		_slot_grenade.offset_left = -190.0
+		_slot_grenade.offset_right = -10.0
+		_slot_grenade.add_theme_color_override("font_color", COL_GOLD)
 	var bandaging := int(me.get("bandage_until_tick", 0)) > int(render_tick)
 	var bandages := int(me.get("bandages", 0))
 	if bandaging:
@@ -1233,10 +1380,6 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 	# --- Dégâts subis ---
 	_hurt_overlay.color.a = _hurt_flash * 0.45
 	_low_hp_vignette.color.a = 0.30 if my_hp <= hp_max * 0.25 and my_hp > 0.0 else 0.0
-
-	_charge_back.visible = _charging
-	if _charging:
-		_charge_bar.size.x = 178.0 * _charge
 
 	if _choice_panel.visible:
 		var deadline := int(_player_of(latest, _my_slot).get("choice_deadline_tick", 0))

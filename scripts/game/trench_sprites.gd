@@ -22,6 +22,8 @@ extends RefCounted
 # est appliquée EN JEU, sans quoi il faudrait repeindre 6 images par faction.
 # =================================================================================================
 
+const Geo := preload("res://scripts/game/trench_geometry.gd")
+
 const SPRITE_DIR := "res://assets/images/trench/sprites/"
 
 # --- LE SOLDAT ADVERSE ---------------------------------------------------------------------------
@@ -30,32 +32,70 @@ const SPRITE_DIR := "res://assets/images/trench/sprites/"
 const ENEMY_IDLE := "idle"
 const ENEMY_AIM := "aim"
 
-# LE REGISTRE : état -> {durée en secondes, état suivant}.
+# LE REGISTRE : état -> {durée en secondes, état suivant, DEBOUT ?}.
 #   • `duration = 0` = état STATIQUE : il dure tant que la condition qui l'a levé dure.
 #   • `next` ne sert qu'aux CHAÎNES réelles (`death_a` -> `death_b`) ; un état transitoire échu
 #     rend la main à l'état AMBIANT (`ambient_state`), qui est la seule vérité du moment.
+#   • `standing` = « cette frame montre un homme DEBOUT sur ses pieds ». Voir `pixel_size_for()` —
+#     c'est ce drapeau, et lui seul, qui décide comment la frame est mise à l'échelle.
 const ENEMY_FRAMES := {
-	"idle": {"duration": 0.0, "next": ""},
-	"aim": {"duration": 0.0, "next": ""},
-	"throw": {"duration": 0.45, "next": "idle"},
-	"hit": {"duration": 0.25, "next": "idle"},
-	"death_a": {"duration": 0.40, "next": "death_b"},
-	"death_b": {"duration": 0.0, "next": ""},
+	"idle": {"duration": 0.0, "next": "", "standing": true},
+	"aim": {"duration": 0.0, "next": "", "standing": true},
+	"throw": {"duration": 0.45, "next": "idle", "standing": true},
+	"hit": {"duration": 0.25, "next": "idle", "standing": true},
+	# La CHUTE et le CORPS AU SOL ne sont pas debout : leur cadre décrit une hauteur réelle plus
+	# petite, et c'est CETTE hauteur-là qu'il faut rendre.
+	"death_a": {"duration": 0.40, "next": "death_b", "standing": false},
+	"death_b": {"duration": 0.0, "next": "", "standing": false},
 }
 # Les états déclenchés par un ÉVÉNEMENT (et non par une lecture d'état) : ils s'imposent pendant
 # leur durée. `hit` interrompt tout sauf la mort ; `throw` ne coupe PAS un `hit` en cours.
 const ENEMY_TRANSIENT := ["throw", "hit"]
 const ENEMY_DEATH_FIRST := "death_a"
 
-# ÉCHELLE — LE réglage critique du lot. 1024 px de haut <-> 1,80 m dans le monde du blockout
-# (`trench_geometry.SILHOUETTE_TOP`, le sommet du crâne d'un soldat debout).
+# ÉCHELLE — LE réglage critique du lot. 1024 px de haut <-> 1,80 m dans le monde du blockout.
 #
-# ⚠️ `pixel_size` est une CONSTANTE, pas une normalisation par texture : c'est ce qui garantit que
-# les 6 frames gardent la MÊME échelle entre elles. Une frame de mort livrée moins haute (un corps
-# au sol) rend donc un corps AU SOL — et non un cadavre étiré à 1,80 m de haut.
+# ⚠️ LA HAUTEUR DE RÉFÉRENCE EST LUE DANS LA GÉOMÉTRIE, PAS RECOPIÉE. `SILHOUETTE_TOP` est le
+# sommet du crâne d'un soldat DEBOUT dans le registre partagé avec le serveur : c'est la taille à
+# laquelle la table angulaire résout les touches. Si un jour cette cote bouge, le soldat peint la
+# suit tout seul — sans quoi le joueur tirerait sur une silhouette qui n'a pas la taille de sa
+# fenêtre de tir.
 const SPRITE_REFERENCE_PX := 1024.0
-const SPRITE_REFERENCE_M := 1.80
+const SPRITE_REFERENCE_M := Geo.SILHOUETTE_TOP
 const PIXEL_SIZE := SPRITE_REFERENCE_M / SPRITE_REFERENCE_PX
+
+
+# ╔═ ⚠️⚠️ L'ADVERSAIRE RÉTRÉCISSAIT DE 25 cm DÈS QU'IL ÉPAULAIT — MESURÉ, §8.141 ═════════════════╗
+# ║ Le `pixel_size` CONSTANT était présenté comme une garantie d'échelle. Il n'en est une que si    ║
+# ║ toutes les frames DEBOUT sont livrées à la même hauteur de cadre — ce que le contrat demandait  ║
+# ║ (1024 px) et ce que la production n'a pas tenu. Mesure des six frames :                          ║
+# ║                                                                                                  ║
+# ║   idle 1024 px = 1,800 m ✅ · throw 1023 px = 1,798 m ✅ · hit 1001 px = 1,760 m ✅              ║
+# ║   **aim 880 px = 1,547 m ⛔** · death_a 806 px = 1,417 m (chute) · death_b 238 px = 0,418 m      ║
+# ║                                                                                                  ║
+# ║ `aim` est l'état AMBIANT de tout adversaire qui menace (drapeau `aiming`, §8.137) : c'est donc   ║
+# ║ la frame que le joueur voit CHAQUE FOIS QU'IL A QUELQUE CHOSE À VISER. À 12 m, le parapet        ║
+# ║ d'en face coupe la silhouette à 1,208 m : la part exposée passait de 0,592 m (idle) à 0,339 m    ║
+# ║ (aim), soit **43 % de cible en moins au moment précis où on tire dessus**. Et le soldat          ║
+# ║ « s'enfonçait » de 25 cm sous les sacs quand il épaulait, ce qui se lit comme une esquive.        ║
+# ║                                                                                                  ║
+# ║ ⚠️ On NORMALISE donc les frames DEBOUT à `SILHOUETTE_TOP`, et on GARDE l'échelle constante pour  ║
+# ║ celles qui ne le sont pas — c'était la bonne intuition du §8.138, appliquée trop largement : un  ║
+# ║ corps au sol doit rendre sa hauteur RÉELLE, un homme debout doit rendre 1,80 m quoi qu'il        ║
+# ║ arrive au cadrage de son PNG. Le code cesse de faire confiance à la hauteur du fichier là où     ║
+# ║ elle décrit une taille d'HOMME, et lui fait confiance là où elle décrit une POSE.                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+static func pixel_size_for(state: String, frame_height: int) -> float:
+	if frame_height <= 0:
+		return PIXEL_SIZE
+	if not is_standing(state):
+		return PIXEL_SIZE
+	return SPRITE_REFERENCE_M / float(frame_height)
+
+
+static func is_standing(state: String) -> bool:
+	var entry: Dictionary = ENEMY_FRAMES.get(state, {})
+	return bool(entry.get("standing", true))
 
 # --- LE VIEWMODEL ---------------------------------------------------------------------------------
 const VIEWMODEL_IDLE := "idle"

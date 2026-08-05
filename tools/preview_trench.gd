@@ -25,8 +25,8 @@ const RULES := {
 	"tick_rate_hz": 10, "rounds_to_win": 2, "round_ticks": 900, "positions": 5, "hp_max": 100,
 	"move_ticks": 3, "intermission_ticks": 30, "grace_disconnect_ticks": 100, "afk_ticks": 200,
 	"grenade": {"stock_start": 2, "stock_max": 3, "regen_ticks": 150,
-		"flight_min_ticks": 15, "flight_max_ticks": 30, "damage_direct": 40,
-		"damage_adjacent": 15},
+		"radius_m": 2.5, "damage_max": 40, "flight_base_s": 0.9,
+		"flight_per_metre_s": 0.07, "flight_floor_ticks": 15, "target_margin_m": 1.5},
 	"weapons": [
 		{"id": "vipere", "name_key": "WEAPON_VIPERE", "burst": 1, "damage": 12,
 			"cooldown_ticks": 9, "flight_ticks": 4, "laser_lead_ticks": 0,
@@ -149,7 +149,7 @@ func _ready() -> void:
 	# La même chose en visant à FOND à droite : c'est là que l'ancien pan linéaire divergeait de
 	# 11 % d'une projection en tangente. Un monde 3D n'a pas de « divergence » à mesurer — la
 	# capture ne sert qu'à le VOIR.
-	duel._aim_yaw = DuelScript.AIM_YAW_LIMIT
+	duel._aim_yaw = DuelScript.aim_yaw_limit()
 	duel._refresh_view(0.016)
 	await get_tree().create_timer(0.2).timeout
 	await _shot(out_dir, "trench_yaw_max")
@@ -185,8 +185,10 @@ func _ready() -> void:
 	duel._enemy_laser_yaw = _aim(3, 2)[0]
 	duel._enemy_laser_pitch = _aim(3, 2)[1]
 	duel._enemy_laser_pos = 3
-	duel._charging = true
-	duel._charge = 0.7
+	# §8.141 : la jauge de charge a disparu — c'est la VISÉE DE GRENADE qui se met en scène, avec
+	# son décalque au sol au rayon réel.
+	duel._aiming_grenade = true
+	duel._world.show_grenade_aim(true, 1.2, Geo.far_soldier_z(), true)
 	duel._on_state(_demo_state(103, true, 140, false, true))
 	duel._open_choice({"options": ["chacal", "condor"], "deadline_tick": 140})
 	duel._refresh_view(0.016)
@@ -195,7 +197,8 @@ func _ready() -> void:
 
 	# ------------------------------------------------------------------ 4) HUD AUX 2 ÉCHELLES
 	# Contre-épreuve §6 : lisible de 0,9 à 1,3 — on capture les deux bornes.
-	duel._charging = false
+	duel._aiming_grenade = false
+	duel._world.show_grenade_aim(false)
 	duel._choice_panel.visible = false
 	for scale_value in [0.9, 1.3]:
 		duel.scale = Vector2(scale_value, scale_value)

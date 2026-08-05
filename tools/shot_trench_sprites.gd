@@ -107,6 +107,21 @@ func _ready() -> void:
 		_duel._pred_pos = int(pair[0])
 		_duel._world.set_pose(int(pair[0]), "up", true)
 		_duel._refresh_pose_view()
+		# ╔═ ⚠️ IL FAUT REGARDER LA CIBLE POUR LA PHOTOGRAPHIER (§8.141) ═════════════════════════╗
+		# ║ Avec l'arène à 9 m et le front à 13,6 m, la position adverse OPPOSÉE est à ±53,7° de   ║
+		# ║ lacet, pour un demi-champ horizontal de ~43° en 16:9. Elle est donc HORS DE L'ÉCRAN     ║
+		# ║ tant que le joueur ne tourne pas la tête — et c'est le jeu voulu (« viser d'un bout à   ║
+		# ║ l'autre demande un vrai geste »). Ce harnais visait droit devant : ses deux captures     ║
+		# ║ extrêmes ne montraient donc PAS de soldat, et un lecteur pressé y aurait lu un défaut    ║
+		# ║ de rendu. On oriente la visée sur le CENTRE de la fenêtre de tir — c'est-à-dire là où le ║
+		# ║ joueur la mettrait lui-même.                                                            ║
+		# ╚═══════════════════════════════════════════════════════════════════════════════════════╝
+		var eye: Vector3 = Geo.eye_position(int(pair[0]), "up")
+		var window: Dictionary = Geo.aim_window(eye, int(pair[1]), "up")
+		if not window.is_empty():
+			_duel._aim_yaw = (float(window["yaw_min"]) + float(window["yaw_max"])) * 0.5
+			_duel._aim_pitch = (float(window["pitch_min"]) + float(window["pitch_max"])) * 0.5
+			_duel._world.set_aim(_duel._aim_yaw, _duel._aim_pitch)
 		_push(int(pair[1]), "idle")
 		await get_tree().create_timer(0.35).timeout     # > 0,2 s : le fondu d'apparition est fini
 		var tag := "soldat_moi%d_lui%d" % [int(pair[0]), int(pair[1])]
@@ -153,7 +168,18 @@ func _push(enemy_pos: int, state: String) -> void:
 	})
 	if state == "throw" or state == "hit":
 		_duel._world.set_enemy_action(state)
-	_duel._refresh_view(0.016)
+	# ╔═ ⚠️⚠️ CE HARNAIS PHOTOGRAPHIAIT UN SOLDAT À ALPHA 0,12 — CORRIGÉ §8.141 ═══════════════════╗
+	# ║ `_render_enemy` monte `_enemy_alpha` de 0,12 PAR APPEL (fondu d'apparition), et `_refresh_   ║
+	# ║ view` n'est appelée que depuis `_process` — que ce harnais coupe volontairement pour figer   ║
+	# ║ la mise en scène. Un seul appel laissait donc l'adversaire à 12 % d'opacité ET, par le même  ║
+	# ║ calcul, ENFONCÉ de 0,48 m derrière son parapet (`sink = (1 − alpha) × 0,55`) : littéralement ║
+	# ║ invisible sur toutes les captures de soldat. Le §8 du rapport de pivot a diagnostiqué un     ║
+	# ║ « rectangle blanc » en partie sur ces images-là.                                             ║
+	# ║ ⚠️ On ne triche PAS en forçant `_enemy_alpha` : on APPELLE la vraie fonction jusqu'au bout du ║
+	# ║ fondu. Ce qui est photographié reste ce que le jeu dessine.                                  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	for _i in 20:
+		_duel._refresh_view(0.016)
 
 
 func _shot(name_: String) -> void:

@@ -38,28 +38,39 @@ extends RefCounted
 # --- Le no man's land et les tranchées ------------------------------------------------------------
 # Largeur du no man's land (§2.1) ⚙. C'est LA cote de ressenti : elle fixe la taille apparente de
 # la cible.
-# ╔═ ⚠️⚠️ 35 m → 12 m, SUR VERDICT DE PARTIE RÉELLE (§8.140.1) ═══════════════════════════════════╗
-# ║ « L'adversaire est trop loin, je le vois minuscule, c'est très compliqué de le voir et encore  ║
-# ║ plus de le viser. » La cote de 35 m avait été calculée pour un « ennemi lointain » — le calcul ║
-# ║ était juste et la sensation mauvaise : à 35 m, la part EXPOSÉE du soldat fait 0,96° de large,  ║
-# ║ soit une vingtaine de pixels en 1920. On ne vise pas vingt pixels au pistolet.                  ║
-# ║ À 12 m, la même silhouette fait **2,64°** — environ 2,8 fois plus large. C'est le tiers demandé.║
+# ╔═ ⚠️⚠️ 35 m → 12 m (§8.140.1) → 9 m (§8.141), SUR VERDICT DE PARTIE RÉELLE ════════════════════╗
+# ║ Premier verdict : « L'adversaire est trop loin, je le vois minuscule. » La cote de 35 m avait  ║
+# ║ été calculée pour un « ennemi lointain » — le calcul était juste et la sensation mauvaise : à  ║
+# ║ 35 m la part EXPOSÉE du soldat fait 0,96° de large, une vingtaine de pixels en 1920. On ne     ║
+# ║ vise pas vingt pixels au pistolet. À 12 m elle faisait 2,64°.                                   ║
+# ║ SECOND verdict, après de nombreux essais sur cette version-là : ENCORE trop petit. On descend   ║
+# ║ donc à **9 m**, ET on resserre le front — les deux ENSEMBLE, voir le pavé suivant.              ║
+# ║                                                                                                 ║
+# ║ Largeur apparente du torse exposé (0,60 m) à 10,0 m de plan à plan :                            ║
+# ║        35 m → 0,96°   ·   12 m → 2,64°   ·   **9 m → 3,44°**  (≈ 67 px à FOV 55 sur 1080p)      ║
+# ║ Hauteur de la bande exposée (le parapet d'en face coupe à 1,194 m) :                            ║
+# ║        12 m → 0,592 m = 2,61°   ·   **9 m → 0,606 m = 3,47°**  (≈ 68 px)                        ║
+# ║ Un torse de plus de 60 px se VISE ; il ne se devine plus. C'est le critère du chantier.         ║
 # ║                                                                                                 ║
 # ║ ⚠️ CETTE COTE N'EST PAS LOCALE. Elle voyage dans `trench_angles.json`, que le SERVEUR charge et ║
 # ║ ne recalcule jamais. La changer IMPOSE de régénérer la table (les deux copies) et de           ║
 # ║ REDÉPLOYER le backend — sans quoi le serveur résout les touches sur une arène qui n'existe      ║
 # ║ plus. `test_trench_angles.py` compare les checksums et le rappelle brutalement.                 ║
-# ║                                                                                                 ║
-# ║ ⚠️ CONSÉQUENCE À JUGER EN JEU : le front reste large de 16 m pour 12 m de profondeur. Depuis un ║
-# ║ bord, la position adverse opposée est à **±50,9° de lacet** (contre ±24,4° à 35 m). Le          ║
-# ║ débattement client a été ouvert en conséquence (`AIM_YAW_LIMIT`) — mais viser d'un bout à       ║
-# ║ l'autre demande désormais un vrai geste, et le pas de côté pèse deux fois plus lourd.           ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-const NO_MANS_LAND := 12.0
+const NO_MANS_LAND := 9.0
 
-# Positions discrètes par tranchée et leur espacement (§2.1) ⚙ — 5 × 4 m = 16 m de front utile.
+# ╔═ ⚠️ ON NE RAPPROCHE PAS SANS RESSERRER — SINON C'EST UN TORTICOLIS ═══════════════════════════╗
+# ║ 5 × 4,0 m faisaient 16 m de front. Gardé tel quel sur 9 m de profondeur, voir la position      ║
+# ║ opposée depuis un bord aurait demandé **±58,0°** de lacet (`atan(16,3 / 10,0)`) : on jouerait   ║
+# ║ le duel de profil. En resserrant à 3,4 m (13,6 m de front), on retombe à **±54,3°**            ║
+# ║ (`atan(13,9 / 10,0)`) — plus qu'à 12 m (±51,4°), donc le pas de côté pèse toujours plus lourd,  ║
+# ║ mais l'arène reste lisible d'un seul regard.                                                    ║
+# ║ ⚠️ Le débattement client ne recopie PAS ce chiffre : `max_window_yaw_deg()` plus bas le CALCULE ║
+# ║ depuis la table, et `trench_fp.gd` lui ajoute sa marge. Une cote qui bouge ne peut donc plus    ║
+# ║ laisser un plafond de visée périmé rendre trois positions sur cinq injoignables.                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const POSITIONS := 5
-const POSITION_SPACING := 4.0
+const POSITION_SPACING := 3.4
 
 # Parapet de sacs de sable : hauteur du sommet et épaisseur (le mur qui décide de tout le jeu).
 const PARAPET_Y := 1.25
@@ -87,7 +98,8 @@ const SILHOUETTE_TOP_DOWN := 1.05
 const AIM_QUANTUM_DEG := 0.1
 # Version de la table : à INCRÉMENTER dès qu'une cote ci-dessus bouge (voyage dans le JSON).
 # v2 : `NO_MANS_LAND` 35 → 12 m (§8.140.1, verdict de partie réelle).
-const TABLE_VERSION := 2
+# v3 : `NO_MANS_LAND` 12 → 9 m ET `POSITION_SPACING` 4,0 → 3,4 m (§8.141, second verdict).
+const TABLE_VERSION := 3
 
 
 # =================================================================================================
@@ -241,6 +253,63 @@ static func silhouette_span_deg() -> float:
 	if window.is_empty():
 		return 0.0
 	return float(window["yaw_max"]) - float(window["yaw_min"])
+
+
+# Hauteur apparente (en degrés) de la bande exposée, vue de face au centre. Jumelle de la
+# précédente : ensemble, elles disent en DEUX chiffres si la cible se vise ou se devine.
+static func silhouette_height_deg() -> float:
+	var window := aim_window(eye_position(2, "up"), 2, "up")
+	if window.is_empty():
+		return 0.0
+	return float(window["pitch_max"]) - float(window["pitch_min"])
+
+
+# ╔═ LE DÉBATTEMENT DE VISÉE SE CALCULE, IL NE SE RECOPIE PLUS (§8.141) ══════════════════════════╗
+# ║ `AIM_YAW_LIMIT` a valu 32° puis 58°, deux fois posé À LA MAIN après un changement de cote —    ║
+# ║ et la première fois, le laisser à 32° après le passage à 12 m aurait rendu trois positions sur ║
+# ║ cinq mécaniquement INJOIGNABLES depuis les bords (la balle n'aurait même pas pu être déclarée).║
+# ║ Ce plafond n'est pas un goût, c'est une CONSÉQUENCE de la géométrie : le plus grand |lacet|    ║
+# ║ qu'une fenêtre de tir réclame. On le calcule donc ICI, sur les mêmes fenêtres que celles que le║
+# ║ serveur résout — plus aucun rapprochement futur ne peut laisser un plafond périmé derrière lui.║
+# ║ ⚠️ C'est un MAXIMUM de fenêtres, pas une marge : `trench_fp.gd` y ajoute la sienne (le joueur  ║
+# ║ doit pouvoir DÉPASSER sa cible, sinon le geste bute sur un mur invisible au moment de viser).  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+static func max_window_yaw_deg() -> float:
+	var worst := 0.0
+	for shooter in range(POSITIONS):
+		var eye := eye_position(shooter, "up")
+		for target in range(POSITIONS):
+			var window := aim_window(eye, target, "up")
+			if window.is_empty():
+				continue
+			worst = maxf(worst, maxf(absf(float(window["yaw_min"])),
+				absf(float(window["yaw_max"]))))
+	return worst
+
+
+# ╔═ LES DEUX BORNES DE PRÉSENTATION QUI EN DÉCOULENT ════════════════════════════════════════════╗
+# ║ ⚠️ ELLES NE VOYAGENT PAS DANS LE JSON — `geometry_block()` ne les exporte pas, et le serveur   ║
+# ║ n'en a que faire : il résout des fenêtres, il ne présente rien. Elles vivent ICI parce qu'elles ║
+# ║ ont TROIS consommateurs client (`trench_fp` pour l'entrée souris, `trench_fp_world` pour la     ║
+# ║ caméra, `trench_tuning` pour le curseur) et qu'une valeur à trois copies est une valeur qui va  ║
+# ║ diverger. Elles sont la SEULE chose de ce fichier qui ne soit pas une cote métrique, et c'est   ║
+# ║ assumé : ce sont des conséquences DIRECTES des cotes, calculées au même endroit qu'elles.      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Marge au-delà de la fenêtre la plus excentrée ⚙ : viser, c'est passer SUR la cible et revenir. Un
+# plafond posé pile sur la fenêtre extrême ferait buter la main contre un mur invisible au moment
+# du tir le plus difficile du jeu. 6° ≈ deux largeurs de silhouette à 9 m.
+const AIM_YAW_MARGIN := 6.0
+# Marge de la caméra AU-DELÀ du débattement ⚙ : elle n'est jamais atteinte en jeu (la visée est
+# déjà bornée en amont), elle n'existe que pour qu'aucune valeur aberrante ne retourne la vue.
+const CAMERA_FOLLOW_SAFETY := 12.0
+
+
+static func aim_yaw_limit_deg() -> float:
+	return max_window_yaw_deg() + AIM_YAW_MARGIN
+
+
+static func camera_follow_max_deg() -> float:
+	return aim_yaw_limit_deg() + CAMERA_FOLLOW_SAFETY
 
 
 # Orientation d'une caméra posée sur une pose : elle REGARDE la tranchée adverse (+Z). Godot

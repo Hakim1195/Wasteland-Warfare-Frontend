@@ -125,6 +125,36 @@ le vent, souffle + bips + formants pour la radio). Le jeu est **100 % fonctionne
 - `menu_ambient` est **forcé en boucle** par le code (`loop = true`) — inutile de configurer la
   boucle dans le `.import`, mais ça ne gêne pas si tu le fais.
 
+## 💥 LA TRANCHÉE (§8.140.1 et §8.141) — bon de commande
+
+Neuf SFX propres au mini-jeu, tous en repli **procédural** aujourd'hui : le duel est jouable et
+recettable sans un seul fichier. Déposer `assets/audio/sfx/<nom>.<ext>` remplace le placeholder
+**sans toucher une ligne de code** (mécanique `_register_sfx` / `_load_override`).
+
+| Nom exact | Quand | Ce que le placeholder fait, et ce qu'on attend de mieux |
+|---|---|---|
+| `trench_shot` | chaque tir, les deux camps | claque sèche de **0,18 s**. ⚠️ **La brièveté est une contrainte, pas un goût** : jusqu'à 24 départs par chargeur au FRELON — la moindre queue de réverbération devient une bouillie |
+| `trench_hit` | coup ENCAISSÉ par le joueur | grave et mat. Doit être impossible à confondre avec un tir |
+| `trench_hitmarker` | MA touche CONFIRMÉE par le serveur | aigu, très court. C'est la récompense — il ne doit jamais couvrir la détonation qui le précède de 200 ms |
+| `trench_grenade` | départ du lancer | bref, mécanique (la goupille, le bras) |
+| `trench_step` | **chaque pas de l'adversaire** (§8.141) | mat et sourd, 0,12 s : de la terre détrempée sous une botte, pas une semelle sur du parquet. Joué jusqu'à 2×/s et **atténué par la distance réelle** — toute résonance en ferait un tambour |
+| `trench_explosion_near` | explosion à **moins de 6 m** | le grave dans la poitrine + le claquement. C'est celui qui accompagne une secousse de caméra : il doit la justifier |
+| `trench_explosion_far` | explosion **au-delà** | ⚠️ **le MÊME événement, pas le même son plus faible.** L'air mange les aigus en premier : un son distant est plus SOMBRE et plus ÉTALÉ. C'est cette différence de TIMBRE — et pas le volume — qui dit au joueur « ce n'est pas tombé sur moi », avant qu'il ait regardé ses PV |
+| `trench_debris` | **0,4 s après** l'explosion | crépitement épars et décroissant : les mottes de terre qui retombent. C'est lui qui donne une DURÉE à l'explosion — sans lui, la détonation s'arrête net et la scène redevient silencieuse comme si rien n'avait été soulevé |
+| `trench_refused` | geste ENTENDU et REFUSÉ (lancer sans stock) | clic sec et grave, 0,045 s. ⚠️ **Il ne doit ressembler à AUCUN son d'action** : un refus qui sonnerait comme un tir raté laisserait croire que le geste est parti. L'oreille doit comprendre « rien n'a eu lieu » |
+
+> ⚠️ **`explosion` (le SFX du jeu principal) n'est PAS réutilisé pour la tranchée.** Il l'était
+> jusqu'au §8.141 ; les deux explosions du mini-jeu ont désormais leur propre entrée, précisément
+> pour que le couple près/loin puisse exister.
+
+### 🖼️ Et une frame d'image, tant qu'on y est
+
+`assets/images/trench/sprites/vm_grenade.png` — la main qui arme la grenade, vue à la première
+personne. Elle **n'appartient à aucune arme** (la main est la même quelle que soit l'arme rangée),
+d'où son nom hors du contrat `vm_<arme>_<état>`. Tant qu'elle n'est pas déposée, l'arme courante
+**s'abaisse** pendant la visée — assez pour dégager la vue du décalque au sol, qui est justement ce
+qu'on demande au joueur de regarder à ce moment-là.
+
 ## 🎚️ Routage & volume
 
 - Les **SFX** sortent sur le bus **`SFX`**, la musique (couches comprises) sur le bus **`Music`**,

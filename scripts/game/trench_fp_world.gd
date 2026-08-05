@@ -36,9 +36,11 @@ extends SubViewportContainer
 const Geo := preload("res://scripts/game/trench_geometry.gd")
 const Sprites := preload("res://scripts/game/trench_sprites.gd")
 const BlockoutScene := preload("res://scenes/game/trench_arena_blockout.tscn")
+const ExplosionScene := preload("res://scenes/game/trench_explosion.tscn")
 
-# Champ de vision VERTICAL de la caméra ⚙. À 75° horizontaux environ (16:9), la silhouette
-# adverse de 0,955° occupe ~25 px sur 1920 : petite, mais franchement visable.
+# Champ de vision VERTICAL de la caméra ⚙. À 9 m (§8.141), la silhouette adverse EXPOSÉE fait
+# 3,44° de large sur 3,47° de haut, soit ~67 × 68 px en 1080p : elle se VISE, elle ne se devine plus.
+# (Rappel de l'échelle parcourue : ~19 px à 35 m, ~51 px à 12 m.)
 const CAMERA_FOV := 55.0
 # Le proche est très court : le viewmodel vit à ~0,4 m de l'œil.
 const CAMERA_NEAR := 0.05
@@ -67,11 +69,16 @@ const STANCE_TRANSITION := 0.12
 # ║ règle la sensation dans le panneau F10, en jouant. Voir `apply_tuning()` plus bas.             ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const AIM_FOLLOW := 1.0
-# Borne de sécurité, au-delà du débattement client (±58° depuis §8.140.1) : elle n'écrête jamais en
-# jeu, elle empêche seulement une visée aberrante de faire pivoter la caméra à l'envers du monde.
-# ⚠️ Elle DOIT rester au-dessus de `AIM_YAW_LIMIT`, sans quoi la caméra cesserait de suivre le
-# réticule dans les derniers degrés — le joueur viserait une cible que sa vue refuse d'atteindre.
-const AIM_FOLLOW_MAX := 70.0
+# Borne de sécurité : elle n'écrête jamais en jeu, elle empêche seulement une visée aberrante de
+# faire pivoter la caméra à l'envers du monde.
+# ╔═ ⚠️ ELLE DOIT RESTER AU-DESSUS DU DÉBATTEMENT DE VISÉE — ET C'EST MAINTENANT MÉCANIQUE ═══════╗
+# ║ Sinon la caméra cesse de suivre le réticule dans les derniers degrés : le joueur vise une      ║
+# ║ cible que sa propre vue refuse de rejoindre. C'est EXACTEMENT le défaut §7.1 du rapport de     ║
+# ║ pivot, vécu avec un réglage persisté à 45° pour un débattement monté à 58°. On avait alors     ║
+# ║ versionné les réglages ; on retire ici la deuxième moitié du piège, celle qui restait dans le  ║
+# ║ CODE : le plafond sort de `Geo.camera_follow_max_deg()`, donc de la géométrie, plutôt que d'un ║
+# ║ nombre reposé à la main après chaque rapprochement.                                            ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 
 # ╔═ LA BRUME DE PROFONDEUR EST DANS L'ENVIRONNEMENT, PAS SUR L'ÉCRAN ════════════════════════════╗
 # ║ `trench_ambient.gd` peint deux nappes de brume à hauteur d'horizon — en 2D, donc à une         ║
@@ -86,8 +93,11 @@ const AIM_FOLLOW_MAX := 70.0
 # la peinture et la 3D se lisent comme une seule image. Toute retouche du panorama impose de
 # reprendre cette mesure — `tools/trench_asset_factory.py` la sort en deux lignes.
 const FOG_COLOR := Color(0.279, 0.338, 0.361)
-# Elle ne commence qu'APRÈS le duel : à 80 m, la tranchée adverse (35 m) et son soldat sont encore
-# parfaitement nets. Voiler la cible serait changer le jeu, pas l'habiller.
+# Elle ne commence qu'APRÈS le duel : à 80 m, la tranchée adverse (9 m depuis §8.141) et son soldat
+# sont encore parfaitement nets. Voiler la cible serait changer le jeu, pas l'habiller.
+# ⚠️ VÉRIFIÉ PAR LA MESURE au rapprochement, et pas par le raisonnement : `probe_trench_soldier`
+# rend EXACTEMENT le même RGB pour le soldat avec et sans les couches d'habillage (98/76/71 dans les
+# deux cas au relevé du §8.141). La brume ne le touche pas — la marge est même passée de 45 m à 71 m.
 const FOG_BEGIN := 80.0
 const FOG_END := 320.0
 
@@ -106,14 +116,73 @@ const ENEMY_HIT_WHITEN := 0.6
 const TRACER_POOL := 24
 # Distance au-delà de laquelle MA traçante devient visible : elle naît à l'œil du tireur, il faut
 # donc la laisser sortir du cadre proche avant de la dessiner ⚙.
+# ⚠️ EN MÈTRES ABSOLUS, et c'est VOULU — contrairement à la longueur ci-dessous. Le critère est
+# ANGULAIRE : une boîte de 6 cm couvre ~10° à 35 cm de l'œil (le défaut §7.2) et 1,7° à 2 m. Ce
+# seuil ne dépend donc pas de la portée de l'arène, et l'exprimer en fraction le ferait fondre à
+# chaque rapprochement jusqu'à ramener la boîte devant la pupille.
 const MUZZLE_CLEAR := 2.0
-# Longueur apparente de la balle. ⚙ Elle porte la lisibilité du vol : trop courte, la traçante est
-# un point qui saute d'une frame à l'autre ; trop longue, c'est un trait fixe entre les tranchées.
-const TRACER_LENGTH := 3.0
+# Longueur apparente de la balle ⚙, en FRACTION de la portée. Elle porte la lisibilité du vol : trop
+# courte, la traçante est un point qui saute d'une frame à l'autre ; trop longue, c'est un trait fixe
+# entre les tranchées — et c'est précisément ce que 3 m en dur seraient devenus sur 9 m de no man's
+# land (un tiers du terrain, occupé en permanence). Un quart de la portée garde le même rapport
+# qu'à 12 m, où le réglage avait été jugé bon.
+const TRACER_LENGTH_RATIO := 0.25
 const GRENADE_POOL := 6
 # Hauteur du PLANCHER DE TRANCHÉE (+ un rien pour éviter le z-fighting avec le sol). C'est là que
 # tombent les grenades et que se posent leurs marqueurs — pas au niveau du no man's land.
 const MARKER_Y := 0.04
+
+# ╔═ §8.141 — LE DÉCALQUE DE VISÉE : POURQUOI IL N'A QU'UN SEUL DEGRÉ DE LIBERTÉ ═════════════════╗
+# ║ Le bon de commande décrit un décalque « au point visé », validé contre une bande de profondeur ║
+# ║ de ±1,5 m autour de la tranchée adverse. Le premier montage l'a pris au pied de la lettre — et  ║
+# ║ le harnais l'a mis au rouge sur un cas trivial (viser à −8° tombait à z = 11,3 m, hors bande).  ║
+# ║ En cherchant pourquoi, DEUX faits de géométrie sont sortis, et ils condamnent la lecture        ║
+# ║ littérale :                                                                                     ║
+# ║                                                                                                 ║
+# ║  1. UNE BANDE DE PROFONDEUR EST UNE FENÊTRE ANGULAIRE MINUSCULE. Depuis un œil à 1,70 m, le    ║
+# ║     plancher de la tranchée d'en face couvre à peine **2,9° de site** entre les deux bords de   ║
+# ║     la bande. Demander au joueur d'y loger son réticule, c'est lui demander un geste de         ║
+# ║     précision au pixel pour une arme de ZONE — l'inverse de ce que le chantier cherche.         ║
+# ║  2. LE POINT D'IMPACT EST INVISIBLE. La ligne de vue qui rase l'arête du parapet adverse coupe  ║
+# ║     à 1,194 m au plan des soldats : TOUT ce qui est plus bas est occulté par les sacs. Le       ║
+# ║     plancher de la tranchée d'en face (y ≈ 0) ne peut donc PAS être vu debout — un décalque     ║
+# ║     posé dessus serait derrière un mur.                                                          ║
+# ║                                                                                                 ║
+# ║ ⚠️ ET SURTOUT : LA PROFONDEUR N'EST PAS UNE VARIABLE DU JEU. Le contrat serveur ne transporte    ║
+# ║ que `target_x` — la grenade tombe TOUJOURS dans la tranchée adverse. Faire viser en profondeur  ║
+# ║ demanderait au joueur un effort qui ne change RIEN, et lui laisserait croire l'inverse.          ║
+# ║                                                                                                 ║
+# ║ Le décalque est donc posé au plan des soldats adverses, et son abscisse suit le LACET — le seul ║
+# ║ axe qui compte. Le site ne sert qu'à deux garde-fous honnêtes : ne pas viser le ciel, ne pas     ║
+# ║ viser ses propres pieds. Le cercle reste alors sous le réticule et la lecture est immédiate.     ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Fraction du no man's land que la ligne de visée doit AU MOINS atteindre au sol ⚙ — voir la mesure
+# dans `grenade_aim_point`, où deux seuils plus « évidents » se sont révélés l'un trop strict et
+# l'autre inatteignable.
+const GRENADE_MIN_REACH := 0.4
+# Au-dessus de ce site, on vise le ciel ⚙ — un chouïa au-dessus de l'horizontale, parce qu'une
+# cloche part LÉGÈREMENT vers le haut et qu'un seuil pile à 0° passerait au rouge à chaque lancer
+# tendu.
+const SKY_TOLERANCE_DEG := 2.0
+const COL_GRENADE_OK := Color(0.94, 0.76, 0.32)
+const COL_GRENADE_OUT := Color(0.86, 0.29, 0.25)
+# Deux explosions simultanées au maximum (bon de commande §C.2) : au-delà, ce sont deux grenades
+# tombées à 0,1 s l'une de l'autre, et la troisième n'ajouterait que du bruit.
+const EXPLOSION_POOL := 2
+# ╔═ LA SECOUSSE — MODÈLE « TRAUMA », ET JAMAIS DE ROTATION ══════════════════════════════════════╗
+# ⚠️ ON TRANSLATE L'ŒIL, ON NE LE FAIT PAS TOURNER. Une rotation de caméra déplacerait la visée
+# RENDUE par rapport à la visée ENVOYÉE : le joueur verrait son réticule dériver au moment précis
+# où il doit riposter, et il l'imputerait au jeu. Une translation de quelques centimètres secoue
+# l'image sans toucher à un seul degré de lacet.
+# CONVERSION : à la distance du duel (~10 m) et au FOV nominal, 6 cm de translation valent
+# `atan(0.06/10)` = 0,34°, soit ~6,7 px en 1080p — l'amplitude demandée par le bon de commande.
+const SHAKE_METRES_MAX := 0.06
+const SHAKE_DECAY := 3.2          # décroissance exponentielle du « trauma » ⚙
+const SHAKE_FREQ := 26.0          # oscillations par seconde ⚙
+# Impulsions ⚙ : dans le rayon · ma tranchée touchée ailleurs · au-delà, rien.
+const SHAKE_ON_ME := 0.4
+const SHAKE_ON_MY_TRENCH := 0.15
+const SHAKE_RANGE := 15.0
 
 var _viewport: SubViewport
 var _root: Node3D
@@ -129,6 +198,17 @@ var _laser: MeshInstance3D
 var _tracers: Array[MeshInstance3D] = []
 var _grenades: Array[MeshInstance3D] = []
 var _markers: Array[MeshInstance3D] = []
+# --- §8.141 : la visée de grenade, les explosions, la secousse ------------------------------------
+var _aim_decal: MeshInstance3D
+var _aim_decal_mat: StandardMaterial3D
+var _explosions: Array = []
+# RAYON D'ACTION EN MÈTRES-MONDE — posé par l'hôte depuis `rules.grenade.radius_m`. La valeur de
+# départ n'est qu'un repli le temps que `trench_init` arrive : dès la première frame de duel réel,
+# c'est le registre SERVEUR qui décide de ce qui est dessiné (invariant d'honnêteté §C.1).
+var _grenade_radius := 2.5
+var _shake := 0.0                 # « trauma » courant, 0..1
+var _shake_time := 0.0
+var _shake_offset := Vector3.ZERO
 
 # Pose courante, INTERPOLÉE (la caméra ne saute jamais d'une position à l'autre).
 var _pose_pos := 2
@@ -146,7 +226,7 @@ var _enemy_x := 0.0                # abscisse RENDUE, tweenée par pas discrets 
 # Réglages VIVANTS, posés par le panneau F10 (`apply_tuning`). Les constantes ne sont que leur
 # valeur de départ.
 var _follow := AIM_FOLLOW
-var _follow_max := AIM_FOLLOW_MAX
+var _follow_max := Geo.camera_follow_max_deg()
 
 # --- Machine à frames du soldat (§8.138) ----------------------------------------------------------
 # `_enemy_painted` = TRUE quand `enemy_idle.png` existe. C'est un OU EXCLUSIF assumé : soit tout le
@@ -158,6 +238,42 @@ var _enemy_dying := false
 var _enemy_aiming := false
 var _enemy_dead := false
 var _enemy_tint := COL_DANGER
+
+# --- §8.141 : LE PAS QUI COÛTE, ET LA SILHOUETTE QUI SE DÉTACHE ----------------------------------
+# ╔═ POURQUOI CES QUATRE NŒUDS EXISTENT ══════════════════════════════════════════════════════════╗
+# ║ Ralentir la simulation (`move_ticks` 3 → 4) répond à « il bouge trop vite » côté RÈGLE. Mais un ║
+# ║ pas qui ne coûte RIEN à l'œil se lit encore comme une téléportation, même à 2,5 pas/s : entre    ║
+# ║ deux poses discrètes il n'y avait qu'un fondu de 0,15 s, sans aucun événement. On donne donc un  ║
+# ║ PRIX visuel et sonore à chaque pas — poussière, affaissement, bruit sourd — pour que l'œil       ║
+# ║ compte les pas au lieu de constater des positions.                                               ║
+# ║ Et le LISERÉ répond à l'autre moitié du verdict : à 67 px sur un parapet de jute très texturé,   ║
+# ║ la silhouette se CONFOND. Un rim clair, c'est ce qui fait la différence entre « je le vois » et  ║
+# ║ « je le cherche ». Il n'apparaît QUE quand l'adversaire est rendu — c'est-à-dire debout et       ║
+# ║ révélé — donc il ne trahit jamais un accroupi (l'invariant §1.6 n'est pas contournable ici : le  ║
+# ║ client n'a même pas la position d'un accroupi).                                                  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+var _enemy_rim: Sprite3D
+var _enemy_dust: GPUParticles3D
+var _enemy_muzzle: MeshInstance3D
+# Dernière position ENTIÈRE observée : c'est son changement qui définit « un pas », pas le glissé.
+var _enemy_step_pos := -1
+var _enemy_dip := 0.0          # affaissement vertical résiduel (m), décroissant
+var _enemy_muzzle_left := 0.0  # durée restante du départ de feu adverse (s)
+
+# Épaisseur du liseré ⚙, en fraction de la demi-largeur du sprite. 0,045 rend ~1,5 px au plus près
+# et ~0,9 px au coin le plus lointain : « 1 px » au sens du bon de commande, sur toute l'arène.
+const ENEMY_RIM_GROW := 0.045
+# Or DÉSATURÉ : assez clair pour trancher sur le jute, assez éteint pour ne pas ressembler à une
+# surbrillance de jeu d'arcade — on souligne une silhouette, on ne la sélectionne pas.
+const ENEMY_RIM_COLOR := Color(0.82, 0.76, 0.60)
+# Profondeur de l'affaissement au poser du pied ⚙ et sa constante de rappel. 4 cm sur une silhouette
+# de 1,80 m : invisible en photo, parfaitement lisible en mouvement — c'est le but.
+const ENEMY_STEP_DIP := 0.04
+const ENEMY_STEP_DIP_DECAY := 14.0
+# Durée du départ de feu adverse ⚙ — deux frames à 60 Hz. Plus long, ça devient une lampe.
+const ENEMY_MUZZLE_TIME := 0.035
+# Au-delà de cette distance, le pas adverse est INAUDIBLE ⚙ (au-delà du front le plus large).
+const STEP_AUDIBLE_RANGE := 22.0
 
 
 func _ready() -> void:
@@ -276,9 +392,11 @@ func _build_enemy() -> void:
 	_enemy_placeholder.add_child(_enemy_helmet)
 
 	_build_enemy_sprite()
+	_build_enemy_perception()
 	_enemy_painted = Sprites.enemy_available()
 	_enemy_placeholder.visible = not _enemy_painted
 	_enemy_sprite.visible = _enemy_painted
+	_enemy_rim.visible = _enemy_painted
 	_apply_enemy_frame()
 	_enemy.visible = false
 
@@ -291,13 +409,29 @@ func _build_enemy_sprite() -> void:
 	#    inutile — le quad est reconstruit depuis la base de la vue, la texture n'est jamais miroir,
 	#    et un sprite « facing the viewer » (convention du guide de production) fait donc bien face
 	#    au joueur depuis la tranchée d'en face, quelle que soit la position occupée.
-	_enemy_sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	# ⚠️ FIXED_Y et non ENABLED (§8.141) : un billboard PLEIN pivote aussi autour de l'horizontale,
+	#    donc il se COUCHE vers la caméra dès qu'elle pique du nez. Sa hauteur projetée reste alors
+	#    constante quel que soit le site — c'est-à-dire que le soldat ne s'enfonce PLUS derrière le
+	#    parapet quand on lève les yeux, alors que la table angulaire du serveur, elle, continue de
+	#    l'occulter. Le rendu mentirait sur la découpe qui décide des touches. Verrouillé sur la
+	#    verticale, le soldat tourne pour me faire face et reste DEBOUT : l'image et la règle
+	#    disent la même chose. (Le débattement de site est de ±14°, et le panneau F10 peut faire
+	#    tourner la caméra bien au-delà — l'écart n'a rien de théorique.)
+	_enemy_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
 	# 2. ALPHA_CUT_DISABLED = fondu alpha classique, et NON `DISCARD`/`OPAQUE_PREPASS` :
 	#    • les bords sont DOUX (sortie rembg antialiasée) — un seuil les redécouperait en escalier ;
 	#    • c'est la SEULE option qui laisse vivre le fondu de redaction (`modulate.a`) : sous un
 	#      seuil, l'adversaire ne s'effacerait pas, il DISPARAÎTRAIT d'un coup à mi-fondu.
 	#    L'occultation par le parapet reste juste : un objet transparent est TESTÉ en profondeur même
 	#    s'il n'y écrit pas, et le parapet est opaque. Le tri n'est pas un sujet : il y a UN sprite.
+	# ⚠️ ARBITRAGE §8.141 : le bon de commande demandait d'essayer `alpha_scissor` (seuil 0,5)
+	#    D'ABORD, et de ne garder le blend que si le seuil crénelait à l'œil. Le départage n'est pas
+	#    esthétique, il est FONCTIONNEL, et il tombe avant la capture : un seuil rend le fondu de
+	#    redaction BINAIRE. L'adversaire qui s'accroupit ne s'effacerait plus derrière son parapet —
+	#    il clignerait hors d'existence à mi-fondu, ce qui se lit comme un décrochage réseau. La
+	#    sonde a mesuré les deux (quad scissor 61/61/59, quad blend 61/62/60) : à qualité d'image
+	#    égale, on garde celui qui préserve une information de jeu. Le coût de tri est nul — il y a
+	#    UN sprite dans la scène.
 	_enemy_sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
 	# 3. NON ÉCLAIRÉ, comme le placeholder et pour la MÊME raison (défaut n° 3 vu en CAPTURE) : à
 	#    35 m la part exposée du soldat fait ~0,9°, soit une vingtaine de pixels. Éclairé, il tombe
@@ -305,18 +439,27 @@ func _build_enemy_sprite() -> void:
 	#    DÉJÀ PEINTE dans la frame — la rééclairer serait de toute façon la peindre deux fois.
 	_enemy_sprite.shaded = false
 	_enemy_sprite.double_sided = true
-	# ╔═ ⚠️⚠️ LE SOLDAT ADVERSE ÉTAIT UN RECTANGLE BLANC — DEPUIS LE §8.138 ═══════════════════════╗
-	# ║ Ce filtre demandait des MIPMAPS. Les 6 frames sont importées avec `mipmaps/generate=false`  ║
-	# ║ (réglage d'import, que la règle maison interdit de toucher). En OpenGL, une texture dont la ║
-	# ║ chaîne de mips est absente alors que le sampler en réclame une est INCOMPLÈTE, et le spec   ║
-	# ║ dit qu'elle s'échantillonne en BLANC OPAQUE. Le sprite se dessinait donc à la bonne place,  ║
-	# ║ à la bonne taille, avec le bon alpha de nœud — en aplat blanc teinté par `modulate`, soit   ║
-	# ║ un carré jaune pâle.                                                                        ║
-	# ║ Personne ne pouvait le voir : à 35 m, la part exposée du soldat faisait une vingtaine de    ║
-	# ║ pixels, et un carré de 20 px ressemble à un homme de 20 px. C'est le rapprochement de       ║
-	# ║ l'arène à 12 m (§8.140.1) qui l'a rendu flagrant — et la recette du §8.138, qui mesurait    ║
-	# ║ l'alpha des FICHIERS et l'état de la machine à frames, n'avait aucune raison de l'attraper. ║
-	# ║ ⚠️ On accorde donc le filtre à l'asset, et surtout PAS l'inverse.                            ║
+	# ╔═ ⚠️⚠️ « LE SOLDAT EST UN RECTANGLE BLANC » — DIAGNOSTIC INFIRMÉ PAR LA MESURE (§8.141) ════╗
+	# ║ Le §8 du rapport de pivot concluait que le sprite s'échantillonnait en blanc opaque, sur la  ║
+	# ║ foi d'un relevé « pixels rendus ≈ modulation × BLANC », et léguait une piste : remplacer le  ║
+	# ║ `Sprite3D` par un quad + `StandardMaterial3D`. Les deux ont été éprouvés avant d'être crus.  ║
+	# ║                                                                                               ║
+	# ║ `tools/probe_trench_quad.tscn` — même texture, même SubViewport, quatre modes de rendu côte  ║
+	# ║ à côte : `Sprite3D` tel qu'en jeu **58/59/58**, quad scissor 61/61/59, quad blend 61/62/60,  ║
+	# ║ `Sprite3D` en NEAREST 59/60/58 — pour une source à 60/61/60. Les QUATRE peignent, écart-type ║
+	# ║ de luminance 0,13. Le mode de rendu n'a jamais été en cause.                                  ║
+	# ║ `tools/probe_trench_soldier.tscn` — dans le VRAI duel, par différence (sprite visible /       ║
+	# ║ masqué), aux trois profondeurs (monde 3D seul · écran habillé · écran nu) : RGB 98/76/71,    ║
+	# ║ σ 0,17, une image peinte. La loupe ×8 montre un homme au casque, l'arme à l'épaule.           ║
+	# ║                                                                                               ║
+	# ║ ⚠️ CE QUE LE §8 A PROBABLEMENT MESURÉ : le PARAPET DE JUTE, teinté `COVER_TINT` (1,70/1,67/  ║
+	# ║ 1,62 — un multiplicateur d'albédo SUPÉRIEUR À 1). Il occupe la majeure partie du quad du      ║
+	# ║ sprite, il est tan clair, et il donne exactement le « blanc teinté d'or » relevé. Le harnais  ║
+	# ║ de l'époque n'y aidait pas : il ne poussait qu'UN état, donc `_enemy_alpha` plafonnait à      ║
+	# ║ 0,12 et le soldat restait ENFONCÉ de 0,48 m derrière les sacs — invisible pour de bon.        ║
+	# ║ ⚠️ LA LEÇON : une mesure qui ne SOUSTRAIT pas le fond ne mesure pas le sujet. Les deux        ║
+	# ║ sondes ci-dessus travaillent par DIFFÉRENCE, et c'est pour cela qu'elles ont tranché.         ║
+	# ║ Le vrai défaut de taille était ailleurs, et il est réel : cf. `Sprites.pixel_size_for()`.     ║
 	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 	_enemy_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	_enemy_sprite.pixel_size = Sprites.PIXEL_SIZE
@@ -324,19 +467,114 @@ func _build_enemy_sprite() -> void:
 	_enemy.add_child(_enemy_sprite)
 
 
-# Pose la texture de la frame courante ET RECALCULE L'ANCRAGE AU SOL.
+# LE LISERÉ, LA POUSSIÈRE ET LE DÉPART DE FEU (§8.141).
+func _build_enemy_perception() -> void:
+	# --- LISERÉ : un DOUBLE du sprite, à peine plus grand, teinté, dessiné DESSOUS ---------------
+	# ⚖ ARBITRAGE — le bon de commande demandait « un shader outline sur le quad ». Un `Sprite3D`
+	# construit son propre matériau (billboard, texture, alpha) : lui poser un `material_override`
+	# le remplacerait ENTIÈREMENT, donc il faudrait réécrire le billboard et le sampling à la main
+	# pour gagner un contour. Un double homothétique donne le même résultat visible avec une
+	# géométrie qu'on maîtrise, et il hérite gratuitement de toutes les propriétés qu'on vient de
+	# régler sur l'original — filtre, billboard vertical, mode alpha. C'est le même dessin, et c'est
+	# une pièce de moins qui peut diverger.
+	# ⚠️ `render_priority` NÉGATIF : deux quads coplanaires transparents ne sont pas départagés par
+	# le tampon de profondeur (l'alpha n'y écrit pas). Sans priorité explicite, l'ordre de dessin
+	# dépendrait de l'ordre de la scène — et un liseré dessiné PAR-DESSUS le soldat le repeindrait.
+	_enemy_rim = Sprite3D.new()
+	_enemy_rim.name = "PaintedSoldierRim"
+	_enemy_rim.billboard = _enemy_sprite.billboard
+	_enemy_rim.alpha_cut = _enemy_sprite.alpha_cut
+	_enemy_rim.shaded = false
+	_enemy_rim.double_sided = true
+	_enemy_rim.texture_filter = _enemy_sprite.texture_filter
+	_enemy_rim.centered = true
+	_enemy_rim.render_priority = -1
+	_enemy_rim.scale = Vector3(1.0 + ENEMY_RIM_GROW, 1.0 + ENEMY_RIM_GROW, 1.0)
+	_enemy.add_child(_enemy_rim)
+
+	# --- POUSSIÈRE AU PIED : 8 grains, 0,3 s, UN SEUL COUP par pas ------------------------------
+	# ⚠️ `one_shot` + `restart()` et non un émetteur permanent : un nuage continu ferait un soldat
+	# qui fume en permanence, et surtout il ne dirait plus RIEN — un signal qui ne s'éteint jamais
+	# n'est pas un signal.
+	_enemy_dust = GPUParticles3D.new()
+	_enemy_dust.name = "StepDust"
+	_enemy_dust.amount = 8
+	_enemy_dust.lifetime = 0.30
+	_enemy_dust.one_shot = true
+	_enemy_dust.emitting = false
+	_enemy_dust.explosiveness = 1.0
+	var dust_mesh := QuadMesh.new()
+	dust_mesh.size = Vector2(0.10, 0.10)
+	_enemy_dust.draw_pass_1 = dust_mesh
+	var dust_mat := StandardMaterial3D.new()
+	dust_mat.albedo_color = Color(0.52, 0.46, 0.38, 0.55)
+	dust_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dust_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	dust_mat.disable_fog = true
+	dust_mat.vertex_color_use_as_albedo = true
+	_enemy_dust.draw_pass_1.surface_set_material(0, dust_mat)
+	var dust_process := ParticleProcessMaterial.new()
+	dust_process.direction = Vector3(0.0, 1.0, 0.0)
+	dust_process.spread = 55.0
+	dust_process.initial_velocity_min = 0.25
+	dust_process.initial_velocity_max = 0.60
+	dust_process.gravity = Vector3(0.0, -1.2, 0.0)     # elle retombe : c'est de la terre, pas de la fumée
+	dust_process.scale_min = 0.6
+	dust_process.scale_max = 1.5
+	dust_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE_SURFACE
+	dust_process.emission_sphere_radius = 0.16
+	# Fondu jusqu'à zéro : un grain qui disparaît d'un coup se lit comme un défaut d'affichage.
+	var fade := Gradient.new()
+	fade.set_color(0, Color(1, 1, 1, 0.8))
+	fade.set_color(1, Color(1, 1, 1, 0.0))
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = fade
+	dust_process.color_ramp = ramp
+	_enemy_dust.process_material = dust_process
+	_enemy.add_child(_enemy_dust)
+
+	# --- DÉPART DE FEU ADVERSE : la parité d'information -----------------------------------------
+	# Le bot « voit » que je tire (ma traçante part de ma position). Sans cette lueur, je n'avais que
+	# le SON pour savoir que lui tirait — alors que la traçante adverse, elle, met un temps de vol à
+	# arriver. Un duel où l'un des deux camps dispose d'une information que l'autre n'a pas n'est
+	# plus un duel : c'est un déséquilibre déguisé en habillage.
+	var flash := SphereMesh.new()
+	flash.radius = 0.10
+	flash.height = 0.20
+	flash.radial_segments = 8
+	flash.rings = 4
+	_enemy_muzzle = MeshInstance3D.new()
+	_enemy_muzzle.name = "EnemyMuzzle"
+	_enemy_muzzle.mesh = flash
+	_enemy_muzzle.material_override = _material(Color(1.0, 0.88, 0.55), true)
+	_enemy_muzzle.visible = false
+	_root.add_child(_enemy_muzzle)
+
+
+# Pose la texture de la frame courante, SON ÉCHELLE, et l'ancrage au sol qui en découle.
 # ⚠️ Le quad est CENTRÉ sur son origine : pour que les PIEDS tombent sur l'ancrage du blockout, on
-# remonte le sprite d'une demi-hauteur. Cette demi-hauteur se recalcule à chaque frame parce que
-# `pixel_size` est CONSTANT (cf. `trench_sprites.PIXEL_SIZE`) : une frame de mort livrée moins haute
-# qu'une frame debout rend un corps AU SOL, et non un cadavre étiré sur 1,80 m.
+# remonte le sprite d'une demi-hauteur.
+# ⚠️⚠️ L'ÉCHELLE EST DÉSORMAIS PAR ÉTAT (`Sprites.pixel_size_for`), et ce n'est pas un raffinement :
+# la frame `aim` était livrée à 880 px pour un contrat à 1024, et l'adversaire perdait 25 cm — donc
+# 43 % de sa part exposée — au moment précis où il devient une cible. Le pavé de `trench_sprites.gd`
+# porte la mesure des six frames.
 func _apply_enemy_frame() -> void:
 	if not _enemy_painted or _enemy_sprite == null:
 		return
 	var frame := Sprites.enemy_texture(_enemy_frame)
 	if frame == null:
 		return
+	var pixel_size: float = Sprites.pixel_size_for(_enemy_frame, frame.get_height())
 	_enemy_sprite.texture = frame
-	_enemy_sprite.position = Vector3(0.0, float(frame.get_height()) * Sprites.PIXEL_SIZE * 0.5, 0.0)
+	_enemy_sprite.pixel_size = pixel_size
+	_enemy_sprite.position = Vector3(0.0, float(frame.get_height()) * pixel_size * 0.5, 0.0)
+	# Le liseré suit la frame COURANTE, sinon un soldat qui épaule porterait le contour de sa pose
+	# précédente — un fantôme d'une frame de retard, visible précisément quand on le regarde.
+	if _enemy_rim != null:
+		_enemy_rim.texture = frame
+		_enemy_rim.pixel_size = pixel_size
+		_enemy_rim.position = _enemy_sprite.position
 
 
 # Matériau du soldat PLACEHOLDER : NON ÉCLAIRÉ, à dessein.
@@ -428,6 +666,38 @@ func set_weapon(weapon_id: String) -> void:
 		_viewmodel.add_child(scope_node)
 
 
+# La maille UNITAIRE des cercles de zone : un tore plat de rayon extérieur 1,0 m, que `scale` ouvre
+# au rayon réel. ⚠️ Unitaire, et c'est le point : une maille déjà dimensionnée obligerait à
+# reconstruire le maillage à chaque changement de barème — donc à avoir un endroit de plus où le
+# rayon dessiné peut cesser de valoir le rayon des dégâts.
+# ╔═ ⚠️⚠️ LES CERCLES DE ZONE SE VOIENT À TRAVERS LES SACS — ET C'EST OBLIGATOIRE ════════════════╗
+# ║ Mesuré en posant le décalque : la ligne de vue qui rase l'arête du parapet adverse coupe à     ║
+# ║ **1,194 m** au plan des soldats. Le plancher de la tranchée d'en face (y ≈ 0), donc le point    ║
+# ║ d'impact d'une grenade, est INTÉGRALEMENT occulté depuis un œil debout. Un cercle soumis au     ║
+# ║ tampon de profondeur y serait donc invisible — c'est-à-dire inexistant, dans un lot dont TOUT   ║
+# ║ l'objet est de rendre la zone lisible.                                                          ║
+# ║ On coupe donc le test de profondeur pour les cercles de zone, et pour eux seuls.                ║
+# ║ ⚠️ AUCUNE INFORMATION N'EST DIVULGUÉE : le décalque de VISÉE ne montre que ma propre visée, et  ║
+# ║ le marqueur de VOL est déjà public par décision de design (§1.6 : « esquiver DOIT rester        ║
+# ║ possible, sinon la grenade cesse d'être l'arme anti-camping et devient une loterie »). On ne    ║
+# ║ voit pas à travers un mur : on voit une MENACE que le jeu a décidé d'annoncer.                  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _see_through(material: StandardMaterial3D) -> void:
+	material.no_depth_test = true
+	# Sans priorité explicite, un objet sans test de profondeur se dessine dans un ordre arbitraire
+	# par rapport aux autres transparents (traçantes, soldat) : il clignoterait derrière eux.
+	material.render_priority = 8
+
+
+func _ring_mesh() -> TorusMesh:
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.90
+	ring.outer_radius = 1.0
+	ring.rings = 40
+	ring.ring_segments = 6
+	return ring
+
+
 func _build_pools() -> void:
 	# Traçantes : des boîtes très étirées, non éclairées — lisibles de jour comme de nuit.
 	for i in range(TRACER_POOL):
@@ -451,18 +721,42 @@ func _build_pools() -> void:
 		_root.add_child(node)
 		_grenades.append(node)
 
-		# Le MARQUEUR D'IMPACT AU SOL : un disque pulsant, visible DÈS LE LANCER (règle d'or).
-		var disc := CylinderMesh.new()
-		disc.top_radius = 1.6
-		disc.bottom_radius = 1.6
-		disc.height = 0.05
+		# Le MARQUEUR D'IMPACT AU SOL : un anneau pulsant, visible DÈS LE LANCER (règle d'or).
+		# ╔═ ⚠️⚠️ IL VALAIT 1,6 m EN DUR POUR UNE ARME QUI EN COUVRAIT 2 × 4 m (§8.141) ═════════╗
+		# ║ L'ancien barème frappait la position visée ET ses deux voisines : la zone RÉELLE       ║
+		# ║ mesurait 8 m de large quand le disque en annonçait 3,2. Le joueur voyait donc un        ║
+		# ║ marqueur à côté duquel il se croyait en sécurité, et prenait 15 dégâts. Le visuel        ║
+		# ║ mentait — pas par excès de zèle, par une constante posée sans être reliée à la règle.   ║
+		# ║ Le rayon est désormais celui du REGISTRE SERVEUR (`set_grenade_radius`), et la maille   ║
+		# ║ est unitaire (rayon 1) : c'est `scale` qui l'ouvre. Une seule valeur, une seule vérité. ║
+		# ║ ⚠️ UN ANNEAU, pas un disque : un disque plein posé sur une position masque les pieds de ║
+		# ║ celui qui s'y trouve, c'est-à-dire l'information qu'on vient regarder.                  ║
+		# ╚═══════════════════════════════════════════════════════════════════════════════════════╝
 		var marker := MeshInstance3D.new()
-		marker.mesh = disc
-		marker.material_override = _material(Color(COL_DANGER.r, COL_DANGER.g, COL_DANGER.b, 0.55),
-			true)
+		marker.mesh = _ring_mesh()
+		var marker_mat := _material(Color(COL_DANGER.r, COL_DANGER.g, COL_DANGER.b, 0.55), true)
+		_see_through(marker_mat)
+		marker.material_override = marker_mat
 		marker.visible = false
 		_root.add_child(marker)
 		_markers.append(marker)
+
+	# LE DÉCALQUE DE VISÉE (§B.1) — le mien, celui que je pose en maintenant la touche. Même maille
+	# et même rayon que les marqueurs de vol : ce que je vise et ce qui explose sont le même cercle.
+	_aim_decal = MeshInstance3D.new()
+	_aim_decal.name = "GrenadeAimDecal"
+	_aim_decal.mesh = _ring_mesh()
+	_aim_decal_mat = _material(COL_GRENADE_OK, true)
+	_see_through(_aim_decal_mat)
+	_aim_decal.material_override = _aim_decal_mat
+	_aim_decal.visible = false
+	_root.add_child(_aim_decal)
+
+	for i in range(EXPLOSION_POOL):
+		var boom := ExplosionScene.instantiate()
+		boom.set_reduced_motion(_reduced_motion)
+		_root.add_child(boom)
+		_explosions.append(boom)
 
 	var beam := BoxMesh.new()
 	beam.size = Vector3(0.02, 0.02, 1.0)
@@ -478,6 +772,151 @@ func _build_pools() -> void:
 # =================================================================================================
 func set_reduced_motion(reduced: bool) -> void:
 	_reduced_motion = reduced
+	for boom in _explosions:
+		boom.set_reduced_motion(reduced)
+
+
+# ╔═ LE RAYON D'ACTION VIENT DU SERVEUR, ET DE NULLE PART AILLEURS (§C.1) ════════════════════════╗
+# ║ `trench_init.rules.grenade.radius_m` est la valeur qui DÉCIDE des dégâts. C'est elle, et pas    ║
+# ║ une constante de présentation, qui ouvre les cercles de visée, les marqueurs de vol et l'anneau ║
+# ║ de choc. Le visuel n'a donc pas de valeur propre à faire diverger : il ne PEUT pas mentir.      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func set_grenade_radius(radius: float) -> void:
+	_grenade_radius = maxf(0.1, radius)
+
+
+func grenade_radius() -> float:
+	return _grenade_radius
+
+
+# ╔═ OÙ LA GRENADE VA-T-ELLE TOMBER ? — le raycast du réticule dans le monde 3D (§B.1.1) ═════════╗
+# ║ On intersecte la ligne de visée avec le PLANCHER de la tranchée adverse, puis on regarde si le  ║
+# ║ point tombe dans la bande utile. Sinon, on AIMANTE : on reprend la même ligne de visée à la     ║
+# ║ profondeur la plus proche de la bande, et on le signale en ROUGE.                                ║
+# ║ ⚠️ L'AIMANTATION N'EST PAS UNE CORRECTION SILENCIEUSE. Le décalque change de couleur, donc le    ║
+# ║ joueur SAIT qu'il vise en dehors et voit exactement où sa grenade partirait s'il lâchait. Une    ║
+# ║ aide qui corrige sans le dire est une aide qui trahit — le joueur croirait avoir visé là.        ║
+# ║ ⚠️ Le serveur ne reçoit QUE `target_x` : la profondeur ne quitte jamais le client. Cette bande   ║
+# ║ est donc du CONFORT DE GESTE, pas une règle — un client modifié qui l'ignorerait ne gagnerait    ║
+# ║ rien du tout, le clamp serveur ayant le dernier mot sur la seule coordonnée qui compte.          ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func grenade_aim_point(yaw_deg: float, pitch_deg: float, limit_x: float) -> Dictionary:
+	var target_z: float = Geo.far_soldier_z()
+	if _camera == null:
+		return {"x": 0.0, "z": target_z, "valid": false}
+	var origin := _camera.global_position
+	var dir := _direction(yaw_deg, pitch_deg)
+	# ⚠️ `dir.z` est TOUJOURS positif ici : le débattement borne le lacet à ±60° et le site à ±14°,
+	# donc `cos(yaw)·cos(pitch) > 0`. La division est sûre, mais on la garde du garde.
+	var x := 0.0
+	if absf(dir.z) > 0.0001:
+		x = origin.x + dir.x * ((target_z - origin.z) / dir.z)
+	var bounded: float = clampf(x, -limit_x, limit_x)
+	var valid: bool = absf(bounded - x) <= 0.0001
+
+	# --- LA VALIDITÉ EN PROFONDEUR : deux garde-fous, et rien de plus ---------------------------
+	# Ne pas viser LE CIEL : au-dessus de l'horizontale, le geste n'a plus de sens (et la grenade
+	# partirait quand même, puisque seul `target_x` voyage — le joueur doit le savoir).
+	if pitch_deg > SKY_TOLERANCE_DEG:
+		valid = false
+	# Ne pas viser LA BOUE DEVANT SON PROPRE PARAPET.
+	# ╔═ ⚠️ LE SEUIL EST MESURÉ, PAS DÉCRÉTÉ — ET UNE PREMIÈRE VERSION NE POUVAIT JAMAIS MORDRE ══╗
+	# ║ Premier essai : « la ligne de visée doit atteindre le parapet adverse ». Mesure : il faut   ║
+	# ║ pour cela un site au-dessus de **−5,4°**, alors que viser le torse de l'adversaire demande   ║
+	# ║ déjà −2,4° et que le débattement descend à −14°. La moitié du geste normal serait passée au  ║
+	# ║ rouge. Second essai, inverse : « la ligne doit dépasser mon propre parapet » — mesure : à    ║
+	# ║ ±14° de site c'est TOUJOURS vrai (il faudrait piquer à 32° pour le rater). Un garde-fou qui  ║
+	# ║ ne peut jamais mordre n'est pas un garde-fou, c'est un mensonge de plus dans le code.        ║
+	# ║ Le seuil retenu tombe entre les deux, en FRACTION du no man's land : la ligne de visée doit  ║
+	# ║ toucher le sol au-delà de 40 % de la traversée, soit un site au-dessus de ~−9,5°. En deçà,   ║
+	# ║ on regarde vraiment la boue à deux mètres de ses bottes.                                     ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	elif dir.y < -0.0005:
+		var ground: float = origin.z + dir.z * ((Geo.GROUND_Y - origin.y) / dir.y)
+		if ground < Geo.NO_MANS_LAND * GRENADE_MIN_REACH:
+			valid = false
+	return {"x": bounded, "z": target_z, "valid": valid}
+
+
+# Le décalque de MA visée : allumé pendant le maintien, éteint sinon. OR = ce point est bon,
+# ROUGE = j'ai débordé et la grenade partirait au point aimanté (celui qui est dessiné).
+func show_grenade_aim(active: bool, at_x: float = 0.0, at_z: float = 0.0,
+		valid: bool = true) -> void:
+	if _aim_decal == null:
+		return
+	_aim_decal.visible = active
+	if not active:
+		return
+	_aim_decal.position = Vector3(at_x, MARKER_Y, at_z)
+	_aim_decal.scale = Vector3(_grenade_radius, 1.0, _grenade_radius)
+	var color: Color = COL_GRENADE_OK if valid else COL_GRENADE_OUT
+	color.a = 0.85
+	_aim_decal_mat.albedo_color = color
+	_aim_decal_mat.emission = color
+
+
+# ╔═ L'EXPLOSION — DÉCLENCHÉE PAR L'ÉVÉNEMENT `impact` DU SERVEUR, JAMAIS PAR UNE HORLOGE LOCALE ═╗
+# ║ Le client connaît le tick d'impact dès le lancer et pourrait « jouer l'explosion à l'heure ».   ║
+# ║ Il ne le fait pas : ce serait rejouer la simulation, et une désynchronisation de 100 ms ferait  ║
+# ║ exploser une grenade avant que le serveur ne l'ait résolue — donc un joueur qui se voit épargné ║
+# ║ puis meurt. C'est l'événement qui commande, comme le hitmarker (§5.5).                          ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func play_explosion(at_x: float, on_my_side: bool) -> void:
+	var z: float = Geo.near_soldier_z() if on_my_side else Geo.far_soldier_z()
+	var at := Vector3(at_x, MARKER_Y, z)
+	var free_slot = null
+	for boom in _explosions:
+		if not boom.is_busy():
+			free_slot = boom
+			break
+	# Pool SATURÉE : on réarme la PLUS ANCIENNE plutôt que d'ignorer l'explosion. Une grenade qui
+	# tombe sans rien montrer serait pire qu'une animation coupée — le joueur perdrait la seule
+	# information qui lui dit où la zone était.
+	if free_slot == null:
+		free_slot = _explosions[0]
+		for boom in _explosions:
+			if boom.elapsed() > free_slot.elapsed():
+				free_slot = boom
+	free_slot.play(at, _grenade_radius)
+	_apply_shake(at)
+	_play_explosion_audio(at)
+
+
+# LA SECOUSSE, en « trauma » : une impulsion qui s'ajoute et décroît, jamais une durée fixe. Deux
+# grenades coup sur coup secouent donc PLUS que deux fois une, ce qui est juste.
+func _apply_shake(at: Vector3) -> void:
+	if _reduced_motion or _camera == null:
+		return
+	var distance := _camera.global_position.distance_to(at)
+	if distance > SHAKE_RANGE:
+		return
+	# Dans le rayon d'action = j'y étais. Ma tranchée touchée ailleurs = je l'entends dans le sol.
+	var impulse: float = SHAKE_ON_ME if distance <= _grenade_radius else SHAKE_ON_MY_TRENCH
+	# … et elle s'atténue AUSSI avec la distance au-delà du rayon : une grenade à 14 m ne doit pas
+	# secouer autant qu'une à 4 m.
+	if distance > _grenade_radius:
+		impulse *= clampf(1.0 - (distance - _grenade_radius) / SHAKE_RANGE, 0.0, 1.0)
+	_shake = clampf(_shake + impulse, 0.0, 1.0)
+
+
+func _play_explosion_audio(at: Vector3) -> void:
+	if _camera == null:
+		return
+	var distance := _camera.global_position.distance_to(at)
+	# ⚠️ DEUX SONS, PAS UN SEUL BAISSÉ. Un son lointain est un son plus SOMBRE, pas juste plus
+	# faible : c'est le TIMBRE qui dit au joueur « ce n'est pas tombé sur moi », et il le dit avant
+	# qu'il ait eu le temps de regarder ses PV. Le seuil de 6 m est celui du bon de commande ⚙.
+	if distance < 6.0:
+		AudioManager.play_sfx("trench_explosion_near", -2.0)
+	else:
+		AudioManager.play_sfx("trench_explosion_far",
+			lerpf(-4.0, -18.0, clampf(distance / 30.0, 0.0, 1.0)))
+	# Les RETOMBÉES, 0,4 s après : c'est ce qui donne une durée à l'événement. Un `SceneTreeTimer`
+	# plutôt qu'un compteur de frame — il survit à un changement de cadence d'affichage.
+	var quiet: float = lerpf(-6.0, -22.0, clampf(distance / 30.0, 0.0, 1.0))
+	get_tree().create_timer(0.4).timeout.connect(func():
+		if is_inside_tree():
+			AudioManager.play_sfx("trench_debris", quiet))
 
 
 # Le champ de vision de la caméra, exposé à l'hôte : c'est lui qui convertit la dispersion d'une
@@ -502,8 +941,11 @@ func camera_fov() -> float:
 # ║ les défauts d'usine à la clôture du chantier.                                                  ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 func apply_tuning(tuning: Dictionary) -> void:
+	var ceiling: float = Geo.camera_follow_max_deg()
 	_follow = clampf(float(tuning.get("aim_follow", AIM_FOLLOW)), 0.0, 1.0)
-	_follow_max = clampf(float(tuning.get("follow_max_deg", AIM_FOLLOW_MAX)), 5.0, 80.0)
+	# ⚠️ La borne HAUTE du clamp est la borne dérivée, pas un 80 en dur : un panneau qui pourrait
+	# poser plus que le plafond de sécurité rendrait ce plafond décoratif.
+	_follow_max = clampf(float(tuning.get("follow_max_deg", ceiling)), 5.0, ceiling)
 	if _camera != null:
 		_camera.fov = clampf(float(tuning.get("fov", CAMERA_FOV)), 50.0, 100.0)
 
@@ -589,6 +1031,12 @@ func _process(delta: float) -> void:
 	# La machine à frames tourne MÊME quand le soldat est masqué par la redaction : il peut mourir
 	# d'une grenade hors de vue, et il ne doit pas ressusciter debout en réapparaissant.
 	_advance_enemy_frames(delta)
+	# Rappel exponentiel de l'affaissement du pas, et extinction du départ de feu adverse.
+	_enemy_dip = maxf(0.0, _enemy_dip - _enemy_dip * ENEMY_STEP_DIP_DECAY * delta - 0.0005)
+	if _enemy_muzzle_left > 0.0:
+		_enemy_muzzle_left = maxf(0.0, _enemy_muzzle_left - delta)
+		if _enemy_muzzle_left <= 0.0 and _enemy_muzzle != null:
+			_enemy_muzzle.visible = false
 	if _camera == null:
 		return
 	# Transition de pose : latéral et vertical ont des durées DIFFÉRENTES (§5.1) — se baisser est
@@ -606,8 +1054,34 @@ func _process(delta: float) -> void:
 	# reste du débattement se lit sur l'écran, pas dans la rotation — les poses restent FIXES.
 	_cam_yaw = clampf(_aim_yaw * _follow, -_follow_max, _follow_max)
 	_cam_pitch = clampf(_aim_pitch * _follow, -_follow_max, _follow_max)
-	_camera.position = _cam_current
-	_camera.look_at(_cam_current + _direction(_cam_yaw, _cam_pitch), Vector3.UP)
+	# ╔═ LA SECOUSSE S'APPLIQUE À LA POSITION, PAS À L'ORIENTATION ══════════════════════════════╗
+	# ║ Le `look_at` ci-dessous vise `position + direction(visée)` : en décalant les DEUX du même   ║
+	# ║ vecteur, l'axe de vue reste RIGOUREUSEMENT celui de la visée du joueur. L'image tremble,    ║
+	# ║ la ligne de mire ne bouge pas d'un centième de degré. C'est la condition pour qu'une        ║
+	# ║ secousse ne soit jamais un handicap déguisé.                                                ║
+	# ╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+	_advance_shake(delta)
+	var eye := _cam_current + _shake_offset
+	_camera.position = eye
+	_camera.look_at(eye + _direction(_cam_yaw, _cam_pitch), Vector3.UP)
+
+
+# DÉCROISSANCE EXPONENTIELLE du trauma, et oscillation à deux fréquences légèrement différentes sur
+# les deux axes : à fréquence égale, l'œil suivrait une diagonale rectiligne et lirait « glissement »
+# plutôt que « secousse ». L'amplitude est le CARRÉ du trauma — c'est ce qui rend une petite
+# détonation discrète et une grosse franche, au lieu d'un continuum plat.
+func _advance_shake(delta: float) -> void:
+	if _shake <= 0.0001:
+		_shake = 0.0
+		_shake_offset = Vector3.ZERO
+		return
+	_shake_time += delta
+	_shake = maxf(0.0, _shake - _shake * SHAKE_DECAY * delta - 0.001)
+	var amplitude: float = SHAKE_METRES_MAX * _shake * _shake
+	_shake_offset = Vector3(
+		sin(_shake_time * SHAKE_FREQ) * amplitude,
+		sin(_shake_time * SHAKE_FREQ * 1.37 + 1.1) * amplitude * 0.75,
+		0.0)
 
 
 # Direction unitaire d'un couple (lacet, site) exprimé en degrés dans le repère de l'arène
@@ -667,7 +1141,8 @@ func _render_enemy(enemy: Dictionary) -> void:
 	var x := _stepped_enemy_x()
 	# En s'effaçant, il s'enfonce derrière le parapet : la disparition RACONTE quelque chose.
 	var sink := (1.0 - _enemy_alpha) * 0.55
-	_enemy.position = Vector3(x, -sink, Geo.far_soldier_z())
+	# … et il s'affaisse d'un rien au poser du pied (§8.141) : c'est ce qui donne un POIDS au pas.
+	_enemy.position = Vector3(x, -sink - _enemy_dip, Geo.far_soldier_z())
 	var flash: float = clampf(float(enemy.get("hit", 0.0)), 0.0, 1.0)
 	if _enemy_painted:
 		# TEINTE DE FACTION + fondu de redaction + éclair de touche, en une seule couleur : sur un
@@ -677,6 +1152,11 @@ func _render_enemy(enemy: Dictionary) -> void:
 			tint = tint.lerp(Color.WHITE, flash * ENEMY_HIT_WHITEN)
 		tint.a = _enemy_alpha
 		_enemy_sprite.modulate = tint
+		# Le liseré partage le fondu de redaction : il doit s'effacer AVEC lui, jamais après — un
+		# contour qui survivrait d'une frame dessinerait la silhouette d'un homme qui n'est plus là.
+		var rim := ENEMY_RIM_COLOR
+		rim.a = _enemy_alpha
+		_enemy_rim.modulate = rim
 		return
 	for mesh in [_enemy_mesh, _enemy_helmet]:
 		if mesh != null and mesh.material_override is StandardMaterial3D:
@@ -702,7 +1182,9 @@ func _render_enemy(enemy: Dictionary) -> void:
 # ║ ⚠️ Et c'est aussi plus FIDÈLE : la position serveur est un ENTIER — le glissé était l'artefact. ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 func _stepped_enemy_x() -> float:
-	var target: float = Geo.position_x(int(round(_enemy_last_pos)))
+	var whole: int = int(round(_enemy_last_pos))
+	_notice_step(whole)
+	var target: float = Geo.position_x(whole)
 	if _reduced_motion or MOVE_TRANSITION <= 0.0:
 		_enemy_x = target
 		return _enemy_x
@@ -711,15 +1193,86 @@ func _stepped_enemy_x() -> float:
 	return _enemy_x
 
 
+# ╔═ UN PAS SE PAIE : POUSSIÈRE, AFFAISSEMENT, BRUIT SOURD (§8.141) ══════════════════════════════╗
+# ║ ⚠️ UN PAS EST UN ÉCART DE **EXACTEMENT** UNE POSITION, et cette condition n'est pas cosmétique. ║
+# ║ Trois choses déplacent l'adversaire d'un cran ou plus SANS qu'il ait marché :                   ║
+# ║   • le début de manche le RAMÈNE au centre (jusqu'à 2 crans d'un coup) ;                        ║
+# ║   • il RÉAPPARAÎT ailleurs après s'être caché (la redaction §1.6 n'a rien diffusé entre-temps) ;║
+# ║   • une reconnexion resynchronise la partie.                                                    ║
+# ║ Sans le garde, chacun de ces trois cas lèverait un nuage de poussière et un bruit de botte pour ║
+# ║ un pas qui n'a jamais eu lieu — c'est-à-dire une INFORMATION FAUSSE dans un jeu où le bruit de   ║
+# ║ pas est justement là pour dire où est l'ennemi. Un saut de 2 crans ne fait donc RIEN, et         ║
+# ║ `-1` (jamais vu) ne fait rien non plus : on ne raconte que ce qu'on a vraiment observé.          ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _notice_step(whole: int) -> void:
+	var previous := _enemy_step_pos
+	_enemy_step_pos = whole
+	if previous < 0 or absi(whole - previous) != 1 or _enemy_dead:
+		return
+	# `reduced_motion` coupe le SPECTACLE (poussière, affaissement) et garde l'INFORMATION (le son).
+	# C'est la règle maison : on n'ampute jamais la lecture du jeu au titre du confort.
+	if not _reduced_motion:
+		_enemy_dip = ENEMY_STEP_DIP
+		if _enemy_dust != null:
+			_enemy_dust.restart()
+	if _camera == null:
+		return
+	# ATTÉNUATION PAR LA DISTANCE, calculée sur la position RÉELLE : un pas au bout opposé du front
+	# est à 17 m, un pas en face à 10 m. Le joueur doit pouvoir entendre OÙ il marche, pas seulement
+	# QU'il marche — sinon le son ajoute du bruit et pas de l'information.
+	var at := Vector3(Geo.position_x(whole), 0.0, Geo.far_soldier_z())
+	var distance := _camera.global_position.distance_to(at)
+	if distance >= STEP_AUDIBLE_RANGE:
+		return
+	AudioManager.play_sfx("trench_step",
+		lerpf(-6.0, -26.0, clampf(distance / STEP_AUDIBLE_RANGE, 0.0, 1.0)))
+
+
+# LE DÉPART DE FEU ADVERSE — poussé par l'hôte depuis l'événement serveur `fire` de l'autre camp.
+# ⚠️ `from_pos` vient de l'ÉVÉNEMENT et non de l'état : au moment où l'hôte le reçoit, l'adversaire
+# peut déjà s'être accroupi, donc sa position aurait disparu de la vue redactée. Un tir TRAHIT son
+# auteur (c'est la règle assumée du §1.6, la même qui rend le `from_pos` des projectiles public) —
+# mais il ne le trahit qu'à l'instant où il a tiré.
+func notify_enemy_fire(from_pos: int) -> void:
+	if _enemy_muzzle == null:
+		return
+	_enemy_muzzle.position = _muzzle_origin(from_pos, false)
+	_enemy_muzzle.visible = true
+	_enemy_muzzle_left = ENEMY_MUZZLE_TIME
+
+
 # Origine d'un tir : l'œil du tireur, dans SA tranchée.
 func _muzzle_origin(from_pos: int, mine: bool) -> Vector3:
 	var z: float = Geo.near_soldier_z() if mine else Geo.far_soldier_z()
 	return Vector3(Geo.position_x(from_pos), Geo.EYE_UP, z)
 
 
+# ╔═ ⚠️ UNE GRENADE NE SORT PAS D'UN ŒIL — ELLE SORT D'UNE MAIN (leçon §7.2) ════════════════════╗
+# ║ Le §7.2 du rapport de pivot a coûté un défaut vu en capture : la traçante naissait à            ║
+# ║ `_muzzle_origin`, c'est-à-dire à la position de l'ŒIL, et la boîte dorée couvrait un carré de   ║
+# ║ ~10° au milieu de l'écran. Pour une balle, on a masqué le premier mètre. Pour une GRENADE, ce   ║
+# ║ remède ne marche pas : elle part LENTEMENT et en cloche, elle passerait donc plusieurs dixièmes ║
+# ║ de seconde devant la pupille avant de se dégager, et la masquer reviendrait à ne plus montrer   ║
+# ║ le début de son arc — c'est-à-dire l'information qui rend le lancer lisible.                     ║
+# ║ On la fait donc naître LÀ OÙ ELLE NAÎT : à la main, en bas à droite du champ ⚙.                  ║
+# ║ ⚠️ LE SIGNE : « à droite de l'ÉCRAN » vaut −X dans le repère droitier de l'arène (le pavé de     ║
+# ║ `trench_geometry.gd` — « +X sort à GAUCHE », mesuré, et ça a coûté une partie entière). Pour le  ║
+# ║ lanceur d'en face, sa droite est notre gauche : le signe s'inverse, exactement comme dans        ║
+# ║ `_shot_direction`.                                                                               ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const HAND_LATERAL := 0.35
+const HAND_VERTICAL := -0.25
+
+
+func _grenade_origin(from_pos: int, mine: bool) -> Vector3:
+	var eye := _muzzle_origin(from_pos, mine)
+	var lateral: float = -HAND_LATERAL if mine else HAND_LATERAL
+	return eye + Vector3(lateral, HAND_VERTICAL, 0.0)
+
+
 # Direction d'un tir dans MON repère.
 # ⚠️ MIROIR : le tireur d'en face vise dans SON repère, dont le +Z pointe vers moi. Le passage
-# d'un repère à l'autre est la réflexion (x, y, z) → (x, y, 35 - z) : elle laisse le lacet
+# d'un repère à l'autre est la réflexion (x, y, z) → (x, y, NO_MANS_LAND − z) : elle laisse le lacet
 # inchangé et RETOURNE la composante en Z. D'où le signe ci-dessous — c'est la même convention de
 # miroir que la table angulaire, qui sert aux deux camps sans inversion d'index.
 func _shot_direction(yaw_deg: float, pitch_deg: float, mine: bool) -> Vector3:
@@ -752,7 +1305,8 @@ func _render_tracers(tracers: Array) -> void:
 			continue
 		# La traçante est un SEGMENT (la balle a une longueur apparente), pas un point. Sa queue ne
 		# recule jamais en deçà du canon dégagé, sinon elle repointerait vers l'œil.
-		var tail_at: float = maxf(MUZZLE_CLEAR if mine else 0.0, travelled - TRACER_LENGTH)
+		var tail_at: float = maxf(MUZZLE_CLEAR if mine else 0.0,
+			travelled - Geo.NO_MANS_LAND * TRACER_LENGTH_RATIO)
 		var tail := origin + dir * tail_at
 		node.visible = true
 		node.position = (head + tail) * 0.5
@@ -768,13 +1322,17 @@ func _render_grenades(grenades: Array, markers: Array) -> void:
 			continue
 		var g: Dictionary = grenades[i]
 		var mine := bool(g.get("mine", false))
-		var origin := _muzzle_origin(int(g.get("from_pos", 2)), mine)
+		var origin := _grenade_origin(int(g.get("from_pos", 2)), mine)
 		var land_z: float = Geo.far_soldier_z() if mine else Geo.near_soldier_z()
 		# ⚠️ LA GRENADE TOMBE AU FOND DE LA TRANCHÉE (y ≈ 0), PAS au niveau du no man's land :
 		# les positions du duel sont DANS les tranchées. Défaut vu en CAPTURE seulement — posé à
 		# `GROUND_Y` (1,0 m), le marqueur passait AU-DESSUS des yeux d'un accroupi (0,90 m) et
 		# noyait tout l'écran de rouge. Un boot headless ne l'aurait jamais montré.
-		var target := Vector3(Geo.position_x(int(g.get("target_pos", 2))), MARKER_Y, land_z)
+		# ⚠️ `target_x` EN MÈTRES, et non plus l'abscisse d'une case (§8.141) : la grenade tombe
+		# exactement là où le décalque l'annonçait depuis le lancer. Reconstruire le point depuis
+		# `target_pos` ferait dériver la cloche jusqu'à 1,7 m du cercle affiché — c'est-à-dire les
+		# deux tiers du rayon d'action, dans une arme dont TOUTE la lisibilité est ce rayon.
+		var target := Vector3(float(g.get("target_x", 0.0)), MARKER_Y, land_z)
 		var t: float = clampf(float(g.get("t", 0.0)), 0.0, 1.0)
 		# CLOCHE : une parabole franche — c'est elle qui rend le temps de vol lisible à l'œil.
 		# ⚠️ Sa hauteur est une FRACTION de la portée, pas 6 m en dur : avec le passage de 35 m à
@@ -794,11 +1352,18 @@ func _render_grenades(grenades: Array, markers: Array) -> void:
 		var on_my_side := bool(m.get("on_my_side", false))
 		var z: float = Geo.near_soldier_z() if on_my_side else Geo.far_soldier_z()
 		node.visible = true
-		node.position = Vector3(Geo.position_x(int(m.get("target_pos", 2))), MARKER_Y, z)
-		# Le disque PULSE d'autant plus vite que l'impact approche : la menace se lit sans lire.
+		node.position = Vector3(float(m.get("target_x", 0.0)), MARKER_Y, z)
+		# ╔═ L'ANNEAU PULSE, MAIS SON RAYON MOYEN NE MENT PAS ═══════════════════════════════════╗
+		# ║ La pulsation accélère à l'approche de l'impact — c'est la lecture de la menace sans   ║
+		# ║ chiffre ni compte à rebours. Mais elle bat AUTOUR du rayon réel (±8 %), et non de 75 % ║
+		# ║ à 100 % de celui-ci comme le faisait l'ancien disque : un cercle qui passe la moitié   ║
+		# ║ de son temps SOUS sa taille réelle promet une zone plus petite que la vraie, et c'est  ║
+		# ║ précisément ce qu'on vient de corriger. La respiration est cosmétique, le rayon non.   ║
+		# ╚═══════════════════════════════════════════════════════════════════════════════════════╝
 		var eta: float = clampf(float(m.get("eta", 1.0)), 0.0, 1.0)
-		var pulse: float = 1.0 if _reduced_motion else (0.75 + 0.25 * sin((1.0 - eta) * 26.0))
-		node.scale = Vector3(pulse, 1.0, pulse)
+		var pulse: float = 1.0 if _reduced_motion else (1.0 + 0.08 * sin((1.0 - eta) * 26.0))
+		var open: float = _grenade_radius * pulse
+		node.scale = Vector3(open, 1.0, open)
 		if node.material_override is StandardMaterial3D:
 			(node.material_override as StandardMaterial3D).albedo_color.a = 0.30 + 0.45 * (1.0 - eta)
 

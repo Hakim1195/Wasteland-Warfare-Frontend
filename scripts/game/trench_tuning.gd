@@ -22,6 +22,10 @@ extends Control
 
 signal changed(values: Dictionary)
 
+# ⚠️ Le registre de COTES, et rien d'autre : ce panneau reste une vue pure. Il ne le lit que pour
+# borner ses curseurs sur la géométrie réelle (cf. `sliders()`).
+const Geo := preload("res://scripts/game/trench_geometry.gd")
+
 const SETTINGS_PATH := "user://trench_tuning.json"
 
 # ╔═ ⚠️⚠️ LES RÉGLAGES SONT VERSIONNÉS, ET C'EST UN CORRECTIF, PAS UNE PRÉCAUTION ════════════════╗
@@ -33,8 +37,12 @@ const SETTINGS_PATH := "user://trench_tuning.json"
 # ║ Un fichier relu tel quel aurait donc SILENCIEUSEMENT dégradé la partie suivante de Hakim, avec ║
 # ║ ses propres réglages, sans un message. On INCRÉMENTE donc à chaque fois qu'une borne change de ║
 # ║ signification, et un fichier d'une autre version repart des défauts.                           ║
+# ║                                                                                                 ║
+# ║ v3 (§8.141) : l'arène passe à 9 m et le front à 13,6 m. Le débattement monte de ±58° à ±60,3°  ║
+# ║ et le plafond de caméra de 70° à 72,3°. Un fichier v2 porterait donc à nouveau des bornes dont ║
+# ║ le SENS a changé — exactement le cas ci-dessus. Il repart des défauts, EN LE DISANT.            ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-const SETTINGS_VERSION := 2
+const SETTINGS_VERSION := 3
 
 const COL_ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
 const COL_TEXT := Color(0.933333, 0.952941, 0.968627, 1)
@@ -45,32 +53,43 @@ const COL_GOLD := Color(0.878431, 0.698039, 0.286275, 1)
 # ║ Ce sont les valeurs de §8.139.1 — celles qui n'ont jamais été jugées dans de bonnes            ║
 # ║ conditions, parce que la caméra ne tournait que de 6° devant un décor peint fixe. Elles ne     ║
 # ║ sont donc PAS des vérités : elles sont un point de départ à contester en jouant.               ║
+# ║                                                                                                 ║
+# ║ ⚠️ DES FONCTIONS ET NON DES `const` DEPUIS LE §8.141 : le plafond de caméra est DÉRIVÉ de la    ║
+# ║ géométrie (`Geo.camera_follow_max_deg()`), et un `const` GDScript ne peut pas appeler. Ce n'est ║
+# ║ pas de la complication gratuite — c'est ce qui empêche le défaut §7.1 de revenir par la porte   ║
+# ║ du CODE après qu'on l'a fermée du côté du FICHIER : un rapprochement futur ne peut plus laisser ║
+# ║ derrière lui un défaut d'usine qui bride la nouvelle géométrie.                                 ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-const DEFAULTS := {
-	"mouse_sensitivity": 0.040,      # degrés de visée par pixel de souris
-	"invert_y": false,
-	"aim_follow": 1.0,               # part de la visée que la caméra accompagne (0 = tête fixe)
-	"follow_max_deg": 70.0,          # plafond de rotation de la caméra (> AIM_YAW_LIMIT = 58°)
-	"fov": 55.0,                     # champ de vision VERTICAL
-}
+static func defaults() -> Dictionary:
+	return {
+		"mouse_sensitivity": 0.040,  # degrés de visée par pixel de souris
+		"invert_y": false,
+		"aim_follow": 1.0,           # part de la visée que la caméra accompagne (0 = tête fixe)
+		"follow_max_deg": Geo.camera_follow_max_deg(),   # plafond de rotation de la caméra
+		"fov": 55.0,                 # champ de vision VERTICAL
+	}
+
 
 # {clé: [minimum, maximum, pas, libellé, décimales]}
-const SLIDERS := {
-	"mouse_sensitivity": [0.010, 0.150, 0.002, "TRENCH_TUNE_SENSITIVITY", 3],
-	"aim_follow": [0.0, 1.0, 0.05, "TRENCH_TUNE_FOLLOW", 2],
-	# ⚙ Plage ouverte à 80° avec le passage à 12 m : le débattement de visée est monté à ±58°, et
-	# une borne de caméra plus basse que lui empêcherait de suivre le réticule dans les extrêmes.
-	"follow_max_deg": [10.0, 80.0, 1.0, "TRENCH_TUNE_FOLLOW_MAX", 0],
-	# ⚖ ARBITRAGE — le bon de commande demande « FOV (60-90) », le jeu tourne à 55 (`CAMERA_FOV`).
-	# Une plage qui ne contient pas la valeur COURANTE n'est pas un réglage : c'est un changement
-	# déguisé. Vu en capture — le curseur affichait 60 pour une caméra à 55, et la première
-	# ouverture du panneau aurait élargi le champ sans que personne ne l'ait demandé. On descend
-	# donc la borne basse à 50 : la plage demandée reste entièrement accessible, et l'état de départ
-	# est représentable. C'est la seule des cinq bornes qui s'écarte du bon de commande.
-	"fov": [50.0, 90.0, 1.0, "TRENCH_TUNE_FOV", 0],
-}
+static func sliders() -> Dictionary:
+	return {
+		"mouse_sensitivity": [0.010, 0.150, 0.002, "TRENCH_TUNE_SENSITIVITY", 3],
+		"aim_follow": [0.0, 1.0, 0.05, "TRENCH_TUNE_FOLLOW", 2],
+		# ⚙ La borne HAUTE est le plafond de sécurité de la caméra, pas un rond chiffre : au-delà,
+		# le réglage n'aurait aucun effet (le monde 3D re-clampe), et un curseur qui ne fait rien
+		# sur son dernier tiers est un mensonge d'interface.
+		"follow_max_deg": [10.0, Geo.camera_follow_max_deg(), 1.0, "TRENCH_TUNE_FOLLOW_MAX", 0],
+		# ⚖ ARBITRAGE — le bon de commande demande « FOV (60-90) », le jeu tourne à 55 (`CAMERA_FOV`).
+		# Une plage qui ne contient pas la valeur COURANTE n'est pas un réglage : c'est un changement
+		# déguisé. Vu en capture — le curseur affichait 60 pour une caméra à 55, et la première
+		# ouverture du panneau aurait élargi le champ sans que personne ne l'ait demandé. On descend
+		# donc la borne basse à 50 : la plage demandée reste entièrement accessible, et l'état de
+		# départ est représentable. C'est la seule des cinq bornes qui s'écarte du bon de commande.
+		"fov": [50.0, 90.0, 1.0, "TRENCH_TUNE_FOV", 0],
+	}
 
-var _values: Dictionary = DEFAULTS.duplicate()
+
+var _values: Dictionary = defaults()
 var _sliders: Dictionary = {}
 var _readouts: Dictionary = {}
 var _invert_box: CheckBox
@@ -112,7 +131,7 @@ func values() -> Dictionary:
 # la main (ou écrit par une version antérieure du panneau) ne doit pas pouvoir poser un FOV de 300
 # ni une sensibilité nulle : le fichier est une commodité, jamais une autorité.
 func _load() -> Dictionary:
-	var out: Dictionary = DEFAULTS.duplicate()
+	var out: Dictionary = defaults()
 	if not FileAccess.file_exists(SETTINGS_PATH):
 		return out
 	var file := FileAccess.open(SETTINGS_PATH, FileAccess.READ)
@@ -128,13 +147,13 @@ func _load() -> Dictionary:
 		print("[trench] reglages v%s ignores (version courante %d) : retour aux defauts"
 			% [parsed.get("version", 1), SETTINGS_VERSION])
 		return out
-	for key in DEFAULTS:
+	for key in defaults():
 		if not parsed.has(key):
 			continue
 		if key == "invert_y":
 			out[key] = bool(parsed[key])
 			continue
-		var bounds: Array = SLIDERS.get(key, [])
+		var bounds: Array = sliders().get(key, [])
 		if bounds.is_empty():
 			continue
 		out[key] = clampf(float(parsed[key]), float(bounds[0]), float(bounds[1]))
@@ -201,7 +220,7 @@ func _build() -> void:
 	column.add_child(hint)
 	column.add_child(HSeparator.new())
 
-	for key in SLIDERS:
+	for key in sliders():
 		column.add_child(_build_slider(key))
 
 	_invert_box = CheckBox.new()
@@ -233,7 +252,7 @@ func _build() -> void:
 
 
 func _build_slider(key: String) -> Control:
-	var bounds: Array = SLIDERS[key]
+	var bounds: Array = sliders()[key]
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 2)
 
@@ -251,7 +270,7 @@ func _build_slider(key: String) -> Control:
 	slider.min_value = float(bounds[0])
 	slider.max_value = float(bounds[1])
 	slider.step = float(bounds[2])
-	slider.value = float(_values.get(key, DEFAULTS[key]))
+	slider.value = float(_values.get(key, defaults()[key]))
 	slider.custom_minimum_size = Vector2(356, 18)
 	slider.value_changed.connect(func(value: float):
 		_values[key] = value
@@ -267,12 +286,12 @@ func _refresh_readout(key: String) -> void:
 	var readout: Label = _readouts.get(key)
 	if readout == null:
 		return
-	var decimals: int = int(SLIDERS[key][4])
+	var decimals: int = int(sliders()[key][4])
 	readout.text = String.num(float(_values.get(key, 0.0)), decimals)
 
 
 func _on_reset() -> void:
-	_values = DEFAULTS.duplicate()
+	_values = defaults()
 	for key in _sliders:
 		(_sliders[key] as HSlider).set_value_no_signal(float(_values[key]))
 		_refresh_readout(key)

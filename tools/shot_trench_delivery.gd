@@ -20,8 +20,9 @@ const Sprites := preload("res://scripts/game/trench_sprites.gd")
 const RULES := {
 	"tick_rate_hz": 10, "rounds_to_win": 2, "round_ticks": 900, "positions": 5, "hp_max": 100,
 	"move_ticks": 3, "intermission_ticks": 30, "grace_disconnect_ticks": 100, "afk_ticks": 200,
-	"grenade": {"stock_start": 2, "stock_max": 3, "regen_ticks": 150, "flight_min_ticks": 15,
-		"flight_max_ticks": 30, "damage_direct": 40, "damage_adjacent": 15},
+	"grenade": {"stock_start": 2, "stock_max": 3, "regen_ticks": 150, "radius_m": 2.5,
+		"damage_max": 40, "flight_base_s": 0.9, "flight_per_metre_s": 0.07,
+		"flight_floor_ticks": 15, "target_margin_m": 1.5},
 	"weapons": [
 		{"id": "vipere", "name_key": "WEAPON_VIPERE", "burst": 1, "damage": 12,
 			"cooldown_ticks": 9, "flight_ticks": 4, "laser_lead_ticks": 0, "dispersion_deg": 0.30,
