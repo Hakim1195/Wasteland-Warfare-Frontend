@@ -89,7 +89,22 @@ const SOLDIER_SETBACK := 0.5
 # `SILHOUETTE_BOTTOM` = bas du torse (sous le parapet — c'est LUI qui coupe, pas cette valeur).
 const SILHOUETTE_TOP := 1.80
 const SILHOUETTE_BOTTOM := 1.15
-const SILHOUETTE_HALF_WIDTH := 0.30
+# ╔═ ⚠️⚠️ 0,30 → 0,44 m : LA BOÎTE ÉPOUSE ENFIN LA SILHOUETTE PEINTE (§8.141.8) ══════════════════╗
+# ║ Verdict de partie réelle : « la zone touchable est extrêmement petite, je la touche au hasard, ║
+# ║ il faut que sa silhouette soit attaquable EN ENTIER ».                                         ║
+# ║ Mesuré (`probe_trench_aim`) : le cadre du sprite fait **0,873 m** de large — l'homme AVEC ses  ║
+# ║ bras et son arme — pour une fenêtre de tir de **0,60 m**, c'est-à-dire le TORSE SEUL. Rapport  ║
+# ║ constant de **1,44×** : à chaque tir, près de la moitié de ce que le joueur voit n'existe pas  ║
+# ║ pour le serveur. On vise un homme, on touche une colonne au milieu de lui.                      ║
+# ║ 0,4365 = la demi-largeur EXACTE du cadre peint (427 px × `pixel_size`). Arrondi à 0,44.         ║
+# ║                                                                                                 ║
+# ║ ⚠️ CE QUE ÇA NE CASSE PAS, et c'est pour ça que c'est faisable : les fenêtres de deux positions ║
+# ║ voisines restent LARGEMENT DISJOINTES (centres à 18,8° d'écart, demi-fenêtres de 2,5°) — « un   ║
+# ║ pas de côté est TOUJOURS une esquive » tient toujours. Et la HAUTEUR n'avait pas à bouger :     ║
+# ║ elle couvrait déjà toute la bande exposée (1,194 → 1,80 m), le parapet fait le reste.           ║
+# ║ ⚠️ CETTE COTE VOYAGE DANS LA TABLE : régénérer les deux copies ET redéployer le backend.        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const SILHOUETTE_HALF_WIDTH := 0.44
 # Silhouette ACCROUPI : sommet du crâne bien SOUS le parapet → jamais exposée (invariant vérifié
 # par `crouched_is_covered()` et par un test de sabotage côté backend).
 const SILHOUETTE_TOP_DOWN := 1.05
@@ -99,7 +114,8 @@ const AIM_QUANTUM_DEG := 0.1
 # Version de la table : à INCRÉMENTER dès qu'une cote ci-dessus bouge (voyage dans le JSON).
 # v2 : `NO_MANS_LAND` 35 → 12 m (§8.140.1, verdict de partie réelle).
 # v3 : `NO_MANS_LAND` 12 → 9 m ET `POSITION_SPACING` 4,0 → 3,4 m (§8.141, second verdict).
-const TABLE_VERSION := 3
+# v4 : `SILHOUETTE_HALF_WIDTH` 0,30 → 0,44 m (§8.141.8, verdict « la zone touchable est minuscule »).
+const TABLE_VERSION := 4
 
 
 # =================================================================================================

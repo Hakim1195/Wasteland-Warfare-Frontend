@@ -425,8 +425,18 @@ func _ready() -> void:
 		rim.scale.x > 1.0 and rim.render_priority < painted.render_priority,
 		"echelle %.3f, priorite %d < %d" % [rim.scale.x, rim.render_priority,
 			painted.render_priority])
-	_ok("le soldat est un billboard VERTICAL (il ne se couche pas quand la camera pique)",
-		painted.billboard == BaseMaterial3D.BILLBOARD_FIXED_Y)
+	# ╔═ ⚠️ CE CONTROLE A CHANGE DE SENS AU §8.141.7 — ET C'EST LE MEME PRINCIPE ═══════════════╗
+	# ║ Il verifiait FIXED_Y « pour que l'image ne mente pas sur la decoupe du parapet ». Bonne    ║
+	# ║ intuition, mauvais axe : un billboard presente sa largeur PLEINE quel que soit l'angle,     ║
+	# ║ alors que la fenetre de tir se raccourcit en cos(θ). Mesure a la pose centrale : silhouette ║
+	# ║ rendue / fenetre = 1,36x en face mais **2,10x au bord** — « a droite ou a gauche,           ║
+	# ║ impossible de toucher ». Sprite FIXE dans le plan de la table : 1,44x PARTOUT.              ║
+	# ║ On verifie donc l'inverse : aucun billboard, et un demi-tour pour faire face a ma tranchee. ║
+	# ╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+	_ok("le soldat n'est PLUS un billboard (l'image se raccourcit comme sa fenetre de tir)",
+		painted.billboard == BaseMaterial3D.BILLBOARD_DISABLED
+		and absf(painted.rotation_degrees.y - 180.0) < 0.01,
+		"billboard=%d rot.y=%.1f" % [painted.billboard, painted.rotation_degrees.y])
 
 	# --- 6c) ⚠️⚠️ L'INVARIANT D'HONNÊTETÉ DU RAYON (§C.1) ----------------------------------------
 	# ╔═════════════════════════════════════════════════════════════════════════════════════════╗

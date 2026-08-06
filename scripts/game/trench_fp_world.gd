@@ -423,7 +423,31 @@ func _build_enemy_sprite() -> void:
 	#    verticale, le soldat tourne pour me faire face et reste DEBOUT : l'image et la règle
 	#    disent la même chose. (Le débattement de site est de ±14°, et le panneau F10 peut faire
 	#    tourner la caméra bien au-delà — l'écart n'a rien de théorique.)
-	_enemy_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	# ╔═ ⚠️⚠️ PLUS DE BILLBOARD DU TOUT — IL RENDAIT LES CÔTÉS INVISABLES (§8.141.7) ═══════════════╗
+	# ║ Verdict de partie réelle : « quand je vise à droite ou à gauche, impossible de toucher le    ║
+	# ║ soldat ; je vois le projectile partir vers lui, il ne lui fait aucun dégât ».                 ║
+	# ║ MESURÉ (`probe_trench_aim`), largeur ANGULAIRE de la silhouette RENDUE contre la fenêtre de   ║
+	# ║ tir que le serveur résout, depuis la pose centrale :                                          ║
+	# ║      position 2 (en face) 4,68° contre 3,44° → **1,36×**                                      ║
+	# ║      position 4 (au bord) 4,93° contre 2,35° → **2,10×**                                      ║
+	# ║                                                                                               ║
+	# ║ LA CAUSE EST GÉOMÉTRIQUE, PAS COSMÉTIQUE. La table angulaire décrit une silhouette PLANE à Z  ║
+	# ║ constant, large de 0,60 m SUR L'AXE X du monde. Vue de biais, sa largeur apparente se réduit  ║
+	# ║ en `0,60 × cos(θ)` — à 34° de lacet, 0,50 m. Un BILLBOARD, lui, pivote pour faire toujours    ║
+	# ║ FACE à l'œil : il présente sa largeur PLEINE quel que soit l'angle. Plus on vise sur le côté, ║
+	# ║ plus l'image ment — et le joueur vise un soldat deux fois plus large que sa fenêtre réelle.   ║
+	# ║                                                                                               ║
+	# ║ ⚠️ On retire donc le billboard et on fixe le sprite DANS LE PLAN DE LA TABLE (demi-tour pour  ║
+	# ║ faire face à ma tranchée). Il se raccourcit alors exactement comme la fenêtre : l'image et la ║
+	# ║ règle disent enfin la même chose. Et c'est aussi plus juste au sens du monde — un soldat dans ║
+	# ║ une tranchée fait face au no man's land, pas à moi personnellement.                            ║
+	# ║ ⚠️ Le §8.141 avait mis FIXED_Y « pour ne pas mentir sur la découpe du parapet » : c'était la  ║
+	# ║ bonne intuition (l'image doit suivre la règle) appliquée au mauvais axe. Elle vaut aussi en   ║
+	# ║ LARGEUR, et en largeur seule la suppression du billboard la respecte.                          ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	_enemy_sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	# Demi-tour : un `Sprite3D` non-billboard regarde +Z, c'est-à-dire l'ARRIÈRE de sa tranchée.
+	_enemy_sprite.rotation_degrees = Vector3(0.0, 180.0, 0.0)
 	# 2. ALPHA_CUT_DISABLED = fondu alpha classique, et NON `DISCARD`/`OPAQUE_PREPASS` :
 	#    • les bords sont DOUX (sortie rembg antialiasée) — un seuil les redécouperait en escalier ;
 	#    • c'est la SEULE option qui laisse vivre le fondu de redaction (`modulate.a`) : sous un
@@ -489,6 +513,7 @@ func _build_enemy_perception() -> void:
 	_enemy_rim = Sprite3D.new()
 	_enemy_rim.name = "PaintedSoldierRim"
 	_enemy_rim.billboard = _enemy_sprite.billboard
+	_enemy_rim.rotation_degrees = _enemy_sprite.rotation_degrees
 	_enemy_rim.alpha_cut = _enemy_sprite.alpha_cut
 	_enemy_rim.shaded = false
 	_enemy_rim.double_sided = true

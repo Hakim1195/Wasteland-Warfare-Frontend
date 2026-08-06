@@ -5290,3 +5290,98 @@ contre le bot (36 % avant la manche 1 de la porte).
 
 ⚠️ **AUCUNE de ces corrections ne se verra tant que le backend n'est pas redéployé** — c'est
 précisément ce que le bandeau dira, maintenant, au lieu de laisser croire à un jeu cassé.
+
+---
+
+## §8.141.7 — LA TRANCHÉE : LE BILLBOARD MENTAIT SUR LA LARGEUR
+
+> Verdict : « quand je vise à droite ou à gauche avec la souris, impossible de toucher le soldat ;
+> je vois le projectile partir vers lui, il ne lui fait aucun dégât ».
+
+### 1. La cause est géométrique, pas cosmétique
+
+La table angulaire décrit une silhouette **plane à Z constant**, large de 0,60 m **sur l'axe X du
+monde**. Vue de biais, sa largeur apparente se réduit en `0,60 × cos(θ)`. Un **BILLBOARD**, lui,
+pivote pour faire toujours FACE à l'œil : il présente sa largeur PLEINE quel que soit l'angle.
+
+Mesuré (`tools/probe_trench_aim.tscn`), silhouette RENDUE / fenêtre de tir, depuis la pose centrale :
+
+| cible | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| **avant** (billboard) | 1,74× | 1,33× | 1,36× | 1,52× | **2,10×** |
+| **après** (sprite fixe) | 1,44× | 1,44× | **1,44×** | 1,44× | 1,44× |
+
+**Plus on visait sur le côté, plus l'image mentait** — jusqu'au double. Le sprite est désormais fixe
+dans le plan de la table (demi-tour pour faire face à ma tranchée) : il se raccourcit exactement
+comme la fenêtre. C'est aussi plus juste au sens du monde — un soldat dans une tranchée fait face au
+no man's land, pas au joueur personnellement.
+
+⚠️ Le §8.141 avait mis `FIXED_Y` « pour que l'image ne mente pas sur la découpe du parapet ». Bonne
+intuition, **mauvais axe** : elle vaut aussi en LARGEUR, et en largeur seule la suppression du
+billboard la respecte.
+
+### 2. Les axes sont CORRECTS — vérifié position par position
+
+La sonde confronte la visée que produit *le réticule posé sur le centre visible du soldat* à la
+fenêtre que le serveur résout. **Les 5 positions touchent** (−34,22 / −18,78 / 0,00 / +18,78 /
++34,22 contre des fenêtres à ±34, ±19, 0). Aucune inversion d'axe, aucun décalage.
+
+> ⚠️ **UN FAUX ROUGE SPECTACULAIRE, ET LA LEÇON.** La première version de la sonde mesurait aussitôt
+> après avoir poussé un état — or `_render_pair()` rend la paire à `maintenant − RENDER_DELAY`, donc
+> l'état PRÉCÉDENT. Elle rapportait des visées décalées d'une position, ce qui ressemblait à s'y
+> méprendre à une **inversion d'axe dans le jeu**. Une sonde qui ne respecte pas le tampon de rendu
+> mesure le passé — et accuse le code d'un défaut qui n'existe pas.
+
+### 3. Le résidu, mesuré et assumé
+
+Il reste **1,44×** partout : le cadre du sprite fait 0,873 m (l'homme **avec son arme et ses bras**)
+pour une fenêtre de 0,60 m (le TORSE). Viser le corps touche ; viser le canon du fusil rate. C'est
+défendable — mais c'est un écart réel, et le fermer demanderait d'aligner `SILHOUETTE_HALF_WIDTH`
+sur la figure peinte, donc de régénérer la table **et de redéployer**.
+
+### 4. Recette
+
+**256 backend · 77 clients · 0 rouge.** Le contrôle « billboard vertical » a changé de sens et
+vérifie désormais l'inverse, avec la mesure qui le justifie.
+
+---
+
+## §8.141.8 — LA TRANCHÉE : LA BOÎTE ÉPOUSE LA SILHOUETTE (table v4)
+
+> Verdict : « même si je le touche plusieurs fois il ne se passe rien. Il faut qu'il soit plus lent
+> dans ses mouvements et que sa **silhouette soit attaquable en entier** — j'ai l'impression que la
+> zone touchable est extrêmement petite et que je la touche au hasard. »
+
+### 1. Il avait raison, et l'écart était mesuré depuis la veille
+
+`SILHOUETTE_HALF_WIDTH` valait **0,30 m** — le TORSE — quand le joueur voit un cadre de **0,873 m**,
+l'homme **avec ses bras et son arme**. Rapport **1,44×** : près de la moitié de ce qu'il visait
+n'existait pas pour le serveur. Le §8.141.7 l'avait chiffré et laissé en résidu ; le verdict dit que
+c'en était le cœur.
+
+| | avant | après |
+|---|---|---|
+| demi-largeur de la boîte | 0,30 m | **0,44 m** |
+| fenêtre au centre | 3,44° (~67 px) | **5,04° (~98 px)** |
+| **silhouette rendue ÷ fenêtre** | **1,44×** | **0,98×** |
+| bot | 1,05 pas/s | **0,71 pas/s** (−33 %) |
+| joueur parfait, cible visible | 63 % | **75 %** |
+
+**0,98× à toutes les positions** : ce qui est peint est ce qui est touchable, à 2 % près.
+
+> ⚠️ **CE QUE ÇA NE CASSE PAS.** Les fenêtres de deux positions voisines restent largement
+> DISJOINTES (centres à 18,8°, demi-fenêtres de 2,5°) : « un pas de côté est TOUJOURS une esquive »
+> tient. Et la HAUTEUR n'avait pas à bouger — elle couvrait déjà toute la bande exposée
+> (1,194 → 1,80 m) ; c'est le parapet qui décide du reste, et c'est le jeu.
+
+### 2. Un contrôle a rougi, et il avait raison de rougir
+
+`test_trench_angles` bornait la silhouette à **4,0° de large** — une valeur héritée de l'arène de
+35 m, où elle faisait 0,96°. La borne est passée à 6,0°, en écrivant ce qu'elle protège vraiment :
+pas un nombre de degrés, mais **la disjonction des fenêtres**, qui est vérifiée juste au-dessus et
+reste verte.
+
+### 3. Recette
+
+**256 backend · 77 clients · 0 rouge.** ⚠️ **Table v4 : paquet indivisible, backend à redéployer** —
+sinon le bandeau de désynchronisation du §8.141.6 s'allumera, ce qui est exactement son rôle.
