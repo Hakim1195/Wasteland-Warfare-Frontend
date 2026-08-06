@@ -170,6 +170,11 @@ var _aiming_grenade := false
 var _grenade_point := 0.0
 var _grenade_cancelled := false
 var _grenade_refuse := 0.0
+# ⚠️ LA CADENCE EST PRÉDITE, PAS LUE : `fire_ready_tick` n'est PAS diffusé dans l'état (cf.
+# `public_state`). On la tient donc localement, comme `_pred_move_ready` pour le déplacement, et on
+# la RÉCONCILIE sur l'événement `fire` du serveur — la seule source qui dise « ce tir est parti ».
+var _pred_fire_ready := 0.0
+var _fire_refuse := 0.0
 var _stance_toggle := false
 
 # --- FX éphémères --------------------------------------------------------------------------------
@@ -530,6 +535,11 @@ func _on_duel_event(event: Dictionary) -> void:
 				# paraissait « en retard » même quand il ne l'était pas. On ne le rejoue donc ici
 				# que si le tir ne vient PAS de ma main — reconnexion en pleine manche, ou tir que
 				# le client n'avait pas anticipé (chargeur que je croyais vide, par exemple).
+				# ⚠️ RÉCONCILIATION DE LA CADENCE. Le serveur vient de confirmer qu'un tir est parti :
+				# c'est LUI qui a raison sur le moment où le suivant sera permis. Sans ce recalage,
+				# une dérive d'horloge finirait par rendre la prédiction trop permissive — et le
+				# faux coup reviendrait par la porte de derrière.
+				_pred_fire_ready = _clock + _cadence_seconds(str(event.get("weapon", "")))
 				if _fire_fx_mute <= 0.0:
 					_recoil = 1.0
 					# Depuis §8.138, le tween de recul s'applique au VIEWMODEL 2D peint.
@@ -744,12 +754,70 @@ func _input(event: InputEvent) -> void:
 # ║ On FIGE donc la visée à l'instant du clic et c'est ELLE qui part avec le tir. Le serveur reste  ║
 # ║ seul juge de la touche : on ne change pas qui décide, on change QUELLE direction on déclare.    ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ╔═ ⚠️⚠️ LE « FAUX COUP » : UN CLIC MONTRAIT UNE BALLE QUI NE PARTAIT PAS (§8.141.9) ═══════════╗
+# ║ Verdict de Hakim : « chaque clic correspond à une balle VUE, mais pas forcément à une balle    ║
+# ║ RÉELLE ». C'est un défaut que le §8.141.5 a INTRODUIT : pour supprimer les 100 ms de retard de ║
+# ║ la traçante, on la joue au clic — mais le retour d'arme ne vérifiait QUE les munitions, alors  ║
+# ║ que le serveur refuse un tir dans SIX cas. Le plus fréquent de loin est la CADENCE : la VIPÈRE ║
+# ║ tire une fois par 0,9 s ; un joueur qui clique trois fois par seconde voyait donc trois        ║
+# ║ traçantes pour une seule vraie balle.                                                          ║
+# ║                                                                                                 ║
+# ║ ⚠️ LA RÈGLE MAISON N'A PAS CHANGÉ, ON L'APPLIQUE MIEUX. Le client peut jouer ce qu'il SAIT      ║
+# ║ (« j'ai tiré ») et jamais ce que seul le serveur sait (« j'ai touché »). Or « mon tir part-il » ║
+# ║ EST connu du client : il a la posture, les munitions, le rechargement, le pansement et le laser ║
+# ║ dans l'état reçu. Il n'a pas la cadence — `fire_ready_tick` n'est pas diffusé — alors il la     ║
+# ║ PRÉDIT, exactement comme il prédit déjà le verrou de déplacement (`_pred_move_ready`).          ║
+# ║ ⚠️ ET LE FILET EXISTE DÉJÀ : si le client refuse à tort, il ne pose pas `_fire_fx_mute`, donc   ║
+# ║ l'événement `fire` du serveur rejoue le retour d'arme. Une prédiction trop prudente coûte un    ║
+# ║ retour d'arme de 100 ms en retard ; une prédiction trop permissive coûte un mensonge.           ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 func _queue_fire() -> void:
 	if _fire_queued:
+		return
+	var refusal := _fire_refusal()
+	if refusal != "":
+		# ⚠️ ON N'ENVOIE MÊME PAS LE TIR. Le serveur le jetterait, et l'envoyer consommerait une
+		# place dans le budget anti-flood de 9 msg/s — au détriment du prochain tir, celui-là légal.
+		_refuse_fire(refusal)
 		return
 	_fire_queued = true
 	_fire_aim = Vector2(_aim_yaw, _aim_pitch)
 	_local_fire_feedback()
+
+
+# LES SIX REFUS DU SERVEUR, dans l'ordre où `trench_sim.step` les applique. Renvoie "" si le tir
+# part vraiment. ⚠️ Miroir EXACT : toute condition ajoutée côté sim doit apparaître ici, sinon le
+# faux coup revient — c'est pour ça qu'elles sont énumérées dans le même ordre et nommées pareil.
+func _fire_refusal() -> String:
+	var me := _player_of(_latest(), _my_slot)
+	if me.is_empty():
+		return "attente"                                  # aucun état : on ne promet rien
+	if _pred_stance != "up":
+		return "accroupi"                                 # `step` : on ne tire pas accroupi
+	if int(me.get("laser_fire_tick", 0)) > 0:
+		return "laser"                                    # CONDOR : le tir est déjà armé
+	if int(me.get("reload_until_tick", 0)) > 0:
+		return "rechargement"
+	if int(me.get("bandage_until_tick", 0)) > 0:
+		return "pansement"
+	if int(me.get("ammo", 0)) <= 0:
+		return "chargeur vide"                            # le clic déclenchera un rechargement
+	if _clock < _pred_fire_ready:
+		return "cadence"                                  # LE cas fréquent — voir le pavé ci-dessus
+	return ""
+
+
+# LE REFUS SE VOIT ET S'ENTEND — jamais un silence (même règle que le refus de grenade §B.1.3).
+# ⚠️ « Chargeur vide » est le seul refus qui PRODUIT quelque chose côté serveur (il déclenche le
+# rechargement, confort standard du genre) : on laisse donc le clic partir dans ce cas-là.
+func _refuse_fire(reason: String) -> void:
+	if reason == "chargeur vide":
+		_fire_queued = true
+		_fire_aim = Vector2(_aim_yaw, _aim_pitch)
+	if _fire_refuse > 0.0:
+		return
+	_fire_refuse = 0.14
+	AudioManager.play_sfx("trench_refused", -10.0)
 
 
 # Le RETOUR D'ARME, joué à l'instant du clic. Il ne prétend RIEN sur la touche — le hitmarker reste
@@ -768,15 +836,25 @@ func _local_fire_feedback() -> void:
 	# rendu RETARDÉE et apparaissait donc ~100 ms APRÈS le hitmarker : le joueur voyait la
 	# confirmation de sa touche AVANT la balle. On la joue au clic, avec la visée FIGÉE au clic —
 	# même raisonnement que le recul et la détonation ci-dessus. Le hitmarker, lui, reste serveur.
-	if _world != null:
-		var weapon_id := str(_my("weapon"))
-		var flight := 1.0
-		var rounds := 1
-		for weapon in _rules.get("weapons", []):
-			if str(weapon.get("id", "")) == weapon_id:
-				flight = float(weapon.get("flight_ticks", 1))
-				rounds = int(weapon.get("burst", 1))
-				break
+	var weapon_id := str(_my("weapon"))
+	var flight := 1.0
+	var rounds := 1
+	var cadence := 0.0
+	var lead := 0.0
+	for weapon in _rules.get("weapons", []):
+		if str(weapon.get("id", "")) == weapon_id:
+			flight = float(weapon.get("flight_ticks", 1))
+			rounds = int(weapon.get("burst", 1))
+			cadence = float(weapon.get("cooldown_ticks", 0))
+			lead = float(weapon.get("laser_lead_ticks", 0))
+			break
+	# ⚠️ LA CADENCE EST CONSOMMÉE MÊME PAR UN TIR TÉLÉGRAPHIÉ : c'est ce que fait `step` (il pose
+	# `fire_ready_tick` AVANT de brancher sur le laser). Sans ça le CONDOR laisserait cliquer en
+	# rafale pendant son propre temps de visée.
+	_pred_fire_ready = _clock + cadence / _tick_rate
+	if _world != null and lead <= 0.0:
+		# ⚠️ PAS DE TRAÇANTE POUR LE CONDOR : son clic ARME UN LASER, la balle ne part que 0,5 s
+		# plus tard. En dessiner une tout de suite serait remplacer un faux coup par un autre.
 		_world.notify_local_shot(_pred_pos, _fire_aim.x, _fire_aim.y, flight / _tick_rate, rounds)
 
 
@@ -1066,6 +1144,7 @@ func _send_budget_left() -> bool:
 func _decay(delta: float) -> void:
 	_fire_fx_mute = maxf(0.0, _fire_fx_mute - delta)
 	_grenade_refuse = maxf(0.0, _grenade_refuse - delta)
+	_fire_refuse = maxf(0.0, _fire_refuse - delta)
 	_hitmarker = maxf(0.0, _hitmarker - delta)
 	_hurt_flash = maxf(0.0, _hurt_flash - delta)
 	_enemy_hit = maxf(0.0, _enemy_hit - delta * 3.0)
@@ -1407,11 +1486,15 @@ func _draw_reticle() -> void:
 	var latest := _latest()
 	var me := _player_of(latest, _my_slot)
 	var empty := int(me.get("ammo", 1)) <= 0 or int(me.get("reload_until_tick", 0)) > 0
-	var color := COL_DANGER if empty else COL_ACCENT
+	# ⚠️ LE REFUS DE TIR SE VOIT AUSSI ICI (§8.141.9) : le réticule claque en rouge et s'écarte de
+	# 4 px. Sans lui, un clic refusé pour CADENCE — le cas de loin le plus fréquent — ne produirait
+	# qu'un son sec, et le joueur croirait à une touche qui ne répond pas. C'est exactement le
+	# symptôme « la flèche bas ne fonctionne pas » du §8.140.1, et il ne se reproduira pas ici.
+	var color := COL_DANGER if (empty or _fire_refuse > 0.0) else COL_ACCENT
 	var center := _reticle.size * 0.5
 	# ÉCARTEMENT = dispersion de l'arme, convertie en pixels par le même champ de vision que la
 	# scène 3D. Le joueur LIT donc sa précision — la promesse du CONDOR se voit avant de tirer.
-	var spread := 6.0 + _dispersion_pixels()
+	var spread := 6.0 + _dispersion_pixels() + (4.0 if _fire_refuse > 0.0 else 0.0)
 	var arm := 7.0
 	for axis: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
 		var start := center + axis * spread
@@ -1628,6 +1711,14 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 		else:
 			_choice_panel.visible = false
 			_capture_mouse(not _match_over)
+
+
+# Cadence d'une arme, en SECONDES. Lue dans `public_rules` : aucun barème en dur côté client.
+func _cadence_seconds(weapon_id: String) -> float:
+	for weapon in _rules.get("weapons", []):
+		if str(weapon.get("id", "")) == weapon_id:
+			return float(weapon.get("cooldown_ticks", 0)) / _tick_rate
+	return 0.0
 
 
 func _mag_size(weapon_id: String) -> int:

@@ -5385,3 +5385,58 @@ reste verte.
 
 **256 backend · 77 clients · 0 rouge.** ⚠️ **Table v4 : paquet indivisible, backend à redéployer** —
 sinon le bandeau de désynchronisation du §8.141.6 s'allumera, ce qui est exactement son rôle.
+
+---
+
+## §8.141.9 — LA TRANCHÉE : LES « FAUX COUPS »
+
+> Question de Hakim : « comment on règle le fait que chaque clic correspond à une balle VUE, mais
+> pas forcément à une balle RÉELLE ? »
+
+### 1. Un défaut que le §8.141.5 a INTRODUIT
+
+Pour supprimer les 100 ms de retard de la traçante, on la joue au clic. Mais `_local_fire_feedback`
+ne vérifiait QUE les munitions — alors que `trench_sim.step` refuse un tir dans **six** cas :
+accroupi · laser CONDOR déjà armé · rechargement · pansement · chargeur vide · **cadence**.
+
+Le dernier est de loin le plus fréquent : la VIPÈRE tire une fois par 0,9 s. **Un joueur qui clique
+trois fois par seconde voyait trois traçantes pour une seule vraie balle.**
+
+### 2. La règle maison n'a pas changé — on l'applique mieux
+
+Le client peut jouer ce qu'il SAIT (« j'ai tiré ») et jamais ce que seul le serveur sait (« j'ai
+touché »). Or **« mon tir part-il ? » est connu du client** : posture, munitions, rechargement,
+pansement et laser sont tous dans l'état reçu. Seule la cadence manque — `fire_ready_tick` n'est pas
+diffusé — alors il la **prédit**, exactement comme il prédit déjà le verrou de déplacement.
+
+`_fire_refusal()` énumère les six refus **dans l'ordre où la simulation les applique**, avec les
+mêmes noms : toute condition ajoutée côté sim doit apparaître ici, sinon le faux coup revient.
+
+**Trois propriétés qui rendent le correctif sûr :**
+- **Le tir refusé n'est même pas ENVOYÉ.** Le serveur le jetterait, et l'envoyer consommerait une
+  place dans le budget anti-flood de 9 msg/s — au détriment du prochain tir, celui-là légal.
+- **La cadence est RÉCONCILIÉE sur l'événement `fire` du serveur**, seule source qui dise « ce tir
+  est parti ». Sans ce recalage, une dérive d'horloge finirait par rendre la prédiction permissive
+  et le faux coup reviendrait par la porte de derrière.
+- **Le filet existe déjà** : si le client refuse à tort, il ne pose pas `_fire_fx_mute`, donc
+  l'événement `fire` rejoue le retour d'arme. Une prédiction trop prudente coûte 100 ms de retard ;
+  une prédiction trop permissive coûte un mensonge. On choisit la prudence.
+
+**Deux cas ont leur règle propre :**
+- **CHARGEUR VIDE** : le clic PART quand même — côté serveur il déclenche le rechargement (confort
+  standard du genre). Simplement, aucune traçante n'est dessinée.
+- **CONDOR** : le clic ARME UN LASER, la balle ne part que 0,5 s plus tard. Aucune traçante locale —
+  en dessiner une reviendrait à remplacer un faux coup par un autre. La cadence, elle, est bien
+  consommée (c'est ce que fait `step`), sinon on pourrait cliquer en rafale pendant la visée.
+
+### 3. Le refus se VOIT et s'ENTEND
+
+Son sec (`trench_refused`, −10 dB) **et** réticule qui claque en rouge en s'écartant de 4 px. Sans
+le visuel, un clic refusé pour cadence ne produirait qu'un son — et le joueur croirait à une touche
+qui ne répond pas. C'est exactement le symptôme « la flèche bas ne fonctionne pas » du §8.140.1.
+
+### 4. Recette
+
+`tools/probe_trench_falseshot.tscn` — 40 clics à 10/s contre la règle du serveur appliquée à la
+main : **5 retours d'arme joués pour 5 tirs réels**. Plus accroupi, rechargement et chargeur vide.
+**256 backend · 77 clients · boot 0 `ERROR`.**
