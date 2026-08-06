@@ -57,7 +57,7 @@ const SEND_INTERVAL := 0.105
 # ║ ⚠️ Ce qu'on peut se permettre depuis le §8.140 : l'adversaire est rendu par PAS DISCRETS, plus ║
 # ║ par un glissé continu — il a donc bien moins besoin d'interpolation qu'avant.                   ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
-const RENDER_DELAY := 0.10
+const RENDER_DELAY := 0.05
 const RECONNECT_DELAY := 2.0
 
 # --- Visée ---------------------------------------------------------------------------------------
@@ -723,6 +723,20 @@ func _local_fire_feedback() -> void:
 	if _viewmodel != null:
 		_viewmodel.notify_fire()
 	AudioManager.play_sfx("trench_shot")
+	# ⚠️ LA TRAÇANTE PART ELLE AUSSI TOUT DE SUITE (§8.141.5). Elle était bâtie depuis la paire de
+	# rendu RETARDÉE et apparaissait donc ~100 ms APRÈS le hitmarker : le joueur voyait la
+	# confirmation de sa touche AVANT la balle. On la joue au clic, avec la visée FIGÉE au clic —
+	# même raisonnement que le recul et la détonation ci-dessus. Le hitmarker, lui, reste serveur.
+	if _world != null:
+		var weapon_id := str(_my("weapon"))
+		var flight := 1.0
+		var rounds := 1
+		for weapon in _rules.get("weapons", []):
+			if str(weapon.get("id", "")) == weapon_id:
+				flight = float(weapon.get("flight_ticks", 1))
+				rounds = int(weapon.get("burst", 1))
+				break
+		_world.notify_local_shot(_pred_pos, _fire_aim.x, _fire_aim.y, flight / _tick_rate, rounds)
 
 
 # Les réglages du panneau F10, appliqués À LA FRAME. Le lacet et le site ENVOYÉS au serveur ne
@@ -796,7 +810,7 @@ func _process(delta: float) -> void:
 			# se croirait plus rapide qu'il n'est — donc ferait un pas de trop, puis se ferait
 			# rappeler à l'ordre par la réconciliation. C'est-à-dire EXACTEMENT le symptôme « mes
 			# flèches ne répondent pas ». Le repli n'est censé servir que si `trench_init` manque.
-			_pred_move_ready = _clock + float(_rules.get("move_ticks", 5)) / _tick_rate
+			_pred_move_ready = _clock + float(_rules.get("move_ticks", 10)) / _tick_rate
 			pose_changed = true
 	if pose_changed:
 		_world.set_pose(_pred_pos, _pred_stance)

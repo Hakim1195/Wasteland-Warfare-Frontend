@@ -5134,3 +5134,82 @@ l'intention du verrou.
 **256 contrôles backend** · **77 clients** · 8 contrôles du guide · 0 rouge. **Aucun test n'a
 rougi** — parce qu'ils ont été réécrits la veille contre `TRENCH_RULES["move_ticks"]` au lieu de
 recopier « 3 » puis « 4 ». Le filet a fait exactement ce pour quoi il avait été refait.
+
+---
+
+## §8.141.5 — LA TRANCHÉE : LA SIMULATION PASSE À 20 Hz (porte, manche 5)
+
+> Verdict de Hakim : « après plusieurs tests, c'est encore trop lent. Le délai entre le clic et le
+> soldat touché doit être drastiquement réduit — 346 ms dans l'expérience de jeu, c'est encore
+> beaucoup trop. Il faut le réduire au minimum possible. »
+
+### 1. ⚠️ D'ABORD, UNE CORRECTION DE MON PROPRE CHIFFRE
+
+**Les 346 ms annoncés au §8.141.2 étaient SURÉVALUÉS.** J'y comptais le tampon de rendu (100 ms),
+en supposant que la touche s'affichait avec le monde. C'est faux : le HITMARKER et la réaction de
+douleur de l'adversaire partent de l'ÉVÉNEMENT `hit`, joué **dès que le message d'état arrive**,
+sans passer par la paire de rendu retardée. Le vrai budget était de **246 ms**.
+
+### 2. ET EN LE VÉRIFIANT, UN DÉFAUT PIRE QUE LA LENTEUR : L'ORDRE ÉTAIT INVERSÉ
+
+La TRAÇANTE, elle, était bâtie depuis la paire de rendu RETARDÉE. Elle apparaissait donc **~100 ms
+APRÈS le hitmarker**. Le joueur voyait, dans cet ordre : son clic → **la confirmation qu'il a
+touché** → et enfin **la balle qui part**.
+
+**Aucun réglage de vitesse ne pouvait réparer ça** : ce n'est pas une lenteur, c'est une inversion,
+et elle explique une bonne part du « c'est mou » ressenti. La traçante est désormais jouée
+**localement au clic**, avec la visée figée au clic — exactement le raisonnement de
+`_local_fire_feedback` pour le recul, la détonation et le départ de feu (§6.3 du rapport de pivot).
+⚠️ **On ne décide toujours aucune touche** : cette traçante dit « j'ai tiré », ce que le joueur sait
+déjà puisqu'il vient de cliquer. Le hitmarker, qui dit « j'ai TOUCHÉ », reste strictement serveur.
+
+### 3. LE DERNIER LEVIER : 10 Hz → 20 Hz
+
+Le vol était déjà au plancher structurel (1 tick). Le seul poste restant était la **granularité du
+tick** — qui coûte deux fois : l'attente de l'entrée au prochain tick, et la durée d'un tick de vol.
+
+| poste | 10 Hz | 20 Hz |
+|---|---|---|
+| envoi client (branche urgente) | 16 ms | 16 ms |
+| réseau (aller) | ~40 ms | ~40 ms |
+| **attente du tick serveur** | **~50 ms** | **~25 ms** |
+| **vol (1 tick)** | **100 ms** | **50 ms** |
+| réseau (retour) | ~40 ms | ~40 ms |
+| **TOTAL clic → hitmarker** | **246 ms** | **171 ms** |
+
+Les 80 ms restants sont du **réseau pur** : c'est le plancher tant que le hitmarker est
+serveur-autoritaire, et il le reste (règle maison, §5.5).
+
+> ⚠️ **L'INVARIANT DU CHANGEMENT : le jeu ne change pas, seule sa granularité double.** Chaque durée
+> exprimée en ticks a été doublée, et `tools`-side une contre-épreuve les ré-exprime toutes en
+> SECONDES pour les comparer à leur valeur d'avant : manche 90 s · pas 0,5 s · bandeau 3 s · grâce
+> 10 s · AFK 20 s · bandage 2 s · régén grenade 15 s · plancher de vol grenade 1,5 s · fenêtre de
+> choix 5 s · cadences 0,90/1,20/0,80/2,50 s · rechargements 1,50/2,00/2,20/2,50 s · laser 0,5 s.
+> **22 durées, 22 identiques.**
+
+**⚠️ LE PIÈGE, ET IL EST SILENCIEUX : les probabilités PAR TICK.** `move_prob` et `grenade_prob` du
+bot sont tirées à chaque tick. Les laisser telles quelles aurait **DOUBLÉ** la cadence du bot sans
+qu'aucun test ne le dise — seule une mesure du nombre de pas par seconde le voit. Halvées
+(0,22 → 0,11 et 0,06 → 0,03), vérifié après coup : **1,05 pas/s, inchangé**.
+
+### 4. Le filet a coûté ce qu'il devait coûter — et il a servi
+
+**20 contrôles ont rougi**, tous pour la même raison : des durées d'attente écrites en ticks et
+calibrées pour 10 Hz. Chacun a été **dérivé du registre** au lieu d'être re-calibré :
+`intermission_ticks + 1` au lieu de `31`, la cadence réelle au lieu de `9`, `reload_ticks` au lieu
+de `15`, `afk_ticks` au lieu de `210`…
+
+Deux méritent d'être cités :
+- **`fresh()` et `playing_state()`** rendaient un état encore en INTERMISSION (le bandeau est passé
+  de 30 à 60 ticks). L'`assert` de `fresh()` a fait exactement son travail : il a **arrêté la suite**
+  au lieu de laisser cent contrôles rougir en accusant la simulation.
+- **La fenêtre d'escalade** arrêtait de tirer à un tick calculé. C'était faux même avant : la
+  cadence courait encore depuis le dernier tir de la VIPÈRE, donc la 1ʳᵉ rafale du FRELON partait
+  plus tard que prévu et la 2ᵉ ne partait jamais. Réécrit pour **compter les rafales réellement
+  parties** — plus aucune arithmétique de tick à tenir à jour.
+
+### 5. Recette
+
+**256 contrôles backend** (sim 153 · bot 27 · flux 56 · table 20) · **77 clients** · 8 du guide ·
+sonde de rayon verte · boot 0 `ERROR` · **contre-épreuve des 22 durées en secondes : toutes
+identiques**.

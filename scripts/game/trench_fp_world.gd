@@ -205,6 +205,9 @@ var _markers: Array[Node3D] = []
 # --- §8.141 : la visée de grenade, les explosions, la secousse ------------------------------------
 var _aim_decal: Node3D
 var _explosions: Array = []
+# Traçantes LOCALES : dessinées dès le clic, sans attendre l'aller-retour serveur (cf. le pavé de
+# `notify_local_shot`). Elles ne décident aucune touche — elles disent seulement « j'ai tiré ».
+var _local_tracers: Array = []
 # RAYON D'ACTION EN MÈTRES-MONDE — posé par l'hôte depuis `rules.grenade.radius_m`. La valeur de
 # départ n'est qu'un repli le temps que `trench_init` arrive : dès la première frame de duel réel,
 # c'est le registre SERVEUR qui décide de ce qui est dessiné (invariant d'honnêteté §C.1).
@@ -1095,6 +1098,7 @@ func _process(delta: float) -> void:
 	# La machine à frames tourne MÊME quand le soldat est masqué par la redaction : il peut mourir
 	# d'une grenade hors de vue, et il ne doit pas ressusciter debout en réapparaissant.
 	_advance_enemy_frames(delta)
+	_advance_local_tracers(delta)
 	# Rappel exponentiel de l'affaissement du pas, et extinction du départ de feu adverse.
 	_enemy_dip = maxf(0.0, _enemy_dip - _enemy_dip * ENEMY_STEP_DIP_DECAY * delta - 0.0005)
 	if _enemy_muzzle_left > 0.0:
@@ -1344,13 +1348,61 @@ func _shot_direction(yaw_deg: float, pitch_deg: float, mine: bool) -> Vector3:
 	return dir if mine else Vector3(dir.x, dir.y, -dir.z)
 
 
+# ╔═ ⚠️⚠️ MA TRAÇANTE ÉTAIT DESSINÉE APRÈS LE HITMARKER — L'ORDRE ÉTAIT INVERSÉ ══════════════════╗
+# ║ Mesuré en relisant le chemin complet : le HITMARKER part de l'ÉVÉNEMENT `hit`, joué DÈS que le ║
+# ║ message d'état arrive (~246 ms après le clic). La TRAÇANTE, elle, était bâtie depuis la paire  ║
+# ║ de rendu RETARDÉE (`render_tick`, un tick en arrière) : elle apparaissait ~100 ms PLUS TARD.   ║
+# ║ Le joueur voyait donc, dans cet ordre : son clic → la confirmation qu'il a touché → et ENFIN   ║
+# ║ la balle qui part. Aucun réglage de vitesse ne peut réparer ça : c'est une inversion, pas une  ║
+# ║ lenteur — et elle explique une bonne part du « c'est mou » ressenti.                            ║
+# ║                                                                                                 ║
+# ║ ⚠️ ON NE DÉCIDE TOUJOURS AUCUNE TOUCHE. Cette traçante dit « J'AI TIRÉ », et le joueur le sait ║
+# ║ déjà — il vient de cliquer. C'est exactement le raisonnement de `_local_fire_feedback` pour le  ║
+# ║ recul, la détonation et le départ de feu (§6.3 du rapport de pivot). Le HITMARKER, lui, dit    ║
+# ║ « J'AI TOUCHÉ » : ça, seul le serveur le sait, et il reste strictement serveur.                 ║
+# ║ ⚠️ Tant qu'une traçante LOCALE vit, les traçantes MIENNES venues de l'état sont supprimées —    ║
+# ║ sans quoi le même tir serait dessiné deux fois, à 100 ms d'écart.                               ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func notify_local_shot(from_pos: int, yaw_deg: float, pitch_deg: float, seconds: float,
+		rounds: int) -> void:
+	for i in range(maxi(1, rounds)):
+		_local_tracers.append({"from_pos": int(from_pos), "yaw": yaw_deg, "pitch": pitch_deg,
+			# Les balles d'une rafale partent décalées : sans ça les trois se superposent au pixel
+			# près et la rafale se lit comme un tir unique.
+			"t": -0.03 * float(i), "life": maxf(0.05, seconds)})
+
+
+func _advance_local_tracers(delta: float) -> void:
+	if _local_tracers.is_empty():
+		return
+	var alive: Array = []
+	for shot in _local_tracers:
+		shot["t"] = float(shot["t"]) + delta / float(shot["life"])
+		if float(shot["t"]) < 1.0:
+			alive.append(shot)
+	_local_tracers = alive
+
+
 func _render_tracers(tracers: Array) -> void:
+	# LES LOCALES D'ABORD, puis celles de l'état — desquelles on retire les MIENNES tant qu'une
+	# locale vit, pour ne pas dessiner deux fois le même tir à 100 ms d'écart.
+	var shots: Array = []
+	for local in _local_tracers:
+		shots.append({"from_pos": int(local["from_pos"]), "mine": true,
+			"t": clampf(float(local["t"]), 0.0, 1.0),
+			"yaw": float(local["yaw"]), "pitch": float(local["pitch"])})
+	var mute_mine: bool = not _local_tracers.is_empty()
+	for entry in tracers:
+		if mute_mine and bool((entry as Dictionary).get("mine", false)):
+			continue
+		shots.append(entry)
+
 	for i in range(_tracers.size()):
 		var node := _tracers[i]
-		if i >= tracers.size():
+		if i >= shots.size():
 			node.visible = false
 			continue
-		var shot: Dictionary = tracers[i]
+		var shot: Dictionary = shots[i]
 		var mine := bool(shot.get("mine", false))
 		var origin := _muzzle_origin(int(shot.get("from_pos", 2)), mine)
 		var dir := _shot_direction(float(shot.get("yaw", 0.0)), float(shot.get("pitch", 0.0)), mine)
