@@ -5213,3 +5213,80 @@ Deux méritent d'être cités :
 **256 contrôles backend** (sim 153 · bot 27 · flux 56 · table 20) · **77 clients** · 8 du guide ·
 sonde de rayon verte · boot 0 `ERROR` · **contre-épreuve des 22 durées en secondes : toutes
 identiques**.
+
+---
+
+## §8.141.6 — LA TRANCHÉE : LE DÉFAUT FATAL QUE TOUT LE CHANTIER ANNONÇAIT
+
+> Verdict de Hakim : « c'est injouable. Je vois par A+B que j'ai touché le soldat, mais pour le jeu
+> je ne l'ai JAMAIS touché. À chaque clic un coup part, aucun ne fait de dégâts. J'ai l'impression
+> de tirer dans le vide. En plus le bot ne rate aucun coup, on dirait qu'il a une précision de
+> 100 % et qu'il sait à tout moment où je suis. »
+
+### 1. Trois symptômes, UNE cause : le serveur ne joue pas la même arène
+
+**Le client ne lit JAMAIS la géométrie que le serveur lui envoie.** Elle voyage pourtant depuis le
+§8.137 dans `trench_init.rules.geometry` — version, profondeur, espacement — et le client a la
+sienne EN DUR dans `trench_geometry.gd`. Personne ne les a jamais comparées.
+
+Mesuré, fenêtre centrale (pose 2 → cible 2) :
+
+| table appliquée | yaw | pitch |
+|---|---|---|
+| **v3 — 9 m, celle du CLIENT** | [−1,72 ; 1,72] | [−2,89 ; 0,57] |
+| v2 — 12 m | [−1,32 ; 1,32] | [−2,17 ; 0,44] |
+| **v1 — 35 m, celle de la PROD** | [−0,48 ; 0,48] | [−0,74 ; 0,16] |
+
+Quand le joueur centre son réticule sur le soldat, il envoie ~**(yaw 0,00 · pitch −1,16)**.
+**−1,16 est HORS de [−0,74 ; 0,16].** Le pitch seul suffit : **aucun tir ne peut toucher**, quelle
+que soit la qualité de la visée. Contre un serveur v2, le même tir touchait — la divergence n'est
+devenue FATALE qu'au passage à 9 m.
+
+Et le BOT, lui, vise le centre des fenêtres **du serveur** : il ne rate jamais, et il « sait où on
+est » parce qu'il lit l'état serveur, qui est cohérent avec lui-même. Le duel devient exactement ce
+que Hakim décrit : *je tire dans le vide, il me touche à tous les coups*.
+
+> ╔═ ⚠️⚠️ LA LEÇON, ET ELLE EST DURE ═════════════════════════════════════════════════════════════╗
+> ║ Tout le chantier répète « client et serveur doivent partir ENSEMBLE », le §9 du rapport de     ║
+> ║ pivot en fait son reste-à-faire n° 1, et un test compare déjà les DEUX COPIES DU FICHIER sur   ║
+> ║ disque. Mais **RIEN ne comparait le serveur qui TOURNE au client qui TOURNE** — et c'est le    ║
+> ║ seul des deux qui compte au moment de jouer. Le contrôle manquait exactement là où le mode     ║
+> ║ d'emploi disait qu'il fallait faire attention. Une consigne écrite n'est pas une ceinture.     ║
+> ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+
+**Le correctif : `_check_geometry_match()`.** À la réception de `trench_init`, le client compare la
+version ET la profondeur du serveur aux siennes. En cas d'écart : un `push_error` dans les journaux
+**et** un bandeau rouge permanent au centre de l'écran, traduit fr/en/it, qui nomme le problème et
+la solution (« le backend doit être redéployé »). On ne CORRIGE pas — le client ne peut pas se
+réaligner à chaud, sa géométrie est bâtie dans le blockout, les poses de caméra et la table locale —
+**on dénonce**. Un duel désynchronisé ne doit plus jamais avoir l'air de fonctionner.
+
+### 2. Le second défaut est réel lui aussi : le bot ne ratait rien
+
+Troisième instance du **même défaut de cascade** que `AIM_YAW_LIMIT` et `flight_ticks` : une valeur
+angulaire calibrée pour 35 m, jamais re-dérivée. `aim_error_deg = 0,45` contre une demi-fenêtre de
+**1,72°** à 9 m — l'erreur tenait entièrement dans la cible.
+
+⚠️ **Et la mesure a corrigé ma première correction.** J'avais posé un rapport de 0,95 en écrivant
+qu'il « reproduisait l'équilibre d'origine ». C'est faux, et structurellement : le bruit est
+**triangulaire et borné** à ±ratio × demi-fenêtre — tant que le ratio est ≤ 1, le bot ne peut PAS
+rater. 20 000 tirs par réglage, cible debout et immobile :
+
+| ratio | 0,95 | 1,50 | **2,00** | 2,50 | 3,00 |
+|---|---|---|---|---|---|
+| touche | **100 %** | 79 % | **56 %** | 41 % | 31 % |
+
+Ce qui établit au passage que **le 0,45° d'origine ne faisait DÉJÀ jamais rater le bot à 35 m**
+(demi-fenêtre 0,48°) : ses ratés d'alors venaient de la cible qui bougeait, jamais de sa main. Le
+verdict « on dirait qu'il a 100 % de précision » décrivait une vérité vieille du §8.137.
+
+Retenu : **`aim_error_ratio = 2,00`**, dérivé de la fenêtre RÉELLE de chaque tir — une cible
+lointaine ou excentrée est plus étroite, donc plus dure, ce que fait aussi une main humaine.
+
+### 3. Recette
+
+**256 contrôles backend · 77 clients · 0 rouge.** Le joueur parfait passe à **69 % de touches**
+contre le bot (36 % avant la manche 1 de la porte).
+
+⚠️ **AUCUNE de ces corrections ne se verra tant que le backend n'est pas redéployé** — c'est
+précisément ce que le bandeau dira, maintenant, au lieu de laisser croire à un jeu cassé.

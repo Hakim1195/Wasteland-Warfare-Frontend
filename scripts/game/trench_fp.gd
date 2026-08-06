@@ -213,6 +213,7 @@ var _slot_bandage: Label
 var _banner: Label
 var _waiting_label: Label
 var _conn_banner: Label
+var _geometry_banner: Label   # désynchronisation client/serveur (§8.141.6)
 var _tune_hint: Label
 var _help_panel: PanelContainer   # guide des commandes (F1)
 var _help_hint: Label
@@ -397,6 +398,7 @@ func _on_init(msg: Dictionary) -> void:
 	# qui en couvrait quatre.
 	var grenade_rules: Dictionary = _rules.get("grenade", {})
 	_world.set_grenade_radius(float(grenade_rules.get("radius_m", 2.5)))
+	_check_geometry_match()
 	_refresh_pose_view()
 
 	var opp_name := str(_opponent.get("name", ""))
@@ -415,6 +417,45 @@ func _on_init(msg: Dictionary) -> void:
 	else:
 		_waiting_label.text = tr("TRENCH_WAITING_OPPONENT")
 		_waiting_label.visible = true
+
+
+# ╔═ ⚠️⚠️ LE CLIENT ET LE SERVEUR PARLENT-ILS DE LA MÊME ARÈNE ? (§8.141.6) ══════════════════════╗
+# ║ LE DÉFAUT QUE CE CONTRÔLE AURAIT ÉVITÉ, ET QUI A COÛTÉ UNE PARTIE ENTIÈRE :                    ║
+# ║ verdict de partie réelle — « je vois par A+B que j'ai touché le soldat, mais pour le jeu je ne  ║
+# ║ l'ai JAMAIS touché · à chaque clic un coup part, aucun ne fait de dégâts · le bot ne rate       ║
+# ║ AUCUN coup ». Trois symptômes, UNE cause : le serveur résolvait les touches sur une table       ║
+# ║ angulaire d'une AUTRE arène que celle que le client dessine.                                    ║
+# ║                                                                                                 ║
+# ║ Mesuré : quand le joueur centre son réticule sur le soldat il envoie ~(yaw 0,00 · pitch −1,16). ║
+# ║   fenêtre centrale, table v3 (9 m, celle du client) : yaw [−1,72, 1,72] · pitch [−2,89, 0,57]   ║
+# ║   fenêtre centrale, table v1 (35 m, celle de la PROD) : yaw [−0,48, 0,48] · pitch [−0,74, 0,16] ║
+# ║ Le pitch seul suffit : **−1,16 est hors de [−0,74 ; 0,16], donc AUCUN tir ne peut toucher**,    ║
+# ║ quelle que soit la qualité de la visée. Le BOT, lui, vise le centre des fenêtres du SERVEUR :   ║
+# ║ il ne rate jamais. Le duel devient « je tire dans le vide, il me touche à tous les coups ».      ║
+# ║                                                                                                 ║
+# ║ ⚠️ TOUT LE CHANTIER RÉPÉTAIT « client et serveur doivent partir ENSEMBLE », et un test compare  ║
+# ║ déjà les DEUX COPIES DU FICHIER sur disque. Mais RIEN ne comparait le serveur qui TOURNE au     ║
+# ║ client qui TOURNE — et c'est le seul des deux qui compte au moment de jouer. Le contrôle        ║
+# ║ manquait exactement là où le mode d'emploi disait qu'il fallait faire attention.                ║
+# ║ Le serveur envoie déjà sa version dans `trench_init.rules.geometry` : il n'y avait qu'à la lire.║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _check_geometry_match() -> void:
+	var geometry: Dictionary = _rules.get("geometry", {})
+	if geometry.is_empty():
+		return
+	var server_version := int(geometry.get("version", 0))
+	var server_depth := float(geometry.get("no_mans_land", 0.0))
+	if server_version == Geo.TABLE_VERSION and absf(server_depth - Geo.NO_MANS_LAND) < 0.01:
+		return
+	# ⚠️ ON NE CORRIGE PAS, ON DÉNONCE. Le client ne PEUT pas se réaligner : sa géométrie est bâtie
+	# dans le blockout 3D, dans les poses de caméra et dans la table locale. Rendre une arène de
+	# 35 m parce que le serveur en parle demanderait de tout reconstruire à chaud — et masquerait
+	# le vrai problème, qui est qu'un déploiement n'a pas eu lieu. On le dit, en grand, en rouge.
+	push_error("[TRANCHÉE] DÉSYNCHRONISATION GÉOMÉTRIQUE : serveur table v%d (%.1f m) / client v%d "
+		% [server_version, server_depth, Geo.TABLE_VERSION]
+		+ "(%.1f m). AUCUN TIR NE PEUT TOUCHER. Redéploie le backend." % Geo.NO_MANS_LAND)
+	_geometry_banner.text = tr("TRENCH_GEOMETRY_MISMATCH") % [server_version, Geo.TABLE_VERSION]
+	_geometry_banner.visible = true
 
 
 # Accent de faction du soldat d'en face (§1.8 : « l'accent de couleur d'une faction du jeu »).
@@ -1289,6 +1330,15 @@ func _build_center() -> void:
 	_conn_banner.visible = false
 	_hud.add_child(_conn_banner)
 	_anchored(_conn_banner, Control.PRESET_CENTER_TOP, Vector2(-220, 108), Vector2(440, 26))
+
+	# LE BANDEAU DE DÉSYNCHRONISATION — rouge, permanent, au centre. Il ne s'efface jamais tant que
+	# le duel dure : ce n'est pas une alerte passagère, c'est « cette partie ne veut rien dire ».
+	_geometry_banner = _label("", 18, COL_DANGER)
+	_geometry_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_geometry_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_geometry_banner.visible = false
+	_hud.add_child(_geometry_banner)
+	_anchored(_geometry_banner, Control.PRESET_CENTER_TOP, Vector2(-420, 140), Vector2(840, 60))
 
 	# Le rappel de la touche F10. Il ne s'allume qu'en ENTRAÎNEMENT, quand `_on_init` l'a confirmé :
 	# annoncer un raccourci qui ne répond pas serait pire que de ne rien annoncer.
