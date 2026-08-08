@@ -13,8 +13,11 @@
    jamais `git commit`, `git push`, `git add` en vue d'un commit, ni aucune opération qui écrit
    dans l'historique git — même si le travail est « terminé ». On laisse les changements dans la
    working tree et on s'arrête là.
-2. **L'utilisateur communique en italien.** Lui répondre en italien. La **documentation et les
-   commentaires de code du projet sont en français** (à conserver pour la cohérence).
+2. **L'utilisateur (Hakim) communique en français — lui répondre en français.** La documentation et
+   les commentaires de code du projet sont en français eux aussi.
+   - ⚠️ Ce fichier a longtemps dit « l'utilisateur communique en italien ». C'était vrai d'un
+     **collègue** qui a utilisé ce PC pour quelques tâches ; il ne travaille plus sur le projet
+     depuis le 2026-08-07. **Hakim développe seul.**
 3. **Toujours valider** une modification de scène/script avant de la déclarer faite (voir
    « Validation headless » ci-dessous).
 
@@ -26,14 +29,28 @@
   de navigation, structure des scènes, HUD, shaders, helpers, **journal §8** et **feuille de route**.
   À mettre à jour à CHAQUE modification de scène / shader / HUD / helper.
   - **⚠️ DOUBLE EXEMPLAIRE — TOUJOURS SYNCHRONISER.** Ce fichier existe **aussi à la racine du
-	projet** (`../FRONTEND_INTERFACES.md`). L'utilisateur fait **deux commits séparés** : un du
-    **projet entier** (racine, backend+frontend) et un du **frontend isolé** (pour son collègue).
+	projet** (`../FRONTEND_INTERFACES.md`). Raison : `frontend/` est un **dépôt git séparé**, publié
+	sur `github.com/Hakim1195/Wasteland-Warfare-Frontend`, distinct du dépôt racine
+	`Wasteland-Warfare-Project`. **La séparation est une DÉCISION D'ARCHITECTURE, pas un héritage** :
+	le client n'a rien à voir avec le serveur, et l'objectif est un serveur de jeu **réplicable**
+	(HA, déploiement d'une instance sur un VPS neuf en une commande) qui ne transporte aucun
+	stockage qu'il n'utilise pas. Ne jamais proposer de fusionner les deux dépôts. Hakim fait donc
+	**deux commits séparés**. *(Ce n'est plus lié à un collègue : il ne travaille plus sur le projet
+	depuis le 2026-08-07.)*
 	Après toute édition de la copie `frontend/` (source de vérité), **recopier à l'identique** vers
 	la racine — les deux fichiers doivent avoir le **même hash** (`Copy-Item -Force` puis
 	`Get-FileHash`). Vaut pour **tout doc partagé** présent dans les deux emplacements.
-- Les docs `CONTEXTE.md`, `ARCHITECTURE_ET_REGLES.md`, `CONTRAT_RESEAU.md`,
-  `PIPELINE_ET_BOOTLOADER.md` sont référencées mais vivent dans le **dépôt backend** — elles ne
-  sont **PAS présentes** ici. Ne pas tenter de les ouvrir dans ce dépôt.
+- **Docs partagés RÉELLEMENT présents ici** (vérifié le 2026-08-07) : `FRONTEND_INTERFACES.md` et
+  **`CONTRAT_RESEAU.md`** — ce dernier est le contrat réseau **client ↔ backend** (charges utiles
+  WS/REST, champs de `PlayerState`, journal §8). Il a **aussi** son double à la racine, soumis à la
+  même règle de hash identique.
+  - ⚠️ Ce fichier affirmait que `CONTRAT_RESEAU.md` n'était **pas présent** ici et qu'il ne fallait
+    « pas tenter de l'ouvrir ». **Faux** — et c'est cette phrase qui a laissé la copie locale
+    dériver sans que personne aille la lire : au 2026-08-07 elle documentait encore l'ANCIENNE règle
+    d'or de La Tranchée (10 Hz, balles ≥ 3 ticks, `throw {"charge"}`) alors que le contrat réel
+    était amendé depuis §8.141.2 (20 Hz, balles 1 tick, `throw {"target_x"}`).
+- Vivent en revanche **uniquement dans le dépôt racine** : `CONTEXTE.md`,
+  `ARCHITECTURE_ET_REGLES.md`, `PIPELINE_ET_BOOTLOADER.md`. Ne pas tenter de les ouvrir ici.
 
 ---
 
@@ -102,9 +119,11 @@ Détail dans `FRONTEND_INTERFACES.md` §3. `run/main_scene = bootloader.tscn`.
 
 ## 🔧 Environnement & validation headless
 
-- **Moteur** : Godot **4.7-stable**. Binaires (sur cette machine) :
-  - GUI : `C:\Users\Hamdi\Downloads\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64.exe`
-  - **Console (stdout, à privilégier pour la CLI)** : `…\Godot_v4.7-stable_win64_console.exe`
+- **Moteur** : Godot **4.7-stable**. Binaires (sur cette machine, **vérifiés le 2026-08-07**) :
+  - GUI : `C:\Users\Hakim\Desktop\Godot_v4.7-stable_win64.exe`
+  - **Console (stdout, à privilégier pour la CLI)** : `C:\Users\Hakim\Desktop\Godot_v4.7-stable_win64_console.exe`
+  - ⚠️ Ce fichier a longtemps indiqué `C:\Users\Hamdi\Downloads\…` — un **autre utilisateur Windows**,
+    chemin qui **n'existe pas ici**. Toute commande copiée depuis l'ancienne version échoue.
 - **Addon MCP `godot_ai`** : outillage **local**, **gitignoré** (`.gitignore` → `/addons/`). Il est
   enregistré dans `project.godot` comme **autoload** (`_mcp_game_helper`) **et** plugin éditeur.
   - ⚠️ **Sans cet addon installé**, l'autoload manque → le **boot runtime échoue** au démarrage
@@ -120,7 +139,13 @@ Détail dans `FRONTEND_INTERFACES.md` §3. `run/main_scene = bootloader.tscn`.
   Godot…_console.exe --headless --path . res://scenes/ui/main_menu.tscn --quit-after 30
   ```
   Un boot propre = **0 ligne `ERROR`**.
-- **Pas de Python/Pillow** sur cette machine (l'alias `python` est le stub du Microsoft Store). Pour
-  toute **manipulation d'image** (recoloration d'asset, etc.), utiliser **Godot** : un script
-  `extends SceneTree` lancé en `--script` **sans `--path`** (donc sans autoload) avec
-  `Image.load_from_file()` / `Image.save_png()` sur des chemins OS absolus.
+- **Python EST disponible** (vérifié le 2026-08-07) : `python` **et** `py` lancent le même
+  **Python 3.12.10**, avec **Pillow 12.2**, **numpy 2.4**, **requests** et **rembg**. C'est
+  l'outillage des usines à assets du dépôt (`tools/trench_asset_factory.py` et suivantes).
+  - ⚠️ Ce fichier a longtemps affirmé « **Pas de Python/Pillow** sur cette machine, l'alias `python`
+    est le stub du Microsoft Store » et renvoyait toute manipulation d'image vers Godot. **C'est
+    faux aujourd'hui** — ne pas contourner Python pour traiter une image.
+  - Convention de test : scripts **autonomes**, `py <test>.py`, **sans pytest**. Exporter
+    `PYTHONUTF8=1` avant de lancer (sinon `UnicodeEncodeError` sur les `✅`/`→` en console cp1252).
+  - La voie Godot (`extends SceneTree` en `--script` **sans `--path`**, `Image.load_from_file()` /
+    `Image.save_png()` sur chemins OS absolus) reste valable, mais n'est plus le seul recours.

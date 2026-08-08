@@ -2976,10 +2976,24 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
 > **Le premier contenu de l'onglet BONUS (§8.134) et la PREMIÈRE boucle temps réel du projet.**
 > Deux soldats dans deux tranchées face à face, 5 positions discrètes, DEBOUT pour agir / ACCROUPI
 > pour survivre, grenades en cloche, escalade d'armes au mérite — match en 2 manches gagnantes,
-> manche de 90 s. Faisable à **10 Hz** sur le WebSocket existant grâce à UNE règle d'or absolue :
-> **tout ce qui traverse le no man's land est un projectile LENT et VISIBLE** (balles >= 3 ticks de
-> vol, grenades 15-30 ticks) — aucune prédiction complexe, aucune compensation de lag, aucun
-> netcode de FPS (détail règles/équilibrage : encart `ARCHITECTURE_ET_REGLES.md`).
+> manche de 90 s. Faisable à **20 Hz** (10 Hz jusqu'au §8.141.5) sur le WebSocket existant grâce à UNE règle d'or absolue :
+> **tout ce qui traverse le no man's land est un projectile, résolu À L'IMPACT par le serveur**
+> — aucune prédiction complexe, aucune compensation de lag, aucun netcode de FPS (détail
+> règles/équilibrage : encart `ARCHITECTURE_ET_REGLES.md`).
+>
+> ⚠️⚠️ **LA RÈGLE D'OR A ÉTÉ AMENDÉE AU §8.141.2, SUR DÉCISION DE HAKIM.** Elle imposait « balles
+> >= 3 ticks de vol, esquivables pendant le vol ». Après trois rapprochements de l'arène (35 → 12
+> → 9 m) **sans jamais re-dériver le temps de vol**, la balle de départ tombait à 25 m/s et le
+> budget clic → touche à **696 ms** : « dès que je clique, il s'est déjà déplacé — c'est
+> injouable ». Les balles volent désormais **1 tick (0,1 s)** ; le budget tombe à **346 ms**.
+> **CE QUI DISPARAÎT** : l'esquive d'une BALLE par un pas ou un plongeon (0,1 s est sous le temps
+> de réaction humain). Se baisser reste une COUVERTURE, ce n'est plus une RÉACTION.
+> **CE QUI SURVIT** : la résolution reste À L'IMPACT et côté SERVEUR, dans un tick strictement
+> postérieur au tir (plancher structurel de 1 tick — à 0, l'ordre interne du tick deviendrait une
+> règle de jeu et le rejeu déterministe perdrait son sens) · la sim reste à **10 Hz sans
+> compensation de lag** · la **GRENADE** garde son plancher de **15 ticks** et reste la menace
+> lente, annoncée et esquivable · le **CONDOR** garde son laser de 5 ticks et devient le SEUL tir
+> télégraphié du jeu.
 
 ### 1. Architecture — une salle `mode="trench"`, un aiguillage précoce, AUCUN GameEngine
 
@@ -3005,12 +3019,40 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
 ### 2. Protocole WS (§1.5 additif — enveloppe de salle existante)
 
 - **client → serveur** (À PLAT, comme le chat) — `{"type": "trench_input", "move": -1|0|1,
-  "stance": "up"|"down", "fire": bool, "throw": {"charge": 0..1} | null,
+  "stance": "up"|"down", "fire": bool, "throw": {"target_x": float} | null,
   "pick_weapon": "chacal"|"condor" | null, "aim": {"yaw": float, "pitch": float} | null,
   "reload": bool, "item": "bandage" | null}`. **<= 10 msg/s par connexion, le serveur JETTE le
   surplus** (anti-flood, `TrenchRuntime.allow_message`) ; le tick serveur COALESCE (dernière
   direction/posture/VISÉE gagnante, un clic de tir n'est jamais perdu, le 11e message d'un tick est
   ignoré — `trench_sim.coalesce_inputs`). `{"type": "trench_forfeit"}` = abandon (ÉCHAP confirmé).
+  - ### ⚠️ **`throw` (§8.141) — LE POINT VISÉ REMPLACE LA JAUGE DE CHARGE**
+    `{"target_x": float}` : abscisse d'impact **en MÈTRES sur l'axe du front**, 0 = centre,
+    quantifiée au décimètre par le client. La profondeur n'est **pas** une variable du jeu — une
+    grenade tombe toujours dans la tranchée adverse, et `target_x` est **la seule** coordonnée qui
+    voyage.
+    - **REPLI ACCEPTÉ** : `{"charge": 0..1}`, la convention d'avant §8.141. Le serveur la traduit
+      en `target_x` du **centre de la position correspondante** (`grenade_target_pos`, arrondi
+      demi-supérieur). ⚠️ Un client retardataire vise donc EXACTEMENT où il visait — mais il
+      encaisse le **modèle de dégâts neuf** comme tout le monde : un duel ne peut pas appliquer
+      deux physiques selon la version du client de chacun. `target_x` GAGNE si les deux sont
+      présents. Un `throw` illisible (NaN, ±inf, texte) retombe sur le repli plutôt que
+      d'empoisonner la simulation.
+    - **CLAMP SERVEUR** : `target_x` est borné à `±(front/2 + target_margin_m)`. Il n'est **pas**
+      re-quantifié (même raison que pour `aim` : le pas de 0,1 m est une mesure de bande passante
+      côté client, pas une règle — et la décroissance des dégâts étant continue, il n'y a aucune
+      case à voler).
+    - **DÉGÂTS CONTINUS** : `dmg = damage_max × max(0, 1 − d / radius_m)` où `d` est la distance du
+      centre de la position occupée par la victime au point d'impact, **quelle que soit la posture**
+      (c'est l'arme anti-camping). `radius_m = 2,5 m` ⚙, `damage_max = 40` ⚙. Conversion en entier
+      par TRONCATURE : à `d = radius_m` exactement, 0 dégât — jamais −0, jamais un point d'arrondi.
+    - **TEMPS DE VOL** : `0,9 s + 0,07 s/m` de distance PARCOURUE (profondeur et travers du front
+      compris), plancher `flight_floor_ticks = 15` — c'est ce plancher qui porte la **règle d'or**,
+      vérifié au chargement du module comme les temps de vol des armes. Un lancer en travers vole
+      donc plus longtemps qu'un lancer droit devant, et s'esquive mieux.
+    - **INTERACTION AVEC LE RECHARGEMENT** ⚙ : lancer PENDANT un rechargement est **autorisé**, et
+      le rechargement **repart du début** (`reload_start` est ré-émis avec `"restarted": true`).
+      L'interdire serait refuser un geste en silence à celui qui en a le plus besoin ; l'autoriser
+      gratuitement ferait de la grenade le meilleur moyen de meubler un rechargement.
   - **`aim` (§8.137)** : direction de visée en DEGRÉS dans le repère de l'arène (yaw 0 = droit
     devant, + = vers la droite du tireur ; pitch + = vers le haut). Envoyée **seulement quand elle
     change**, arrondie au dixième de degré. ⚠️ Le serveur ne RE-QUANTIFIE pas : le pas de 0,1° est
@@ -3026,7 +3068,14 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
     state | null}` — le client n'a AUCUNE constante du mini-jeu en dur (patron
     `battle_royale.public_rules` §8.131). `rules` porte désormais aussi, par arme,
     `dispersion_deg`/`mag_size`/`reload_ticks`, le bloc `bandage`, et le bloc `geometry` (cotes du
-    blockout : `no_mans_land`, `positions`, `parapet_y`, `eye_up`, `eye_down`, `aim_quantum_deg`).
+    blockout : `no_mans_land`, `positions`, `position_spacing`, `parapet_y`, `eye_up`, `eye_down`,
+    `aim_quantum_deg`).
+    ⚠️ **`rules.grenade.radius_m` EST LE CONTRAT VISUEL DU §8.141**, et pas seulement une donnée
+    d'équilibrage : c'est CETTE valeur — celle qui décide des dégâts — que le client utilise pour
+    ouvrir son décalque de visée, ses marqueurs d'impact et son anneau de choc. Il n'y a pas deux
+    rayons à garder d'accord, il n'y en a qu'un, et le cercle ne PEUT donc pas mentir. Le bloc porte
+    aussi `damage_max`, `flight_base_s`, `flight_per_metre_s`, `flight_floor_ticks` et
+    `target_margin_m` (dont le client dérive sa borne de visée, au lieu de la recalculer).
     ⚠️ L'état joint est REDACTÉ lui aussi — sans quoi il suffirait de se reconnecter pour
     photographier la position d'un accroupi.
   - `trench_state` (**PERSONNEL, un payload PAR JOUEUR**, 10 Hz) : `{tick, phase:
@@ -3034,7 +3083,13 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
     winner_slot, players: [{slot, pos, stance, hp, weapon, hits_total, grenades,
     choice_deadline_tick, laser_fire_tick, disconnected, ammo, reload_until_tick, bandages,
     bandage_until_tick, aiming, hidden}], projectiles: [{id, kind, owner_slot, from_pos,
-    target_pos, launch_tick, impact_tick, aim_yaw, aim_pitch}], events: [...]}`.
+    target_pos, target_x, launch_tick, impact_tick, aim_yaw, aim_pitch}], events: [...]}`.
+    ⚠️ **`target_x` (§8.141)** : le point d'impact EXACT d'une grenade, en mètres sur l'axe du front.
+    C'est lui que le client dessine des deux côtés et lui qui décide des dégâts. `target_pos` reste
+    diffusé — la position adverse la plus PROCHE du point — pour les consommateurs qui raisonnent
+    encore en cases (bot, journaux, client retardataire) ; il n'entre plus dans aucun calcul de
+    dégât. Les événements `grenade_thrown` et `impact` le portent eux aussi : l'explosion doit
+    naître EXACTEMENT là où le décalque l'annonçait depuis le lancer.
     ⚠️ Les projectiles voyagent par INSTANTS (lancement, impact) — le CLIENT interpole la
     trajectoire, le serveur ne calcule que les instants et les dégâts. Depuis §8.137 ils portent
     AUSSI leur visée réelle (`aim_yaw`/`aim_pitch` = visée du tireur + écart de dispersion figé au
