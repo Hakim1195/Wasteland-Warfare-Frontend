@@ -1022,9 +1022,12 @@ func conquest_flash(tid: String, accent: Color) -> void:
 		fill.material = null
 		fill.visible = false)
 
-# Flotteur « tic de zone » (E9 §8.81) : « -1 » vert toxique sur un territoire touché par la
+# Flotteur « tic de zone » (E9 §8.81) : « −N » vert toxique sur un territoire touché par la
 # contamination. Réutilise le calque de badges (BadgeLayer) posé sur le plateau.
-func spawn_zone_tick(tid: String) -> void:
+# ZONE LÉTALE (§8.145) : `amount` vient de l'évènement serveur `zone_damage` (lui-même issu du
+# registre `zone_settings.ZONE_DAMAGE`) — plus aucun « −1 » en dur côté client. Défaut 1 pour les
+# appelants historiques (outil de test E9).
+func spawn_zone_tick(tid: String, amount: int = 1) -> void:
 	# Réglage damage_numbers (E10 §8.82) : les flotteurs de dégâts (zone comprise) sont masquables.
 	if not bool(SettingsManager.get_comfort("damage_numbers")):
 		return
@@ -1040,7 +1043,7 @@ func spawn_zone_tick(tid: String) -> void:
 		_badge_layer.z_index = 2
 		add_child(_badge_layer)
 	var lbl := Label.new()
-	lbl.text = "-1"
+	lbl.text = "-%d" % max(1, amount)
 	lbl.add_theme_font_size_override("font_size", 30)
 	lbl.add_theme_color_override("font_color", Color("7fff00"))
 	lbl.add_theme_constant_override("outline_size", 5)

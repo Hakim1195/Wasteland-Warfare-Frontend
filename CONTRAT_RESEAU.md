@@ -3486,3 +3486,55 @@ pas une panne. Une `cause` inconnue retombe sur « temporairement fermé », jam
 > une escouade `full` ou une file fermée ne voyait **rien**. Corrigé en inversant l'ordre.
 > Contre-épreuve : `frontend/tools/test_mm_refusals.gd` (77 contrôles, 4 chemins × toutes les
 > raisons + une inconnue + une réponse vide, × 3 langues).
+
+---
+
+## ☢️ §8.145 — ZONE LÉTALE : l'évènement structuré `zone_damage` (2026-08-09)
+
+> Règles & moteur : **§8.145 de [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md)**.
+> Rendu client : **§8.145 de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)**.
+> **Strictement ADDITIF (règle §1.5)** : aucune clé de payload existante n'est renommée, supprimée ni
+> changée de forme. Un client antérieur IGNORE simplement le nouveau code (repli `_` de
+> `war_feed._system_event_entry` → entrée `system` brute, aucune perte, aucun crash).
+> ⚠️⚠️ **Changement de GAMEPLAY : client et serveur partent ENSEMBLE** (gate de version WS, §9).
+
+### 1. Le nouveau code système (pipeline `system_events` existant, PUBLIC)
+
+```json
+{"code": "zone_damage", "territory_id": "<tid>", "owner_id": 42, "amount": 1, "ravaged": false}
+```
+
+| Champ | Type | Sens |
+|---|---|---|
+| `territory_id` | `str` | le territoire réellement frappé |
+| `owner_id` | `int \| null` | **propriétaire AVANT le dégât** (`null` = territoire neutre). C'est lui qui porte l'attribution ; **jamais** le joueur dont c'est le tour. |
+| `amount` | `int` | pertes **RÉELLES** — bornées par la garnison (`min(registre, garnison)`), donc jamais un chiffre que le plateau ne peut pas montrer. Vient de `zone_settings.ZONE_DAMAGE["per_player_turn"]` : le client n'affiche **aucun « −1 » en dur**. |
+| `ravaged` | `bool` | le territoire est tombé à 0 et **redevient NEUTRE**. Servi par le SERVEUR plutôt que réinféré côté client depuis « garnison 0 + owner null » — une inférence de moins. |
+
+**Émis** au début du tour de CHAQUE joueur, **une fois par territoire réellement frappé** :
+- ⛔ **jamais** pour un territoire PROTÉGÉ (Culte de l'Isotope / `immune_to_contamination`) — ceux-là
+  émettent `zone_protected`, inchangé ;
+- ⛔ **jamais** pour un territoire déjà VIDE (neutre sans garnison) : rien à perdre, rien à raconter.
+
+**Aucune ligne `system_messages` LEGACY n'accompagne `zone_damage`** (contrairement à `zone_grew`).
+Volontaire : `war_feed.parse` IGNORE les `system_messages` dès qu'un `system_events` est présent, et
+la dérivation cliente qui produisait ces lignes est SUPPRIMÉE (cf. FRONTEND §8.145) — une ligne
+legacy ne servirait qu'à doubler l'entrée sur les clients à jour.
+
+### 2. Ce qui NE change PAS dans le contrat
+
+- `contamination_zone` (`territories` / `next_territories` / `probability`) : forme INCHANGÉE.
+- `zone_protected`, `zone_grew`, `zone_forecast` : INCHANGÉS.
+- `GameStatistics.zone_kills_by_player` (Métrique A §8.35) : **même sémantique** (« unités de CE
+  joueur détruites par la zone », ventilées par PROPRIÉTAIRE). Seul le MOMENT du comptage change —
+  à chaque tour de joueur au lieu du seul tour du propriétaire. Les valeurs montent donc plus vite ;
+  aucun consommateur (HUD Intel, Rapport Post-Op, `WARROOM_LBL_ZONE`) n'a besoin d'être touché.
+- Les **objectifs** continuent d'ignorer ces kills (`build_context` ne lit que `combat_kills_by_player`).
+
+### 3. Volume de diffusion
+
+À 5 joueurs sur une zone de 6 territoires, un round produit jusqu'à **30** `zone_damage` (6 par tick
+× 5 ticks), contre ~6 auparavant. Ils voyagent dans le tampon `pending_system_events` déjà existant,
+drainé par les sites qui attachent `system_messages` — **aucun message périodique neuf**, aucune
+nouvelle route. Le journal client les catégorise en `zone` (filtrable). À surveiller au playtest :
+c'est le seul poste de volume du chantier, et il est CONSTATÉ ici plutôt que découvert plus tard.

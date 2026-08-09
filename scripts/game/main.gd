@@ -968,10 +968,11 @@ func _deferred_refresh():
 
 func _on_game_event(event):
 	# Journal de Guerre 2.0 (E4 §8.76) : parsing structuré (war_feed — catégories, [url=<tid>],
-	# system_messages embarqués) + tics de zone DÉRIVÉS + kill feed (entrées majeures) + toast
-	# défensif. Remplace l'ancien add_log(_format_event) — le texte legacy reste le repli (ctx).
+	# system_messages embarqués) + kill feed (entrées majeures) + toast défensif. Remplace l'ancien
+	# add_log(_format_event) — le texte legacy reste le repli (ctx).
+	# ZONE LÉTALE (§8.145) : les tics de zone ne sont plus DÉDUITS ici — ils arrivent en évènements
+	# structurés `zone_damage` et passent par le même `WarFeed.parse` que le reste.
 	var entries: Array = WarFeed.parse(event, _feed_ctx(event))
-	entries.append_array(WarFeed.zone_entries(_derive_zone_ticks(event)))
 	hud.add_feed_entries(entries)
 	for e in entries:
 		if typeof(e) == TYPE_DICTIONARY and bool(e.get("major", false)):
@@ -3498,6 +3499,11 @@ func _play_event_feedback(event) -> void:
 				# On y ajoute un FLASH court + une entrée ☢ au Journal — sans quoi l'extension
 				# passerait inaperçue au milieu d'un tour chargé.
 				_on_zone_grew(str(sev.get("territory_id", "")))
+			elif code == "zone_damage":
+				# ZONE LÉTALE (§8.145) : retour visuel BREF sur le territoire frappé. La ligne de
+				# journal, elle, est déjà produite par WarFeed (évènement structuré) — ici on
+				# n'ajoute QUE ce que le texte ne dit pas : OÙ, et MAINTENANT.
+				_on_zone_damage(sev)
 			elif code == "pact_broken":
 				# §8.123 — LA TRAHISON. Portée par les `system_events` de l'`attack_result` qui l'a
 				# provoquée : le bandeau part donc AVEC le combat, pas plusieurs actions plus tard.
@@ -3507,12 +3513,6 @@ func _play_event_feedback(event) -> void:
 				# §8.123 — fin de pacte, DISCRÈTE (journal seul, aucun bandeau ni son) : ce n'est
 				# pas un drame, mais les signataires doivent cesser de se croire couverts.
 				_on_pact_expired(int(sev.get("a_id", -9999)), int(sev.get("b_id", -9999)))
-	# Tics de zone (VFX) : flotteur -1 vert sur CHAQUE territoire touché (mêmes ticks dérivés
-	# que le journal E4). SFX zone_alarm distinct = télégraphe (voir _push_zone_forecast).
-	if _vfx_enabled():
-		for t in _derive_zone_ticks(event):
-			if typeof(t) == TYPE_DICTIONARY:
-				board.spawn_zone_tick(str(t.get("tid", "")))
 
 # ZONE CROISSANTE (chantier « Tension & fin de partie », LOT F) : rendu de l'extension. Le passage
 # au shader `toxic_pulsation` est déjà fait par board.gd (le territoire est entré dans
@@ -3551,32 +3551,29 @@ func _feed_ctx(event) -> Dictionary:
 		ctx["def_pid"] = def_pid if GameState.players.has(str(def_pid)) else -9999
 	return ctx
 
-# Dégâts de zone DÉRIVÉS (E4 §8.76) : le serveur n'itemise pas les « −1 » de contamination — on
-# les déduit en comparant la garnison AFFICHÉE (snapshot pré-évènement, même mécanique que
-# _displayed_owners) à l'état reçu, pour les seuls territoires de la zone COURANTE, sur les
-# évènements de TOUR (les dégâts s'appliquent à l'entame du tour, engine._end_turn). Les combats
-# passent par attack_result (exclu) → aucune confusion possible.
-func _derive_zone_ticks(event) -> Array:
-	if typeof(event) != TYPE_DICTIONARY:
-		return []
-	var etype := str(event.get("event_type", ""))
-	if etype != "turn_passed" and etype != "turn_timeout" and etype != "blind_deploy_resolved":
-		return []
-	var zone: Dictionary = GameState.contamination_zone \
-		if typeof(GameState.contamination_zone) == TYPE_DICTIONARY else {}
-	var tids = zone.get("territories", [])
-	if typeof(tids) != TYPE_ARRAY:
-		return []
-	var ticks: Array = []
-	for tid in tids:
-		var key := str(tid)
-		if not _displayed_garrisons.has(key):
-			continue
-		var before := int(_displayed_garrisons.get(key, 0))
-		if _garrison(key) < before:
-			ticks.append({"tid": key, "name": _territory_name(key),
-				"ravaged": _garrison(key) <= 0 and _terr(key).get("owner_id") == null})
-	return ticks
+# ⛔ `_derive_zone_ticks(event)` (E4 §8.76) est SUPPRIMÉE depuis ZONE LÉTALE (§8.145). Elle DÉDUISAIT
+# les « −1 » de contamination en comparant la garnison AFFICHÉE à l'état reçu, faute d'itemisation
+# serveur — une inférence à l'aveugle qui ne pouvait raconter que ce qu'elle réussissait à deviner.
+# Le serveur émet désormais un `zone_damage {territory_id, owner_id, amount, ravaged}` par
+# territoire réellement frappé : la ligne de journal passe par `WarFeed`, le retour visuel par
+# `_on_zone_damage`. Aucune déduction, aucun doublon.
+
+# ZONE LÉTALE (§8.145) : retour visuel d'un tic d'attrition. Emprunt PUR à l'existant — flotteur
+# « −N » vert toxique (E9 §8.81, déjà gated par le réglage `damage_numbers`) + flash bref du
+# territoire (le MÊME canal que la croissance de zone). AUCUN nouveau système d'animation.
+# `reduced_motion` (E10 §8.82) coupe le mouvement via `_vfx_enabled()` : la ligne de journal, elle,
+# reste TOUJOURS émise — c'est elle qui porte l'information, l'animation ne fait que la souligner.
+func _on_zone_damage(sev) -> void:
+	if typeof(sev) != TYPE_DICTIONARY:
+		return
+	var tid := str(sev.get("territory_id", ""))
+	if tid == "" or not _vfx_enabled():
+		return
+	board.spawn_zone_tick(tid, int(sev.get("amount", 1)))
+	# Territoire RAVAGÉ (garnison 0 → neutre) : il vient de changer de camp sous nos yeux, on
+	# appuie d'un flash — même geste que pour une extension de zone (`_on_zone_grew`).
+	if bool(sev.get("ravaged", false)):
+		board.flash_territory(tid)
 
 # Toast défensif (E4 §8.76) : un attack_result frappe un territoire à NOUS pendant le tour d'un
 # AUTRE → toast + SFX (les données sont déjà diffusées à tous — pure mise en scène locale).

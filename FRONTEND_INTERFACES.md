@@ -5621,3 +5621,86 @@ MODIFIÉS   frontend/scripts/ui/top_nav.gd                   enveloppe, pastille
            frontend/scripts/ui/squad_screen.gd              closed/cause + ORDRE rendu/message
            frontend/translations/ui_strings.csv             18 lignes
 ```
+
+---
+
+## ☢️ §8.145 — ZONE LÉTALE (volet CLIENT) : voir la zone tuer, distinguer la menace de l'annonce
+
+> Règles & moteur : **§8.145 d'`ARCHITECTURE_ET_REGLES.md`** (dépôt racine).
+> Contrat réseau : **§8.145 de [`CONTRAT_RESEAU.md`](CONTRAT_RESEAU.md)**.
+> ⚠️⚠️ **Changement de GAMEPLAY : client et serveur partent ENSEMBLE** (gate de version WS, §9).
+
+### 1. ⛔ Ce qui est SUPPRIMÉ : la dérivation des tics de zone
+
+Deux fonctions disparaissent, et c'est le cœur du lot :
+
+| Supprimé | Ce qu'il faisait |
+|---|---|
+| `main.gd::_derive_zone_ticks(event)` | DÉDUISAIT les « −1 » de contamination en comparant `_displayed_garrisons` (snapshot affiché) à l'état reçu, restreint aux territoires de `contamination_zone.territories`, sur 3 `event_type` de tour. |
+| `war_feed.gd::zone_entries(ticks)` | Transformait ces ticks devinés en entrées de journal. |
+
+Le serveur ITEMISE désormais ses dégâts (`zone_damage`, cf. CONTRAT §8.145). **Garder les deux
+chemins aurait produit une ligne de journal EN DOUBLE par tic.** Les deux emplacements portent un
+commentaire `⛔ … SUPPRIMÉE` expliquant pourquoi — pour qu'on ne les « restaure » pas par réflexe.
+
+> 📌 **Rectification utile pour la suite.** Le client n'était pas MUET sur les pertes de zone : il
+> était DEVIN. S'il ne montrait rien, c'est qu'il n'y avait effectivement rien à montrer (la règle
+> serveur épargnait ces territoires). L'inférence était donc fidèle — et c'est précisément pour ça
+> qu'elle ne pouvait pas alerter : une déduction ne peut pas signaler ce que le serveur ne fait pas.
+
+### 2. Le rendu de `zone_damage`
+
+- **Journal de Guerre** — `war_feed.gd::_system_event_entry`, branche `"zone_damage"`, au même
+  endroit et sous le même moule que `zone_protected` / `zone_forecast` :
+  - tic normal → `FEED_ZONE_TICK_FMT` (« ☢ %s : −%d (radiations) »), catégorie `zone`, icône ☢,
+    `tid` cliquable (recentrage caméra E4 §8.76) ;
+  - `ravaged: true` → `FEED_ZONE_RAVAGED_FMT` (« ☢ %s ravagé (−%d) »), entrée **MAJEURE** → elle
+    remonte au **kill feed** : perdre un territoire par les radiations est un évènement de partie.
+  - ⚠️ Les deux clés sont passées de `−1` en dur à **`%d`** : le montant vient du registre serveur.
+- **Plateau** — `main.gd::_on_zone_damage(sev)` : flotteur `board.spawn_zone_tick(tid, amount)`
+  (signature étendue, défaut 1 pour les appelants historiques) + `board.flash_territory(tid)` sur un
+  ravage seulement. **Aucun nouveau système d'animation** — emprunt aux canaux E9 §8.81 / E4 §8.76.
+- **Confort** : `_vfx_enabled()` (donc `reduced_motion`, E10 §8.82) coupe le flotteur ET le flash ;
+  `damage_numbers` coupe le flotteur seul (garde interne de `spawn_zone_tick`). **La ligne de journal
+  est TOUJOURS émise** — c'est elle qui porte l'information, l'animation ne fait que la souligner.
+
+### 3. Zone COURANTE vs TÉLÉGRAPHE — VERDICT : distinction déjà nette, aucun renforcement
+
+Cartographié **en capture** (`tools/shot_zone_lethal.tscn`), pas en lecture de code :
+
+| | Zone COURANTE (tue MAINTENANT) | TÉLÉGRAPHE (annoncé, frappera au round suivant) |
+|---|---|---|
+| Surface | **remplissage plein** teinté vers `#7FFF00` à 70 %, alpha **0,62** | **aucun remplissage** |
+| Contour | néon `territory_edge` 0,9 | **liseré OR/ambre PULSANT**, `forecast_width` 2,4 px (plus épais que le contour normal, donc lisible par-dessus) |
+| Badge | **☢** | **⚠** or |
+
+Deux langages visuels différents — *surface* contre *contour*. L'hypothèse « le joueur confondait le
+télégraphe avec la zone active » est donc **ÉCARTÉE par l'image**, et le renforcement proposé au
+brief n'a **pas** été fait : il aurait ajouté du bruit sans résoudre de problème réel.
+
+⚠️ **Observation reportée (hors périmètre)** : le canal `territory_forecast` est **PARTAGÉ** avec le
+surlignage du coach de tutoriel (`board.gd` ~l.720 : `is_forecast or tid == _tutorial_tid`). Un
+liseré or orphelin se lirait donc comme une zone radioactive annoncée — le risque est connu et ses
+quatre chemins de nettoyage sont déjà verrouillés par `tools/test_tutorial_highlight.gd`.
+
+### 4. Les textes de la règle (FR / EN / IT)
+
+- `MANUAL_SEC_ZONE_BODY` — réécrit. Le Manuel et le §4 disent **mot pour mot** la même règle
+  (« Au début de CHAQUE tour de joueur, TOUT territoire dans la zone perd une unité, quel que soit
+  son propriétaire »), plus la conséquence chiffrée (« à cinq joueurs… cinq unités ») et la nouvelle
+  raison de l'ordre croissance-après-dégâts (**non-doublon**, et non plus « un tour pour évacuer »).
+- `MANUAL_SEC_PHASES_BODY` — la ligne « 1. ZONE » passe de « tes territoires contaminés » à
+  « **TOUS** les territoires contaminés de la carte, à qui qu'ils soient ».
+- `TUTO_STEP_ZONE` — la bulle vue par CHAQUE nouveau joueur : universalité explicite.
+- `FEED_ZONE_TICK_FMT` / `FEED_ZONE_RAVAGED_FMT` — `%d` au lieu de `−1`.
+
+### 5. Validation
+
+`--import` + boot `res://scenes/game/main.tscn` headless = **0 ERROR**.
+`tools/test_e4_feed.tscn` **21 asserts** (section [3] réécrite : l'évènement `zone_damage` structuré
+remplace l'appel à `zone_entries`, et le montant `2` d'un ravage prouve qu'aucun « −1 » n'est câblé
+en dur côté client) · `tools/test_e9_feedback.tscn` **14 asserts**.
+Captures relues — **NOUVEAU** `tools/shot_zone_lethal.tscn` (plateau zone/télégraphe, kill feed +
+toast, **onglet REGISTRE OUVERT** : sans ce 3ᵉ cliché la capture ne prouvait que le kill feed, le
+panneau INFO s'ouvrant sur OBJECTIFS — l'« écran muet » du RETEX §8.144) et **NOUVEAU**
+`tools/shot_manual_zone.tscn` (Manuel section ZONE en FR, EN et IT).

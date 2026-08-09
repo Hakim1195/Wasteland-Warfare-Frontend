@@ -117,6 +117,21 @@ static func _system_event_entry(sev, tname: Callable, fname: Callable,
 				TranslationServer.translate("FEED_ZONE_PROTECTED_FMT") % [
 					fac, _tname_of(tname, str(sev.get("territory_id", "")))],
 				str(sev.get("territory_id", "")))
+		"zone_damage":
+			# ZONE LÉTALE (§8.145) — la perte de contamination devient AUTORITAIRE : le serveur
+			# itemise enfin ses dégâts (avant, le contrôleur les DÉDUISAIT en comparant les
+			# garnisons affichées, et tout ce qu'il ne pouvait pas déduire n'existait pas à
+			# l'écran). `amount` vient du registre serveur — jamais un « −1 » en dur ici.
+			# Territoire RAVAGÉ (garnison 0 → neutre) = entrée MAJEURE : elle remonte au kill feed.
+			var z_tid := str(sev.get("territory_id", ""))
+			var z_name := _tname_of(tname, z_tid)
+			var z_amount := int(sev.get("amount", 1))
+			if bool(sev.get("ravaged", false)):
+				return _mk(CAT_ZONE, "☢",
+					TranslationServer.translate("FEED_ZONE_RAVAGED_FMT") % [z_name, z_amount],
+					z_tid, true)
+			return _mk(CAT_ZONE, "☢",
+				TranslationServer.translate("FEED_ZONE_TICK_FMT") % [z_name, z_amount], z_tid)
 		_:
 			return _mk(CAT_SYSTEM, "⚙", code)
 
@@ -163,23 +178,11 @@ static func _parse_attack(event: Dictionary, ctx: Dictionary,
 			_bb_of(bb, int(duel.get("attacker_id", -9999)))], def_tid, true))
 	return out
 
-# Entrées « tic de zone » (dégâts de contamination DÉRIVÉS par le contrôleur en comparant les
-# garnisons affichées avant/après un évènement de tour — le serveur ne les itemise pas).
-# ticks = Array[{ "tid": String, "name": String, "ravaged": bool }].
-static func zone_entries(ticks: Array) -> Array:
-	var out: Array = []
-	for t in ticks:
-		if typeof(t) != TYPE_DICTIONARY:
-			continue
-		var nm := str(t.get("name", t.get("tid", "?")))
-		if bool(t.get("ravaged", false)):
-			# Territoire rasé par les radiations (garnison 0 → neutre) : entrée MAJEURE.
-			out.append(_mk(CAT_ZONE, "☢",
-				TranslationServer.translate("FEED_ZONE_RAVAGED_FMT") % nm, str(t.get("tid", "")), true))
-		else:
-			out.append(_mk(CAT_ZONE, "☢",
-				TranslationServer.translate("FEED_ZONE_TICK_FMT") % nm, str(t.get("tid", ""))))
-	return out
+# ⛔ `zone_entries(ticks)` (E4 §8.76) est SUPPRIMÉE depuis ZONE LÉTALE (§8.145). Elle rendait des
+# dégâts de contamination DÉDUITS par le contrôleur (comparaison des garnisons affichées avant /
+# après un évènement de tour), faute d'itemisation serveur. Le serveur émet désormais un évènement
+# structuré `zone_damage` par territoire réellement frappé (traité dans `_system_event_entry`) :
+# garder les DEUX chemins produirait une ligne de journal EN DOUBLE par tic.
 
 static func _bb_of(bb: Callable, pid: int) -> String:
 	if bb.is_valid():

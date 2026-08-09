@@ -45,14 +45,27 @@ func _ready() -> void:
 		and unknown[0]["rich_text"] == "BRUT")
 	print("[OK] cartes/system + repli type inconnu sans perte (3 asserts)")
 
-	# 3) Entrées de zone dérivées : tic simple vs territoire ravagé (majeur).
-	var zx: Array = WarFeed.zone_entries([
-		{"tid": "quebec", "name": "Québec", "ravaged": false},
-		{"tid": "ontario", "name": "Ontario", "ravaged": true},
-	])
-	assert(zx.size() == 2 and zx[0]["category"] == "zone" and not zx[0]["major"])
-	assert(zx[1]["major"] and zx[1]["rich_text"].find("ravagé") >= 0)
-	print("[OK] zone_entries : tic simple + ravage majeur (2 asserts)")
+	# 3) Tics de zone AUTORITAIRES (ZONE LÉTALE §8.145) : le serveur ITEMISE enfin ses dégâts via
+	# l'évènement structuré `zone_damage`. La dérivation client (`WarFeed.zone_entries` /
+	# `main._derive_zone_ticks`) est SUPPRIMÉE — garder les deux aurait doublé chaque ligne.
+	# Le MONTANT vient du serveur (registre `zone_settings.ZONE_DAMAGE`), jamais d'un « −1 » local.
+	var zev := {
+		"event_type": "turn_passed",
+		"system_events": [
+			{"code": "zone_damage", "territory_id": "quebec", "owner_id": 7,
+				"amount": 1, "ravaged": false},
+			{"code": "zone_damage", "territory_id": "ontario", "owner_id": null,
+				"amount": 2, "ravaged": true},
+		],
+	}
+	var zx: Array = WarFeed.parse(zev, _stub_ctx())
+	assert(zx.size() == 3)  # entrée principale (turn_passed) + 2 évènements structurés
+	assert(zx[1]["category"] == "zone" and zx[1]["tid"] == "quebec" and not zx[1]["major"])
+	assert(zx[1]["rich_text"].find("1") >= 0 and zx[1]["rich_text"].find("Quebec") >= 0)
+	# Territoire RAVAGÉ = entrée MAJEURE (elle remonte au kill feed), et le montant est celui du
+	# serveur : un « 2 » ici prouve qu'aucun « −1 » n'est câblé en dur côté client.
+	assert(zx[2]["major"] and zx[2]["tid"] == "ontario" and zx[2]["rich_text"].find("2") >= 0)
+	print("[OK] zone_damage structure : tic simple + ravage majeur, montant SERVEUR (5 asserts)")
 
 	# 4) Niveau HUD (arène réelle) : flux filtrable + [url=<tid>] + kill feed + toast.
 	# NB : RichTextLabel.text n'est PAS mis à jour par append_text → on lit get_parsed_text()
@@ -77,5 +90,5 @@ func _ready() -> void:
 	assert(hud._defense_toast != null and hud._defense_toast.visible)
 	print("[OK] HUD : rendu, [url], filtre, kill feed, toast (6 asserts)")
 
-	print("[OK] TEST E4 FEED : 18 asserts verts")
+	print("[OK] TEST E4 FEED : 21 asserts verts")
 	get_tree().quit(0)
