@@ -3224,3 +3224,156 @@ Pendant sa fenêtre, `featured` le met en VEDETTE du QG (bonus 30 > match 20 —
 >
 > ⚠️ **VPS + client partent ENSEMBLE** (le client appelle `/trench/*` et la scène de duel parle le
 > protocole ci-dessus ; le gate de version WS protège la transition).
+
+---
+
+## §8.142 — INTERFACE D'ADMINISTRATION : `blocking_sanction` (volet RÉSEAU — **shape INCHANGÉE**)
+
+> Chantier complet : [`ADMINISTRATION.md`](ADMINISTRATION.md). **Le client Godot n'est PAS touché**
+> (à une clé i18n OPTIONNELLE près, cf. plus bas) : aucun gate de version, aucun build nécessaire.
+
+### 1. Un seul point de décision côté serveur
+
+`api/v1/endpoints/matchmaking.py` gagne **`blocking_sanction(db, user_id, now)`**, qui rend la
+sanction active **la plus contraignante** (échéance la plus lointaine) parmi
+`BLOCKING_SANCTION_KINDS = ("search_abuse", "admin_ban")`.
+
+Les **9 points de contrôle** du dépôt remplacent leur appel
+`active_sanction(db, uid, "search_abuse", now)` par `blocking_sanction(db, uid, now)` :
+
+| Fichier | Routes |
+|---|---|
+| `endpoints/matchmaking.py` | `POST /matchmaking/queue` · `POST /private/rooms` · `POST /private/join` |
+| `endpoints/squad.py` | `POST /squad/create` · `POST /squad/join` · `POST /squad/queue` |
+| `endpoints/company.py` | `POST /company/create` · `POST /company/join` |
+| `endpoints/trench.py` | `POST /trench/queue` |
+
+> ⚠️ Le brief du chantier en annonçait **7** ; il y en a **9** (`company.py` en porte deux de plus).
+> **Le code fait foi** — re-grepper `blocking_sanction(` reste la seule liste fiable.
+
+### 2. Ce que le CLIENT voit : RIEN de nouveau
+
+La réponse `banned` est **bit-à-bit** celle d'avant : `{"queued"|"created"|"joined"|"squad"|
+"company": False, "reason": "banned", "banned_until_epoch": …}` (+ `"ban_hours"` là où il était
+déjà présent). Un client antérieur au chantier ne peut pas distinguer un `admin_ban` d'un
+`search_abuse` — **c'est voulu** : la convention zéro-4xx (§8.112) est intacte, et un joueur banni
+voit l'écran « banni » qu'il connaît déjà.
+
+**Nouveau motif `kind = "admin_ban"`** dans la table `sanctions` (le champ était String depuis
+§8.116, « pour pouvoir ajouter d'autres motifs plus tard sans migration » — c'est ce jour).
+
+### 3. LEVÉE — nouvelle notion, invisible du réseau
+
+Une sanction levée par un opérateur porte `lifted_at`/`lifted_by` : la ligne **reste** (l'historique
+est un LEDGER, jamais de DELETE), elle cesse simplement de produire son effet. `active_sanction`
+**et** `blocking_sanction` l'excluent — via `getattr(s, "lifted_at", None)`, **défensif** parce que
+les doublures de `Sanction` des suites de tests historiques ne portent pas cette colonne (c'est ce
+qui fait passer `test_search_sanctions.py` **sans une ligne modifiée**).
+
+### 4. ÉQUITÉ de l'escalade (`_apply_search_ban`)
+
+Le `.count()` devient un `.all()` + comptage Python, ce qui donne deux garanties :
+
+1. un **`admin_ban` n'aggrave JAMAIS** l'escalade anti-bruteforce (seuls les `search_abuse` comptent) ;
+2. une sanction **LEVÉE n'y compte plus** — si un opérateur reconnaît une erreur du système, elle ne
+   doit pas peser des mois. **Lever rend un cran d'escalade.**
+
+### 5. Économie — une raison canonique de plus
+
+`REASON_ADMIN_ADJUST = "admin_adjust"` (12ᵉ raison), placée dans `ALL_REASONS` entre
+`season_reward` et `coin_pack`. Le client en dérive la clé i18n
+`PROFILE_FIN_SRC_ADMIN_ADJUST` ; **tant qu'elle n'est pas embarquée, le repli « libellé muet » de
+§8.106 fait exactement son travail** — l'ajout d'une raison est SÛR sans build client.
+
+⚙ **Clé à embarquer au PROCHAIN build (optionnel, non bloquant)** : `PROFILE_FIN_SRC_ADMIN_ADJUST`
+= FR « AJUSTEMENT DU COMMANDEMENT » · EN « COMMAND ADJUSTMENT » · IT « RETTIFICA DEL COMANDO ».
+
+### 6. Événements — le calendrier devient dynamique, le CONTRAT ne bouge pas
+
+`events.py` reçoit un hook `external_windows_provider` alimenté par la table `event_schedules`.
+`active_event` / `active_events` / `is_event_active` / `featured` / `next_event` /
+`upcoming_events` gardent **exactement** leur forme publique (epochs `int` purs, clés i18n, aucun
+texte affichable). Une fenêtre programmée depuis l'administration est, pour le client,
+indiscernable d'une fenêtre du calendrier codé — **c'est tout l'intérêt**.
+
+**Propagation : ≤ 60 s** (cache in-process d'`events_store`, sur le chemin chaud du matchmaking).
+
+---
+
+## §8.143 — ADMINISTRATION V2 : la raison `closed` (volet RÉSEAU — **ADDITIF STRICT §1.5**)
+
+> Chantier complet : [`ADMINISTRATION.md`](ADMINISTRATION.md) **§9 à §15**.
+> **Le client Godot n'est PAS touché** : aucune clé renommée, aucune clé retirée, aucun gate de
+> version, aucun build nécessaire. Une clé i18n a été ajoutée au CSV (§4 ci-dessous) — elle
+> s'embarquera au prochain build, sans couplage de déploiement.
+
+### 1. Nouvelle raison de refus : `closed` (+ `cause`)
+
+Le vocabulaire de refus du matchmaking (`banned` · `in_room` · `queued`/`created`/`joined` faux ·
+`not_queued` · `assigned` · `busy` · `unavailable` · `playlist_closed` · `full` · `not_leader`)
+**s'AGRANDIT** d'une entrée :
+
+```jsonc
+{ "queued": false, "reason": "closed", "cause": "maintenance" }
+```
+
+| Route | Clé de succès | Quand |
+|---|---|---|
+| `POST /matchmaking/queue` | `queued` | maintenance · ou `queue == "ranked"` avec la classée coupée |
+| `POST /private/rooms` | `created` | maintenance |
+| `POST /private/join` | `joined` | maintenance (**avant** la résolution du code : sans cela, la garde anti-bruteforce serait contournable pendant un gel) |
+| `POST /squad/queue` | `squad` | maintenance · ou playlists d'équipe coupées |
+| `POST /trench/queue` | `queued` | maintenance |
+| `POST /trench/training` | `created` | maintenance |
+
+`cause` ∈ **`"maintenance"`** (tout est gelé, ça va rouvrir) | **`"feature_disabled"`** (CETTE file
+est coupée, le reste du jeu tourne). Deux situations qui n'appellent pas la même réaction du joueur.
+
+**Shape par ailleurs INCHANGÉE** : la clé de succès reste `false`, aucun autre champ n'est modifié.
+
+### 2. ORDRE des refus — `banned` AVANT `closed`
+
+Le message le **plus spécifique** gagne. Un joueur banni pendant une maintenance reçoit toujours
+`banned` : lui répondre « revenez plus tard » lui ferait croire sa sanction levée.
+
+⚠️ Deux exceptions **cartographiées**, pas des oublis :
+- `POST /trench/queue` et `POST /trench/training` évaluent **`event_closed` en premier** (gate
+  d'événement, comportement d'avant le chantier) ;
+- `POST /trench/training` n'a **aucun** contrôle de sanction (il ne verse aucune récompense) : il
+  gèle donc sur `closed`, faute de plus spécifique.
+
+### 3. LA TRANCHÉE coupée par coupe-circuit → **`event_closed`**, raison EXISTANTE
+
+Le drapeau `FLAG_TRENCH_OPEN` s'emboîte dans le gate d'événement : la réponse est **exactement**
+celle d'une fenêtre fermée, bloc additif `event_window` compris. **Zéro nouveauté réseau sur ce
+chemin**, et le client affiche déjà l'écran adéquat.
+
+### 4. `GET /squad/playlists` gagne `maintenance: true|false` (ADDITIF)
+
+La configuration publique porte désormais l'état du gel, pour qu'un futur hub puisse l'afficher
+**sans attendre un refus de mise en file**. Les clients actuels ignorent cette clé. Volontairement
+**hors** du bloc mémoïsé 60 s de la route : un gel doit se voir tout de suite.
+
+### 5. ⚠️ CE QUE LE CLIENT ACTUEL FAIT D'UNE RAISON INCONNUE (cartographié 2026-08-08)
+
+| Écran | Comportement | Verdict |
+|---|---|---|
+| Recherche de partie (`search_screen.gd`) | branche terminale §8.118 → panneau CONFIGURATION + `MM_QUEUE_FAILED`, CTA re-cliquable | ✅ dégradation acceptable |
+| File d'équipe (`squad_screen.gd`) | `match` avec défaut `_:` → `SQUAD_ERR_UNAVAILABLE` | ✅ acceptable |
+| Créer un salon privé | seul `banned` traité → **écran muet** | ⚠️ à corriger au prochain build |
+| Rejoindre un salon privé | `match` sans branche par défaut → **écran muet** | ⚠️ à corriger au prochain build |
+
+**Dégradation ACCEPTÉE et documentée** — la mécanique serveur est définitive, l'écran dédié viendra.
+
+> 🩸 `search_screen.gd` affiche en priorité un champ `message` s'il existe dans la réponse. Il
+> serait donc tentant d'en ajouter un côté serveur pour afficher un vrai texte sans build client.
+> **On ne le fait pas** : la règle R4 (« le serveur ne renvoie jamais de texte affichable ») existe
+> parce que le client est traduit en trois langues et que le serveur ne sait pas laquelle.
+
+### 6. Clé i18n ajoutée au CSV (asynchrone, sans couplage)
+
+`PROFILE_FIN_SRC_ADMIN_ADJUST` = FR « AJUSTEMENT DU COMMANDEMENT » · EN « COMMAND ADJUSTMENT » ·
+IT « RETTIFICA DEL COMANDO », dans `frontend/translations/ui_strings.csv` uniquement (⛔ jamais les
+`.translation`/`.import` générés). Le client dérive la clé par `"PROFILE_FIN_SRC_" +
+reason.to_upper()` (`profile.gd`). D'ici le prochain build, le repli « libellé muet » de §8.106 fait
+son travail.

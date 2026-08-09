@@ -5440,3 +5440,49 @@ qui ne répond pas. C'est exactement le symptôme « la flèche bas ne fonctionn
 `tools/probe_trench_falseshot.tscn` — 40 clics à 10/s contre la règle du serveur appliquée à la
 main : **5 retours d'arme joués pour 5 tirs réels**. Plus accroupi, rechargement et chargeur vide.
 **256 backend · 77 clients · boot 0 `ERROR`.**
+
+---
+
+## §8.143 — ADMINISTRATION V2 : ce que le CLIENT doit savoir (aucun code client modifié)
+
+> Chantier **100 % serveur** ([`ADMINISTRATION.md`](ADMINISTRATION.md) §9-15). Une seule ligne
+> touche ce dépôt : une clé i18n. Cette entrée existe pour le **prochain build client**, parce
+> qu'elle décrit deux écrans muets qu'il faudra corriger.
+
+### 1. Clé i18n ajoutée (CSV uniquement)
+
+`PROFILE_FIN_SRC_ADMIN_ADJUST` — FR « AJUSTEMENT DU COMMANDEMENT » · EN « COMMAND ADJUSTMENT » ·
+IT « RETTIFICA DEL COMANDO ». Elle complète l'onglet **FINANCES** du Profil : `profile.gd` dérive
+la clé par `"PROFILE_FIN_SRC_" + reason.to_upper()`, et la 12ᵉ raison canonique du serveur
+(`admin_adjust`, §8.142) n'en avait pas — le repli « libellé muet » de §8.106 faisait son travail
+depuis. ⛔ Seul `translations/ui_strings.csv` a été édité ; les `.translation`/`.import` sont des
+artefacts régénérés par l'éditeur.
+
+### 2. ⚠️ DEUX ÉCRANS MUETS À CORRIGER — nouvelle raison de refus `closed`
+
+Le serveur peut désormais refuser une entrée en partie avec `reason: "closed"` +
+`cause: "maintenance"|"feature_disabled"` (gel d'exploitation ou fonctionnalité coupée depuis le
+panneau). **Cartographie du build actuel face à cette raison inconnue :**
+
+| Écran | Fonction | Comportement | Verdict |
+|---|---|---|---|
+| Recherche | `search_screen._on_mm_queue_result` | branche terminale §8.118 → retour au panneau CONFIGURATION + `MM_QUEUE_FAILED`, CTA re-cliquable | ✅ dégradation acceptable |
+| Escouade | `squad_screen._err_key` | `match` avec défaut `_:` → `SQUAD_ERR_UNAVAILABLE` | ✅ acceptable |
+| **Salon privé — créer** | `search_screen._on_private_created` | seul `banned` est traité → **RIEN NE SE PASSE** | ⚠️ **à corriger** |
+| **Salon privé — rejoindre** | `search_screen._on_private_join_result` | `match` **sans** branche par défaut → **RIEN NE SE PASSE** | ⚠️ **à corriger** |
+| LA TRANCHÉE | gate d'événement | reçoit `event_closed` (raison EXISTANTE) → écran « fenêtre fermée » | ✅ parfait |
+
+**À faire au prochain build** : (a) une branche par défaut sur les deux handlers de salon privé —
+un bouton qui ne fait rien est le pire retour possible ; (b) deux clés dédiées, par exemple
+`MM_CLOSED_MAINTENANCE` (« MAINTENANCE EN COURS — RÉESSAYEZ DANS QUELQUES MINUTES ») et
+`MM_CLOSED_FEATURE` (« CE MODE EST TEMPORAIREMENT INDISPONIBLE »), choisies sur le champ `cause`.
+
+> 🩸 `search_screen.gd` affiche en priorité un champ `message` de la réponse s'il existe. Il serait
+> donc « facile » de faire descendre le texte depuis le serveur, **sans build**. ⛔ **Non** : la
+> règle R4 existe parce que ce client est traduit en trois langues et que le serveur ne sait pas
+> laquelle. Le texte reste côté client.
+
+### 3. Champ additif sur `GET /squad/playlists`
+
+`maintenance: true|false`. Le build actuel l'ignore ; un futur hub pourra afficher un bandeau
+« maintenance en cours » **sans attendre** qu'un joueur se prenne un refus.
