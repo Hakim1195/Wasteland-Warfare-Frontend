@@ -88,6 +88,23 @@ signal company_tag_checked(data: Dictionary)
 # navigation sur CHAQUE écran hub, d'où une route serveur volontairement minuscule.
 signal company_badge_loaded(data: Dictionary)
 
+# --- COURRIER DU COMMANDEMENT (§8.144) — messagerie DESCENDANTE avec pièces jointes -------------
+# Canal calqué TRAIT POUR TRAIT sur la pastille COMPAGNIE ci-dessus : une route minuscule pour le
+# compteur (appelée par la nav sur tous les écrans hub), une route de liste pour le modal, et deux
+# écritures du destinataire. Aucune route d'ÉCRITURE de contenu : composer est un geste d'opérateur,
+# il vit dans le panneau d'administration.
+# `{unread, claimable}` — la pastille de l'enveloppe.
+signal mail_badge_loaded(unread: int, claimable: int)
+# `{mails: [...]}` — la liste des plis VIVANTS (le serveur exclut les expirés).
+signal mail_list_loaded(data: Dictionary)
+# Claim RÉUSSI : `{claimed: true, coins, balance_after}`. ⚠️ `balance_after` est le solde d'APRÈS —
+# la jauge de la nav s'en sert sans re-demander `/auth/me` (patron `mission_claimed`, §8.135).
+signal mail_claimed(data: Dictionary)
+# Claim REFUSÉ : la raison canonique TELLE QUELLE (`no_attachment` / `already_claimed` / `expired` /
+# `unavailable`). ⚠️ Le serveur n'envoie AUCUN texte affichable (règle R4) : c'est le modal qui
+# choisit la clé i18n. Une raison inconnue d'un client ancien retombe sur un message générique.
+signal mail_claim_failed(reason: String)
+
 signal salon_state_updated(count: int, max_players: int, is_creator: bool)
 # Salon fermé par l'hôte (WS) : l'écran ramène à la recherche avec un message amical.
 signal salon_closed(reason: String)
@@ -1074,6 +1091,69 @@ func _on_company_badge(_result, response_code, _headers, body, http_node):
 	# client, il doit simplement rester muet au lieu de garder un compteur d'une session précédente.
 	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
 	company_badge_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
+
+
+# =========================================================
+# COURRIER DU COMMANDEMENT (§8.144)
+# =========================================================
+# Pastille de l'enveloppe. Deux nombres, rien d'autre : appelée depuis TOUS les écrans hub à chaque
+# navigation, exactement comme `/company/badge` — elle ne doit jamais coûter le prix d'une liste.
+func fetch_mail_badge() -> void:
+	_send_api_request("/mail/badge", HTTPClient.METHOD_GET, {}, _on_mail_badge)
+
+
+func _on_mail_badge(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	# ⚠️ SERVEUR ANTÉRIEUR → 404. On émet `0, 0` : l'enveloppe reste MUETTE au lieu de conserver le
+	# compteur d'une session précédente. C'est ce qui rend le build client déployable AVANT ou APRÈS
+	# le serveur sans qu'aucun joueur ne voie d'erreur (§1.5, additif strict).
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	if typeof(data) != TYPE_DICTIONARY:
+		mail_badge_loaded.emit(0, 0)
+		return
+	# Piège JSON float §5 : les nombres arrivent en float, ils servent de compteur affiché.
+	mail_badge_loaded.emit(int(data.get("unread", 0)), int(data.get("claimable", 0)))
+
+
+# Liste des plis VIVANTS — appelée à l'OUVERTURE du modal seulement, jamais par la nav.
+func fetch_mail() -> void:
+	_send_api_request("/mail", HTTPClient.METHOD_GET, {}, _on_mail_list)
+
+
+func _on_mail_list(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8()) if response_code == 200 else null
+	# Un dict VIDE plutôt que rien : le modal affiche alors son état vide soigné, jamais un
+	# chargement perpétuel.
+	mail_list_loaded.emit(data if typeof(data) == TYPE_DICTIONARY else {})
+
+
+# Accusé de LECTURE — FIRE-AND-FORGET (patron `company_mark_seen`). La réponse est ignorée : le
+# client vient d'afficher le pli, la relire n'apprendrait rien, et un échec réseau ne doit surtout
+# pas empêcher de LIRE. La pastille se réconcilie au prochain `fetch_mail_badge()`.
+func mail_mark_read(mail_id: int) -> void:
+	_send_api_request("/mail/%d/read" % int(mail_id), HTTPClient.METHOD_POST, {},
+		func(_r, _rc, _h, _b, http_node): http_node.queue_free())
+
+
+# Réclame la pièce jointe. Convention zéro-4xx (§8.112) : un refus NOMINAL arrive en 200 avec sa
+# `reason` — on ne lit donc PAS le code HTTP pour décider, mais le champ `claimed`.
+func claim_mail(mail_id: int) -> void:
+	_send_api_request("/mail/%d/claim" % int(mail_id), HTTPClient.METHOD_POST, {}, _on_mail_claimed)
+
+
+func _on_mail_claimed(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if response_code == 200 and typeof(data) == TYPE_DICTIONARY and bool(data.get("claimed", false)):
+		mail_claimed.emit(data)
+		return
+	# Refus : on relaie la RAISON CANONIQUE, jamais un texte. Réponse illisible ou serveur muet →
+	# `unavailable`, la raison la plus neutre du vocabulaire.
+	var reason := "unavailable"
+	if typeof(data) == TYPE_DICTIONARY:
+		reason = str(data.get("reason", "unavailable"))
+	mail_claim_failed.emit(reason)
 
 # Accusé de lecture des activités (§8.126.1) : appelé à l'OUVERTURE de l'écran Compagnie. Réponse
 # ignorée — le client vient de recevoir la fiche, la relire n'apprendrait rien.

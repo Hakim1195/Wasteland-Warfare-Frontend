@@ -32,6 +32,8 @@ const XpCoinsBarScript = preload("res://scripts/ui/xp_coins_bar.gd")
 const CompanyScreen = preload("res://scripts/ui/company_screen.gd")
 # §8.135 — bordure de maîtrise du cadre identité (implémentation unique, cf. mastery_border.gd).
 const MasteryBorder = preload("res://scripts/ui/mastery_border.gd")
+# §8.144 — modal COURRIER, ouvert par l'enveloppe du cluster droit (jamais un écran de hub).
+const MailModal = preload("res://scripts/ui/mail_modal.gd")
 const LOGO_TEX = preload("res://assets/images/logo_mark.svg")  # marque hex-nœuds (§8.57)
 
 # Hauteur de la bande de navigation (marges + barre + filet) — calquée sur la top-bar du menu.
@@ -146,6 +148,16 @@ var _company_online: int = 0
 var _events_tab_btn: Button = null
 var _event_active: bool = false
 
+# --- COURRIER (§8.144) : enveloppe du cluster droit + pastille « ●N » OR (non-lus) ---
+# Réplique EXACTE du patron COMPAGNIE (route minuscule, fetch, signal, rendu) — pas une invention.
+# ⚠️ La pastille compte les NON-LUS, pas les réclamables : lire suffit à l'éteindre (un pli sans
+# pièce jointe doit pouvoir le faire), et c'est `mail_rules.badge_counts` qui en décide, côté serveur.
+var _mail_btn: Button = null
+var _mail_badge: Label = null
+var _mail_glyph: Control = null
+var _mail_unread: int = 0
+var _mail_modal: Control = null
+
 # --- Mini-profil flottant (§8.58, déplacé du menu en §8.94) ---
 var _profile_flyout: Control = null
 var _flyout_panel: PanelContainer = null
@@ -233,6 +245,14 @@ func _ready() -> void:
 	# §8.126.1 — pastille COMPAGNIE. Route VOLONTAIREMENT minuscule (`/company/badge` : deux
 	# nombres), justement parce qu'elle part depuis TOUS les écrans hub à chaque navigation.
 	NetworkManager.company_badge_loaded.connect(_on_company_badge)
+	# §8.144 — pastille du COURRIER. MÊME cadencement que la compagnie : un fetch au montage de
+	# chaque écran hub, plus le tick de 15 s qui existe déjà (cf. `_start_invite_poll`). ⛔ AUCUN
+	# polling nouveau : la barre n'a qu'UN timer, et c'est une contrainte du §8.126.1.
+	NetworkManager.mail_badge_loaded.connect(_on_mail_badge)
+	# La réponse du claim porte DÉJÀ le solde d'après (`balance_after`) : la jauge se met à jour à
+	# cet instant, sans attendre le prochain `/auth/me` — MÊME canal que le claim de mission
+	# (§8.135, LOT 0). Aucun appel réseau supplémentaire.
+	NetworkManager.mail_claimed.connect(_on_mail_claimed)
 	# §8.132 — configuration des ÉVÉNEMENTS. Même raisonnement que ci-dessus : la nav est montée
 	# partout, elle charge UNE fois par écran et les écrans hôtes (QG, recherche) n'ont qu'à écouter
 	# `events_loaded`. Réponse mémoïsée 60 s côté serveur → le coût réel est nul.
@@ -246,6 +266,7 @@ func _ready() -> void:
 	NetworkManager.fetch_missions()
 	NetworkManager.fetch_profile_history(1)
 	NetworkManager.fetch_company_badge()
+	NetworkManager.fetch_mail_badge()
 	NetworkManager.fetch_events()
 	# Le cache peut DÉJÀ être garni (navigation depuis un autre écran hub) : on peint la pastille
 	# tout de suite, sans attendre l'aller-retour — sinon elle clignoterait à chaque changement
@@ -480,9 +501,98 @@ func _build_right_cluster() -> Control:
 	box.alignment = BoxContainer.ALIGNMENT_END
 
 	box.add_child(_build_identity_frame())
+	# §8.144 — COURRIER. Placé AVANT ⚙ : le courrier est une NOTIFICATION DE COMPTE, il vit donc au
+	# bord du cadre identité (à qui il s'adresse), pas au milieu des onglets de jeu. Ce n'est pas un
+	# 8ᵉ onglet — la barre est déjà à 7 sous surveillance d'échelle (§8.133/§8.134), et un courrier
+	# n'est pas une destination : c'est quelque chose qui ARRIVE.
+	# ⚠️ Il ÉLARGIT le cluster droit : l'invariant « ⚙/⏻/identité toujours dans le viewport » est
+	# donc re-mis en jeu, et la matrice ui_scale est REJOUÉE avec l'enveloppe en place.
+	box.add_child(_build_mail_button())
 	box.add_child(_build_icon_button("⚙", ACCENT, func() -> void: _go(SETTINGS_SCENE)))
 	box.add_child(_build_icon_button("⏻", DANGER, _on_quit_requested))
 	return box
+
+
+# --- ENVELOPPE + PASTILLE (§8.144) — réplique du patron COMPAGNIE ------------------------------
+# Le glyphe est DESSINÉ (cf. `EnvelopeGlyph`), comme le ⏻ l'est depuis §8.102 : « ✉ » (U+2709) rend
+# en TOFU avec la police condensée de la charte — constat §8.117, reconduit. Aucun emoji, jamais.
+func _build_mail_button() -> Button:
+	var btn := Button.new()
+	btn.name = "MailButton"
+	btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn.custom_minimum_size = Vector2(44, 44)
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.text = ""
+	btn.tooltip_text = tr("MAIL_TITLE")
+	var normal := StyleBoxFlat.new()
+	normal.set_corner_radius_all(0)
+	normal.bg_color = Color(1, 1, 1, 0.03)
+	normal.set_border_width_all(1)
+	normal.border_color = Color(ACCENT, 0.5)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(ACCENT, 0.18)
+	hover.border_color = ACCENT
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.add_theme_stylebox_override("focus", normal)
+
+	var glyph := EnvelopeGlyph.new()
+	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glyph.color = ACCENT
+	btn.add_child(glyph)
+	btn.mouse_entered.connect(func() -> void: glyph.color = TEXT)
+	btn.mouse_exited.connect(func() -> void:
+		glyph.color = GOLD if _mail_unread > 0 else ACCENT)
+	_mail_glyph = glyph
+
+	# Pastille « ●N » OR, posée PAR-DESSUS le coin haut-droit du bouton. Un Label `top_level = false`
+	# ancré au coin : il suit le bouton quel que soit le palier de dégradation de la barre.
+	_mail_badge = Label.new()
+	_mail_badge.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_mail_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mail_badge.add_theme_font_override("font", _font)
+	_mail_badge.add_theme_font_size_override("font_size", 12)
+	_mail_badge.add_theme_color_override("font_color", GOLD)
+	_mail_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_mail_badge.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_mail_badge.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_mail_badge.offset_left = -34.0
+	_mail_badge.offset_top = 1.0
+	_mail_badge.offset_right = -2.0
+	_mail_badge.visible = false
+	btn.add_child(_mail_badge)
+
+	WarzoneUI.wire_button_sfx(btn)
+	btn.pressed.connect(_on_mail_pressed)
+	_mail_btn = btn
+	return btn
+
+
+# Enveloppe DESSINÉE par code (§8.102, même doctrine que `PowerGlyph`) : rectangle + rabat en V.
+# Nette à toute taille, aucun asset nouveau, aucun risque de tofu.
+class EnvelopeGlyph extends Control:
+	var color: Color = Color.WHITE:
+		set(v):
+			color = v
+			queue_redraw()
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		# Corps : 22×15 px centrés dans un bouton de 44×44 — mêmes proportions optiques que le ⚙.
+		var bw := w * 0.50
+		var bh := h * 0.34
+		var origin := Vector2((w - bw) * 0.5, (h - bh) * 0.5)
+		draw_rect(Rect2(origin, Vector2(bw, bh)), color, false, 1.6)
+		# Rabat : deux segments du haut vers le centre bas. C'est LUI qui fait lire « enveloppe » —
+		# sans lui, le glyphe n'est qu'un rectangle.
+		var mid := origin + Vector2(bw * 0.5, bh * 0.55)
+		draw_line(origin, mid, color, 1.6, true)
+		draw_line(origin + Vector2(bw, 0.0), mid, color, 1.6, true)
 
 # Cadre identité encadré (= IdentityFrame du menu principal) : eyebrow JOUEUR + pseudo + jauge XP/Coins.
 func _build_identity_frame() -> Control:
@@ -836,7 +946,11 @@ func _start_invite_poll() -> void:
 	_invite_timer.autostart = true
 	_invite_timer.timeout.connect(func() -> void:
 		if is_inside_tree():
-			NetworkManager.fetch_company_badge())
+			NetworkManager.fetch_company_badge()
+			# §8.144 — le courrier se greffe sur le tick EXISTANT. Un joueur immobile au QG voit
+			# donc arriver un pli sous 15 s, sans qu'on ajoute ni timer ni cadence : c'est la
+			# contrainte « un seul timer dans la nav, et jamais en arène » (§8.126.1).
+			NetworkManager.fetch_mail_badge())
 	add_child(_invite_timer)
 
 
@@ -971,6 +1085,78 @@ func _update_events_badge() -> void:
 		_events_tab_btn.remove_theme_color_override("font_color")
 
 
+# =========================================================
+# PASTILLE DU COURRIER (§8.144) — non-lus, or
+# =========================================================
+# UN SEUL régime, contrairement à COMPAGNIE qui en a deux : les NON-LUS. Le compteur `claimable` du
+# serveur n'est PAS affiché ici — un pli réclamable est forcément un pli qu'on a déjà vu passer, et
+# deux nombres sur une icône de 44 px ne se lisent pas. Il vit dans le modal, à côté du bouton.
+func _on_mail_badge(unread: int, _claimable: int) -> void:
+	if not is_inside_tree():
+		return  # garde défensive : signal global reçu pendant un changement de scène.
+	_mail_unread = maxi(0, int(unread))
+	_update_mail_badge()
+	# ⚠️ L'enveloppe vit dans le CLUSTER DROIT, qui ne participe PAS au débordement des onglets :
+	# la pastille ne change donc pas la largeur du bouton (elle se pose PAR-DESSUS). On re-mesure
+	# tout de même — c'est gratuit, et ça garde l'invariant vrai si le rendu venait à changer.
+	_badges_changed()
+
+
+func _update_mail_badge() -> void:
+	if _mail_badge == null or not is_instance_valid(_mail_badge):
+		return
+	if _mail_unread > 0:
+		# `●` : même glyphe que les pastilles d'onglet — ASCII-safe, aucun emoji, aucun tofu.
+		_mail_badge.text = "●%d" % _mail_unread
+		_mail_badge.visible = true
+		if _mail_glyph != null and is_instance_valid(_mail_glyph):
+			_mail_glyph.color = GOLD
+	else:
+		_mail_badge.visible = false
+		if _mail_glyph != null and is_instance_valid(_mail_glyph):
+			_mail_glyph.color = ACCENT
+	if _mail_btn != null and is_instance_valid(_mail_btn):
+		_mail_btn.tooltip_text = tr("MAIL_TITLE")
+
+
+# Claim réussi : le serveur vient de nous donner le solde d'APRÈS. Même canal que le claim de
+# mission — une seule mise en scène de « quelque chose est arrivé aux Coins » dans tout le jeu.
+func _on_mail_claimed(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	# Piège JSON float §5. Clé absente (serveur antérieur) → on ne touche à rien plutôt qu'afficher 0.
+	if not data.has("balance_after"):
+		return
+	animate_coins(int(data.get("balance_after", 0)))
+
+
+func _on_mail_pressed() -> void:
+	AudioManager.play_sfx("click")
+	if _mail_modal != null and is_instance_valid(_mail_modal):
+		_close_mail_modal()
+		return
+	_mail_modal = MailModal.new()
+	_mail_modal.name = "MailModal"
+	# ⚠️ `top_level` : le modal doit couvrir TOUT l'écran, pas la seule bande de nav (hauteur NAV_H).
+	# Même précaution que le mini-profil et la confirmation de sortie.
+	_mail_modal.top_level = true
+	add_child(_mail_modal)
+	_mail_modal.position = Vector2.ZERO
+	_mail_modal.size = get_viewport_rect().size
+	_mail_modal.closed.connect(_close_mail_modal)
+	# Le modal ne connaît PAS la nav (vue pure) : il signale, on rafraîchit.
+	_mail_modal.badge_dirty.connect(func() -> void: NetworkManager.fetch_mail_badge())
+
+
+func _close_mail_modal() -> void:
+	if _mail_modal != null and is_instance_valid(_mail_modal):
+		_mail_modal.queue_free()
+	_mail_modal = null
+	# La pastille a pu changer pendant la consultation (lecture, claim) : on se réconcilie avec le
+	# serveur à la fermeture plutôt que de faire confiance au décompte local.
+	NetworkManager.fetch_mail_badge()
+
+
 # Session expirée (§AC.5) : purge le token mort, laisse un message et renvoie à l'écran d'auth.
 # AUCUN retry — l'utilisateur se reconnecte. NetworkManager n'émet le signal qu'UNE fois.
 func _on_session_expired() -> void:
@@ -983,6 +1169,7 @@ func _on_locale_changed(_code: String) -> void:
 	_update_missions_badge()
 	_update_company_badge()
 	_update_events_badge()
+	_update_mail_badge()   # §8.144 — l'infobulle de l'enveloppe est une clé traduite à la main.
 	# §8.133 — les entrées du menu « ••• » sont des textes composés/traduits à la main comme les
 	# pastilles : sans ce re-rendu, elles resteraient dans la langue précédente.
 	_refresh_overflow_menu()
@@ -1174,6 +1361,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _quit_dialog != null and _quit_dialog.visible:
 		_on_quit_cancel()
+		get_viewport().set_input_as_handled()
+		return
+	# §8.144 — le modal COURRIER gère lui-même ÉCHAP (`set_input_as_handled`), mais cette garde
+	# le double : sans elle, l'ordre de parcours d'`_unhandled_input` deviendrait une hypothèse, et
+	# ÉCHAP refermerait le modal ET ramènerait au QG dans le même geste.
+	if _mail_modal != null and is_instance_valid(_mail_modal):
+		_close_mail_modal()
 		get_viewport().set_input_as_handled()
 		return
 	if _profile_flyout != null and _profile_flyout.visible:

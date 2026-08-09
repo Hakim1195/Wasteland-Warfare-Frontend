@@ -3377,3 +3377,112 @@ IT « RETTIFICA DEL COMANDO », dans `frontend/translations/ui_strings.csv` uniq
 `.translation`/`.import` générés). Le client dérive la clé par `"PROFILE_FIN_SRC_" +
 reason.to_upper()` (`profile.gd`). D'ici le prochain build, le repli « libellé muet » de §8.106 fait
 son travail.
+
+---
+
+## §8.144 — LE COURRIER DU COMMANDEMENT (messagerie descendante avec pièces jointes)
+
+> **ADDITIF STRICT (§1.5).** Quatre routes NEUVES sous `/mail`, aucun champ existant modifié, aucune
+> clé renommée ni retirée, **aucun gate de version**. Un client ANTÉRIEUR ne les appelle pas et se
+> comporte exactement comme avant ; un client NOUVEAU face à un serveur ancien reçoit 404 et affiche
+> une enveloppe muette (`fetch_mail_badge` émet `0, 0` — cf. `network_manager.gd`). Le serveur peut
+> donc partir **avant** le build client, et c'est l'ordre recommandé.
+
+### 1. ⚠️⚠️ DÉROGATION À LA RÈGLE R4 — LA PREMIÈRE DE CONTENU, ET ELLE EST BORNÉE
+
+La règle R4 (« le serveur ne renvoie JAMAIS de texte affichable ») existe parce que le client est
+traduit en trois langues et que le serveur ne sait pas laquelle. Le **corps** et le **titre** d'un
+pli y dérogent : ce sont des textes LIBRES écrits par un opérateur humain, transportés tels quels.
+
+C'est **exactement** le précédent des messages du Chat (§8.20), qui transportent le texte des
+joueurs — la nouveauté n'est pas le mécanisme, c'est l'auteur.
+
+**La dérogation porte sur le CONTENU, jamais sur le CHROME ni sur la MISE EN FORME :**
+
+| | Origine | Traduit ? |
+|---|---|---|
+| `title` / `body` d'un pli | texte libre de l'opérateur | ❌ affiché tel quel |
+| libellés, boutons, statuts, refus | clés i18n `MAIL_*` | ✅ FR / EN / IT |
+| raisons de refus (`expired`…) | constantes canoniques | ✅ le client choisit la clé |
+
+**Garde côté client, NON NÉGOCIABLE** : `mail_modal.gd` rend le corps dans un `RichTextLabel` avec
+**`bbcode_enabled = false`**. Un opérateur ne doit pas pouvoir styler, et un compte d'administration
+compromis ne doit pas pouvoir injecter du balisage dans un client. Côté panel, l'échappement Jinja
+est actif et **aucun gabarit du courrier ne contient `|safe`** (contre-épreuve structurelle, sur le
+gabarit privé de ses commentaires).
+
+**v1 assume que Hakim écrit ses courriers en français.** Les courriers SYSTÈME multilingues (à
+`title_key`) viendront avec l'envoi de masse — le champ `kind` leur est déjà réservé.
+
+### 2. Les quatre routes (toutes derrière `get_current_user`)
+
+**Le destinataire ne voit que SON courrier** : chaque requête filtre `user_id == current_user.id`.
+C'est la frontière de confidentialité du chantier.
+
+| Route | Réponse |
+|---|---|
+| `GET /mail` | `{"mails": [{id, kind, title, body, coins_attached, created_at_epoch, expires_at_epoch, read, claimed}]}` — NON EXPIRÉS, plus récent d'abord, **50 max** |
+| `GET /mail/badge` | `{"unread": int, "claimable": int}` |
+| `POST /mail/{id}/read` | `{"ok": true}` · inexistant / expiré / pas à moi → `{"ok": false}` |
+| `POST /mail/{id}/claim` | `{"claimed": true, "coins": int, "balance_after": int}` · sinon `{"claimed": false, "reason": …}` |
+
+⚠️ **Epochs `int` PURS** (piège §5). `read` et `claimed` sont des **booléens**, pas des dates : le
+client n'a rien à faire de l'instant de lecture.
+
+### 3. ⚠️ AUCUN ORACLE — `unavailable`
+
+`reason` ∈ `no_attachment` | `already_claimed` | `expired` | `unavailable`.
+
+**`unavailable` = « inexistant » OU « pas à moi », indistinguablement** (patron §8.116/§8.126) : on
+ne confirme jamais l'existence d'un id qu'on n'a pas le droit de lire. Les deux cas passent par la
+même fonction et rendent le même objet — contre-épreuve qui compare les deux réponses.
+
+**Ordre des refus**, et c'est une décision produit : `no_attachment` → `already_claimed` → `expired`.
+Un message simple expiré dit « pas de pièce jointe » (rien n'a été perdu) ; un pli réclamé PUIS
+expiré dit « déjà réclamé » (c'est un succès passé, pas une occasion manquée).
+
+### 4. Le claim : idempotent, atomique, SANS multiplicateur
+
+```
+_lock_user(joueur)  →  row lock du pli (with_for_update)  →  can_claim  →  record_coins  →  claimed_at  →  UN commit
+```
+
+⚠️ **Verrou JOUEUR d'abord, partout dans le dépôt** — l'achat boutique, le claim de mission et
+l'ajustement de Coins de l'administration font tous de même. L'ordre inverse serait un interblocage
+en embuscade, invisible dans toute trace le jour où il se produirait.
+
+⚠️⚠️ **AUCUN MULTIPLICATEUR DE PASS** sur `mail_reward`, contrairement à `mission_claim`. Une
+COMPENSATION n'est pas un gain de jeu : un détenteur de Pass Infinity à qui on rend 200 Coins perdus
+dans un incident en reçoit **200**. Sinon l'opérateur ne peut plus annoncer un montant, et deux
+joueurs dédommagés du même préjudice recevraient des sommes différentes. Contre-épreuve dédiée, plus
+un contrôle STRUCTUREL : `endpoints/mail.py` n'importe même pas `pass_catalog`.
+
+### 5. Raison canonique d'économie
+
+`REASON_MAIL_REWARD = "mail_reward"` — **CRÉDIT UNIQUEMENT** (le courrier ne débite jamais),
+`ref = "mail:<id>"` (source unique `mail_rules.mail_ref`). Placée dans `ALL_REASONS` **juste après**
+`REASON_ADMIN_ADJUST` : même famille (l'argent du commandement), la différence tient à la forme.
+Clé i18n cliente : `PROFILE_FIN_SRC_MAIL_REWARD` = FR « COURRIER DU COMMANDEMENT » · EN « COMMAND
+MAIL » · IT « POSTA DEL COMANDO », **embarquée dans CE build**.
+
+### 6. §8.143 SOLDÉ — le tableau des écrans muets n'a plus lieu d'être
+
+Le tableau du §8.143 §5 ci-dessus est **caduc**. Ce build traite `closed` + `cause` sur les quatre
+chemins, et **aucun** ne peut plus rester muet :
+
+| Chemin | Face à `closed` | Face à une raison INCONNUE |
+|---|---|---|
+| Recherche de partie | `MM_CLOSED_MAINTENANCE` / `MM_CLOSED_FEATURE`, en **OR** | `MM_QUEUE_FAILED` |
+| Créer un salon privé | idem | `MM_UNKNOWN_REFUSAL` (branche par défaut **AJOUTÉE**) |
+| Rejoindre un salon privé | idem | `MM_UNKNOWN_REFUSAL` (branche par défaut **AJOUTÉE**) |
+| File d'ÉQUIPE | idem | `SQUAD_ERR_UNAVAILABLE` |
+
+⚠️ Une fermeture s'affiche en **OR** (avertissement) et non en rouge : c'est une info de SERVICE,
+pas une panne. Une `cause` inconnue retombe sur « temporairement fermé », jamais sur rien.
+
+> 🩸 **Défaut trouvé en le vérifiant** : la file d'ÉQUIPE était muette elle aussi, alors que la
+> cartographie du §8.143 la déclarait « acceptable ». `_on_squad_state` posait le message PUIS
+> appelait `_render()`, qui remet `_status_label.visible = false`. Un membre recevant `not_leader`,
+> une escouade `full` ou une file fermée ne voyait **rien**. Corrigé en inversant l'ordre.
+> Contre-épreuve : `frontend/tools/test_mm_refusals.gd` (77 contrôles, 4 chemins × toutes les
+> raisons + une inconnue + une réponse vide, × 3 langues).

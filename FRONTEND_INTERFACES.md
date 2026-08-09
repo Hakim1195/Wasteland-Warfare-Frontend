@@ -5486,3 +5486,138 @@ un bouton qui ne fait rien est le pire retour possible ; (b) deux clés dédiée
 
 `maintenance: true|false`. Le build actuel l'ignore ; un futur hub pourra afficher un bandeau
 « maintenance en cours » **sans attendre** qu'un joueur se prenne un refus.
+
+---
+
+## §8.144 — LE COURRIER DU COMMANDEMENT (enveloppe, modal, claim) + reliquats §8.143 SOLDÉS
+
+### 1. L'ENVELOPPE — cluster droit de la barre de navigation
+
+`top_nav.gd` gagne un bouton **ENVELOPPE**, placé **AVANT ⚙** dans `_build_right_cluster()`.
+
+**Ce n'est PAS un 8ᵉ onglet, et c'est une décision** : le courrier n'est pas une destination de jeu,
+c'est une **notification de compte**. Il vit donc au bord du cadre identité (à qui il s'adresse), et
+non au milieu des onglets. Accessoirement, la barre est déjà à 7 onglets sous surveillance d'échelle
+(§8.133/§8.134) — un 8ᵉ aurait coûté 80 px de plus à faire tenir.
+
+- **Glyphe DESSINÉ par code** (`EnvelopeGlyph`, rectangle + rabat en V), même doctrine que le
+  `PowerGlyph` du ⏻ depuis §8.102 : `✉` (U+2709) rend en **TOFU** avec la police condensée de la
+  charte. **Aucun emoji, jamais.**
+- **Pastille `●N` OR** posée par-dessus le coin haut-droit, et le glyphe passe **en or** quand
+  `unread > 0`. Un seul régime — contrairement à COMPAGNIE qui en a deux : le compteur `claimable`
+  du serveur n'est pas affiché ici (deux nombres sur une icône de 44 px ne se lisent pas), il vit
+  dans le modal, à côté du bouton.
+- **Cadencement : ZÉRO polling nouveau.** `fetch_mail_badge()` part au montage de chaque écran hub
+  (comme `fetch_company_badge`) et se greffe sur le **timer de 15 s qui existe déjà**
+  (`_start_invite_poll`). La barre n'a toujours qu'**UN seul timer**, et **jamais en arène**.
+
+### 2. ⚠️⚠️ LE PRIX D'ENTRÉE — la matrice ui_scale REJOUÉE
+
+L'enveloppe **élargit le cluster droit**, le seul bloc que l'invariant §8.133/§8.134 déclare
+intouchable (« ⚙ / ⏻ / identité restent dans le viewport, à toutes les échelles »). Cet invariant ne
+se suppose pas : il a été **REJOUÉ**.
+
+**`frontend/tools/test_nav_mail_scale.gd`** — matrice {0.9, 1.0, 1.15, 1.3} × {1920×1080, 1600×900,
+1280×720} = **12 cases**, `get_global_rect()` ⊆ viewport logique sur **identité + enveloppe + ⚙ + ⏻**,
+plus « l'enveloppe garde sa taille pleine » (sinon elle « tiendrait » en rétrécissant, et le contrôle
+verdirait pour une mauvaise raison). **67 OK / 0 KO.**
+
+> ⚠️ Le test fabrique un **SubViewport de `résolution / échelle`** plutôt que de redimensionner la
+> fenêtre : `get_window().size` est un **NO-OP en headless** (constat §8.134). Or c'est exactement
+> le viewport logique que `content_scale_factor` produit, et exactement la largeur que
+> `_relayout()` lit dans `size.x`.
+>
+> 🩸 **Le test a été SABOTÉ pour vérifier qu'il pouvait rougir** (enveloppe portée à 900 px →
+> **24 KO**). Une matrice verte qu'on n'a pas vue échouer ne prouve rien.
+
+### 3. LE MODAL — `frontend/scripts/ui/mail_modal.gd`
+
+**Calqué Classement** (référence maison §8.125, comme `war_manual.gd`) : voile plein écran, panneau
+gunmetal à liseré cyan, encoches de coin, filets. **100 % code-driven.** Navigation LATÉRALE — liste
+à gauche, pli ouvert à droite.
+
+| Élément | Comportement |
+|---|---|
+| **Liste** | plus récent d'abord · non-lu = **point `●` OR + liseré or + titre clair** · **trombone** si pièce jointe non réclamée · `countdown_label` compact sous 48 h |
+| **Détail** | titre, échéance (`countdown_label`), corps, bloc pièce jointe |
+| **État vide** | message **CENTRÉ sur toute la surface** — les deux colonnes sont masquées |
+| **Ouverture d'un pli** | `POST /mail/{id}/read` **fire-and-forget** + décrément local, réconcilié au prochain fetch |
+| **RÉCLAMER** | verrou `_claim_in_flight`, bouton désactivé en vol, toast doré, jauge de Coins mise à jour depuis `balance_after` |
+| **ÉCHAP / clic extérieur / FERMER** | referment (et `set_input_as_handled` empêche la nav de ramener au QG dans la foulée) |
+
+⚠️⚠️ **`bbcode_enabled = false` sur le corps, sans exception.** C'est la contrepartie de la
+dérogation R4 du chantier : le serveur transporte ici du texte libre écrit par un opérateur. La
+dérogation porte sur le **CONTENU**, jamais sur le pouvoir de **MISE EN FORME**.
+
+⚠️ La jauge de Coins passe par le **canal EXISTANT** : `top_nav` écoute `mail_claimed` et appelle
+`animate_coins(balance_after)` — le même chemin que le claim de mission (§8.135). Aucun appel réseau
+supplémentaire, et le modal reste une vue PURE (il ne connaît pas la nav, il émet `badge_dirty`).
+
+### 4. 🩸 CE QUE SEULE LA CAPTURE A TROUVÉ (quatrième chantier d'affilée)
+
+Le boot headless rendait **0 ERROR** et les 67 contrôles géométriques étaient verts. Trois défauts
+n'étaient visibles **que** sur les PNG relus :
+
+1. **Le trombone se lisait « 0 ».** La première version fermait la silhouette par deux arcs opposés
+   (haut ET bas) + deux verticales → une **capsule**. Un trombone est un tracé **OUVERT** : un grand
+   U, une remontée, un demi-tour serré, une redescente plus courte à l'intérieur. Porté de 16 à
+   **20 px** au passage — à 16, les trois rails se touchent.
+2. **L'état vide était tassé en haut à gauche** d'un panneau de 1000×620 vide, parce qu'il vivait
+   dans la colonne de liste. *(Et des spacers `SIZE_EXPAND_FILL` n'y auraient rien changé : dans un
+   `ScrollContainer`, l'enfant prend sa taille MINIMALE sur l'axe qui défile.)*
+3. **Les captures montraient une boîte entièrement LUE** — pas de point or, pas de liseré or : le
+   harnais partageait **une seule fixture par référence** avec le bloc de contrôles logiques, qui
+   ouvre des plis et écrit `read = true`. *(Et `duplicate(true)` au moment de la capture ne
+   suffisait pas : il copiait la donnée DÉJÀ mutée. Une fixture se **reconstruit**.)*
+
+**Captures relues** : `nav_mail_{1920_090,1920_100,1600_115,1280_130}.png`,
+`mail_modal_full_{fr,en,it}.png`, `mail_modal_empty.png`, `mm_maintenance.png`.
+
+### 5. CLÉS i18n (FR / EN / IT) — 18 lignes ajoutées à `ui_strings.csv`
+
+`MAIL_TITLE` · `MAIL_EYEBROW` · `MAIL_CLOSE` · `MAIL_LOADING` · `MAIL_EMPTY` · `MAIL_EMPTY_HINT` ·
+`MAIL_CLAIM_CTA` · `MAIL_CLAIMED` · `MAIL_EXPIRES_IN` · `MAIL_EXPIRED` · `MAIL_ATTACHMENT` ·
+`MAIL_CLAIM_OK` · `MAIL_CLAIM_FAILED` · `MAIL_NO_ATTACHMENT` · `PROFILE_FIN_SRC_MAIL_REWARD`
+· `MM_CLOSED_MAINTENANCE` · `MM_CLOSED_FEATURE` · `MM_UNKNOWN_REFUSAL`.
+
+⚠️ `PROFILE_FIN_SRC_ADMIN_ADJUST` était **déjà** dans le CSV (livrée §8.143) — **non dupliquée**.
+⛔ Seul le **CSV** est édité, jamais les `.translation` / `.import` générés.
+
+> **Le faux vert de l'i18n** : une clé manquante est rendue par Godot **comme la clé elle-même** —
+> le texte s'affiche, il est juste incompréhensible. La contre-épreuve vérifie donc
+> `tr(key) != key`, dans les **trois** langues.
+
+### 6. §8.143.2 SOLDÉ — « plus jamais un clic muet »
+
+La cartographie du §8.143 §5.8 est **caduque**. Les quatre chemins parlent désormais :
+
+| Chemin | `closed` + `cause` | Raison INCONNUE |
+|---|---|---|
+| Recherche de partie | `MM_CLOSED_MAINTENANCE` / `MM_CLOSED_FEATURE`, en **OR** | `MM_QUEUE_FAILED` |
+| **Créer un salon privé** | idem | `MM_UNKNOWN_REFUSAL` — **branche par défaut AJOUTÉE** |
+| **Rejoindre un salon privé** | idem | `MM_UNKNOWN_REFUSAL` — **branche par défaut AJOUTÉE** |
+| File d'ÉQUIPE | idem (`_set_status_for`) | `SQUAD_ERR_UNAVAILABLE` |
+
+> 🩸 **Un cinquième chemin muet, que la cartographie du §8.143 avait classé « acceptable ».**
+> Dans `squad_screen._on_squad_state`, le message était posé **AVANT** `_render()` — qui remet
+> `_status_label.visible = false` quand l'escouade n'est pas en file. Un membre recevant
+> `not_leader`, une escouade `full` ou une file fermée pour maintenance ne voyait **STRICTEMENT
+> RIEN**. Corrigé en inversant l'ordre (rendu d'abord, message ensuite), avec un ⛔ dans le code.
+> **Trouvé par la contre-épreuve, pas par relecture.**
+
+**Contre-épreuve : `frontend/tools/test_mm_refusals.gd`** — 4 chemins × (toutes les raisons du
+contrat + une raison inventée + une réponse vide) + les textes + les couleurs + les 3 langues.
+**77 OK / 0 KO.** Une fermeture s'affiche en **OR** (info de service), jamais en rouge d'erreur.
+
+### 7. Fichiers
+
+```
+NEUFS      frontend/scripts/ui/mail_modal.gd
+           frontend/tools/test_nav_mail_scale.{gd,tscn}     matrice ui_scale + modal + captures
+           frontend/tools/test_mm_refusals.{gd,tscn}        « plus jamais muet » + i18n
+MODIFIÉS   frontend/scripts/ui/top_nav.gd                   enveloppe, pastille, modal, ÉCHAP
+           frontend/scripts/managers/network_manager.gd     4 signaux + 4 appels
+           frontend/scripts/ui/search_screen.gd             closed/cause + 2 branches par défaut
+           frontend/scripts/ui/squad_screen.gd              closed/cause + ORDRE rendu/message
+           frontend/translations/ui_strings.csv             18 lignes
+```

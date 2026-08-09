@@ -805,9 +805,16 @@ func _on_squad_state(ok: bool, data: Dictionary) -> void:
 		_squad = data
 		_in_queue = bool(data.get("in_queue", false))
 		_queued_since = int(data.get("queued_since_s", 0))
-		if reason != "":
-			_set_status(_reason_key(reason))
+		# 🩸 L'ORDRE COMPTE, ET IL ÉTAIT INVERSÉ. `_render()` remet `_status_label.visible = false`
+		# quand l'escouade n'est pas en file — donc poser le message AVANT le rendu revenait à
+		# l'EFFACER aussitôt. Un membre qui recevait `not_leader`, une escouade `full`, ou la file
+		# fermée pour maintenance ne voyait STRICTEMENT RIEN : le clic passait pour mort.
+		# C'est exactement la muette du §8.143 §5.8, sur un chemin que sa cartographie déclarait
+		# pourtant « acceptable » — trouvé par la contre-épreuve `tools/test_mm_refusals.gd`.
+		# ⛔ Ne jamais remettre `_set_status_for` avant `_render()`.
 		_render()
+		if reason != "":
+			_set_status_for(reason, data)
 		return
 
 	# Pas (ou plus) d'escouade. `in_queue` reste possible : c'est le cas du SOLO en file d'équipe.
@@ -826,9 +833,30 @@ func _on_squad_state(ok: bool, data: Dictionary) -> void:
 			_refresh_queue_status()
 		else:
 			_status_label.visible = false
+		_render()
 	else:
-		_set_status(_reason_key(reason))
-	_render()
+		# MÊME INVERSION que ci-dessus, et même correctif : le rendu d'abord, le message ensuite.
+		_render()
+		_set_status_for(reason, data)
+
+
+# Affiche le refus. §8.143 → SOLDÉ §8.144 : `closed` porte un champ ADDITIF `cause` qu'aucune
+# signature ne transportait jusqu'ici (`_reason_key` ne reçoit que la raison) — d'où ce niveau
+# intermédiaire, qui a accès au payload COMPLET.
+#
+# ⚠️ Une fermeture n'est pas une PANNE : c'est une info de service, en OR et non en rouge. Le reste
+# des refus (banni, escouade pleine, pas chef…) garde son rouge.
+func _set_status_for(reason: String, data: Dictionary) -> void:
+	if reason == "closed":
+		match str(data.get("cause", "")):
+			"maintenance":
+				_set_status("MM_CLOSED_MAINTENANCE", [], GOLD)
+			_:
+				# `feature_disabled`, ou une cause inconnue d'un serveur plus récent : dans les deux
+				# cas la file est fermée, et le dire vaut mieux que de retomber sur « indisponible ».
+				_set_status("MM_CLOSED_FEATURE", [], GOLD)
+		return
+	_set_status(_reason_key(reason))
 
 
 # Traduction du CODE machine renvoyé par le serveur (convention zéro-4xx §8.112) : le client choisit
@@ -843,6 +871,11 @@ func _reason_key(reason: String) -> String:
 		"not_leader": return "SQUAD_ERR_NOT_LEADER"
 		"playlist_closed": return "SQUAD_ERR_PLAYLIST_CLOSED"
 		"assigned": return "SQUAD_ERR_ASSIGNED"
+		# §8.144 — repli si `closed` arrivait par un chemin sans payload : mieux vaut « fermé » que
+		# « indisponible », qui se lit comme une panne.
+		"closed": return "MM_CLOSED_FEATURE"
+		# ⚠️ La branche par défaut existait DÉJÀ ici (§8.143 §5.8 la déclarait « acceptable ») — on
+		# ne la touche pas, on la garde comme filet.
 		_: return "SQUAD_ERR_UNAVAILABLE"
 
 

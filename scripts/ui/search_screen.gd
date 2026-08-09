@@ -698,6 +698,13 @@ func _on_mm_queue_result(ok: bool, data: Dictionary) -> void:
 		_show_banned_notice(data)
 	elif reason == "in_room":
 		_offer_resume(_int_or(data.get("room_id"), -1))
+	elif reason == "closed":
+		# §8.143 → soldé §8.144 : la V2 émet `closed` + `cause` depuis le panneau d'administration
+		# (maintenance globale ou fonctionnalité fermée), et ce client l'IGNORAIT — il retombait sur
+		# le message générique « mise en file impossible », qui se lit comme une PANNE. Ce n'en est
+		# pas une : c'est une info de SERVICE, et elle se dit en OR, pas en rouge.
+		_show_config(false)
+		_set_config_status(_closed_text(data), GOLD)
 	else:
 		# §8.118 — BRANCHE TERMINALE : tout échec NON couvert ci-dessus (HTTP non-200 → `data` vide,
 		# `reason` inconnue d'un backend plus récent, `queued=false` inattendu) ne produisait RIEN :
@@ -767,8 +774,23 @@ func _on_private_created(ok: bool, data: Dictionary) -> void:
 		NetworkManager.current_salon_code = str(data.get("code", ""))
 		TransitionManager.change_scene("res://scenes/ui/salon_screen.tscn")
 		return
-	if str(data.get("reason", "")) == "banned":
-		_show_banned_notice(data)
+	# §8.143 §5.8 → SOLDÉ §8.144. Avant ce build, SEUL `banned` était traité : toute autre raison
+	# (`closed`, `in_room`, une raison d'un serveur plus récent…) ne produisait **RIEN DU TOUT** —
+	# le joueur cliquait « CRÉER UN SALON » et l'écran ne bougeait pas. Un clic muet est le pire
+	# retour possible : il ne dit même pas que le clic a été reçu.
+	var reason := str(data.get("reason", ""))
+	match reason:
+		"banned":
+			_show_banned_notice(data)
+		"closed":
+			_set_config_status(_closed_text(data), GOLD)
+		"in_room":
+			_offer_resume(_int_or(data.get("room_id"), -1))
+		_:
+			# BRANCHE PAR DÉFAUT — la dette exacte du §8.143. Message SERVEUR prioritaire s'il en
+			# fournit un (même lecture défensive que `_on_lobby_error`), générique sinon.
+			var server_msg := str(data.get("message", ""))
+			_set_config_status(server_msg if server_msg != "" else tr("MM_UNKNOWN_REFUSAL"), DANGER)
 
 
 func _on_private_join_result(ok: bool, data: Dictionary) -> void:
@@ -793,6 +815,29 @@ func _on_private_join_result(ok: bool, data: Dictionary) -> void:
 			# Pas de clé dédiée dans la liste fournie -> repli explicitement suggéré par le brief
 			# (cf. rapport de fin de tâche).
 			_set_config_status(tr("MM_CODE_UNAVAILABLE"), DANGER)
+		"closed":
+			# §8.143 → soldé §8.144 : maintenance / fonctionnalité fermée.
+			_set_config_status(_closed_text(data), GOLD)
+		_:
+			# §8.143 §5.8 → SOLDÉ. Ce `match` n'avait **AUCUNE branche par défaut** : une raison
+			# inconnue (serveur plus récent, réponse tronquée) laissait l'écran parfaitement muet.
+			var server_msg := str(data.get("message", ""))
+			_set_config_status(server_msg if server_msg != "" else tr("MM_UNKNOWN_REFUSAL"), DANGER)
+
+
+# §8.143 §13.2 → SOLDÉ §8.144. La raison `closed` porte un champ additif `cause` :
+#   • `maintenance`      → gel GLOBAL prononcé depuis le panneau d'administration ;
+#   • `feature_disabled` → un coupe-circuit a fermé CETTE file en particulier.
+# Une `cause` inconnue (serveur plus récent) retombe sur le message de fermeture générique — jamais
+# sur rien. C'est une info de SERVICE : elle se dit en OR, pas en rouge (§7.1 du brief).
+func _closed_text(data: Dictionary) -> String:
+	match str(data.get("cause", "")):
+		"maintenance":
+			return tr("MM_CLOSED_MAINTENANCE")
+		"feature_disabled":
+			return tr("MM_CLOSED_FEATURE")
+		_:
+			return tr("MM_CLOSED_FEATURE")
 
 
 func _on_lobby_error(msg: String) -> void:
