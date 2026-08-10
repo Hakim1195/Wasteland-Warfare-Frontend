@@ -117,7 +117,10 @@ signal requeue_unavailable
 # (mêmes gates 4000/4001/4003) — trois messages dédiés relayés tels quels, l'écran fait le tri.
 signal trench_queue_result(ok: bool, data: Dictionary)
 signal trench_status_updated(data: Dictionary)
-signal trench_left(left: bool, reason: String)
+# `refunded` (chantier MODÈLE ÉCONOMIQUE) : Coins RENDUS par l'annulation, 0 si rien n'était dû
+# (frais à 0, détenteur du Pass) ou si le serveur est antérieur. Un mouvement d'argent SILENCIEUX
+# est un défaut de traçabilité en soi — le joueur doit voir revenir ce qu'il a payé.
+signal trench_left(left: bool, reason: String, refunded: int)
 signal trench_training_result(ok: bool, data: Dictionary)
 signal trench_leaderboard_loaded(data: Dictionary)
 signal trench_init_received(data: Dictionary)
@@ -893,7 +896,7 @@ func _on_trench_leave(_result, response_code, _headers, body, http_node):
 	if typeof(data) != TYPE_DICTIONARY:
 		data = {}
 	trench_left.emit(bool(data.get("left", false)) if response_code == 200 else false,
-		str(data.get("reason", "")))
+		str(data.get("reason", "")), int(data.get("refunded", 0)))
 
 func trench_training_start() -> void:
 	_send_api_request("/trench/training", HTTPClient.METHOD_POST, {}, _on_trench_training)
@@ -1028,8 +1031,24 @@ func _store_events(data: Dictionary) -> void:
 		"upcoming": v2_upcoming if typeof(v2_upcoming) == TYPE_ARRAY else [],
 		"character": v2_character if typeof(v2_character) == TYPE_DICTIONARY else {},
 		"featured_id": str(v2.get("featured_id", "")),
+		# FRAIS D'ENTRÉE D'ÉVÉNEMENT (chantier MODÈLE ÉCONOMIQUE) : { fee, fee_with_pass }, entiers
+		# purs, 0/0 quand l'entrée est gratuite. NORMALISÉ comme le reste — les vues n'ont jamais à
+		# distinguer `null`, absent et vide. Absent d'un serveur antérieur → {} → aucun prix affiché.
+		"event_queue_fee": _fee_block(data.get("event_queue_fee")),
 	}
 	events_loaded.emit(events_config)
+
+# Normalise un bloc de frais réseau en { fee: int, fee_with_pass: int }. Piège JSON float (§5) : le
+# réseau rend des `float` — un prix affiché « 120.0 » serait un défaut visible. Bloc absent ou mal
+# typé → {} (et NON pas {fee: 0}) : « je ne sais pas » et « c'est gratuit » ne s'affichent pas
+# pareil, même si les deux finissent par ne rien montrer.
+func _fee_block(raw) -> Dictionary:
+	if typeof(raw) != TYPE_DICTIONARY:
+		return {}
+	return {
+		"fee": int(raw.get("fee", 0)),
+		"fee_with_pass": int(raw.get("fee_with_pass", 0)),
+	}
 
 func squad_create(playlist: String) -> void:
 	_send_api_request("/squad/create", HTTPClient.METHOD_POST, {"playlist": playlist},

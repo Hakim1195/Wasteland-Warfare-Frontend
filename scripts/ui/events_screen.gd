@@ -302,6 +302,10 @@ func _render_event_tab(tab_id: String, type_id: String, actives: Array, upcoming
 	if tab_id == "bonus":
 		if _contains_id(mine, TRENCH_EVENT_ID):
 			page.add_child(_ensure_trench_panel())
+			# Le panneau SURVIT aux rendus (il porte une recherche en vol) : son prix d'entrée doit
+			# donc être repeint ICI, à chaque rendu, et pas seulement à sa construction — un frais
+			# réglé à chaud côté serveur (TUNABLE §8.143) arrive par un simple `fetch_events`.
+			_refresh_trench_fee()
 			NetworkManager.fetch_trench_leaderboard()
 		elif _trench_panel != null and is_instance_valid(_trench_panel):
 			# Fenêtre refermée : le panneau meurt avec elle (la file serveur est déjà purgée).
@@ -595,6 +599,10 @@ var _trench_progress_box: VBoxContainer = null
 var _trench_board_box: VBoxContainer = null
 var _trench_poll: Timer = null
 var _trench_searching := false
+# PRIX D'ENTRÉE de la file d'événement (chantier MODÈLE ÉCONOMIQUE) — ligne posée SOUS les CTA,
+# repeuplée à chaque `_render()` depuis `NetworkManager.events_config.event_queue_fee`. Masquée
+# quand l'entrée est gratuite : jamais « 0 COINS ».
+var _trench_fee_label: Label = null
 
 
 func _ensure_trench_panel() -> PanelContainer:
@@ -630,6 +638,12 @@ func _ensure_trench_panel() -> PanelContainer:
 	_trench_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trench_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_trench_status_label)
+	# PRIX D'ENTRÉE, juste sous la rangée ENTRER / ANNULER / ENTRAÎNEMENT — donc à côté du bouton
+	# qu'il conditionne, et AVANT le clic (§7.3 : le joueur ne découvre jamais un péage au moment
+	# d'agir). Le texte est posé par `_refresh_trench_fee`, appelé à chaque rendu.
+	_trench_fee_label = _label("", 13, GOLD)
+	_trench_fee_label.visible = false
+	box.add_child(_trench_fee_label)
 	var note := _label(_t("TRENCH_VS_BOT_NOTE"), 12, MUTED)
 	box.add_child(note)
 
@@ -659,6 +673,28 @@ func _ensure_trench_panel() -> PanelContainer:
 		_trench_poll.timeout.connect(func() -> void: NetworkManager.trench_queue_status())
 		add_child(_trench_poll)
 	return pan
+
+
+# Peint le prix d'entrée de la file d'événement. TROIS états, et le premier est le plus important :
+#   • frais à 0 (ou bloc absent d'un serveur antérieur) → RIEN. Surtout pas « 0 COINS » : écrire la
+#     gratuité en prix la transforme en tarif.
+#   • frais dû → « 120 COINS » en or (le serveur a DÉJÀ appliqué le Pass du lecteur).
+#   • frais dû mais nul avec un Pass → on ajoute « GRATUIT AVEC LE PASS », qui est un avantage
+#     contractuel du Pass de saison, pas un argument de vente inventé ici.
+func _refresh_trench_fee() -> void:
+	if _trench_fee_label == null or not is_instance_valid(_trench_fee_label):
+		return
+	var block: Dictionary = _dict(NetworkManager.events_config.get("event_queue_fee", {}))
+	var fee := int(block.get("fee", 0))
+	if fee <= 0:
+		_trench_fee_label.visible = false
+		_trench_fee_label.text = ""
+		return
+	var text := _t("FEE_LABEL") % fee
+	if int(block.get("fee_with_pass", fee)) <= 0:
+		text += "  ·  " + _t("FEE_FREE_WITH_PASS")
+	_trench_fee_label.text = text
+	_trench_fee_label.visible = true
 
 
 func _trench_join() -> void:
@@ -720,6 +756,13 @@ func _on_trench_queue_result(ok: bool, data: Dictionary) -> void:
 	elif reason == "banned":
 		_trench_set_searching(false)
 		_trench_set_status(_t("SQUAD_ERR_BANNED"), MUTED)
+	elif reason == "insufficient_coins":
+		# FRAIS D'ENTRÉE impayable — information, pas panne : EN OR, et on rappelle que le mode
+		# CASUAL reste gratuit (aucun péage n'a jamais touché les modes cœur). On rafraîchit aussi
+		# le prix affiché : s'il vient de changer à chaud, autant que le joueur voie le vrai.
+		_trench_set_searching(false)
+		_trench_set_status(_t("FEE_INSUFFICIENT"), GOLD)
+		_refresh_trench_fee()
 	else:
 		_trench_set_searching(false)
 		_trench_set_status(_t("NET_UNKNOWN_ERROR"), MUTED)
@@ -749,12 +792,19 @@ func _on_trench_status(data: Dictionary) -> void:
 			_trench_set_status(_t("TRENCH_EVENT_CLOSED"), MUTED)
 
 
-func _on_trench_left(left: bool, _reason: String) -> void:
+func _on_trench_left(left: bool, _reason: String, refunded: int) -> void:
 	if not is_inside_tree():
 		return
 	if left:
 		_trench_set_searching(false)
-		_trench_set_status("", MUTED)
+		# REMBOURSEMENT : annoncé, jamais silencieux. Le frais d'entrée est rendu à l'annulation
+		# (§6.3) — sans un mot à l'écran, le joueur voit partir des Coins au clic « ENTRER » et ne
+		# les voit jamais revenir. `refunded` vaut 0 quand il n'y avait rien à rendre (frais à 0,
+		# détenteur du Pass) : on se tait alors, comme avant.
+		if refunded > 0:
+			_trench_set_status(_t("FEE_REFUNDED") % refunded, GOLD)
+		else:
+			_trench_set_status("", MUTED)
 
 
 func _on_trench_training_result(ok: bool, data: Dictionary) -> void:

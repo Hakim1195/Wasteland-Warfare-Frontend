@@ -488,6 +488,20 @@ func _rebuild_playlist_buttons(row: HBoxContainer, editable: bool) -> void:
 		var btn := Button.new()
 		btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 		btn.text = "%s  (%d)" % [tr("MODE_" + str(pid).to_upper()), int(spec.get("capacity", 0))]
+		# PRIX D'ENTRÉE (chantier MODÈLE ÉCONOMIQUE) — servi par playlist dans `GET /squad/playlists`
+		# et DÉJÀ remisé pour ce lecteur (le serveur applique son Pass avant d'envoyer). Il s'affiche
+		# ICI, sur le bouton, parce que c'est le seul endroit où le chef choisit encore : découvrir
+		# un péage après avoir cliqué, c'est un refus qu'on pouvait éviter.
+		# ⚠️ UN FRAIS À 0 N'AFFICHE RIEN. Jamais « 0 COINS » : les modes cœur sont gratuits, et écrire
+		# leur gratuité en prix la transformerait en tarif.
+		var fee := int(spec.get("fee", 0))
+		var fee_with_pass := int(spec.get("fee_with_pass", 0))
+		if fee > 0:
+			btn.text += "  ·  " + tr("FEE_LABEL") % fee
+			# Le joueur paie plus cher qu'un détenteur de Pass : on le lui dit, sans encombrer le
+			# libellé (l'infobulle est le seul canal qui ne coûte pas un pixel de large).
+			if fee_with_pass < fee:
+				btn.tooltip_text = tr("FEE_HALF_WITH_PASS")
 		btn.add_theme_font_override("font", _font)
 		btn.add_theme_font_size_override("font_size", 14)
 		btn.custom_minimum_size = Vector2(200, 44)
@@ -856,6 +870,17 @@ func _set_status_for(reason: String, data: Dictionary) -> void:
 				# cas la file est fermée, et le dire vaut mieux que de retomber sur « indisponible ».
 				_set_status("MM_CLOSED_FEATURE", [], GOLD)
 		return
+	# FRAIS D'INSCRIPTION (chantier MODÈLE ÉCONOMIQUE) — MÊME raisonnement que la fermeture, et même
+	# OR : ce n'est pas une panne, c'est un prix. Le refus nomme le membre BLOQUANT (`who`) parce que
+	# dans une escouade de trois, un « solde insuffisant » anonyme laisse trois joueurs se regarder
+	# sans savoir qui doit agir. Sans `who` (chemin solo d'un serveur plus ancien), message générique.
+	if reason == "insufficient_coins":
+		var who := str(data.get("who", "")).strip_edges()
+		if who != "":
+			_set_status("FEE_INSUFFICIENT_MEMBER", [who.to_upper()], GOLD)
+		else:
+			_set_status("FEE_INSUFFICIENT", [], GOLD)
+		return
 	_set_status(_reason_key(reason))
 
 
@@ -871,6 +896,10 @@ func _reason_key(reason: String) -> String:
 		"not_leader": return "SQUAD_ERR_NOT_LEADER"
 		"playlist_closed": return "SQUAD_ERR_PLAYLIST_CLOSED"
 		"assigned": return "SQUAD_ERR_ASSIGNED"
+		# Filet : `_set_status_for` traite normalement ce refus AVANT d'arriver ici (il a besoin de
+		# `who`, que cette fonction ne reçoit pas). On le mappe quand même — un chemin sans payload
+		# doit dire « solde insuffisant », pas « indisponible », qui se lit comme une panne.
+		"insufficient_coins": return "FEE_INSUFFICIENT"
 		# §8.144 — repli si `closed` arrivait par un chemin sans payload : mieux vaut « fermé » que
 		# « indisponible », qui se lit comme une panne.
 		"closed": return "MM_CLOSED_FEATURE"

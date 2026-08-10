@@ -2299,10 +2299,11 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 	elif rank == 0:
 		items.append({"key": "REPORT_XP_WIN", "value": 150})
 	items = _nonzero(items)
-	# Bonus Pass : le SERVEUR fait foi (`xp_inputs.xp_pass_bonus`, qui porte le multiplicateur du
-	# PALIER RÉEL — Plus ×1.10, Premium ×1.25, Infinity ×1.50). Repli LOCAL (override < 0, serveur
-	# antérieur) : on ne peut que supposer PREMIUM ×1.25 — c'était la source historique d'un
-	# « Ajustement serveur » systématique pour tout détenteur d'un AUTRE palier.
+	# Bonus Pass : le SERVEUR fait foi (`xp_inputs.xp_pass_bonus`). ⚠️ Le commentaire disait ici
+	# « Plus ×1.10, Premium ×1.25, Infinity ×1.50» : ces trois paliers N'EXISTENT PLUS depuis le
+	# chantier MODÈLE ÉCONOMIQUE. Il n'y a qu'UN niveau, « season », et l'XP de PROFIL y vaut ×1.50.
+	# Repli LOCAL (override < 0, serveur antérieur) : ×1.25 — le barème HISTORIQUE, conservé tel
+	# quel parce qu'il est le seul qui ait jamais valu pour ces serveurs-là.
 	var bonus := 0
 	if pass_bonus_override >= 0:
 		bonus = pass_bonus_override
@@ -2317,7 +2318,8 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 # +100/coup de grâce, +1/4 PV de dégâts héros.
 static func hero_xp_breakdown(enemy_units_killed: int, objective_win: bool,
 		territories_end: int, hero_kills: int, hero_damage: int,
-		placement_override: int = -1, rank: int = 0) -> Array:
+		placement_override: int = -1, rank: int = 0,
+		pass_bonus_override: int = -1) -> Array:
 	var items: Array = []
 	items.append({"key": "REPORT_HXP_UNITS", "value": enemy_units_killed})
 	# LOT D : le +150 « objectif atteint » est devenu un forfait de PLACEMENT (150 au 1er / 60 au 2e,
@@ -2330,7 +2332,18 @@ static func hero_xp_breakdown(enemy_units_killed: int, objective_win: bool,
 	items.append({"key": "REPORT_HXP_TERR", "value": 5 * territories_end})
 	items.append({"key": "REPORT_HXP_GRAVE", "value": 100 * hero_kills})
 	items.append({"key": "REPORT_HXP_DMG", "value": hero_damage / 4})
-	return _nonzero(items)
+	items = _nonzero(items)
+	# BONUS PASS SUR L'XP DE HÉROS (chantier MODÈLE ÉCONOMIQUE, ×2) — servi par
+	# `xp_inputs.hero_xp_pass_bonus`, symétrique de `xp_pass_bonus` côté profil. Sans cette ligne la
+	# reconstruction s'arrêtait à la valeur de BASE alors que le serveur avait crédité le double :
+	# tout le bonus tombait dans « Ajustement serveur » (mesuré 329 reconstruits pour 658 crédités).
+	# ⛔ AUCUN REPLI LOCAL, et c'est DÉLIBÉRÉMENT différent de l'XP de profil : il n'a JAMAIS existé
+	# de bonus Pass sur l'XP de héros avant ce build. Il n'y a donc aucun barème historique à
+	# retrouver — en inventer un fabriquerait précisément la divergence qu'on vient de fermer.
+	# Override < 0 (serveur antérieur) → AUCUNE ligne, et l'écart reste où il doit être.
+	if pass_bonus_override > 0:
+		items.append({"key": "REPORT_XP_PASS", "value": pass_bonus_override})
+	return items
 
 # Libellé du poste de PLACEMENT selon le rang (1er / 2e / autre). Clé distincte pour les deux
 # premières places : « PLACEMENT (1ᵉʳ) » se lit d'un coup d'œil, « PLACEMENT » seul obligerait à
@@ -2377,6 +2390,10 @@ static func _self_check() -> void:
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 150, 0)) == 308)  # 1er : idem 150
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 60, 1)) == 218)   # 2e : 60, PAS 150+60
 	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 0, 2)) == 158)    # 3e : aucun forfait
+	# XP héros — BONUS PASS (chantier MODÈLE ÉCONOMIQUE). Deux contre-épreuves, et la seconde est la
+	# plus importante : SANS le champ serveur, la reconstruction ne doit RIEN inventer.
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 150, 0, 308)) == 616)  # ×2 : 308+308
+	assert(_breakdown_total(hero_xp_breakdown(25, true, 4, 1, 55, 150, 0, -1)) == 308)   # absent : aucune ligne
 	# §8.121 — le module d'ANALYSE narrative se vérifie lui-même (coup de poignard, moment décisif,
 	# matrice, chaîne des chutes) : on l'enchaîne ici pour qu'un seul boot du rapport couvre les deux.
 	BetrayalReport.self_check()
@@ -2449,7 +2466,9 @@ func _build_hero_detail(box: VBoxContainer, rewards: Dictionary) -> void:
 		int(srv.get("hero_damage", d.get("hero_damage", 0))),
 		# LOT D : forfait de placement HÉROS réellement crédité (−1 = serveur antérieur).
 		int(srv.get("hero_xp_placement", -1)),
-		int(srv.get("rank", d.get("rank", 0))))
+		int(srv.get("rank", d.get("rank", 0))),
+		# Bonus Pass sur l'XP de HÉROS (−1 = serveur antérieur → aucune ligne, aucun barème deviné).
+		int(srv.get("hero_xp_pass_bonus", -1)))
 	_render_detail(box, tr("REPORT_HXP_EYEBROW"), items,
 		int(rewards.get("hero_xp_earned", _breakdown_total(items))), "REPORT_UNIT_XP")
 

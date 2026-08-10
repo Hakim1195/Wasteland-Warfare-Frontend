@@ -89,6 +89,22 @@ var _draft_emblem: int = 0
 var _tag_check: Dictionary = {}     # dernière réponse de /company/check_tag
 var _seen_sent: bool = false        # accusé de lecture des activités : UNE fois par visite
 
+# --- FRAIS D'ADHÉSION (chantier MODÈLE ÉCONOMIQUE) ------------------------------------------------
+# Prix de l'adhésion POUR CE LECTEUR (`join_fee`) et prix qu'il paierait avec un Pass
+# (`join_fee_with_pass`). Le serveur les joint à TOUTE réponse d'état de compagnie — `_state()` les
+# émet, donc `GET /company/mine` les porte Y COMPRIS dans l'état « sans compagnie », qui est
+# précisément celui depuis lequel on ouvre le formulaire d'adhésion. La fiche publique les porte
+# aussi. Il n'y a donc RIEN à mémoriser d'un écran à l'autre : on lit le payload qu'on vient de
+# recevoir, et le prix affiché est celui qui sera débité.
+# ⚠️ Le tarif est DÉJÀ résolu pour le lecteur : un détenteur de Pass reçoit 250/250, pas 500/250 —
+# le client n'applique aucune remise, il affiche.
+# 0 = frais éteint → on n'affiche RIEN (cf. `_join_fee_line`).
+var _join_fee: int = 0
+var _join_fee_with_pass: int = 0
+# Solde en Coins du joueur, capté au passage sur `AuthManager.profile_loaded` — le MÊME signal que
+# la nav partagée montée par cet écran consomme déjà pour sa jauge. AUCUNE requête de plus.
+var _coins: int = -1
+
 
 func _ready() -> void:
 	_font = _make_font()
@@ -121,6 +137,10 @@ func _ready() -> void:
 	NetworkManager.company_public_loaded.connect(_on_company_public)
 	NetworkManager.company_tag_checked.connect(_on_tag_checked)
 	NetworkManager.session_expired.connect(_on_session_expired)
+	# Solde en Coins, pour annoncer le frais d'adhésion AVEC de quoi le juger (« 500 COINS » ne dit
+	# rien, « 500 COINS · SOLDE 320 » dit tout). La nav partagée montée juste au-dessus déclenche
+	# déjà `AuthManager.get_profile()` : on ÉCOUTE, on ne redemande rien.
+	AuthManager.profile_loaded.connect(_on_me_loaded)
 	LocaleManager.locale_changed.connect(func(_code: String) -> void: _render())
 
 	_set_status(tr("COMMON_SYNCING"), MUTED)
@@ -291,6 +311,14 @@ func _build_company_view() -> void:
 
 	if not _is_public():
 		head.add_child(_build_code_block())
+
+	# Fiche PUBLIQUE : c'est ici que la question « est-ce que je les rejoins ? » se pose, et c'est
+	# la seule réponse serveur qui porte le tarif (`join_fee` de `GET /company/{tag}`). Sur SA
+	# PROPRE compagnie, le prix n'a aucun sens : on y est déjà.
+	if _is_public():
+		var fee_line := _join_fee_line()
+		if fee_line != "":
+			_content.add_child(_label(fee_line, 14, GOLD))
 
 	WarzoneUI.add_filet(_content)
 
@@ -640,6 +668,11 @@ func _build_create_form() -> void:
 func _build_join_form() -> void:
 	_content.add_child(_center_note(tr("COMPANY_JOIN_TITLE"), ACCENT, 24))
 	_content.add_child(_center_note(tr("COMPANY_JOIN_HINT"), MUTED, 14))
+	# PRIX DE L'ADHÉSION, AVANT le clic (§7.3). Non remboursable : quitter ou être exclu ne rend
+	# rien — d'où l'insistance à le dire ici plutôt qu'après.
+	var fee_line := _join_fee_line()
+	if fee_line != "":
+		_content.add_child(_center_note(fee_line, GOLD, 15))
 	_content.add_child(_spacer(10))
 
 	var input := LineEdit.new()
@@ -698,6 +731,26 @@ func _build_emblem_grid(selected: int, on_pick: Callable) -> GridContainer:
 	return grid
 
 
+# Ligne « N COINS · SOLDE M · -50 % AVEC LE PASS » — "" quand il n'y a RIEN à dire.
+# ⚠️ UN FRAIS À 0 N'AFFICHE RIEN. Jamais « 0 COINS » : écrire la gratuité en prix la transforme en
+# tarif, et c'est une exigence dure du chantier. Le solde n'est accolé que s'il est connu — un
+# « SOLDE 0 » inventé serait pire que pas de solde du tout.
+func _join_fee_line() -> String:
+	if _join_fee <= 0:
+		return ""
+	var line := tr("FEE_LABEL") % _join_fee
+	# ⚠️ `PROFILE_FIN_BALANCE_AFTER_FMT` (« SOLDE %s ») et NON `SHOP_CREDITS` (« CRÉDITS ») : les deux
+	# désignent le même porte-monnaie, mais accoler « CRÉDITS » à « COINS » sur UNE MÊME LIGNE donne
+	# deux noms à une seule monnaie — défaut vu en capture, « 500 COINS · CREDITI 320 ».
+	if _coins >= 0:
+		line += "  ·  " + tr("PROFILE_FIN_BALANCE_AFTER_FMT") % str(_coins)
+	# Le joueur paie plein tarif alors qu'un détenteur de Pass paierait moitié : on le dit, une fois.
+	# Chez un détenteur, le serveur a déjà remisé les DEUX champs — ils sont égaux, et on se tait.
+	if _join_fee_with_pass < _join_fee:
+		line += "  ·  " + tr("FEE_HALF_WITH_PASS")
+	return line
+
+
 # Verdict affiché sous le champ TAG. Trois états, jamais muet : trop court (on attend), disponible,
 # indisponible/mal formé.
 func _tag_verdict_text() -> Dictionary:
@@ -724,6 +777,10 @@ func _on_company_state(ok: bool, data: Dictionary) -> void:
 	_company = c if typeof(c) == TYPE_DICTIONARY else {}
 	if typeof(data.get("rules")) == TYPE_DICTIONARY:
 		_rules = data["rules"]
+	# PRIX DE L'ADHÉSION : joint par `_state()` à TOUTE réponse d'état, y compris celle qui dit
+	# « tu n'as pas de compagnie » — c'est-à-dire exactement celle qui précède l'ouverture du
+	# formulaire. On le lit ici, au même titre que `rules`.
+	_capture_join_fee(data)
 	_reason = str(data.get("reason", ""))
 	_cooldown_s = int(data.get("cooldown_s", 0))
 	_mark_seen_once()
@@ -737,20 +794,56 @@ func _on_company_state(ok: bool, data: Dictionary) -> void:
 		_draft_name = ""
 		_tag_check = {}
 
+	# REFUS POUR SOLDE INSUFFISANT : le tarif, lui, est déjà pris par `_capture_join_fee` (le refus
+	# passe par `_state()` comme le reste). Reste `balance` — le solde AU MOMENT DU REFUS, plus frais
+	# que celui de `/auth/me`, qui date du montage de l'écran.
+	if _reason == "insufficient_coins" and data.has("balance"):
+		_coins = int(data.get("balance", 0))
+
 	_render()
 	# La ligne de statut ne sert qu'aux REFUS et à l'attente réseau : en cas de succès elle se TAIT.
 	# Le panneau lui-même est la confirmation — annoncer « chargé » sous une fiche déjà à l'écran
 	# n'apprend rien et occupe une ligne qui doit rester réservée aux mauvaises nouvelles.
-	if _reason != "" and _reason != "no_company":
+	if _reason == "insufficient_coins":
+		# ⚠️ EN OR, PAS EN ROUGE : un solde insuffisant est un PRIX, pas une panne. Le rouge de cet
+		# écran reste réservé aux refus qui disent « tu n'as pas le droit » (banni, pas chef, tag
+		# pris) ; celui-ci dit « il te manque des Coins », et le message rappelle que le mode CASUAL
+		# reste gratuit — aucun péage n'a jamais touché les modes cœur.
+		_set_status(_reason_text(_reason), GOLD)
+	elif _reason != "" and _reason != "no_company":
 		_set_status(_reason_text(_reason), DANGER)
 	else:
 		_set_status("", MUTED)
+
+
+# Solde en Coins depuis /auth/me (clé canonique + repli historique, piège float §5).
+func _on_me_loaded(data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	var before := _coins
+	_coins = int(data.get("coins_balance", data.get("coins", _coins)))
+	# Re-rendu SEULEMENT si le solde a bougé ET qu'il est affiché quelque part : le formulaire
+	# d'adhésion est le seul écran de ce fichier qui montre un solde, et rebâtir `_content` sous les
+	# doigts du joueur effacerait le code qu'il est en train de taper.
+	if _view == "join" and before != _coins:
+		_render()
+
+
+# Lit le tarif d'adhésion d'une réponse serveur (état de compagnie OU fiche publique : les deux le
+# portent). Champs ADDITIFS : absents d'un serveur antérieur → on garde la dernière valeur lue, et
+# le défaut 0 ne fait rien afficher. Piège JSON float (§5) : `int()`, jamais la valeur brute.
+func _capture_join_fee(data: Dictionary) -> void:
+	if data.has("join_fee"):
+		_join_fee = int(data.get("join_fee", 0))
+	if data.has("join_fee_with_pass"):
+		_join_fee_with_pass = int(data.get("join_fee_with_pass", 0))
 
 
 func _on_company_public(data: Dictionary, tag: String) -> void:
 	# Réponse d'une AUTRE demande (le joueur peut enchaîner deux lignes du classement) : ignorée.
 	if not is_inside_tree() or tag != _public_tag:
 		return
+	_capture_join_fee(data)
 	var c = data.get("company")
 	_company = c if typeof(c) == TYPE_DICTIONARY else {}
 	_render()
@@ -1067,6 +1160,9 @@ func _reason_text(reason: String) -> String:
 		"banned": return tr("COMPANY_ERR_BANNED")
 		"not_leader": return tr("COMPANY_ERR_NOT_LEADER")
 		"not_member": return tr("COMPANY_ERR_NOT_MEMBER")
+		# FRAIS D'ADHÉSION impayable (chantier MODÈLE ÉCONOMIQUE). Le message rappelle que le mode
+		# CASUAL reste gratuit : le péage ne touche que des activités OPT-IN, jamais les modes cœur.
+		"insufficient_coins": return tr("FEE_INSUFFICIENT")
 		_: return tr("COMPANY_ERR_UNAVAILABLE")
 
 

@@ -176,6 +176,11 @@ var _finance_end_reached: bool = false
 var _finance_available: bool = true     # false = 404 (serveur non redéployé) → état « indisponible »
 var _pass: Dictionary = {}
 var _pass_available: bool = true
+# TITRE EXCLUSIF DE SAISON (chantier MODÈLE ÉCONOMIQUE) : identifiant « pass:sN » servi par
+# `GET /profile/pass` ("" = aucun Pass actif, donc rien à proposer). Il vit ICI et non dans
+# `_masteries` parce que ce n'est PAS un titre de maîtrise : le palmarès de faction l'écarte
+# explicitement côté serveur. Champ DÉRIVÉ — il disparaît de lui-même à l'expiration du Pass.
+var _season_title_id: String = ""
 
 # Conteneurs de contenu des onglets (peuplés/vidés par les `_populate_*`).
 var _overview_box: VBoxContainer = null
@@ -230,6 +235,12 @@ func _ready():
 
 	NetworkManager.fetch_profile_stats()
 	NetworkManager.fetch_shop_rotation()
+	# ⚠️ `/profile/pass` était demandé UNIQUEMENT à l'ouverture de l'onglet PASS (fetch différé). Il
+	# porte désormais `season_title_id`, dont a besoin le SÉLECTEUR DE TITRE — qui vit dans l'onglet
+	# APERÇU, celui qu'on voit en arrivant. Sans cet appel, le titre de saison n'apparaîtrait qu'à
+	# ceux qui ont d'abord fait un détour par l'onglet PASS. La réponse est minuscule, et l'onglet
+	# PASS la redemande de toute façon à son ouverture (rafraîchissement).
+	NetworkManager.fetch_profile_pass()
 	_fetch_history(true)
 	# Saison — REPLI LEGACY uniquement : si /profile/stats ne porte pas de bloc `season` (serveur
 	# non redéployé), la division vient encore de /auth/me. Sur un serveur à jour, `season` gagne.
@@ -355,7 +366,13 @@ func _on_pass_loaded(data: Dictionary) -> void:
 	_pass_available = not data.is_empty()
 	if _pass_available:
 		_pass = data
+		# Écrasement SYSTÉMATIQUE (y compris par "") : le serveur re-dérive ce champ à chaque
+		# lecture et le vide dès que le Pass expire. Garder l'ancien proposerait un titre que le
+		# serveur refuserait au clic — exactement le « titre fantôme » que §8.135 s'interdit.
+		_season_title_id = str(data.get("season_title_id", ""))
 	_populate_pass_tab()
+	# Le sélecteur de titre vit dans l'APERÇU : c'est lui qui doit apprendre le titre de saison.
+	_populate_overview_tab()
 
 
 # Lit la première clé présente d'une liste et la convertit en int (piège float JSON §5, CLAUDE.md).
@@ -661,9 +678,12 @@ func _populate_overview_tab() -> void:
 # par le serveur dans `masteries_summary` : aucune table de paliers n'est recopiée ici, et le
 # serveur re-valide de toute façon au clic (un droit peut tomber entre l'ouverture et le choix).
 
-# Ligne « TITRE : X ▾ » — `null` si le joueur n'a AUCUNE maîtrise (rien à proposer).
+# Ligne « TITRE : X ▾ » — `null` s'il n'y a RIEN à proposer.
+# ⚠️ La condition était « aucune maîtrise ». Elle est devenue FAUSSE avec le titre EXCLUSIF DE
+# SAISON : un détenteur du Pass qui n'a encore aucune maîtrise de faction a bel et bien un titre à
+# porter, et l'ancienne garde lui masquait le sélecteur en entier.
 func _build_title_row() -> Control:
-	if _masteries.is_empty():
+	if _masteries.is_empty() and _season_title_id == "":
 		return null
 
 	var row := HBoxContainer.new()
@@ -672,7 +692,10 @@ func _build_title_row() -> Control:
 	# La bordure de la MEILLEURE maîtrise (première ligne : le serveur trie par rang décroissant).
 	# Sur le Profil on porte son plus haut fait d'armes, toutes factions confondues — au draft ce
 	# sera au contraire la faction ENGAGÉE (§1.3, deux règles distinctes, assumées).
-	var best: Dictionary = _masteries[0] if typeof(_masteries[0]) == TYPE_DICTIONARY else {}
+	# Sans aucune maîtrise (cas « Pass seul »), `make("")` rend un nœud VALIDE qui ne dessine rien.
+	var best: Dictionary = {}
+	if not _masteries.is_empty() and typeof(_masteries[0]) == TYPE_DICTIONARY:
+		best = _masteries[0]
 	var border := MasteryBorder.make(str(best.get("border_tier", "")), 40.0)
 	border.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(border)
@@ -695,6 +718,11 @@ func _build_title_row() -> Control:
 func _equipped_title_label() -> String:
 	if _equipped_title == "":
 		return tr("TITLE_NONE")
+	# TITRE DE SAISON d'abord : sa source (« pass ») n'est PAS une faction. `title_with_faction`
+	# chercherait une clé `TITLE_S1` inexistante et rendrait la clé brute à l'écran.
+	var season := _season_title_number(_equipped_title)
+	if season > 0:
+		return tr("PASS_SEASON_TITLE_NAME") % season
 	# Le catalogue de l'écran est DÉJÀ chargé (`_factions`) : on le passe plutôt que de laisser le
 	# helper en charger un second.
 	var names := {}
@@ -702,6 +730,18 @@ func _equipped_title_label() -> String:
 		names[fid] = str(_factions[fid].get("name", fid))
 	var label := MasteryBorder.title_with_faction(_equipped_title, names)
 	return label if label != "" else tr("TITLE_NONE")
+
+
+# Numéro de saison d'un titre de Pass (« pass:s3 » → 3), 0 si ce n'en est pas un.
+# ⚠️ La FORME de l'identifiant est celle du serveur (`mastery.PASS_TITLE_SOURCE` +
+# `PASS_TITLE_KEY_FMT`) ; on ne la fabrique jamais ici, on ne fait que la RECONNAÎTRE pour choisir
+# le libellé. Le seul identifiant réellement envoyé au serveur reste celui qu'il nous a donné.
+func _season_title_number(title_id: String) -> int:
+	var raw := str(title_id).strip_edges()
+	if not raw.begins_with("pass:s"):
+		return 0
+	var digits := raw.substr(6)
+	return int(digits) if digits.is_valid_int() else 0
 
 
 # Panneau modal CALQUÉ SUR LE CLASSEMENT (référence maison §8.125) : voile cliquable, panneau
@@ -802,6 +842,16 @@ func _open_title_picker() -> void:
 	# doit être atteignable sans faire défiler.
 	list.add_child(_make_title_option("", "", "", modal))
 
+	# TITRE EXCLUSIF DE SAISON (chantier MODÈLE ÉCONOMIQUE), juste après : il n'appartient à AUCUNE
+	# faction, donc à aucun groupe du palmarès, et c'est le plus éphémère de tous (il part avec le
+	# Pass) — le reléguer en bas de liste l'aurait rendu invisible pendant la seule saison où il
+	# existe. L'identifiant est celui du serveur, découpé puis RECOMPOSÉ à l'identique par
+	# `_make_title_option` : aucun format n'est réinventé ici.
+	if _season_title_id != "":
+		var parts := _season_title_id.split(":", true, 1)
+		if parts.size() == 2:
+			list.add_child(_make_title_option(parts[0], parts[1], "", modal))
+
 	# Puis un GROUPE par faction, dans l'ordre du palmarès (rang décroissant, tri serveur).
 	for entry in _masteries:
 		if typeof(entry) != TYPE_DICTIONARY:
@@ -856,7 +906,12 @@ func _make_title_option(faction_id: String, title_key: String, border_tier: Stri
 	btn.add_theme_font_size_override("font_size", 17)
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	# Le titre de SAISON a son propre libellé (« PORTE-ÉTENDARD DE LA SAISON 1 ») : sa source
+	# « pass » n'est pas une faction, et `title_label("s1")` ne rendrait qu'une clé brute.
+	var season := _season_title_number(title_id)
 	var label := tr("TITLE_NONE") if faction_id == "" else MasteryBorder.title_label(title_key)
+	if season > 0:
+		label = tr("PASS_SEASON_TITLE_NAME") % season
 	btn.text = ("▸  " + label) if is_current else ("   " + label)
 	btn.disabled = is_current
 	WarzoneUI.apply_ghost_button(btn)
@@ -1779,20 +1834,33 @@ func _populate_pass_tab() -> void:
 	if typeof(gains) == TYPE_DICTIONARY:
 		_pass_box.add_child(_spacer(8))
 		_pass_box.add_child(_eyebrow(tr("PASS_GAINS_TITLE")))
-		var grid := HBoxContainer.new()
-		grid.add_theme_constant_override("separation", 12)
+		# ⚠️ GRILLE, plus une rangée. Le Pass unique mesure CINQ gains (les 3 d'origine + XP de héros
+		# + Coins de palier) plus le coût : six cartes de 175 px dans un `HBoxContainer` auraient
+		# débordé le panneau. Trois colonnes = la disposition DÉJÀ retenue par l'onglet APERÇU pour
+		# ses six cartes de statistiques — on la cite, on n'en invente pas une septième.
+		var grid := GridContainer.new()
+		grid.columns = 3
+		grid.add_theme_constant_override("h_separation", 12)
+		grid.add_theme_constant_override("v_separation", 12)
+		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_pass_box.add_child(grid)
 		var bonus_xp := int(gains.get("bonus_xp_total", 0))
+		var bonus_hero_xp := int(gains.get("bonus_hero_xp_total", 0))
 		var bonus_missions := int(gains.get("bonus_mission_coins_total", 0))
+		var bonus_level_coins := int(gains.get("bonus_level_coins_total", 0))
 		var hero_coins := int(gains.get("hero_coins_with_pass_total", 0))
 		var spent := int(gains.get("coins_spent_on_pass", 0))
 		grid.add_child(_make_stat_card(tr("PASS_GAIN_XP"), _format_thousands(bonus_xp), ACCENT))
+		grid.add_child(_make_stat_card(tr("PASS_GAIN_HERO_XP"), _format_thousands(bonus_hero_xp), ACCENT))
 		grid.add_child(_make_stat_card(tr("PASS_GAIN_MISSIONS"), _format_thousands(bonus_missions), GOLD))
+		grid.add_child(_make_stat_card(tr("PASS_GAIN_LEVEL_COINS"), _format_thousands(bonus_level_coins), GOLD))
 		grid.add_child(_make_stat_card(tr("PASS_GAIN_HERO_COINS"), _format_thousands(hero_coins), GOLD))
 		grid.add_child(_make_stat_card(tr("PASS_GAIN_COST"), _format_thousands(spent), DANGER))
-		# BILAN NET : seuls les COINS entrent au bilan — l'XP bonus n'est pas convertible, l'ajouter
-		# gonflerait artificiellement le résultat (calcul d'affichage, cf. PASS_GAINS_NOTE).
-		var net := bonus_missions + hero_coins - spent
+		# BILAN NET : seuls les COINS entrent au bilan. Les deux compteurs d'XP (profil ET héros) en
+		# restent DEHORS — l'XP n'est pas convertible en Coins, l'additionner gonflerait le résultat
+		# d'une monnaie qui n'en est pas une (calcul d'affichage, cf. PASS_GAINS_NOTE). Les Coins de
+		# PALIER DE NIVEAU, eux, entrent : ce sont des Coins, crédités au solde comme les autres.
+		var net := bonus_missions + hero_coins + bonus_level_coins - spent
 		_pass_box.add_child(_mini(tr("PASS_NET_BALANCE_FMT") % _signed(net), 17,
 			GOLD if net >= 0 else DANGER))
 		_pass_box.add_child(_muted_note(tr("PASS_GAINS_NOTE")))

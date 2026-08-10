@@ -578,6 +578,7 @@ tour). ⚠️ Runtime complet (FastAPI/Redis) à revalider sur le VPS après red
 - **Combat — `action_result.event.hero_duel`.** UN duel par ATTAQUE (pas par dé). Dict `{attacker_id, defender_id, pp_delta, attacker_pp, damage, defender_pv, defender_pv_max, hero_died}` (ou `null` si héros non initialisés / défenseur déjà mort). Asymétrique : seul le PP de l'**attaquant** bouge (`pp_delta = dés_gagnés − dés_perdus`, borné `[pp_min,pp_max]`), seul le PV du **défenseur** baisse (`damage = max(1, floor((PA+PP)·(1−PB)))`). **Permadeath** : `defender_pv ≤ 0` → joueur `status="eliminated"`, **tous ses territoires garnison forcée à 1** (conservés, pas neutres). La mécanique Risk (dés/troupes/conquête) et la Time Bank (+10 s/attaque, max 90 s) sont **inchangées**.
 - **Fin de partie — `game_over.match_rewards[pid]` (champs héros).** `hero_xp_earned`, `hero_level` (avant), `hero_new_level`, `hero_levels_gained`, `hero_total_xp`, `hero_level_up`, `hero_xp_in_level`, `hero_xp_for_level`, `hero_milestones[{level,bonus}]`, **+ NEUF `hero_coins_earned`**. Barème XP héros : +1/unité tuée, +150 objectif, +5/territoire en fin, +100/coup de grâce, +1/4 PV de dégâts. **Coins par niveau** : 1-5 aléatoire **par niveau** franchi (sans gating Pass pour l'instant — palier « avec Pass Season » 10-20 différé), crédités sur `User.coins`. La progression (`HeroProgression(user_id, faction_id)` : `hero_level`, `hero_xp` lifetime) est la **SEULE** donnée héros persistée en SQL.
 - **Fin de partie — `game_over.match_rewards[pid].xp_inputs` (bloc ADDITIF).** Les entrées **EXACTES** du barème telles que le serveur les a utilisées : `rank`, `territories_end`, `continents_end`, `continents_conquered`, `eliminations`, `enemy_kills`, `conquests`, `hero_kills`, `hero_damage`, `objective_win`, `xp_pass_bonus`. Le Rapport Post-Op rend son détail **depuis ce bloc** au lieu de ré-estimer localement → la ligne « Ajustement serveur » retombe structurellement à **0**. Il corrige deux divergences historiques : (1) `continents_conquered` (continents conquis **pendant** la partie, métrique de l'XP) ≠ `continents_end` (continents **possédés en fin**, métrique des POINTS et seule dont disposait le client) ; (2) `xp_pass_bonus` = surplus RÉEL du Pass (palier exact ×1.10 / ×1.25 / ×1.50), là où le client supposait ×1.25 pour tout le monde. Bloc **absent** sur un serveur antérieur → le client retombe sur son estimation locale (rétro-compatible). Entiers/booléens purs (§5).
+  > **§8.147 — deux mises à jour de CE bloc.** (1) Le Pass n'a plus qu'**UN** palier : `xp_pass_bonus` est le surplus du seul `×1.50` (la liste « ×1.10 / ×1.25 / ×1.50 » ci-dessus est HISTORIQUE — elle décrit les trois paliers retirés, dont les détenteurs actifs sont lus `season`, cf. §8.147). (2) Clé **ADDITIVE `hero_xp_pass_bonus`** = le JUMEAU côté héros (`hero_xp_earned − base_hero_xp`, 0 sans Pass), né en même temps que l'axe « XP de héros ×2 ». ⚠️ Sans elle le client rejouait le barème héros **sans** connaître le multiplicateur et retombait sur la BASE : l'onglet XP HÉROS affichait un « Ajustement serveur » égal au bonus entier (mesuré : 329 reconstruit contre 658 crédités) — exactement le défaut que `xp_pass_bonus` avait fermé côté profil, et que l'axe neuf avait rouvert côté héros.
 - **Objectifs DOUBLES (redaction préservée).** Chaque objectif = `{type:"double", kill_objective, classic_objective, params}` (sémantique **OU** : tuer le héros X **OU** conquérir territoire/continent Y). Le volet « tuer X » exige `eliminated_by[X] == self_id` (le **coup de grâce** crédite le tueur, pas un « chasseur » au hasard). L'objectif entier est **masqué** aux adversaires (`{type:"hidden", description:"Objectif classifié"}`).
 - **Endpoint roster.** `GET /api/v1/heroes` (authentifié) — schéma détaillé en **§8.59** de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md).
 - **⚠️ Réalignement cahier des charges (2026-06-26).** **Cap héros = 50** (était 100 ; `rewards.HERO_LEVEL_MAX` + `factions.HERO_LEVEL_MAX`, à garder synchro). **Courbe d'XP FIGÉE** `step(N→N+1)=round(348·1.05^(N-1))`, N=1..49, **total 69050 @50** (générée au boot). **Paliers de stats = exactement 10/20/30/40/50** (10 héros re-tunés en préservant les totaux max). **`pp_max ∈ [15,20]`**. Validé par TDD (16 suites backend vertes).
@@ -750,18 +751,24 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
   "hero_key": null,                     // string|null — id de faction liée à un 'skin'
   "purchasable": true,                  // bool (§8.102) — false = retiré de la vente (skin de saison)
   // --- §8.108 : enrichissement à la volée des SEULS articles category == "pass" ---
-  "tier": "",                           // string — "plus"|"premium"|"infinity" ("" hors Pass)
-  "rank": 0,                            // int — 1|2|3, ordonne les niveaux ET permet au client de
-                                        //   comparer une carte au niveau qu'il DÉTIENT (0 hors Pass)
+  "tier": "",                           // string — "season" DEPUIS §8.147 ("" hors Pass).
+                                        //   Valeurs HISTORIQUES "plus"|"premium"|"infinity" : plus
+                                        //   jamais servies (leurs articles sont purchasable:false).
+  "rank": 0,                            // int — 1 (unique niveau) ; 0 hors Pass. Champ CONSERVÉ
+                                        //   bien qu'il ne départage plus rien (cf. §8.147)
   "perk_keys": []                       // string[] — CLÉS i18n ORDONNÉES des avantages du niveau
 }
 ```
+> **§8.147 — LE PASS UNIQUE.** Un seul article de Pass est vendu : **`pass_season`, FIAT, `price: 1999`** (19,99 €), `tier: "season"`, `rank: 1`, **10 `perk_keys`** (`SHOP_PASS_SEASON_PERK_1` … `_10`). `pass_plus` / `pass_premium` / `pass_infinity` passent **`purchasable: false`** et **RESTENT au catalogue** — le seed est un upsert qui ne supprime JAMAIS une ligne orpheline, les effacer du code les laisserait **EN VENTE en base** (précédent `special_pass`). Ils ne remontent donc que via `?include_all=1`, sans CTA. **La liste des Pass reste une LISTE** : elle n'a plus qu'un élément, un client qui itère ne casse pas (§1.5).
+
 > **§8.108 — prix en vigueur.** Personnages **10 000 / 10 500 / 11 000 / 12 000** Coins ; skins **1 200-1 500** (UN par personnage, les 10 sont couverts) ; **3 Pass FIAT** `pass_plus` 799 ¢, `pass_premium` 1299 ¢, `pass_infinity` 1999 ¢ ; packs de Coins **5 000 / 12 000 / 25 000 / 80 000** (prix € inchangés). L'ancien `special_pass` (7 500 Coins) est **retiré de la vente** (`purchasable=false`) mais **conservé au catalogue** — le seed ne supprime jamais une ligne orpheline, l'effacer du module le laisserait en vente en base.
 
 - **`GET /shop/rotation`** → `{ "week_key": "2026-W29", "free_faction_ids": ["ordre_eclipse"], "rotates_at": iso Z, "free_games_max": 5, "free_games_used": 2, "free_games_left": 3 }`. **PUBLIC mais à AUTH OPTIONNELLE (§8.109)** (`get_current_user_optional`, patron du leaderboard — jamais de 401) : `free_games_max` est TOUJOURS présent ; `free_games_used`/`free_games_left` **seulement si authentifié**. ⚠️ `free_faction_ids` reste une **LISTE** bien qu'elle n'ait plus qu'**UN** élément (`ROTATION_COUNT = 1`) — la forme du contrat est inchangée.
 - **`GET /shop/inventory`** → `{ "credits": 2500, "items": { "skin_aegis_obsidienne": 1 }, "has_active_pass": false, "pass_expires_at": null, "payments_enabled": false, "pass_tier": "", "pass_faction_grants": [] }` (`credits: int` ; `items` = `{ "<item_id:str>": int }` = factions/skins possédés ; `has_active_pass: bool` **dérivé** de `User.special_pass_expires_at` ; `pass_expires_at: str|null` = date ISO 8601 d'expiration du Pass si actif, sinon `null` → le client en dérive les jours restants ; **`payments_enabled: bool` (§8.102)** = miroir de `PAYMENTS_ENABLED` (gate C3) → `false` = le client affiche les packs de Coins « BIENTÔT DISPONIBLE » au lieu d'un achat voué au 501 ; champ ABSENT (serveur antérieur) = le client conserve son défaut `false` ; **`pass_tier: str` (§8.108)** = niveau DÉTENU (`""` si aucun Pass actif — vaut `"premium"` pour un détenteur de l'ANCIEN Pass Spécial, cf. mapping legacy §8.108) ; **`pass_faction_grants: string[]` (§8.108)** = personnages débloqués par le Pass pour la SAISON COURANTE, `[]` sinon). Authentifié.
+  > **§8.147 — deux mises à jour.** (1) **`pass_tier` vaut `"season"` pour TOUT Pass actif**, y compris celui d'un ancien détenteur de Plus / Premium / Infinity / Pass Spécial — la mention « vaut `"premium"` pour l'ANCIEN Pass Spécial » ci-dessus est **CADUQUE** (collapse par LECTURE, `pass_catalog.tier_of`, aucune migration de données). (2) Champ **ADDITIF `skin_access: { "<skin_id>": "owned" | "pass" }`** — titre d'accès de chaque skin du CATALOGUE. ⚠️ **Les skins `locked` sont OMISES : leur absence EST le verrou** (et la réponse reste courte). `owned` = ligne d'inventaire, DÉFINITIF ; `pass` = prêt temporaire du Pass. `items` reste la vérité de la POSSESSION — un client antérieur ignore `skin_access` et retombe dessus. ⚠️ **`GET /shop/inventory` est un SITE DE PURGE PARESSEUSE** : la lecture supprime la ligne `EquippedSkin` d'une skin retombée `locked` (cf. §8.147).
 - **`POST /shop/purchase/virtual`** payload `{ "item_id": "corporation_aegis" }` → achat en **Coins** (faction/skin = **définitif**). Succès `{ "credits", "items", "has_active_pass", "pass_expires_at" }` ; échec HTTP 400 (« Crédits insuffisants » / « Article déjà acquis » / « Cet article s'achète en argent réel » / « Article inconnu » / **« Article non disponible à l'achat » (§8.102 — CORRECTIF SÉCURITÉ : un article `purchasable=False` était achetable par POST direct, les skins de saison prix 0 étaient donc gratuits ; même garde sur la route fiat)** / **« Ce skin nécessite de posséder le personnage. » (§8.108 — GATE SKINS : un accès TEMPORAIRE, rotation ou Pass, ne permet PAS d'acheter le skin d'un personnage qu'on va perdre ; seule une possession DÉFINITIVE, gratuite ou achetée, l'autorise)**). Authentifié.
 - **`POST /shop/purchase/fiat`** payload `{ "item_id": "coins_pack_small" }` → achat en **argent réel** : packs « currency » (crédite `grant_amount` Coins) **ou, depuis §8.108, l'un des 3 Pass** (pose le niveau — aucun Coin crédité). ⚠️ **GATE C3 : la route entière renvoie HTTP 501 tant que `PAYMENTS_ENABLED` est faux** — les 3 Pass sont donc **visibles mais inachetables** aujourd'hui (décision produit assumée ; le client affiche « BIENTÔT DISPONIBLE » plutôt qu'un achat voué à l'échec). Succès `{ "credits", "items", "has_active_pass", "pass_expires_at" }` ; échecs HTTP 501 (paiements fermés) / 400 (« Article inconnu » / « Cet article s'achète en Coins » / **« Pass déjà actif de niveau supérieur ou égal »** — on ne peut qu'**MONTER** de niveau, jamais rétrograder ni racheter le même). Authentifié.
+  > **§8.147.** « L'un des 3 Pass » devient **le Pass unique `pass_season`** (1999 ¢). Le message d'erreur « Pass déjà actif de niveau supérieur ou égal » est **CONSERVÉ AU CARACTÈRE PRÈS** (le client l'affiche tel quel, deux suites le lisent), mais sa portée change : à registre à UN niveau, `rank(season) <= rank(season)` est vrai dès qu'un Pass court — **ce refus n'est pas devenu inatteignable, il est devenu LE SEUL**. La branche UPGRADE (§8.108 §2.10) n'a plus de chemin d'accès ; acheter par-dessus un Pass actif est refusé, ce qui interdit la double dépense et l'allongement déguisé d'un abonnement. **Le gate 501 est INCHANGÉ** : le Pass reste visible et inachetable tant que `PAYMENTS_ENABLED` est faux.
 - **`POST /shop/purchase`** — **ALIAS DÉPRÉCIÉ** de `/purchase/virtual` (rétro-compat des clients antérieurs au split virtual/fiat).
 - **Consommé par :** `scripts/ui/shop.gd` (`_catalog` / `_owned` / `_credits` / `_has_active_pass` / `_payments_enabled` — **boutique à 4 onglets de catégorie §8.102**, inventaire fusionné) + `scripts/managers/network_manager.gd` (`fetch_shop_catalog` = `?include_all=1`, `purchase_item_virtual` / `purchase_item_fiat`). Le client résout `name_key`/`desc_key`/`SHOP_CAT_<CATEGORY>` via `tr()` (R4) et choisit la route d'achat selon `currency_type`.
 
@@ -832,6 +839,7 @@ Tri **serveur** par **victoires décroissantes** (départage par **niveau** desc
 
 - **Table `equipped_skins`** (`models.py`, `create_all`) : `user_id` FK idx, `faction_id`, `skin_id`, contrainte **UNIQUE(user_id, faction_id)** — un seul skin équipé par faction.
 - **NOUVEAU `POST /api/v1/shop/equip`** (authentifié, `shop.py`) : `{ "skin_id": "<id>" }` (équipe — possession `inventory_items` + `category == "skin"` vérifiées, **`faction_id` DÉRIVÉ de `item.hero_key`** — on ne fait pas confiance au client) ou `{ "faction_id": "<id>", "skin_id": null }` (déséquipe). Upsert sous `_lock_user` + rejeu IntegrityError (course entre deux equips). Réponse = **inventaire complet** (forme `GET /shop/inventory`). Refus 400 : « Skin inconnu » / catégorie non-skin / « Skin non possédé » / déséquipement sans faction_id.
+  > **§8.147 — le gate d'ÉQUIPEMENT s'assouplit, le gate d'ACHAT ne bouge pas.** « Skin non possédé » n'est plus prononcé que si `access.skin_access` rend **`locked`** : l'équipement accepte désormais `owned` **OU** `pass` (prêt temporaire du Pass unique). Le refus d'ACHAT « Ce skin nécessite de posséder le personnage » (§8.108) est **INCHANGÉ à un caractère près** — on n'achète toujours pas le cosmétique d'un personnage qu'on va perdre. Shape et code HTTP identiques.
 - **`GET /shop/inventory`** : bloc **`"equipped": { "<faction_id>": "<skin_id>" }`** (schéma `InventoryResponse.equipped`, string→string).
 - **État de partie** : **`PlayerState.equipped_skin: str = ""`** (PUBLIC — la Redaction ne masque que les objectifs §8.6 ; défaut → rétro-compat Redis). Posé au draft (`router._handle_faction_choice` via `_load_equipped_skin`, session courte fail-safe) ET à la voie REST `start_game` (requête `equipped_skins` par joueur). **Bots : toujours ""** (`_load_equipped_skin` court-circuite pid < 0).
 - **Frontend — registre data-driven (pattern factions §4.3)** : **NOUVEAU `resources/skins/skin_data.gd`** (`class_name SkinData` : id = ShopItem.id, faction_id, name_key, portrait_path, model_path, accent_override) + **5 `.tres`** (skins du catalogue + `skin_pass_s1`) en **placeholders teintés** (chemins vides → ColorRect `accent_override`, convention §4.3). `split_screen_vs.gd::_load_faction(faction_id, fallback, equipped_skin="")` — surcharge portrait/modèle (si les chemins EXISTENT) + accent ; les skins des DEUX camps passent par `meta.attacker_skin/defender_skin` (lus des PlayerState publics par `main.gd::_equipped_skin_of`). `faction_selection.gd::_set_portrait` — même résolution pour SON skin équipé (bloc `equipped` de l'inventaire, déjà chargé par M3). ⚠️ Le panneau héros du HUD (§8.60) n'affiche AUCUN portrait (barres de stats seules) — rien à skinner là. `shop.gd` — bouton **ÉQUIPER (or) / ÉQUIPÉ ✓** sur les skins possédés (boutique ET inventaire) via `NetworkManager.equip_skin/unequip_skin` + signaux `skin_equipped`/`skin_equip_failed` (la réponse étant un inventaire complet, le handler d'inventaire est réutilisé). 3 clés i18n ajoutées.
@@ -3538,3 +3546,289 @@ legacy ne servirait qu'à doubler l'entrée sur les clients à jour.
 drainé par les sites qui attachent `system_messages` — **aucun message périodique neuf**, aucune
 nouvelle route. Le journal client les catégorise en `zone` (filtrable). À surveiller au playtest :
 c'est le seul poste de volume du chantier, et il est CONSTATÉ ici plutôt que découvert plus tard.
+
+---
+
+## 💰 §8.147 — MODÈLE ÉCONOMIQUE : Pass UNIQUE, accès temporaire aux skins, FRAIS D'INSCRIPTION (2026-08-10)
+
+> Règles & barèmes : **§8.147 de [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md)**.
+> Exploitation (les 3 réglages, les 2 courbes) : **[`ADMINISTRATION.md`](ADMINISTRATION.md) §33-§35**.
+> **Strictement ADDITIF (règle §1.5)** : aucune clé de payload existante n'est renommée, supprimée
+> ni changée de FORME. Ce qui change, ce sont des **valeurs** (`pass_tier` vaut désormais `"season"`
+> partout) et une **cardinalité** (`pass_tiers()` passe de 3 entrées à 1) — jamais un type.
+> ⚠️⚠️ **CLIENT ET SERVEUR PARTENT ENSEMBLE** (gate de version WS §9) : la vitrine du Pass, les prix
+> de frais affichés et les états d'accès des skins sont une seule release.
+> ⚠️ **DÉPLOIEMENT NEUTRE** : les trois frais sont déployés **à 0** (`fallback: 0`). Le jour J,
+> aucun joueur ne ressent autre chose que la vitrine du Pass — pas un bloc `fee` non nul, pas une
+> ligne `entry_fee`, pas un refus `insufficient_coins`. L'économie s'allume **au panel**.
+> Tous les montants (Coins, prix, frais) sont des **`int` PURS** (piège JSON float §5) ; les
+> multiplicateurs ne franchissent le fil qu'en **pourcentages ENTIERS**.
+
+### 1. `pass_tiers()` — 3 entrées → **1**, mais ça RESTE une LISTE
+
+`GET /profile/pass` clé `tiers` : la forme d'un élément est **INCHANGÉE**
+(`{ id, name_key, rank, benefits: [ { id, kind, value, desc_key } ] }`), et la valeur reste une
+**LISTE JSON**. Un client qui l'itère ne casse pas — il dessine simplement une carte au lieu de
+trois. C'est la seule tolérance que §1.5 accorde à une réduction de cardinalité, et elle n'est
+acceptable que parce que client et serveur partent ensemble.
+
+L'unique entrée : `id: "season"`, `name_key: "SHOP_ITEM_PASS_SEASON_NAME"`, `rank: 1`.
+**`rank` est CONSERVÉ** bien qu'il ne départage plus rien (trois lectures s'y appuient : le tri de
+`TIER_IDS`, la couronne de la vitrine, la règle d'octroi de `pass_grant`).
+
+**DIX avantages**, ids **STABLES**, dans cet ordre — les cinq axes CHIFFRÉS d'abord, les déblocages
+ensuite. Les deux ids AJOUTÉS (`hero_xp_mult`, `level_coins`) s'**insèrent** sans renommer ni
+déplacer les trois d'origine :
+
+| `id` | `kind` | `value` servie | Sens |
+|---|---|---|---|
+| `xp_mult` | `percent` | `50` | XP de PROFIL ×1.50 |
+| `hero_xp_mult` | `percent` | `100` | **NOUVEL AXE** — XP de HÉROS ×2 |
+| `mission_mult` | `percent` | `300` | Coins de MISSIONS ×4 |
+| `level_coins` | `percent` | `300` | **NOUVEL AXE** — Coins de PALIER de niveau ×4 |
+| `hero_coins` | `range` | `[4, 20]` | Coins par niveau de HÉROS (base 1-5 × 4) |
+| `faction_grants` | `grant` | `""` | TOUS les personnages payants |
+| `skin_access_all` | `grant` | `""` | TOUTES les skins achetables, en PRÊT (§3) |
+| `season_skin` | `grant` | `""` | skin exclusif de saison, crédité à l'octroi |
+| `season_title` | `grant` | `""` | titre exclusif de saison (§4) |
+| `fee_relief` | `grant` | `""` | exonérations de FRAIS (§5) |
+
+⚠️ **Un `×4` s'expose en `+300` `percent`, pas en `×4`** : une seule forme d'affichage sur toute la
+carte, jamais un « ×4 » à côté d'un « +50 % » que le joueur devrait convertir de tête. Un `kind`
+inconnu d'un client ancien retombe sur le seul `desc_key` (tolérance §8.106).
+
+⛔ **Aucun avantage affiché n'est non câblé** — les dix ont leur point d'application ET leur
+contre-épreuve de crédit (leçon `radioactive_damage_multiplier`, §8.145 : une règle écrite mais
+jamais implémentée).
+
+**Le collapse est une décision de LECTURE, pas une migration.** `pass_catalog.tier_of` rend
+`"season"` pour **TOUT Pass actif**, quel que soit le contenu de `users.pass_tier` (`"plus"`,
+`"premium"`, `"infinity"`, `""` du Pass Spécial d'origine, ou déjà `"season"`) : le registre ne
+contenant plus qu'une entrée, tout `pass_tier` historique en est absent et retombe sur
+`LEGACY_TIER = "season"` — le repli LEGACY d'origine, mécanisme INCHANGÉ. **Aucun UPDATE de masse,
+aucun script**, la colonne reste une trace d'achat. Un détenteur de Plus (7,99 €) est donc **promu**
+jusqu'à son échéance : plus généreux, jamais moins. ⚠️ Ce que le collapse NE rétroagit PAS : les
+personnages **déjà tirés** (`pass_faction_grants`) — un ex-Plus garde son unique personnage offert,
+le tirage ayant eu lieu à l'achat. Les skins prêtées et les exonérations de frais, elles,
+s'appliquent immédiatement (elles se LISENT, elles ne se tirent pas).
+
+### 2. `GET /profile/pass` — deux compteurs de gains ADDITIFS + le titre de saison
+
+```jsonc
+{
+  "active": true, "expires_at": "…Z", "tier_id": "season",
+  "tiers": [ … 1 entrée … ], "granted_items": [ … ],
+  "season_title_id": "pass:s3",          // NOUVEAU — "" si aucun Pass ACTIF
+  "gains": {
+    "bonus_xp_total": 0,                 // inchangé
+    "bonus_mission_coins_total": 0,      // inchangé
+    "hero_coins_with_pass_total": 0,     // inchangé (TOTAL assumé, pas un différentiel)
+    "bonus_hero_xp_total": 0,            // NOUVEAU — différentiel de l'axe XP héros
+    "bonus_level_coins_total": 0,        // NOUVEAU — différentiel de l'axe Coins de palier
+    "coins_spent_on_pass": 0             // inchangé
+  }
+}
+```
+
+Colonnes ADDITIVES `users.pass_bonus_hero_xp_total` / `users.pass_bonus_level_coins_total`
+(`Integer NOT NULL DEFAULT 0`, auto-migrées au boot ; archive de parité
+**`backend/migration_pass_season.sql`**). **MÊME discipline qu'au §8.106** : on n'y stocke que le
+**SURPLUS**, mesuré **AU POINT D'APPLICATION** (`state_manager` pour l'XP héros,
+`rewards.apply_xp_and_levels` — qui renvoie désormais la clé additive `base_coins_earned` — pour les
+paliers), **jamais recalculé après coup**. ⚠️ **Aucune donnée rétroactive** : la mesure démarre à
+cette mise à jour, un Pass antérieur affiche 0 sur ces deux lignes (le client l'explicite,
+`PASS_GAINS_NOTE`). Sans ces deux clés, l'onglet PASS mentirait **par omission** — trois gains
+affichés sur cinq.
+
+`season_title_id` est un champ **DÉRIVÉ, jamais stocké** : `"pass:s<index de saison courante>"` tant
+que le Pass est ACTIF, `""` sinon. Il est exposé **ici et non dans `masteries_summary`** — ce n'est
+pas un titre de maîtrise de faction, et le palmarès de maîtrise l'écarte explicitement.
+
+### 3. `GET /shop/inventory` — `skin_access`, et la PURGE PARESSEUSE des skins
+
+Champ ADDITIF **`skin_access: { "<skin_id>": "owned" | "pass" }`** (cf. §9.3). Trois titres existent
+côté serveur (`access.skin_access` / `skin_access_map` / `catalog_skin_access`, patron EXACT de
+`faction_access` §8.109) mais **seuls deux franchissent le réseau : `locked` est OMIS** — l'absence
+d'une clé EST le verrou, et la réponse reste courte.
+
+- **`owned`** — ligne d'inventaire, quantité > 0. **DÉFINITIF, indépendant du Pass** : ce qui a été
+  acheté pendant un Pass survit à son expiration. C'est la boucle hybride, et c'est elle qu'il faut
+  rendre visible en vitrine (« DÉBLOQUÉ AVEC LE PASS » + le prix d'achat permanent à côté).
+- **`pass`** — Pass ACTIF, dont le niveau porte `skin_access_all`, ET article de catégorie `skin`
+  **encore `purchasable`**. ⚠️ **Cette dernière condition EST la promesse d'exclusivité** : les skins
+  exclusifs des saisons PASSÉES (`skin_pass_s*`, seedés `purchasable=false`) ne sont **JAMAIS**
+  prêtés à qui ne les a pas gagnés.
+- ⚠️ **PÉRIMÈTRE** : les **FINISHERS** (`category == "finisher"`) ne sont pas des skins et le Pass
+  ne les prête pas — accessibles POSSÉDÉS seulement.
+
+**FIN D'ACCÈS = PURGE PARESSEUSE, aucun cron, aucune colonne nouvelle** (patron §8.109 pour les
+factions, §8.135 pour les titres) : la vérité se **recalcule à la lecture**. Deux sites, et deux
+seulement :
+
+| Site | Pourquoi lui |
+|---|---|
+| `shop._inventory_response` (`GET /shop/inventory`, et donc aussi la réponse de `/shop/equip`) | c'est la lecture que le joueur provoque en ouvrant sa boutique |
+| `sockets/router._load_equipped_skin` (draft / lancement de salle) | **le plus important des deux** : c'est lui qui décide de ce que les AUTRES JOUEURS voient en partie |
+
+À l'expiration du Pass, la première de ces lectures constate que la skin équipée est retombée
+`locked`, **SUPPRIME la ligne `EquippedSkin`** (on ne l'ignore pas : une ligne fantôme ferait
+« remonter » la skin le jour d'un nouveau Pass, sans que le joueur l'ait rééquipée) et le joueur
+réapparaît avec son apparence par défaut. Côté contrat : `equipped` (§8.69) et
+`PlayerState.equipped_skin` reprennent leur valeur vide — **aucune clé nouvelle, aucun événement**.
+
+### 4. Le titre de saison — source `"pass"` dans `mastery`
+
+Le format `"<source>:<key>"` d'`equipped_title` (§8.135 §8) était prévu pour ça : la source
+**`"pass"`** s'ajoute, avec une clé `s<N>` (N = index 1-based de la saison). ⚠️ **Sémantique
+d'ÉGALITÉ, pas de palier** — contrairement aux titres d'événement, `s3` n'est portable que **sous la
+saison 3**, pas « à partir de ». Le titre est **PORTABLE tant que le Pass est ACTIF** et **expire
+avec lui**, re-validé À LA LECTURE comme tous les autres : `resolve_equipped_title` fait retomber le
+champ à `""` tout seul (§8.135 §5 — « jamais de titre fantôme »). **Zéro colonne, zéro stockage.**
+
+### 5. FRAIS D'INSCRIPTION — le prix s'affiche **AVANT** l'action
+
+Trois surfaces OPT-IN sont concernées, et **elles seules**. ⛔ **Casual FFA et CLASSÉE : GRATUITES,
+TOUJOURS** — `api/v1/endpoints/matchmaking.py` n'importe même pas le module des frais (contrôle AST : ni import, ni appel `charge_fee`). Les playlists
+d'équipe **sans traître** (`duo_2v2`) restent gratuites elles aussi.
+
+Le bloc de prix canonique est **`{ "fee": int, "fee_with_pass": int }`** (`fees.fee_block`) :
+`fee` = ce que **CE lecteur** doit (remise déjà appliquée s'il a un Pass) ; `fee_with_pass` = ce que
+la même action coûterait AVEC un Pass — c'est l'argument de vente, et c'est ce qui permet au client
+d'afficher un prix barré **sans connaître la moindre règle de remise**.
+**Les deux valent `0` quand le frais est à 0 → le client n'affiche RIEN** (surtout pas « 0 Coins »).
+
+| Route | Ajout ADDITIF | Note |
+|---|---|---|
+| `GET /squad/playlists` | **par playlist**, dans chaque spec : `fee` + `fee_with_pass` | les playlists gratuites portent `0/0`, comme toutes les autres à frais 0. Le tarif dépend du LECTEUR → **calculé HORS du cache 60 s** de l'endpoint |
+| `GET /squad/playlists` | **au niveau racine** : `"event_queue_fee": { fee, fee_with_pass }` | c'est ce hub-là qui construit l'écran ÉVÉNEMENTS (onglet BONUS) — le client doit connaître le prix **en dessinant** le bouton ENTRER, pas en le cliquant. ⚠️ **UN SEUL bloc pour TOUS les événements** : le registre ne distingue pas encore les événements entre eux (une seule activité `event_queue`). La forme est prête pour une entrée par événement le jour venu |
+| **TOUTE réponse d'état de compagnie** (`GET /company/mine`, `GET /company/{tag}`, `POST /company/join`, création, départ, exclusion… — tout ce qui passe par le constructeur commun `_state`) | `join_fee` + `join_fee_with_pass` | **HORS** du payload de compagnie, parce qu'ils ne décrivent PAS la compagnie (toutes ont le même tarif) : ils décrivent ce que L'ADHÉSION coûterait AU LECTEUR. Servis **aussi** sur les branches `{"company": null}` — `"unavailable"`, `"no_company"`, `"insufficient_coins"` (zéro-4xx §8.112).<br>⚠️ **POURQUOI SUR TOUTES LES RÉPONSES ET PAS SEULEMENT SUR LA FICHE PUBLIQUE** : le formulaire d'adhésion part d'un **CODE à 5 caractères**, jamais d'un tag. Adossé au seul `GET /company/{tag}`, le tarif serait resté invisible à tout joueur n'ayant pas d'abord ouvert une fiche publique — il aurait découvert le péage **au moment de cliquer**, ce que le §7.3 interdit. L'état « sans compagnie » est précisément celui à partir duquel le formulaire est rendu : c'est donc lui qui doit porter le prix.<br>⚠️ Le tarif est **déjà celui du lecteur** (un détenteur de Pass lit `250 / 250`, pas `500 / 250`). Coût nul tant que le frais dort à 0 : aucune requête n'est faite pour servir deux zéros. |
+
+⚠️ **Aucun bloc `fee` sur les routes `/trench/*`** — décision de conception, pas un oubli : le prix
+d'entrée de l'événement vit sur `GET /squad/playlists` (ci-dessus), l'unique point de configuration
+publique du hub. Deux endroits auraient signifié deux façons de calculer le même prix.
+
+**Remise du Pass : calculée en UN SEUL point** (`fees.effective_fee`), jamais rejouée par un
+endpoint. Politiques : `event_queue` → **`free`** (entrée gratuite, avantage contractuel du Pass) ;
+`company_join` et `br_search` → **`discount_50`**, moitié **ARRONDIE AU SUPÉRIEUR** (`ceil`).
+⚠️ **L'arrondi haut est délibéré** : avec `floor`, un frais de 1 Coin deviendrait GRATUIT sous Pass
+— la remise cesserait d'être « la moitié » pour devenir « la totalité » sur les petits montants, et
+le joueur verrait un péage annoncé qui ne se produit jamais. `ceil` garde « -50 % » vrai à tous les
+montants (1 → 1, 3 → 2, 100 → 50).
+
+**Périmètre « Battle Royale » = DÉRIVÉ du registre `teams`**, jamais une liste d'ids en dur :
+`fees.br_playlists(TEAM_PLAYLISTS)` = les playlists à `traitor: true` (aujourd'hui `squad_3v3`
+seule). Un futur format BR ajouté au registre d'équipe devient payant **PAR CONSTRUCTION**.
+
+### 6. Refus **`insufficient_coins`** — raison NOUVELLE, sur trois shapes EXISTANTS
+
+Convention **zéro-4xx nominal (§8.112)** partout : un solde insuffisant est un état NOMINAL, pas une
+erreur du client. HTTP **200**, shape inchangée, raison additive (précédent exact : `closed` §8.143).
+⚠️ Le refus est prononcé **AVANT** tout `record_coins` — on n'atteint jamais le clamp-à-zéro
+d'`economy` (qui journalise un WARNING « l'appelant doit vérifier la solvabilité AVANT » : c'est un
+filet comptable, pas un chemin nominal).
+
+| Surface | Réponse |
+|---|---|
+| `POST /company/join` | shape `CompanyStateResponse` (§8.126 §2) + `{"reason": "insufficient_coins", "fee": N, "balance": M}` |
+| `POST /trench/queue` | `{"queued": false, "reason": "insufficient_coins", "fee": N, "balance": M}` |
+| `POST /squad/queue` | solo → `{"squad": false, "reason": "insufficient_coins", "who": "<pseudo>", "fee": N}` · escouade → l'état d'escouade habituel PLUS ces trois clés |
+
+⚠️⚠️ **La file d'équipe est la seule à porter `who`, et la seule à NE PAS porter `balance`** — les
+deux décisions sont volontaires :
+- **`who` est le pseudo du membre BLOQUANT.** Un « solde insuffisant » anonyme dans une escouade de
+  trois, c'est trois joueurs qui se regardent : personne ne sait qui doit agir, et le groupe se
+  disloque. Le pseudo ne divulgue rien de neuf — l'écran d'escouade affiche déjà la liste des
+  membres (§8.124).
+- **Le SOLDE d'un tiers n'est PAS exposé.** Savoir que quelqu'un ne peut pas payer suffit ;
+  connaître son porte-monnaie ne regarde personne.
+- **Chaque membre est évalué selon SON PROPRE Pass** : dans une escouade mixte, l'un paie la moitié
+  et l'autre le plein tarif. Le frais n'est donc pas « le prix de la salle » mais la somme de N prix
+  individuels, et **un seul insolvable bloque tout le monde** — jamais une salle à moitié débitée.
+- **Ordre STABLE** (celui de l'escouade) : deux tentatives successives nomment le même joueur.
+
+Côté client, un `insufficient_coins` s'affiche en **OR** (une info, pas une panne) avec le rappel
+« le mode CASUAL reste gratuit » : jamais un cul-de-sac.
+
+### 7. `DELETE /trench/queue` — clé ADDITIVE `refunded`
+
+`{"left": true, "refunded": <int>}` — le montant **réellement rendu**, `0` si rien n'était dû
+(frais à 0, ou consigne déjà consommée). Les shapes de refus (`assigned`, etc.) sont **inchangés**.
+
+Le cycle diffère **volontairement** entre les deux surfaces payantes, et il ne faut pas les
+mélanger :
+
+| Surface | Débit | Remboursement |
+|---|---|---|
+| **Événement** (Tranchée, futurs événements bonus) | à la **MISE EN FILE** — c'est le moment de l'engagement, et la Tranchée forme vite | **COMPLET** : annulation, TTL/heartbeat expiré, purge au démarrage de l'API. Chaque chemin de purge rembourse |
+| **Battle Royale** (playlists à traître) | à la **FORMATION de la salle** (`matchmaker_runner`) ; à la mise en file, **solvabilité seulement** | **VIDE PAR CONSTRUCTION** : un ticket purgé sans partie n'a jamais rien débité, il n'y a rien à rendre |
+
+⚠️ **L'idempotence du remboursement vit dans une CONSIGNE Redis `mm:fee:<uid>`** (TTL 1 h), **pas**
+dans le ticket de file et **surtout pas** dans une somme du livre de comptes (règle §8.106 : on ne
+recalcule jamais un montant en sommant des deltas). Motif MESURÉ : le ticket `mm:ticket:<uid>` a un
+TTL de 15 s rafraîchi par le heartbeat — un joueur qui **ferme le jeu** en file cesse de battre,
+Redis efface le ticket **et avec lui le montant à rembourser**, or c'est précisément le cas qu'il
+faut rembourser. La consigne est une clé DISTINCTE qui survit au ticket ; elle se **consomme par un
+`DELETE`**, dont Redis renvoie le nombre de clés réellement supprimées → deux remboursements
+concurrents, un seul crédite. Elle est consommée sur les DEUX issues (partie formée → on jette, le
+frais est acquis ; pas de partie → on rembourse).
+
+⚠️ **Un débit BR qui échoue à la formation N'ANNULE PAS la salle** (décision assumée) : entre la
+vérification de solvabilité et la formation, un joueur a pu vider son solde. On journalise un
+WARNING, et on continue — **la partie prime sur le péage**. Le `try/except` est PAR JOUEUR : l'échec
+de l'un ne prive pas les autres. Aucune trace réseau, aucune raison nouvelle.
+
+### 8. Économie — **14ᵉ raison canonique** `entry_fee`
+
+`REASON_ENTRY_FEE = "entry_fee"`, placée dans `ALL_REASONS` **en tête des DÉPENSES**, après
+`REASON_COIN_PACK` et **avant** `REASON_SHOP_PURCHASE` : un frais d'inscription n'est pas un achat —
+on n'en repart avec aucun objet. Le placer là groupe les sorties tout en gardant visible qu'il
+s'agit d'une autre nature de dépense (onglet FINANCES, ordre canonique §8.106).
+
+⚠️ **DOUBLE SIGNE** — la 2ᵉ raison du dépôt dans ce cas, après `admin_adjust` (§8.142 §5), et pour
+un motif différent : le **DÉBIT** part à l'engagement, le **CRÉDIT** revient si l'activité n'a pas
+lieu. Rembourser sous la **MÊME** raison plutôt qu'inventer une raison miroir a deux vertus :
+`split_earned_spent` sommant **par SIGNE**, un aller-retour s'annule tout seul dans les totaux ; et
+le relevé du joueur raconte l'histoire vraie — « −50 » puis « +50 », au lieu de deux lignes qui
+n'auraient pas l'air liées.
+
+`ref` = **`"<activity>:<contexte>"`**, et c'est LUI que la télémétrie découpe pour ventiler les
+frais par activité (il n'y a **aucune comptabilité parallèle** — le livre de comptes raconte tout) :
+
+| Activité | `ref` réellement écrit |
+|---|---|
+| `company_join` | `"company_join:<TAG>"` |
+| `event_queue` | `"event_queue:trench_week"` (l'id d'ÉVÉNEMENT — les futurs événements bonus réutilisent la même activité, aucun code nouveau par événement) |
+| `br_search` | `"br_search:room<id de salle>"` |
+
+Clé i18n cliente : **`PROFILE_FIN_SRC_ENTRY_FEE`** (« FRAIS D'INSCRIPTION »), FR/EN/IT.
+
+⚠️ **Un frais à 0 est un NO-OP TOTAL** : aucune ligne au livre de comptes, aucune écriture, rien
+(`record_coins` est déjà no-op à delta 0, et `charge_fee` évite jusqu'à l'appel). C'est ce qui rend
+le déploiement à frais 0 rigoureusement **invisible** — à 0, le mécanisme ne laisse aucune trace de
+son existence.
+
+### 9. Ce qui NE change PAS
+
+- **`has_active_pass` / `pass_expires_at`** (`/shop/inventory`, `/shop/purchase/*`) : forme et
+  sémantique INCHANGÉES. `special_pass_expires_at` reste la colonne d'horloge, `current_season_end_dt()`
+  l'échéance d'un achat.
+- **Le gate `PAYMENTS_ENABLED`** : `POST /shop/purchase/fiat` rend toujours **501**. Le Pass unique
+  est **visible et inachetable** ; l'octroi admin (§8.146) reste LE chemin de test. **Ce chantier ne
+  touche pas aux paiements.**
+- **Le gate d'ACHAT d'un skin** (possession DÉFINITIVE du personnage exigée, §8.108) : pas un
+  caractère.
+- **`/matchmaking/*` et les salons privés** : aucun frais, aucune raison nouvelle, aucun champ.
+- **`GET /profile/finance`** : shape inchangée — `entry_fee` y apparaît comme n'importe quelle
+  source, par le mécanisme générique d'`ALL_REASONS`.
+- **L'ordre canonique `base × pass × événement`** de l'XP de profil (§8.132) : le Pass d'abord,
+  l'événement ensuite. **NE PAS l'inverser** — le surplus mesuré doit rester le gain PROPRE du Pass.
+  ⚠️ Au 2026-08-10, **aucun événement ne multiplie l'XP de HÉROS** (`events.py` ne porte que
+  `xp_multiplier` et `hero_coins_multiplier`) : il n'y a donc pas d'ordre à respecter sur l'axe neuf.
+  Le jour où un événement le fera, il devra venir **APRÈS** le Pass, comme partout ailleurs.
+
+### 10. Rappel de typage (§5)
+
+Coins, frais, prix, `fee`, `fee_with_pass`, `join_fee`, `refunded`, `balance`, compteurs de gains :
+**`int` PURS**, sans exception. Les multiplicateurs du registre sont des **flottants côté serveur**
+et ne franchissent JAMAIS le fil tels quels — `pass_tiers()` les convertit en pourcentages ENTIERS
+(1.50 → 50, 2.00 → 100, 4.00 → 300), forme qu'attendent aussi les libellés i18n en `%d`.
