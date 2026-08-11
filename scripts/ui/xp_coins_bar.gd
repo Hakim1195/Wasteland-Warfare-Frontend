@@ -360,7 +360,13 @@ func _flash_coins() -> void:
 		var t := create_tween()
 		node.modulate = Color(1.8, 1.55, 1.0)  # surbrillance dorée
 		t.tween_property(node, "modulate", Color.WHITE, 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	if _coin_icon:
+	# ⚠️ `reduced_motion` — LE REBOND DE L'ICÔNE EST DU MOUVEMENT, LA LUEUR N'EN EST PAS.
+	# La règle du dépôt est « couleur seule, pas de mouvement » : on garde donc la surbrillance
+	# dorée ci-dessus (l'information « il s'est passé quelque chose » reste intégralement lisible)
+	# et on retire le seul élément qui bouge. Garde AJOUTÉE au chantier CORRECTIFS ÉCONOMIQUES :
+	# cette lueur devient le geste partagé de la mise en valeur du Pass (jauge du hub, §7.4), et
+	# une animation qu'on généralise doit d'abord être conforme là où elle existait déjà.
+	if _coin_icon and not bool(SettingsManager.get_comfort("reduced_motion")):
 		var s := create_tween()
 		_coin_icon.pivot_offset = _coin_icon.size * 0.5
 		_coin_icon.scale = Vector2(1.4, 1.4)

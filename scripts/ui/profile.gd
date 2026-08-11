@@ -1892,7 +1892,24 @@ func _make_benefit_row(b: Dictionary) -> HBoxContainer:
 			desc = desc % int(value)
 		"range":
 			if typeof(value) == TYPE_ARRAY and value.size() >= 2:
-				desc = desc % [int(value[0]), int(value[1])]
+				# FOURCHETTE DE BASE (chantier CORRECTIFS ÉCONOMIQUES) — le libellé dit « X-Y au
+				# lieu de A-B » ; le « A-B » était écrit EN DUR dans les trois traductions. Exact
+				# aujourd'hui, faux le jour où le barème de base bougera, et invisible jusqu'à ce
+				# qu'un joueur le remarque : c'était le dernier chiffre de gain codé côté client.
+				# Le serveur le sert désormais (`base_value`) ; sans lui (serveur antérieur) on
+				# retombe sur la forme à deux paramètres, qui reste rendue correctement.
+				var args := [int(value[0]), int(value[1])]
+				var base_v = b.get("base_value")
+				if typeof(base_v) == TYPE_ARRAY and base_v.size() >= 2:
+					args.append_array([int(base_v[0]), int(base_v[1])])
+				# ⚠️ ON COMPTE LES MARQUEURS DU LIBELLÉ. Un `%` de trop ou de trop peu est une
+				# erreur de formatage Godot AFFICHÉE au joueur ; le nombre de paramètres dépend ici
+				# à la fois de la version du serveur et de la traduction. Discordance → on rend la
+				# fourchette seule : moins bavard, jamais cassé, jamais faux.
+				if args.size() == desc.count("%d"):
+					desc = desc % args
+				else:
+					desc = "%d-%d" % [int(value[0]), int(value[1])]
 	h.add_child(_mini(desc, 14, TEXT))
 	return h
 

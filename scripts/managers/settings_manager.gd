@@ -56,6 +56,16 @@ const COMFORT_DEFAULTS := {
 	# n'efface PAS la mémoire des bulles déjà vues — c'est « REVOIR LES AIDES » qui la remet à zéro,
 	# et les deux gestes sont distincts à dessein (se taire ≠ tout recommencer).
 	"context_hints": true,
+	# RAPPELS DU PASS (chantier CORRECTIFS ÉCONOMIQUES) — le « fantôme doré » de fin de partie qui
+	# montre à un joueur SANS Pass ce que le Pass lui aurait ajouté sur CE match.
+	#
+	# ⚠️ DÉFAUT **OFF**, ET C'EST DÉLIBÉRÉ. Le brief laissait le choix ; dans le doute, on livre
+	# éteint. Un rappel commercial en fin de partie est la surface la plus rentable d'un free-to-play
+	# ET la plus détestée : un joueur agacé désinstalle plus vite qu'il n'achète. Livré OFF, c'est
+	# Hakim qui décide de l'allumer après playtest, en connaissance de cause — livré ON, la décision
+	# aurait été prise par défaut, ce qui n'est pas une décision.
+	# Le mécanisme est CÂBLÉ et testé : l'allumer ne demande aucun redéploiement, juste un clic.
+	"pass_hints": false,
 }
 var _comfort := {}
 

@@ -1508,6 +1508,17 @@ func _on_mission_claimed(data: Dictionary) -> void:
 	if not data.has("coins_balance"):
 		return
 	animate_coins(int(data.get("coins_balance", 0)))
+	# §7.4 — LE GAIN BOOSTÉ SE VOIT SUR LA JAUGE (chantier CORRECTIFS ÉCONOMIQUES). Le drapeau
+	# `pass_bonus_applied` arrivait ici depuis toujours et n'était **pas lu** : le Pass venait de
+	# multiplier la récompense par quatre, et le hub affichait exactement le même mouvement que
+	# pour un gain ordinaire.
+	# ⚑ ON EMPRUNTE, ON N'INVENTE PAS : `flash_coins()` est le flash or que la boutique déclenche
+	# déjà à chaque mouvement de Coins. Une seule mise en scène de « il s'est passé quelque chose
+	# sur tes Coins » dans tout le jeu — c'est la contrainte du chantier, et elle donne gratuitement
+	# le chemin `reduced_motion` (le composant le gère déjà) et la cohérence.
+	if bool(data.get("pass_bonus_applied", false)) and _xp_bar != null \
+			and is_instance_valid(_xp_bar):
+		_xp_bar.flash_coins()
 
 
 # --- Toast de promotion de division ---------------------------------------------------------

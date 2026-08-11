@@ -234,11 +234,11 @@ func _on_catalog_loaded(items: Array) -> void:
 			"rank": int(it.get("rank", 0)),
 			"perk_keys": _as_string_array(it.get("perk_keys", [])),
 		})
-	# Table { niveau: rang } dérivée du catalogue — sert à comparer un niveau au sien (S.2).
-	_pass_ranks.clear()
-	for entry in _catalog:
-		if str(entry.get("tier", "")) != "":
-			_pass_ranks[str(entry["tier"])] = int(entry.get("rank", 0))
+	# ⚰️ La table { niveau: rang } dérivée du catalogue a été RETIRÉE avec `_max_pass_rank()`
+	# (chantier CORRECTIFS ÉCONOMIQUES) : elle ne servait qu'à départager plusieurs cartes de Pass,
+	# et il n'en reste qu'une. Le `rank` continue de descendre du serveur et d'être stocké sur
+	# chaque entrée du catalogue — c'est le CONTRAT réseau, il ne bouge pas ; simplement, plus
+	# aucune décision d'affichage n'en dépend.
 	_populate()
 
 # Normalise une liste JSON en tableau de String (piège JSON §5 : on ne fait jamais confiance au type).
@@ -386,14 +386,13 @@ var _free_games_max: int = -1
 # n'est jamais ni inférieur ni supérieur à lui-même. Leurs clés i18n RESTENT au CSV (des données
 # legacy peuvent encore les référencer) ; plus aucune carte ne les affiche.
 var _pass_tier: String = ""
-var _pass_ranks: Dictionary = {}
 
-# Rang le plus élevé du catalogue (le niveau « haut de gamme ») — 0 si aucun Pass n'est listé.
-func _max_pass_rank() -> int:
-	var top := 0
-	for t in _pass_ranks:
-		top = maxi(top, int(_pass_ranks[t]))
-	return top
+# ⚰️ `_pass_ranks` / `_max_pass_rank()` RETIRÉS (chantier CORRECTIFS ÉCONOMIQUES) — vestiges du
+# comparatif à trois cartes. Ils servaient à couronner la carte du niveau LE PLUS HAUT parmi
+# plusieurs ; avec une carte unique, la comparaison était devenue vraie par construction, donc du
+# code mort qui SIMULAIT une décision. Le liseré or est désormais posé sur la carte du Pass parce
+# que c'est LA carte du Pass — ce qui est la vraie règle, et elle se lit en une ligne.
+# `_pass_tier` reste LU (le bandeau « ACTIF » de la carte) : il n'est pas un vestige.
 
 # --- Saison courante (M4 §8.67) : { id, ends_at } lu du bloc `season` de GET /shop/inventory. ---
 var _season: Dictionary = {}
@@ -677,7 +676,7 @@ func _build_shop_card(item: Dictionary) -> PanelContainer:
 
 	# Le Pass est couronné d'un liseré or COMPLET (les autres cartes n'ont qu'une arête gauche) —
 	# c'est l'offre premium de la boutique, et elle doit se lire sans lire son prix.
-	if category == "pass" and rank > 0 and rank >= _max_pass_rank():
+	if category == "pass":
 		var crown := _make_card_style(GOLD)
 		crown.set_border_width_all(2)
 		crown.border_width_left = 3

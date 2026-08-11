@@ -2092,13 +2092,55 @@ func _build_player_rewards(rewards: Dictionary, is_ranked: bool = true) -> void:
 	xp_lbl.text = tr("REPORT_PLAYER_XP") % 0
 	block.add_child(xp_lbl)
 
-	# Pass Spécial (M4 §8.67) : RELAIS du flag serveur (+25 % XP déjà appliqué côté serveur).
+	# 🩸 BANDEAU DU PASS — LE SYMPTÔME ① TEL QUE HAKIM L'A VU (chantier CORRECTIFS ÉCONOMIQUES).
+	# Il affichait `REPORT_PASS_BONUS` = « ★ +25 % XP — PASS SPÉCIAL ACTIF », un libellé FIGÉ au
+	# barème de l'ancien Premium : c'est littéralement le « bonus de fin de partie comme l'ancien
+	# Pass ». Le serveur créditait +50 %, l'écran de fin annonçait +25 %.
+	# Il porte désormais le SURPLUS RÉEL en XP, lu sur `xp_inputs.xp_pass_bonus` — le nombre que le
+	# serveur vient de créditer, pas un taux. Un pourcentage se périme au premier rééquilibrage ;
+	# un gain mesuré, jamais. Et il en dit PLUS au joueur : « +103 XP » vaut mieux que « +50 % ».
+	# Surplus nul (Pass actif mais match sans XP) → aucun bandeau : on n'annonce pas un gain de 0.
 	if bool(rewards.get("pass_bonus_applied", false)):
-		var pass_lbl := Label.new()
-		pass_lbl.text = tr("REPORT_PASS_BONUS")
-		pass_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
-		pass_lbl.add_theme_font_size_override("font_size", 13)
-		block.add_child(pass_lbl)
+		var xp_in: Dictionary = rewards.get("xp_inputs", {}) if typeof(
+				rewards.get("xp_inputs")) == TYPE_DICTIONARY else {}
+		var surplus := int(xp_in.get("xp_pass_bonus", 0))
+		if surplus > 0:
+			var pass_lbl := Label.new()
+			pass_lbl.text = tr("REPORT_PASS_BONUS") % surplus
+			pass_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+			pass_lbl.add_theme_font_size_override("font_size", 13)
+			block.add_child(pass_lbl)
+		# SURPLUS DE COINS (§7.1) — la seconde moitié de ce que le Pass a rapporté sur CE match,
+		# et jusqu'ici la moitié muette : l'écran de fin ne parlait que d'XP. Paliers de niveau +
+		# niveaux de héros, tous deux servis par le serveur (`coins_pass_bonus`,
+		# `hero_coins_pass_bonus`), jamais dérivés ici.
+		var coins_surplus := (int(rewards.get("coins_pass_bonus", 0))
+				+ int(rewards.get("hero_coins_pass_bonus", 0)))
+		if coins_surplus > 0:
+			var coins_lbl := Label.new()
+			coins_lbl.text = tr("REPORT_PASS_COINS") % coins_surplus
+			coins_lbl.add_theme_color_override("font_color", ACCENT_GOLD)
+			coins_lbl.add_theme_font_size_override("font_size", 13)
+			block.add_child(coins_lbl)
+	elif bool(SettingsManager.get_comfort("pass_hints")):
+		# LE RAPPEL AUX NON-DÉTENTEURS (§7.5) — le point le plus délicat du chantier, et le seul
+		# livré **ÉTEINT PAR DÉFAUT** (`pass_hints` = false). Un « fantôme » : même place, même
+		# format que le bandeau d'un détenteur, mais MUET — teinte or à 45 % d'opacité, taille
+		# réduite, aucune animation, aucun son, aucun bouton, aucune fenêtre. Il constate un
+		# manque à gagner, il ne vend rien et n'interrompt rien.
+		# ⚠️ IL N'EXISTE QUE SI LE CHIFFRE EST RÉEL : `xp_pass_bonus` vaut 0 sans Pass (le serveur
+		# ne calcule pas un contrefactuel), donc on le dérive de l'XP de base et du barème SERVEUR
+		# du Pass — `pass_xp_bonus_pct`, joint au payload. ⛔ Aucun multiplicateur en dur ici : ce
+		# serait rouvrir, pour un argument de vente, exactement le trou que ce chantier vient de
+		# fermer. Champ absent → aucun fantôme, jamais un chiffre inventé.
+		var pct := int(rewards.get("pass_xp_bonus_pct", 0))
+		var would_gain := int(rewards.get("xp_earned", 0)) * pct / 100
+		if pct > 0 and would_gain > 0:
+			var ghost := Label.new()
+			ghost.text = tr("REPORT_PASS_GHOST") % would_gain
+			ghost.add_theme_color_override("font_color", Color(ACCENT_GOLD, 0.45))
+			ghost.add_theme_font_size_override("font_size", 12)
+			block.add_child(ghost)
 
 	# Jauge XP + Coins réutilisable (remplissage cyan + lueur dorée aux paliers de 10 niveaux).
 	var bar = XpCoinsBarScript.new()
@@ -2299,19 +2341,23 @@ static func player_xp_breakdown(rank: int, conquests: int, enemy_kills: int,
 	elif rank == 0:
 		items.append({"key": "REPORT_XP_WIN", "value": 150})
 	items = _nonzero(items)
-	# Bonus Pass : le SERVEUR fait foi (`xp_inputs.xp_pass_bonus`). ⚠️ Le commentaire disait ici
-	# « Plus ×1.10, Premium ×1.25, Infinity ×1.50» : ces trois paliers N'EXISTENT PLUS depuis le
-	# chantier MODÈLE ÉCONOMIQUE. Il n'y a qu'UN niveau, « season », et l'XP de PROFIL y vaut ×1.50.
-	# Repli LOCAL (override < 0, serveur antérieur) : ×1.25 — le barème HISTORIQUE, conservé tel
-	# quel parce qu'il est le seul qui ait jamais valu pour ces serveurs-là.
-	var bonus := 0
-	if pass_bonus_override >= 0:
-		bonus = pass_bonus_override
-	elif pass_applied:
-		var base_total := _breakdown_total(items)
-		bonus = int(floor(1.25 * float(base_total))) - base_total
-	if bonus != 0:
-		items.append({"key": "REPORT_XP_PASS", "value": bonus})
+	# 🩸 BONUS PASS — LE SERVEUR FAIT FOI, ET LUI SEUL (chantier CORRECTIFS ÉCONOMIQUES).
+	#
+	# CE QUI VIVAIT ICI : un repli LOCAL qui recalculait `floor(1.25 × total) − total` quand le
+	# champ serveur manquait. C'était le TROISIÈME foyer du même défaut — après
+	# `hero_coin_potential` et `economy_constants`, un multiplicateur de l'ANCIEN Premium écrit en
+	# dur dans un chemin d'affichage, alors que le barème réel est ×1.50 depuis §8.147. Un client
+	# qui devine un multiplicateur se trompe à chaque rééquilibrage, en silence, et personne ne le
+	# voit tant qu'un joueur ne compare pas deux écrans.
+	#
+	# POURQUOI LE SUPPRIMER PLUTÔT QUE LE CORRIGER À 1.50 : le repli ne servait qu'à parler à un
+	# serveur antérieur — or le gate de version WS interdit à ce client de s'y connecter. Il ne
+	# protégeait donc rien, et il fabriquait un chiffre faux. On aligne exactement sur
+	# `hero_xp_breakdown`, qui n'a jamais eu de repli et n'en a jamais eu besoin : override absent
+	# → AUCUNE ligne, et l'écart tombe visiblement dans « Ajustement serveur » au lieu d'être
+	# masqué par une invention. `pass_applied` n'est plus lu ici — il ne pilote plus qu'un libellé.
+	if pass_bonus_override > 0:
+		items.append({"key": "REPORT_XP_PASS", "value": pass_bonus_override})
 	return items
 
 # XP HÉROS (rewards.compute_hero_match_xp) : +1/unité tuée, +150 objectif, +5/territoire en fin,
@@ -2378,7 +2424,12 @@ static func _self_check() -> void:
 	# XP de profil — REPLI LOCAL (serveur antérieur au chantier « Tension », aucun override) :
 	# ancien barème conservé tel quel, +150 au seul 1er.
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false)) == 205)  # 30+20+5+150
-	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 256)   # floor(1.25×205)
+	# 🩸 Ce contrôle EXIGEAIT `floor(1.25 × 205) = 256` — il GELAIT le multiplicateur de l'ancien
+	# Premium dans le client. Un rééquilibrage du Pass ne l'aurait jamais fait rougir : il vérifiait
+	# que le client sait recalculer un barème qu'il n'a pas le droit de connaître. Remplacé par son
+	# contraire — SANS champ serveur, le client n'invente RIEN (miroir exact de `hero_xp_breakdown`).
+	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true)) == 205)   # aucun champ → aucune ligne
+	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, true, 103)) == 308)  # ×1.50 servi : 205+103
 	assert(_breakdown_total(player_xp_breakdown(2, 3, 10, 5, false)) == 50)   # rang 3+ : ni cont ni win
 	# XP de profil — barème SERVEUR (LOT D) : forfait de PLACEMENT fourni, 100 au 1er / 50 au 2e.
 	assert(_breakdown_total(player_xp_breakdown(0, 3, 10, 1, false, -1, 100)) == 155)  # 30+20+5+100

@@ -537,6 +537,20 @@ func _build_comfort_section() -> void:
 				child.disabled = true
 	else:
 		map_hint.visible = false   # la mention n'a de sens que quand l'option est neutralisée
+	# RAPPELS DU PASS (chantier CORRECTIFS ÉCONOMIQUES) — livré ÉTEINT. Comme le MODE STREAMER, son
+	# effet ne se devine pas au libellé : il gagne sa ligne d'explication muette juste dessous, et
+	# elle dit explicitement ce que le joueur NE subira PAS (aucune fenêtre, aucun son). Un réglage
+	# commercial qu'on n'explique pas se fait couper par réflexe, même par ceux qu'il n'aurait pas
+	# dérangés.
+	var t_pass := _comfort_toggle("SETTINGS_PASS_HINTS", "pass_hints")
+	root.add_child(t_pass)
+	var pass_hint := Label.new()
+	pass_hint.text = tr("SETTINGS_PASS_HINTS_HINT")
+	pass_hint.add_theme_font_override("font", _font)
+	pass_hint.add_theme_font_size_override("font_size", 12)
+	pass_hint.add_theme_color_override("font_color", MUTED)
+	pass_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(pass_hint)
 	# --- AIDES CONTEXTUELLES & MANUEL DE GUERRE (TUTORIEL & FTUE §8.129) ------------------------
 	# Rangés dans CONFORT et non dans GÉNÉRAL : ce sont des réglages d'ASSISTANCE, exactement de la
 	# même famille que le mouvement réduit ou les chiffres de dégâts.

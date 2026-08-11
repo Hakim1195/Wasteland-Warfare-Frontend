@@ -34,6 +34,10 @@ var _status: Label
 var _daily_reset_epoch: int = 0
 var _weekly_reset_epoch: int = 0
 # Anti double-clic : id de la mission dont le claim est EN VOL ("" = aucun).
+# Le lecteur détient-il un Pass ? DÉDUIT du serveur (`pass_bonus_applied` d'un claim), jamais
+# calculé ici. Faux tant qu'on ne sait pas : afficher le montant de BASE à un détenteur est une
+# bonne surprise, afficher le montant boosté à un non-détenteur est un mensonge.
+var _pass_active := false
 var _claim_in_flight: String = ""
 # Dernier payload `GET /missions` reçu — re-peint au changement de langue SANS aller-retour réseau.
 # (L'écran d'origine ne gérait PAS la bascule de langue à chaud : c'est le seul ajout de ce
@@ -200,12 +204,36 @@ func _make_row(m: Dictionary) -> Control:
 	counter.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hb.add_child(counter)
 
-	# Récompense en COINS (badge hexagonal or, valeur brute serveur — le ×1.5 Pass est appliqué
-	# au claim par le serveur et affiché dans le statut).
-	var badge := WarzoneUI.make_hex_badge(str(reward), _font, 13, GOLD, GUNMETAL, 52.0)
+	# RÉCOMPENSE EN COINS — badge hexagonal or. Le montant affiché est celui que le joueur
+	# TOUCHERA : `reward_coins` s'il n'a pas de Pass, `reward_coins_pass` s'il en a un.
+	#
+	# 🩸 CE COMMENTAIRE DISAIT « le ×1.5 Pass est appliqué au claim » (chantier CORRECTIFS
+	# ÉCONOMIQUES). C'était le taux de l'ANCIEN Premium — le serveur crédite ×4 depuis §8.147 — et
+	# le libellé i18n du statut affichait vraiment « ×1.5 » au joueur. Même défaut exact que le
+	# « 10-20 » des Coins de héros, à une troisième surface. ⛔ Plus AUCUN taux n'est écrit ici :
+	# les deux montants viennent du serveur, calculés par le MÊME `floor(reward × mission_mult)`
+	# que le claim. Le client n'a pas à savoir ce que le Pass multiplie — juste à l'afficher.
+	var reward_pass := int(m.get("reward_coins_pass", reward))
+	var has_boost := reward_pass > reward
+	var badge := WarzoneUI.make_hex_badge(str(reward_pass if _pass_active else reward),
+			_font, 13, GOLD, GUNMETAL, 52.0)
 	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	badge.tooltip_text = tr("MISSIONS_REWARD_TOOLTIP")
 	hb.add_child(badge)
+	# §7.7 — RENDRE LE ×4 VISIBLE AU BON MOMENT, avec RETENUE :
+	#   • détenteur → « 400 » sur le badge (ce qu'il touche) et « 100 ❯ 400 » à côté, en or : le
+	#     gain se voit sans qu'on ait à le dire ;
+	#   • non-détenteur → « 100 » sur le badge et « AVEC LE PASS : 400 » en MUET — une mention, pas
+	#     une réclame ; aucune animation, aucune couleur d'appel (piège n° 5 : séduire, pas harceler).
+	# Aucune des deux lignes n'apparaît si le Pass ne change rien à cette mission.
+	if has_boost:
+		var hint := _label(
+			(tr("MISSIONS_REWARD_BOOSTED") % [reward, reward_pass]) if _pass_active
+			else (tr("MISSIONS_REWARD_WITH_PASS") % reward_pass),
+			11, GOLD if _pass_active else MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+		hint.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+		hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		hb.add_child(hint)
 
 	# Bouton d'action : RÉCLAMER (or, actif) / RÉCLAMÉE ✓ (désactivé) / EN COURS (désactivé muet).
 	var btn := Button.new()
@@ -265,9 +293,19 @@ func _on_mission_claimed(data: Dictionary) -> void:
 		return
 	AudioManager.play_sfx("confirm")
 	var paid := int(data.get("reward_paid", 0))
+	var base := int(data.get("reward_base", paid))
 	var msg := tr("MISSIONS_STATUS_CLAIMED").format({"n": paid})
+	# §7.7 — AU MOMENT DU CLAIM, l'avantage se produit : on montre « 100 ❯ 400 » à côté du crédit.
+	# C'est l'instant exact où l'information coûte le moins d'attention au joueur (il regarde déjà
+	# le chiffre), et c'est le seul endroit où le montant boosté est un FAIT et non une promesse.
+	# Le serveur fait foi des DEUX montants (`reward_base`, `reward_paid`) — aucun taux ici.
 	if bool(data.get("pass_bonus_applied", false)):
 		msg += "  " + tr("MISSIONS_PASS_BONUS")
+		if paid > base:
+			msg += "  " + (tr("MISSIONS_REWARD_BOOSTED") % [base, paid])
+	# L'état de Pass du lecteur se DÉDUIT du claim qu'il vient de faire : le prochain rendu des
+	# cartes affichera donc les montants boostés. Aucune requête de plus, aucune supposition.
+	_pass_active = bool(data.get("pass_bonus_applied", _pass_active))
 	_set_status(msg, GOLD)
 	# Source de vérité serveur : on RE-FETCHE la liste (progress/claimed/pastille à jour).
 	# §8.135 (LOT 0) — DETTE SOLDÉE : la jauge de Coins de la nav se rafraîchit désormais à cet

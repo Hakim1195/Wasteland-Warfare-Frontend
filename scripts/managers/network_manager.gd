@@ -123,6 +123,10 @@ signal trench_status_updated(data: Dictionary)
 signal trench_left(left: bool, reason: String, refunded: int)
 signal trench_training_result(ok: bool, data: Dictionary)
 signal trench_leaderboard_loaded(data: Dictionary)
+# INSCRIPTION A UN EVENEMENT BONUS (chantier CORRECTIFS ECONOMIQUES) — droit d'entree paye UNE
+# FOIS par occurrence. Dict COMPLET propage (enrolled/already/reason/fee/balance) : l'ECRAN
+# choisit le message, la couche reseau ne decide jamais de ce qui s'affiche.
+signal event_signup_result(ok: bool, data: Dictionary)
 signal trench_init_received(data: Dictionary)
 signal trench_state_received(data: Dictionary)
 signal trench_result_received(data: Dictionary)
@@ -898,6 +902,20 @@ func _on_trench_leave(_result, response_code, _headers, body, http_node):
 	trench_left.emit(bool(data.get("left", false)) if response_code == 200 else false,
 		str(data.get("reason", "")), int(data.get("refunded", 0)))
 
+# INSCRIPTION A L'OCCURRENCE COURANTE D'UN EVENEMENT BONUS (chantier CORRECTIFS ECONOMIQUES).
+# ⚠️ L'ID D'EVENEMENT EST UN PARAMETRE, jamais une constante d'ecran : le prochain evenement bonus
+# reutilisera cet appel tel quel. Le serveur resout l'occurrence ACTIVE lui-meme — le client
+# n'envoie aucune fenetre, et ne peut donc pas s'inscrire a la mauvaise.
+func event_signup(event_id: String) -> void:
+	_send_api_request("/events/%s/signup" % event_id, HTTPClient.METHOD_POST, {}, _on_event_signup)
+
+func _on_event_signup(_result, response_code, _headers, body, http_node):
+	http_node.queue_free()
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		data = {}
+	event_signup_result.emit(response_code == 200, data)
+
 func trench_training_start() -> void:
 	_send_api_request("/trench/training", HTTPClient.METHOD_POST, {}, _on_trench_training)
 
@@ -1035,6 +1053,11 @@ func _store_events(data: Dictionary) -> void:
 		# purs, 0/0 quand l'entrée est gratuite. NORMALISÉ comme le reste — les vues n'ont jamais à
 		# distinguer `null`, absent et vide. Absent d'un serveur antérieur → {} → aucun prix affiché.
 		"event_queue_fee": _fee_block(data.get("event_queue_fee")),
+		# INSCRIPTION A L'EVENEMENT (chantier CORRECTIFS ECONOMIQUES) : le meme bloc de prix que
+		# ci-dessus, PLUS deux etats — `required` (« une etape S'INSCRIRE doit-elle apparaitre ? »)
+		# et `enrolled`. Absent d'un serveur anterieur → {} → aucune etape, exactement comme un
+		# frais eteint : « je ne sais pas » degrade vers « rien a faire », jamais vers un blocage.
+		"event_signup": _signup_block(data.get("event_signup")),
 	}
 	events_loaded.emit(events_config)
 
@@ -1045,10 +1068,30 @@ func _store_events(data: Dictionary) -> void:
 func _fee_block(raw) -> Dictionary:
 	if typeof(raw) != TYPE_DICTIONARY:
 		return {}
+	var fee := int(raw.get("fee", 0))
 	return {
-		"fee": int(raw.get("fee", 0)),
+		"fee": fee,
+		# PLEIN TARIF (chantier CORRECTIFS ÉCONOMIQUES) — ce que l'activité coûte SANS Pass. C'est
+		# le champ qui rend la remise LISIBLE : un détenteur voyait « 25 » sur un frais réglé à 50
+		# et rien, nulle part, ne pouvait le lui expliquer (le prix de base ne se déduit pas du
+		# prix remisé — l'arrondi au supérieur n'est pas inversible).
+		# ⚠️ REPLI SUR `fee` et non sur 0 quand le serveur est antérieur : « je ne connais pas le
+		# plein tarif » doit se lire « il n'y a pas de remise à montrer », jamais « c'est gratuit ».
+		"fee_base": int(raw.get("fee_base", fee)),
 		"fee_with_pass": int(raw.get("fee_with_pass", 0)),
 	}
+
+# Normalise le bloc d'inscription : le bloc de frais (piege JSON float §5) enrichi des deux etats.
+# ⚑ `required` par DEFAUT FALSE : un bloc absent, mal type, ou servi par un serveur anterieur ne
+# doit JAMAIS faire apparaitre une etape de peage — un faux blocage coute infiniment plus cher
+# qu'une inscription manquee (le serveur, lui, refusera proprement si elle etait vraiment due).
+func _signup_block(raw) -> Dictionary:
+	if typeof(raw) != TYPE_DICTIONARY:
+		return {}
+	var block := _fee_block(raw)
+	block["required"] = bool(raw.get("required", false))
+	block["enrolled"] = bool(raw.get("enrolled", false))
+	return block
 
 func squad_create(playlist: String) -> void:
 	_send_api_request("/squad/create", HTTPClient.METHOD_POST, {"playlist": playlist},

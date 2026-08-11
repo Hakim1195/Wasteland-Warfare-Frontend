@@ -330,6 +330,48 @@ static func attach_mark_glow(mark: TextureRect, mark_px: float, strength: float 
 
 
 # =========================================================
+# FRAIS D'INSCRIPTION — LA PHRASE QUI EXPLIQUE LE PRIX (chantier CORRECTIFS ÉCONOMIQUES)
+# =========================================================
+# UNE SEULE RÈGLE D'AFFICHAGE, ICI, pour les TROIS surfaces qui montrent un péage (recherche
+# Battle Royale, adhésion à une compagnie, entrée d'événement). Elles la dupliquaient chacune à sa
+# façon, et les trois se sont trompées de la même manière.
+#
+# 🩸 LE DÉFAUT QU'ELLE FERME. Chaque écran testait `fee_with_pass < fee` pour décider s'il devait
+# parler du Pass. Cette condition est FAUSSE pour un DÉTENTEUR : le serveur lui sert déjà son tarif
+# remisé, donc `fee == fee_with_pass` et l'écran se taisait. Résultat rapporté en jeu : « 50 réglé
+# au panel, 25 affiché » — un prix moitié moindre que l'annonce, sans un mot d'explication. Ce
+# n'était pas un bug de calcul (25 est exact) : c'était un bug de LISIBILITÉ, et il fallait le
+# `fee_base` du serveur pour le réparer.
+#
+# Renvoie `{ "text": String, "owned": bool }` — `text` vide = il n'y a RIEN à dire (ne rien
+# afficher). `owned` distingue les deux tons : l'avantage que le lecteur EXERCE (or, il en profite
+# maintenant) de l'argument de vente adressé à qui n'a pas le Pass (muet, on propose sans insister).
+# ⛔ Un frais à 0 ne dit JAMAIS rien : écrire la gratuité en prix la transforme en tarif.
+static func fee_pass_hint(fee: int, fee_base: int, fee_with_pass: int) -> Dictionary:
+	var mute := {"text": "", "owned": false}
+	if fee_base <= 0:
+		return mute                                     # activité gratuite : silence total.
+	if fee <= 0:
+		# Le lecteur est EXONÉRÉ alors qu'un prix existe : c'est l'avantage le plus fort du Pass,
+		# et sans cette ligne il était rigoureusement invisible (le prix disparaissait, point).
+		return {"text": _tr("FEE_OFFERED_PASS"), "owned": true}
+	if fee_base > fee:
+		return {"text": _tr("FEE_PASS_APPLIED") % fee_base, "owned": true}
+	# À partir d'ici le lecteur paie le plein tarif : on lui dit ce que le Pass changerait.
+	if fee_with_pass <= 0:
+		return {"text": _tr("FEE_FREE_WITH_PASS"), "owned": false}
+	if fee_with_pass < fee:
+		return {"text": _tr("FEE_HALF_WITH_PASS"), "owned": false}
+	return mute
+
+
+# Traduction depuis un contexte STATIQUE. ⛔ `tr()` est une méthode d'INSTANCE : dans une
+# `static func` elle ne résout pas (le piège exact du §8.104, war_feed / identités de factions).
+static func _tr(key: String) -> String:
+	return String(TranslationServer.translate(key))
+
+
+# =========================================================
 # SÉLECTEUR DE LANGUE (Feuille de route R4) — FR / EN / IT
 # =========================================================
 # Construit un sélecteur de langue autonome (HBox de 3 boutons angulaires), câblé

@@ -30,6 +30,9 @@ const EventsScene := preload("res://scenes/ui/events.tscn")
 const CompanyScene := preload("res://scenes/ui/company_screen.tscn")
 const ProfileScene := preload("res://scenes/ui/profile.tscn")
 const Report := preload("res://scripts/game/operation_report.gd")
+# Chantier CORRECTIFS ÉCONOMIQUES : les deux composants dont la mise en valeur du Pass se sert.
+const MissionsPanelScript := preload("res://scripts/ui/missions_panel.gd")
+const XpCoinsBarScript := preload("res://scripts/ui/xp_coins_bar.gd")
 
 const GOLD := Color(0.878431, 0.698039, 0.286275, 1)
 
@@ -291,6 +294,25 @@ func _test_squad_fees() -> void:
 	_check("playlist GRATUITE : AUCUN prix affiché — « %s »" % free_label,
 			free_label != "" and not free_label.contains("COINS"))
 
+	# 🩸 SÉLECTEUR BR SOUS PASS — la surface EXACTE du symptôme ② (« 50 réglé, 25 en jeu »).
+	#    Le serveur sert au détenteur son tarif (125) ET le plein tarif (250) ; le bouton doit
+	#    nommer les deux. Auparavant l'indice vivait en INFOBULLE et sa condition
+	#    (`fee_with_pass < fee`) était fausse pour un détenteur : le joueur lisait 125, point.
+	squad._on_playlists_loaded({
+		"squad_4v4": {"capacity": 8, "team_size": 4, "fee": 125, "fee_base": 250,
+					  "fee_with_pass": 125},
+	})
+	await get_tree().process_frame
+	var pass_labels := _texts(squad._create_playlist_row)
+	pass_labels.append_array(_texts(squad._playlist_row))
+	var pass_btn := ""
+	for t in pass_labels:
+		if t.contains("(8)"):
+			pass_btn = t
+	_check("le bouton du détenteur a été trouvé", pass_btn != "")
+	_check("détenteur : son tarif ET le plein tarif sont sur le BOUTON — « %s »" % pass_btn,
+			pass_btn.contains("125") and pass_btn.contains("250"))
+
 	squad._on_squad_state(true, {"squad": false, "reason": "insufficient_coins",
 								 "who": "zoran", "fee": 250})
 	await get_tree().process_frame
@@ -317,13 +339,31 @@ func _test_events_fee() -> void:
 	events._refresh_trench_fee()
 	_check("entrée GRATUITE : la ligne de prix est MASQUÉE", not events._trench_fee_label.visible)
 
-	NetworkManager.events_config["event_queue_fee"] = {"fee": 120, "fee_with_pass": 0}
+	NetworkManager.events_config["event_queue_fee"] = {"fee": 120, "fee_base": 120,
+													  "fee_with_pass": 0}
 	events._refresh_trench_fee()
 	var line := str(events._trench_fee_label.text).to_upper()
 	_check("entrée PAYANTE : « %s »" % line,
 			events._trench_fee_label.visible and line.contains("120"))
 	_check("entrée payante : « gratuit avec le Pass » annoncé", line.contains(
 			String(TranslationServer.translate("FEE_FREE_WITH_PASS")).to_upper()))
+	# 🩸 DÉTENTEUR DE PASS SUR UN ÉVÉNEMENT PAYANT (chantier CORRECTIFS ÉCONOMIQUES) — le serveur
+	#    lui sert `fee = 0` parce que la politique de l'activité est `free`. L'écran sortait alors
+	#    sur `if fee <= 0` et MASQUAIT la ligne : « entrées d'événement GRATUITES », l'avantage écrit
+	#    noir sur blanc sur la carte du Pass, ne se voyait NULLE PART au moment où il s'exerçait.
+	NetworkManager.events_config["event_queue_fee"] = {"fee": 0, "fee_base": 120,
+													  "fee_with_pass": 0}
+	events._refresh_trench_fee()
+	var offered := str(events._trench_fee_label.text).to_upper()
+	_check("détenteur : « OFFERT · PASS » au lieu d'un silence — « %s »" % offered,
+			events._trench_fee_label.visible and offered.contains(
+				String(TranslationServer.translate("FEE_OFFERED_PASS")).to_upper()))
+	_check("détenteur : aucun prix fantôme n'est écrit à côté", not offered.contains("120"))
+	# ⛔ Non-régression de la garde d'origine : frais RÉELLEMENT éteint → toujours masqué.
+	NetworkManager.events_config["event_queue_fee"] = {"fee": 0, "fee_base": 0, "fee_with_pass": 0}
+	events._refresh_trench_fee()
+	_check("⛔ frais éteint (base 0) : la ligne reste MASQUÉE",
+			not events._trench_fee_label.visible)
 
 	events._on_trench_queue_result(true, {"queued": false, "reason": "insufficient_coins",
 										  "fee": 120, "balance": 10})
@@ -338,6 +378,57 @@ func _test_events_fee() -> void:
 	events._on_trench_left(true, "", 0)
 	_check("annulation sans frais : aucun message inventé",
 			str(events._trench_status_label.text).strip_edges() == "")
+	# --- INSCRIPTION A L'EVENEMENT (chantier CORRECTIFS ECONOMIQUES, LOT 6) --------------------
+	# ⚠️ EPROUVE ICI, sur l'ecran DEJA MONTE, et non dans un second montage : instancier une
+	# deuxieme fois `events.tscn` dans la meme execution laisse derriere lui des CanvasItem et des
+	# fontes que Godot signale en « leaked at exit ». Des lignes ERROR sans defaut derriere elles
+	# sont pires qu'un test absent : elles apprennent a ignorer les lignes ERROR.
+	# ⚑ FRAIS ÉTEINT (l'état DÉPLOYÉ) : aucune étape ne doit apparaître. C'est le piège n° 8 —
+	#   « frais 0 = friction 0 » — et c'est ce qui rend le déploiement invisible.
+	NetworkManager.events_config["event_signup"] = {"fee": 0, "fee_base": 0, "fee_with_pass": 0,
+													"required": false, "enrolled": false}
+	events._refresh_trench_signup()
+	_check("⚑ frais d'inscription éteint : AUCUN bouton S'INSCRIRE",
+			not events._trench_signup_btn.visible)
+	# Frais allumé, non inscrit → l'étape apparaît, avec son prix, AVANT le bouton ENTRER.
+	NetworkManager.events_config["event_signup"] = {"fee": 100, "fee_base": 100, "fee_with_pass": 0,
+													"required": true, "enrolled": false}
+	events._refresh_trench_signup()
+	_check("frais allumé + non inscrit : le bouton apparaît avec son prix — « %s »"
+			% events._trench_signup_btn.text,
+			events._trench_signup_btn.visible and events._trench_signup_btn.text.contains("100"))
+	# Une fois inscrit : l'étape disparaît (elle ne se repose pas à chaque visite).
+	NetworkManager.events_config["event_signup"] = {"fee": 100, "fee_base": 100, "fee_with_pass": 0,
+													"required": false, "enrolled": true}
+	events._refresh_trench_signup()
+	_check("inscrit : l'étape disparaît", not events._trench_signup_btn.visible)
+	# ⚑ DÉTENTEUR DE PASS : exonéré ⇒ AUCUNE étape, et l'avantage se dit sur la ligne de prix.
+	NetworkManager.events_config["event_signup"] = {"fee": 0, "fee_base": 100, "fee_with_pass": 0,
+													"required": false, "enrolled": false}
+	events._refresh_trench_signup()
+	_check("⚑ sous Pass : aucune étape (l'inscription est OFFERTE, pas « gratuite à cliquer »)",
+			not events._trench_signup_btn.visible)
+	# Le refus d'inscription montre le geste à faire au lieu d'être un cul-de-sac : message
+	# VISIBLE, en OR (une information, pas une panne).
+	# ⚠️ ON ÉPROUVE LA VOIE `insufficient_coins` ET NON `signup_required` — DÉLIBÉRÉMENT. Les deux
+	# passent par le même rendu de statut, mais la seconde déclenche un `fetch_events()` : un VRAI
+	# appel réseau, dans une suite dont l'en-tête promet « AUCUN RÉSEAU ATTENDU ». Sans serveur,
+	# l'HTTPRequest ne reçoit jamais sa réponse, n'est jamais libéré, et Godot sort en déversant des
+	# « leaked at exit » — des lignes ERROR qui n'annoncent aucun défaut mais qui apprennent à
+	# ignorer les lignes ERROR. Le rafraîchissement, lui, est couvert plus haut par l'état servi.
+	events._on_event_signup_result(true, {"enrolled": false, "reason": "insufficient_coins",
+										  "fee": 100, "balance": 10})
+	var st2 := str(events._trench_status_label.text).to_upper()
+	_check("refus d'inscription : message VISIBLE — « %s »" % st2, st.strip_edges() != "")
+	_check("… et le message est en OR (une information, pas une panne)",
+			events._trench_status_label.get_theme_color("font_color") == events.GOLD)
+	# La clé du gate d'entrée EXISTE et est traduite : c'est elle que le joueur lira quand le
+	# serveur refusera la mise en file faute d'inscription.
+	var gate2 := String(TranslationServer.translate("EVENT_SIGNUP_REQUIRED"))
+	_check("la clé du gate d'entrée est traduite — « %s »" % gate2,
+			gate2 != "" and gate2 != "EVENT_SIGNUP_REQUIRED")
+
+
 	# ⚠️ `_ensure_trench_panel()` FABRIQUE le panneau mais ne le monte pas : c'est `_render_event_tab`
 	# qui l'ajoute à la page quand la fenêtre de LA TRANCHÉE est ouverte. Ici elle ne l'est pas, donc
 	# le panneau reste ORPHELIN et l'écran ne l'emporte pas en mourant — d'où une volée de « leaked
@@ -346,6 +437,7 @@ func _test_events_fee() -> void:
 			and events._trench_panel.get_parent() == null:
 		events._trench_panel.free()
 		events._trench_panel = null
+
 	_unmount(events)
 
 
@@ -372,15 +464,44 @@ func _test_company_fee() -> void:
 			line.contains("500") and line.contains("320"))
 	_check("prix : la remise du Pass est annoncée", line.contains(
 			String(TranslationServer.translate("FEE_HALF_WITH_PASS")).to_upper()))
-	# 3. Détenteur de Pass : le serveur a DÉJÀ remisé les deux champs → on n'annonce pas une remise
-	#    qu'il a déjà. C'est le contrôle qui attrape un client qui recalculerait le tarif lui-même.
+	# 3. 🩸 DÉTENTEUR DE PASS — LE CONTRÔLE QUI FIGEAIT LE DÉFAUT (chantier CORRECTIFS ÉCONOMIQUES).
+	#    Il EXIGEAIT auparavant « AUCUNE mention de remise » pour un détenteur. Ce vert-là est
+	#    exactement ce que Hakim a rapporté en jeu : « 50 réglé au panel, 25 affiché », sans un mot
+	#    d'explication. L'INTENTION d'origine reste valable et n'est PAS abandonnée — le client ne
+	#    doit jamais recalculer le tarif — mais elle se vérifie autrement : le prix DÛ vient du
+	#    serveur (250) ET le prix PLEIN vient du serveur (500). Le client n'en dérive aucun.
 	company._on_company_state(true, {"company": null, "rules": {}, "reason": "no_company",
-									 "join_fee": 250, "join_fee_with_pass": 250})
+									 "join_fee": 250, "join_fee_base": 500,
+									 "join_fee_with_pass": 250})
 	await get_tree().process_frame
 	var pass_line: String = str(company._join_fee_line()).to_upper()
-	_check("détenteur de Pass : tarif remisé, AUCUNE mention de remise — « %s »" % pass_line,
-			pass_line.contains("250") and not pass_line.contains(
+	_check("détenteur : le tarif remisé EST affiché — « %s »" % pass_line, pass_line.contains("250"))
+	_check("détenteur : le PLEIN TARIF est nommé (l'écart cesse d'être inexpliqué)",
+			pass_line.contains("500"))
+	_check("détenteur : c'est le libellé « TARIF PASS », pas l'argument de vente",
+			pass_line.contains(String(TranslationServer.translate("FEE_PASS_APPLIED")
+					.replace(" %d", "")).to_upper())
+			and not pass_line.contains(
 				String(TranslationServer.translate("FEE_HALF_WITH_PASS")).to_upper()))
+	# 3 bis. EXONÉRATION TOTALE (politique `free` du registre : les événements, et une compagnie le
+	#        jour où l'admin la passerait en gratuite sous Pass). Le dû vaut 0 alors qu'un prix
+	#        EXISTE : l'ancienne garde `if _join_fee <= 0: return ""` éteignait la ligne entière —
+	#        l'avantage le plus fort du Pass était le seul à n'afficher rigoureusement RIEN.
+	company._on_company_state(true, {"company": null, "rules": {}, "reason": "no_company",
+									 "join_fee": 0, "join_fee_base": 500,
+									 "join_fee_with_pass": 0})
+	await get_tree().process_frame
+	var free_line: String = str(company._join_fee_line()).to_upper()
+	_check("détenteur EXONÉRÉ : l'avantage s'affiche au lieu de disparaître — « %s »" % free_line,
+			free_line.contains(String(TranslationServer.translate("FEE_OFFERED_PASS")).to_upper()))
+	# 3 ter. ⛔ ET LE FRAIS RÉELLEMENT ÉTEINT SE TAIT TOUJOURS — c'est la garde à ne pas casser en
+	#        réparant la précédente : à base 0, aucun badge « OFFERT » ne doit apparaître (sinon on
+	#        annoncerait un avantage sur une activité qui n'a jamais rien coûté à personne).
+	company._on_company_state(true, {"company": null, "rules": {}, "reason": "no_company",
+									 "join_fee": 0, "join_fee_base": 0, "join_fee_with_pass": 0})
+	await get_tree().process_frame
+	_check("⛔ frais ÉTEINT (base 0) : toujours aucune ligne, aucun badge",
+			str(company._join_fee_line()) == "")
 	# 4. Le formulaire d'adhésion l'affiche pour de vrai.
 	company._on_company_state(true, {"company": null, "rules": {}, "reason": "no_company",
 									 "join_fee": 500, "join_fee_with_pass": 250})
@@ -474,6 +595,83 @@ func _test_report() -> void:
 		Report.hero_xp_breakdown(25, true, 4, 1, 55, 150, 0, -1))
 	# ⛔ Le point le plus important du lot : SANS le champ, on n'invente AUCUN multiplicateur.
 	_check("sans le champ serveur : rien n'est inventé (%d)" % legacy, legacy == base)
+
+
+# =========================================================
+# 10. MISE EN VALEUR DU PASS & INSCRIPTION (chantier CORRECTIFS ÉCONOMIQUES)
+# =========================================================
+func _test_pass_emphasis() -> void:
+	print("
+  --- 10. MISE EN VALEUR DU PASS : chiffres corrigés, avantage visible ---")
+
+	# --- 10.a. Le bandeau de fin de partie ne ment plus -----------------------------------------
+	# 🩸 Il affichait « ★ +25 % XP — PASS SPÉCIAL ACTIF », le taux de l'ANCIEN Premium, alors que le
+	# serveur crédite +50 %. C'est LE symptôme ① tel que Hakim l'a vu à l'écran. Le libellé porte
+	# désormais un %d — le SURPLUS RÉEL — et plus aucun pourcentage.
+	var banner := String(TranslationServer.translate("REPORT_PASS_BONUS"))
+	_check("bandeau de fin : plus AUCUN taux en dur — « %s »" % banner,
+			not banner.contains("25") and not banner.contains("%%"))
+	_check("bandeau de fin : il attend le surplus RÉEL (un %d)", banner.contains("%d"))
+	for k in ["REPORT_XP_PASS", "MISSIONS_PASS_BONUS", "MISSIONS_REWARD_TOOLTIP"]:
+		var v := String(TranslationServer.translate(k))
+		# ⚠️ On cherche les DEUX écritures du taux de missions (« 1.5 » et « 1,5 ») : la virgule
+		# décimale est la forme française, et c'est celle qui aurait survécu à un grep anglophone.
+		_check("%s ne porte plus de taux périmé — « %s »" % [k, v],
+				not v.contains("1.5") and not v.contains("1,5") and not v.contains("25 %")
+				and not v.contains("25%"))
+
+	# --- 10.b. Le ×4 des missions se voit, et vient du SERVEUR ----------------------------------
+	var panel = MissionsPanelScript.new()
+	add_child(panel)
+	await get_tree().process_frame
+	panel._on_missions_loaded({"daily": [{"mission_id": "d1", "name_key": "X", "desc_key": "Y",
+			"progress": 1, "target": 1, "reward_coins": 100, "reward_coins_pass": 400,
+			"completed": true, "claimed": false}], "weekly": [], "claimable_count": 1})
+	await get_tree().process_frame
+	var texts := _texts(panel)
+	var joined := "  ".join(texts)
+	_check("non-détenteur : la récompense de BASE est affichée — « %s »" % joined,
+			joined.contains("100"))
+	_check("non-détenteur : « AVEC LE PASS : 400 » est mentionné, sobrement",
+			joined.contains("400"))
+	# ⛔ ET SURTOUT : aucun taux n'est calculé côté client. Les deux montants viennent du payload ;
+	#    un panneau qui ne reçoit PAS `reward_coins_pass` ne doit rien inventer.
+	panel._on_missions_loaded({"daily": [{"mission_id": "d2", "name_key": "X", "desc_key": "Y",
+			"progress": 1, "target": 1, "reward_coins": 100,
+			"completed": true, "claimed": false}], "weekly": [], "claimable_count": 1})
+	await get_tree().process_frame
+	var plain := "  ".join(_texts(panel))
+	_check("sans le champ serveur : AUCUN montant boosté n'est inventé — « %s »" % plain,
+			not plain.contains("400"))
+	await get_tree().process_frame
+	_unmount(panel)   # ⚠️ JAMAIS queue_free() ici : une liberation DIFFEREE juste avant quit()
+	                  # n'est pas traitee et Godot deverse une pluie de « leaked » (cf. _unmount).
+
+	# --- 10.d. `reduced_motion` : chaque effet dégrade en COULEUR SEULE -------------------------
+	# La lueur dorée de la jauge (empruntée par la mise en valeur du Pass, §7.4) contenait un
+	# REBOND d'icône — du mouvement. Sous `reduced_motion`, la couleur reste, l'échelle ne bouge pas.
+	var was: bool = bool(SettingsManager.get_comfort("reduced_motion"))
+	var bar = XpCoinsBarScript.new()
+	add_child(bar)
+	await get_tree().process_frame
+	SettingsManager.set_comfort("reduced_motion", true)
+	bar.flash_coins()
+	await get_tree().process_frame
+	_check("⚑ reduced_motion : l'icône de Coins ne CHANGE PAS d'échelle",
+			bar._coin_icon == null or bar._coin_icon.scale.is_equal_approx(Vector2.ONE))
+	_check("⚑ reduced_motion : la LUEUR, elle, reste (l'information n'est pas perdue)",
+			bar._coins_label == null or bar._coins_label.modulate != Color.WHITE)
+	SettingsManager.set_comfort("reduced_motion", was)
+	await get_tree().process_frame
+	_unmount(bar)
+
+	# --- 10.e. Le rappel aux non-détenteurs est livré ÉTEINT ------------------------------------
+	# ⚙ Décision du chantier : dans le doute sur le ton, on livre OFF et Hakim décide. Le mécanisme
+	#   est câblé et testable ; le défaut, lui, ne harcèle personne.
+	_check("⚑ « RAPPELS DU PASS » est un réglage de confort EXISTANT",
+			SettingsManager.COMFORT_DEFAULTS.has("pass_hints"))
+	_check("⚑ … et son défaut est OFF (un joueur agacé désinstalle plus vite qu'il n'achète)",
+			bool(SettingsManager.COMFORT_DEFAULTS["pass_hints"]) == false)
 
 
 # =========================================================
@@ -606,6 +804,7 @@ func _ready() -> void:
 	await _test_events_fee()
 	await _test_company_fee()
 	await _test_profile_pass()
+	await _test_pass_emphasis()
 	_test_report()
 	await _shoot_all()
 	print("\n" + "=".repeat(78))

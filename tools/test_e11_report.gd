@@ -159,7 +159,12 @@ func _ready() -> void:
 
 	# 5) Détail du barème (E-visuel) : helpers PURS réconciliés + rendu dans les onglets.
 	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, false)) == 205)
-	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, true)) == 256)
+	# 🩸 SECOND endroit qui gelait `floor(1.25 × 205) = 256` — le multiplicateur de l'ANCIEN Premium
+	# recalculé par le client (chantier CORRECTIFS ÉCONOMIQUES). Le repli local a été supprimé : sans
+	# champ serveur le client n'invente plus rien, et avec le champ il rend ce que le serveur a
+	# crédité. Deux suites figeaient le même chiffre faux — d'où deux verts qui ne protégeaient rien.
+	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, true)) == 205)
+	assert(Report._breakdown_total(Report.player_xp_breakdown(0, 3, 10, 1, true, 103)) == 308)
 	assert(Report._breakdown_total(Report.hero_xp_breakdown(25, true, 4, 1, 55)) == 308)
 	var report_detail = ReportScene.instantiate()
 	add_child(report_detail)

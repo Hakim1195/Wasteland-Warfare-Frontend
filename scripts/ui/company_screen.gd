@@ -98,8 +98,14 @@ var _seen_sent: bool = false        # accusé de lecture des activités : UNE fo
 # recevoir, et le prix affiché est celui qui sera débité.
 # ⚠️ Le tarif est DÉJÀ résolu pour le lecteur : un détenteur de Pass reçoit 250/250, pas 500/250 —
 # le client n'applique aucune remise, il affiche.
+# ⚠️ ET C'EST EXACTEMENT POURQUOI `_join_fee_base` EXISTE (chantier CORRECTIFS ÉCONOMIQUES) : un
+# détenteur recevant 250/250 n'avait, dans tout le payload, AUCUNE trace du prix plein. L'écran ne
+# pouvait donc pas lui dire d'où venait la moitié — et il ne le disait pas. Le plein tarif est
+# désormais servi à part ; le prix de base ne se déduit PAS du remisé (l'arrondi au supérieur n'est
+# pas inversible : 499 comme 500 donnent 250).
 # 0 = frais éteint → on n'affiche RIEN (cf. `_join_fee_line`).
 var _join_fee: int = 0
+var _join_fee_base: int = 0
 var _join_fee_with_pass: int = 0
 # Solde en Coins du joueur, capté au passage sur `AuthManager.profile_loaded` — le MÊME signal que
 # la nav partagée montée par cet écran consomme déjà pour sa jauge. AUCUNE requête de plus.
@@ -736,18 +742,28 @@ func _build_emblem_grid(selected: int, on_pick: Callable) -> GridContainer:
 # tarif, et c'est une exigence dure du chantier. Le solde n'est accolé que s'il est connu — un
 # « SOLDE 0 » inventé serait pire que pas de solde du tout.
 func _join_fee_line() -> String:
-	if _join_fee <= 0:
+	# 🩸 LA GARDE PORTE SUR LE PLEIN TARIF, PAS SUR LE DÛ (chantier CORRECTIFS ÉCONOMIQUES). Sortir
+	# sur `_join_fee <= 0` faisait disparaître la ligne entière pour un détenteur totalement
+	# exonéré — l'avantage le plus fort du Pass était le seul à ne rien afficher du tout.
+	if _join_fee_base <= 0:
 		return ""
+	if _join_fee <= 0:
+		# Exonéré : pas de prix à annoncer, mais un avantage à montrer.
+		return String(WarzoneUI.fee_pass_hint(_join_fee, _join_fee_base,
+			_join_fee_with_pass).get("text", ""))
 	var line := tr("FEE_LABEL") % _join_fee
 	# ⚠️ `PROFILE_FIN_BALANCE_AFTER_FMT` (« SOLDE %s ») et NON `SHOP_CREDITS` (« CRÉDITS ») : les deux
 	# désignent le même porte-monnaie, mais accoler « CRÉDITS » à « COINS » sur UNE MÊME LIGNE donne
 	# deux noms à une seule monnaie — défaut vu en capture, « 500 COINS · CREDITI 320 ».
 	if _coins >= 0:
 		line += "  ·  " + tr("PROFILE_FIN_BALANCE_AFTER_FMT") % str(_coins)
-	# Le joueur paie plein tarif alors qu'un détenteur de Pass paierait moitié : on le dit, une fois.
-	# Chez un détenteur, le serveur a déjà remisé les DEUX champs — ils sont égaux, et on se tait.
-	if _join_fee_with_pass < _join_fee:
-		line += "  ·  " + tr("FEE_HALF_WITH_PASS")
+	# La phrase qui explique le prix — règle UNIQUE, partagée avec le sélecteur BR et l'écran
+	# d'événements (`WarzoneUI.fee_pass_hint`). L'ancienne condition locale (`with_pass < fee`)
+	# était MUETTE pour un détenteur, à qui le serveur sert déjà le tarif remisé : il lisait 250
+	# sur un frais réglé à 500 sans qu'aucune surface ne le lui explique.
+	var hint: Dictionary = WarzoneUI.fee_pass_hint(_join_fee, _join_fee_base, _join_fee_with_pass)
+	if String(hint.get("text", "")) != "":
+		line += "  ·  " + String(hint["text"])
 	return line
 
 
@@ -835,6 +851,9 @@ func _on_me_loaded(data: Dictionary) -> void:
 func _capture_join_fee(data: Dictionary) -> void:
 	if data.has("join_fee"):
 		_join_fee = int(data.get("join_fee", 0))
+		# Repli sur `join_fee` (serveur antérieur au champ) et non sur 0 : « plein tarif inconnu »
+		# doit se lire « aucune remise à montrer », jamais « adhésion gratuite ».
+		_join_fee_base = int(data.get("join_fee_base", _join_fee))
 	if data.has("join_fee_with_pass"):
 		_join_fee_with_pass = int(data.get("join_fee_with_pass", 0))
 

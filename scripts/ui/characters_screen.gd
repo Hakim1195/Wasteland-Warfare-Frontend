@@ -78,11 +78,19 @@ const SKINS_DIR := "res://resources/skins/"
 # volontairement NON traduit (« PLUS », « PREMIUM », « INFINITY » = noms commerciaux invariants,
 # même règle que les noms propres de personnages, §1.8).
 # « SANS PASS » est en revanche une vraie phrase d'interface → clé i18n (CHAR_EVO_NO_PASS).
+# 🩸 DÉFAUT LATENT CORRIGÉ (chantier CORRECTIFS ÉCONOMIQUES). Cette table listait les TROIS
+# anciens paliers et AUCUN « season ». Depuis le collapse 3 → 1 (§8.147), le serveur ne sert plus
+# que la clé `season` : le filtre `potential.has(key)` ne retenait donc que « base », la garde
+# `cols.size() <= 1` se déclenchait, et **tout le comparatif disparaissait de l'écran** — sans
+# erreur, sans log, sans que personne le remarque. Un tableau qui ne s'affiche plus ne se plaint
+# jamais. Les trois entrées legacy sont CONSERVÉES (un serveur qui les servirait encore les rendrait
+# correctement) mais elles ne décident plus de rien : c'est `season` qui porte l'affichage.
 const PASS_COLUMNS := [
 	{"key": "base", "label": "", "i18n": "CHAR_EVO_NO_PASS", "tier": ""},
 	{"key": "plus", "label": "PLUS", "i18n": "", "tier": "plus"},
 	{"key": "premium", "label": "PREMIUM", "i18n": "", "tier": "premium"},
 	{"key": "infinity", "label": "INFINITY", "i18n": "", "tier": "infinity"},
+	{"key": "season", "label": "", "i18n": "CHAR_EVO_WITH_PASS", "tier": "season"},
 ]
 
 # --- Factions data-driven (id -> ressource .tres), garde-fous de profile.gd / faction_selection.gd ---

@@ -5704,3 +5704,99 @@ Captures relues — **NOUVEAU** `tools/shot_zone_lethal.tscn` (plateau zone/tél
 toast, **onglet REGISTRE OUVERT** : sans ce 3ᵉ cliché la capture ne prouvait que le kill feed, le
 panneau INFO s'ouvrant sur OBJECTIFS — l'« écran muet » du RETEX §8.144) et **NOUVEAU**
 `tools/shot_manual_zone.tscn` (Manuel section ZONE en FR, EN et IT).
+
+---
+
+## 🩹 §8.148 — CORRECTIFS ÉCONOMIQUES (volet CLIENT) : le Pass dit vrai, puis se voit
+
+> **Le client était le principal MENTEUR.** Trois des cinq foyers du défaut « bonus de fin de partie
+> comme l'ancien Pass » vivaient ici : un multiplicateur recalculé en GDScript, et deux familles de
+> libellés i18n figées au barème de l'ancien Premium. Conséquence : **la Partie A n'est pas
+> déployable en serveur seul** — le bandeau « ★ +25 % XP » que Hakim a vu est un `.csv`.
+
+### 1. ⛔ AUCUN MULTIPLICATEUR NE VIT PLUS CÔTÉ CLIENT
+
+`operation_report.player_xp_breakdown` portait un repli local `floor(1.25 × total)` quand le champ
+serveur manquait. **Supprimé**, pas corrigé à 1.50 : il ne servait qu'à parler à un serveur
+antérieur — or le gate de version WS interdit à ce client de s'y connecter. Il ne protégeait rien
+et fabriquait un chiffre faux. On s'aligne exactement sur `hero_xp_breakdown`, qui n'a jamais eu de
+repli : **champ absent → aucune ligne**, et l'écart tombe visiblement dans « Ajustement serveur »
+au lieu d'être masqué par une invention.
+
+⚠️ **Deux suites figeaient ce 1.25** (`tools/test_e11_report.gd` et `operation_report._self_check`).
+Elles exigeaient que le client sache recalculer un barème qu'il n'a pas le droit de connaître : un
+rééquilibrage du Pass ne les aurait jamais fait rougir. Remplacées par leur contraire — *sans champ
+serveur, le client n'invente RIEN*.
+
+**i18n corrigés** (5 clés) : `REPORT_PASS_BONUS` (« +25 % XP » → **`★ +%d XP`**, le surplus RÉEL),
+`REPORT_XP_PASS`, `MISSIONS_PASS_BONUS` et `MISSIONS_REWARD_TOOLTIP` (« ×1.5 » retiré),
+`PASS_BENEFIT_HERO_COINS` (le « au lieu de 1-5 » devient `%d-%d`, servi par `base_value`).
+**Un gain mesuré vaut mieux qu'un taux** : « +103 XP » ne se périme pas, « +50 % » si.
+
+### 2. UNE règle d'affichage des frais, partagée — `WarzoneUI.fee_pass_hint()`
+
+Les trois écrans à péage (`squad_screen`, `company_screen`, `events_screen`) dupliquaient chacun sa
+condition, et **les trois se trompaient de la même façon** : `if fee_with_pass < fee`, faux pour un
+détenteur (le serveur lui sert déjà son tarif). Résultat : 25 affiché sur un frais réglé à 50, sans
+un mot. Pire, la garde de sortie portait sur `fee <= 0` — donc sur un événement où le Pass exonère
+TOTALEMENT, la ligne **disparaissait entièrement** : l'avantage le plus fort du produit était le
+seul à n'afficher rigoureusement rien.
+
+`fee_pass_hint(fee, fee_base, fee_with_pass)` rend `{text, owned}`. `owned` distingue les deux
+tons : l'avantage **exercé** (or, sur le bouton — c'est un gain présent) et l'argument de vente
+(muet, en infobulle — on propose sans encombrer). ⛔ Un frais à 0 ne dit **jamais** rien.
+⚠️ Fonction `static` → `TranslationServer.translate`, **jamais `tr()`** (piège §8.104).
+
+### 3. Mise en valeur du Pass — EMPRUNTS, jamais un système neuf
+
+| Surface | Fichier | Effet |
+|---|---|---|
+| Fin de partie | `operation_report.gd` | bandeau or `★ +N XP` **+ `★ +N COINS`** (surplus paliers + niveaux de héros, servis par le serveur) |
+| Panneau missions | `missions_panel.gd` | détenteur : `100 ❯ 400` en or ; non-détenteur : « AVEC LE PASS : 400 » en **muet** ; au claim, `base ❯ payé` |
+| Jauge du hub | `top_nav.gd` | `flash_coins()` sur un claim boosté — le drapeau `pass_bonus_applied` arrivait depuis toujours et **n'était pas lu** |
+| Frais | les 3 écrans | prix du lecteur **+ plein tarif nommé** (§2) |
+| Carte du Pass | `shop.gd` | liseré or sur la carte du Pass, **par ce qu'elle est** et non par comparaison de rangs |
+| Inscription | `events_screen.gd` | « S'INSCRIRE — N COINS » ; rien du tout à frais nul ou sous Pass |
+
+### 4. Trois DÉFAUTS LATENTS trouvés par la cartographie, pas par un symptôme
+
+1. **`characters_screen.PASS_COLUMNS` n'avait aucune entrée `season`.** Depuis le collapse 3 → 1,
+   le filtre ne retenait que « base », la garde `cols.size() <= 1` se déclenchait, et **tout le
+   comparatif des Pass avait disparu de l'écran** — sans erreur, sans log, sans que personne le
+   remarque. *Un tableau qui ne s'affiche plus ne se plaint jamais.*
+2. **`shop.gd` gardait `_pass_ranks` / `_max_pass_rank()`** — le couronnement de la carte « la plus
+   haute » parmi plusieurs. Avec une carte unique, la comparaison était vraie par construction :
+   du code mort qui **simulait** une décision. Retiré ; le liseré se pose en une ligne.
+3. **`xp_coins_bar._flash_coins()` ne respectait pas `reduced_motion`** : la lueur (couleur) est
+   conforme, mais le **rebond** de l'icône est du mouvement. Corrigé — et il fallait le faire avant
+   d'en faire le geste partagé de la mise en valeur du Pass (§3).
+
+### 5. ⚙ Le rappel aux non-détenteurs — livré **ÉTEINT**
+
+Réglage de confort `pass_hints` (**défaut `false`**), section CONFORT, avec sa ligne d'explication
+disant ce que le joueur **ne subira pas** (aucune fenêtre, aucun son). Rendu : un fantôme doré à
+45 % d'opacité sous le bloc d'XP du Post-Op, non animé, non cliquable.
+
+**Pourquoi OFF.** Le brief laissait le choix ; dans le doute on livre éteint. Un rappel commercial
+en fin de partie est la surface la plus rentable d'un free-to-play *et* la plus détestée. Livré ON,
+la décision aurait été prise **par défaut**, ce qui n'est pas une décision. Le mécanisme est câblé
+et testé : l'allumer est un clic, pas un redéploiement.
+
+### 6. Contre-épreuves — `tools/test_econ_client.gd` : **83 ✅ / 0 KO, 0 ERROR**
+
+Section 10 neuve : plus aucun taux périmé dans les 5 libellés · le ×4 des missions vient du serveur
+et **rien n'est inventé sans le champ** · les 4 états de l'étape d'inscription (éteint / dû /
+inscrit / exonéré) · `reduced_motion` → l'icône ne bouge plus, **la lueur reste** · `pass_hints`
+existe et vaut `false`.
+
+⚠️ **Deux pièges de harnais rencontrés, consignés** : (a) monter `events.tscn` une **seconde** fois
+dans la même exécution laisse des `CanvasItem` orphelins → « leaked at exit », des lignes ERROR
+sans défaut derrière elles, qui apprennent à ignorer les lignes ERROR ; les assertions ont été
+repliées sur l'écran déjà monté. (b) Le handler `signup_required` déclenche un **vrai**
+`fetch_events()` — proscrit par l'en-tête du fichier (« AUCUN RÉSEAU ATTENDU ») : on éprouve la
+voie `insufficient_coins`, qui passe par le même rendu de statut sans appel réseau.
+
+⚠️ **`tools/test_hub_celebrations.gd` écrit dans les persistances RÉELLES de la machine.** S'il est
+interrompu (timeout, assert), il laisse `ladder_division` sali et le **run suivant échoue au premier
+cas** pour une raison sans rapport avec le code. Vu, diagnostiqué, non corrigé (hors périmètre) —
+mais à savoir avant d'accuser un diff.

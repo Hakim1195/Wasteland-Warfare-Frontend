@@ -105,6 +105,7 @@ func _ready() -> void:
 	# LA TRANCHÉE (§8.136) : signaux de la file dédiée + classement d'événement. Connectés à l'écran
 	# (pas au panneau) : le panneau survit aux _render() mais l'écran reste l'unique abonné.
 	NetworkManager.trench_queue_result.connect(_on_trench_queue_result)
+	NetworkManager.event_signup_result.connect(_on_event_signup_result)
 	NetworkManager.trench_status_updated.connect(_on_trench_status)
 	NetworkManager.trench_left.connect(_on_trench_left)
 	NetworkManager.trench_training_result.connect(_on_trench_training_result)
@@ -306,6 +307,7 @@ func _render_event_tab(tab_id: String, type_id: String, actives: Array, upcoming
 			# donc être repeint ICI, à chaque rendu, et pas seulement à sa construction — un frais
 			# réglé à chaud côté serveur (TUNABLE §8.143) arrive par un simple `fetch_events`.
 			_refresh_trench_fee()
+			_refresh_trench_signup()
 			NetworkManager.fetch_trench_leaderboard()
 		elif _trench_panel != null and is_instance_valid(_trench_panel):
 			# Fenêtre refermée : le panneau meurt avec elle (la file serveur est déjà purgée).
@@ -593,6 +595,12 @@ const TrenchDuelScript := preload("res://scripts/game/trench_fp.gd")
 var _trench_panel: PanelContainer = null
 var _trench_status_label: Label = null
 var _trench_enter_btn: Button = null
+# INSCRIPTION A L'EVENEMENT (chantier CORRECTIFS ECONOMIQUES) — l'etape « S'INSCRIRE » n'existe
+# QUE si le serveur la demande (`event_signup.required`). ⚑ A frais nul, ou pour un detenteur du
+# Pass (exonere), ce bouton n'apparait JAMAIS : le joueur ne voit aucune etape, ne clique rien, et
+# ne sait meme pas que le mecanisme existe. « Frais 0 = friction 0 » n'est pas une optimisation,
+# c'est la condition pour que le deploiement soit invisible.
+var _trench_signup_btn: Button = null
 var _trench_cancel_btn: Button = null
 var _trench_training_btn: Button = null
 var _trench_progress_box: VBoxContainer = null
@@ -627,6 +635,10 @@ func _ensure_trench_panel() -> PanelContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	box.add_child(row)
+	# L'inscription se lit AVANT ENTRER — c'est l'ordre des gestes, et donc l'ordre a l'ecran.
+	_trench_signup_btn = _cta("", GOLD, _trench_signup)
+	_trench_signup_btn.visible = false
+	row.add_child(_trench_signup_btn)
 	_trench_enter_btn = _cta(_t("TRENCH_ENTER_CTA"), GOLD, _trench_join)
 	row.add_child(_trench_enter_btn)
 	_trench_cancel_btn = _cta(_t("TRENCH_CANCEL_SEARCH"), MUTED, _trench_cancel)
@@ -686,15 +698,24 @@ func _refresh_trench_fee() -> void:
 		return
 	var block: Dictionary = _dict(NetworkManager.events_config.get("event_queue_fee", {}))
 	var fee := int(block.get("fee", 0))
-	if fee <= 0:
+	var fee_base := int(block.get("fee_base", fee))
+	# 🩸 LA GARDE PORTE SUR LE PLEIN TARIF (chantier CORRECTIFS ÉCONOMIQUES). Sortir sur `fee <= 0`
+	# éteignait le label pour un détenteur de Pass — or l'événement est la surface où le Pass
+	# EXONÈRE TOTALEMENT : l'avantage contractuel le plus visible du produit était le seul à
+	# n'afficher strictement rien. Frais réellement éteint (base à 0) → silence, comme avant.
+	if fee_base <= 0:
 		_trench_fee_label.visible = false
 		_trench_fee_label.text = ""
 		return
-	var text := _t("FEE_LABEL") % fee
-	if int(block.get("fee_with_pass", fee)) <= 0:
-		text += "  ·  " + _t("FEE_FREE_WITH_PASS")
+	var hint: Dictionary = WarzoneUI.fee_pass_hint(fee, fee_base,
+		int(block.get("fee_with_pass", fee)))
+	var text := ""
+	if fee > 0:
+		text = _t("FEE_LABEL") % fee
+	if String(hint.get("text", "")) != "":
+		text += ("  ·  " if text != "" else "") + String(hint["text"])
 	_trench_fee_label.text = text
-	_trench_fee_label.visible = true
+	_trench_fee_label.visible = text != ""
 
 
 func _trench_join() -> void:
@@ -702,6 +723,60 @@ func _trench_join() -> void:
 		return
 	_trench_set_status(_t("COMMON_SYNCING"), MUTED)
 	NetworkManager.trench_queue_join()
+
+
+func _trench_signup() -> void:
+	if _trench_searching:
+		return
+	_trench_set_status(_t("COMMON_SYNCING"), MUTED)
+	# L'id vient du bloc serveur, jamais d'une constante d'ecran : le prochain evenement bonus
+	# reutilisera ce bouton sans une ligne de plus ici.
+	NetworkManager.event_signup(_trench_event_id())
+
+
+func _trench_event_id() -> String:
+	var active = NetworkManager.events_config.get("active", [])
+	if typeof(active) == TYPE_ARRAY:
+		for ev in active:
+			if typeof(ev) == TYPE_DICTIONARY and str(ev.get("type", "")) == "bonus":
+				return str(ev.get("id", ""))
+	return "trench_week"   # repli : le seul evenement bonus inscriptible a ce jour.
+
+
+# Peint l'etape d'inscription. TROIS etats, et le premier est de loin le plus frequent :
+#   • rien a faire (frais eteint, deja inscrit, ou detenteur du Pass exonere) → AUCUN bouton ;
+#   • inscription due → « S'INSCRIRE — N COINS », en or, AVANT le bouton ENTRER ;
+#   • detenteur avec un prix configure → l'entree est OFFERTE : on ne demande rien, mais la ligne
+#     de prix (juste dessous) le DIT (« OFFERT · PASS »), sinon l'avantage serait invisible.
+func _refresh_trench_signup() -> void:
+	if _trench_signup_btn == null or not is_instance_valid(_trench_signup_btn):
+		return
+	var block: Dictionary = _dict(NetworkManager.events_config.get("event_signup", {}))
+	var required := bool(block.get("required", false))
+	_trench_signup_btn.visible = required and not _trench_searching
+	if required:
+		_trench_signup_btn.text = _t("EVENT_SIGNUP_CTA") % int(block.get("fee", 0))
+	# Le bouton ENTRER reste VISIBLE et CLIQUABLE : le serveur refusera proprement
+	# (`signup_required`) et le joueur comprendra pourquoi. Le griser aurait fabrique un mur muet.
+
+
+func _on_event_signup_result(ok: bool, data: Dictionary) -> void:
+	if not is_inside_tree():
+		return
+	if ok and bool(data.get("enrolled", false)):
+		_trench_set_status(_t("EVENT_SIGNUP_DONE"), GOLD)
+		# L'etat d'inscription vit dans la config d'evenements : on la redemande pour que le
+		# bouton disparaisse et que la ligne de prix se mette a jour d'un seul coup.
+		NetworkManager.fetch_events()
+		return
+	var reason := str(data.get("reason", ""))
+	if reason == "insufficient_coins":
+		_trench_set_status(_t("FEE_INSUFFICIENT"), GOLD)
+	elif reason == "event_closed":
+		_trench_set_status(_t("TRENCH_EVENT_CLOSED"), MUTED)
+		NetworkManager.fetch_events()
+	else:
+		_trench_set_status(_t("NET_UNKNOWN_ERROR"), MUTED)
 
 
 func _trench_cancel() -> void:
@@ -756,6 +831,14 @@ func _on_trench_queue_result(ok: bool, data: Dictionary) -> void:
 	elif reason == "banned":
 		_trench_set_searching(false)
 		_trench_set_status(_t("SQUAD_ERR_BANNED"), MUTED)
+	elif reason == "signup_required":
+		# LE GATE D'INSCRIPTION : on n'entre pas dans les activites d'un evenement sans s'y etre
+		# inscrit. Message en OR (une information, pas une panne) et on rafraichit l'etat pour que
+		# le bouton « S'INSCRIRE » apparaisse dans la seconde — un refus qui ne montre pas le geste
+		# a faire est un cul-de-sac.
+		_trench_set_searching(false)
+		_trench_set_status(_t("EVENT_SIGNUP_REQUIRED"), GOLD)
+		NetworkManager.fetch_events()
 	elif reason == "insufficient_coins":
 		# FRAIS D'ENTRÉE impayable — information, pas panne : EN OR, et on rappelle que le mode
 		# CASUAL reste gratuit (aucun péage n'a jamais touché les modes cœur). On rafraîchit aussi
@@ -763,6 +846,7 @@ func _on_trench_queue_result(ok: bool, data: Dictionary) -> void:
 		_trench_set_searching(false)
 		_trench_set_status(_t("FEE_INSUFFICIENT"), GOLD)
 		_refresh_trench_fee()
+		_refresh_trench_signup()
 	else:
 		_trench_set_searching(false)
 		_trench_set_status(_t("NET_UNKNOWN_ERROR"), MUTED)

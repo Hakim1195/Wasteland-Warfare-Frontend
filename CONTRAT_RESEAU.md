@@ -3832,3 +3832,105 @@ Coins, frais, prix, `fee`, `fee_with_pass`, `join_fee`, `refunded`, `balance`, c
 **`int` PURS**, sans exception. Les multiplicateurs du registre sont des **flottants côté serveur**
 et ne franchissent JAMAIS le fil tels quels — `pass_tiers()` les convertit en pourcentages ENTIERS
 (1.50 → 50, 2.00 → 100, 4.00 → 300), forme qu'attendent aussi les libellés i18n en `%d`.
+
+---
+
+## 🩹 §8.148 — CORRECTIFS ÉCONOMIQUES : `fee_base`, `event_signup`, surplus du Pass (2026-08-11)
+
+> **Tout est ADDITIF (§1.5).** Aucun champ existant ne change de sens ni de nom — c'est ce qui
+> permet à un client déployé de continuer à fonctionner, et c'est délibéré : la tentation était de
+> faire porter le plein tarif à `fee` (que tous les clients affichent comme « ce que je vais
+> payer »), ce qui aurait cassé les trois surfaces à péage d'un coup.
+
+### 1. Blocs de frais — le champ `fee_base`
+
+`fees.fee_block()` rend désormais **trois** entiers, et la sémantique est la MÊME sur les quatre
+surfaces (recherche BR, file d'événement, adhésion à une compagnie, inscription à un événement) :
+
+| Champ | Sens |
+|---|---|
+| `fee` | ce que **CE lecteur** paie réellement (remise du Pass déjà appliquée) — *inchangé* |
+| `fee_base` | **NOUVEAU** — le PLEIN TARIF, celui réglé au panel, sans aucune remise |
+| `fee_with_pass` | ce que la même action coûterait AVEC un Pass — *inchangé* |
+
+Déclinaisons : `GET /squad/playlists` → `playlists[<id>].fee_base` et `event_queue_fee.fee_base` ;
+`/company/*` → `join_fee_base` (même préfixe que ses voisins).
+
+🩸 **Pourquoi le champ existe.** `ceil(n/2)` **n'est pas inversible** : 49 et 50 remisent tous deux
+à 25. Un client qui doublerait le prix remisé afficherait un plein tarif faux une fois sur deux.
+Sans `fee_base`, aucune surface ne pouvait expliquer « 50 réglé au panel, 25 en jeu ».
+
+**Règle d'affichage du client** (une seule, `WarzoneUI.fee_pass_hint`) : `fee_base <= 0` → rien ·
+`fee <= 0 < fee_base` → « OFFERT · PASS » · `fee_base > fee` → « TARIF PASS · AU LIEU DE N » ·
+sinon `fee_with_pass < fee` → l'argument de vente. ⛔ Un frais à 0 ne dit **jamais** rien.
+
+### 2. `POST /events/{event_id}/signup` — inscription à l'occurrence courante
+
+Zéro-4xx (§8.112) : **200** dans tous les cas nominaux. Idempotent.
+
+```jsonc
+{"enrolled": true,  "fee_paid": 100, "window_start_epoch": 1756000000}   // inscription faite
+{"enrolled": true,  "already": true, "window_start_epoch": 1756000000}   // déjà inscrit
+{"enrolled": false, "reason": "event_closed"}                            // aucune occurrence
+{"enrolled": false, "reason": "insufficient_coins", "fee": 100, "balance": 40}
+```
+
+⚠️ **Le client n'envoie AUCUNE fenêtre** : le serveur résout l'occurrence active lui-même
+(`events.active_events()`). Il est donc impossible de s'inscrire à la mauvaise occurrence, et
+l'identité de l'inscription ne dépend pas de l'horloge du poste du joueur.
+
+**Bloc d'état** joint à `GET /squad/playlists` (le hub qui dessine l'onglet BONUS) :
+
+```jsonc
+"event_signup": {"fee": 100, "fee_base": 100, "fee_with_pass": 0,
+                 "required": true, "enrolled": false}
+```
+
+`required` répond à la seule question du client : « dois-je afficher une étape ? ». Il vaut `false`
+à frais nul **et** pour un détenteur de Pass (exonéré) → aucune friction, aucune étape.
+
+**Nouveau refus de `POST /trench/queue`** — le gate d'entrée, entre `in_room` et la file :
+
+```jsonc
+{"queued": false, "reason": "signup_required", "fee": 100, "event_id": "trench_week"}
+```
+
+Ordre complet des refus : `event_closed` → `banned` → `closed` (maintenance) → `in_room` →
+**`signup_required`** → `insufficient_coins` (ticket de file).
+
+### 3. `game_over.match_rewards` — le surplus du Pass, en clair
+
+Trois champs additifs, présents sur **tous** les chemins de sortie (y compris bots et joueurs non
+persistés, à 0) — un champ additif qui manque sur un seul chemin oblige chaque lecteur à défendre
+les deux cas :
+
+| Champ | Sens |
+|---|---|
+| `coins_pass_bonus` | surplus de Coins de **PALIER** dû au Pass sur ce match (0 sans Pass) |
+| `hero_coins_pass_bonus` | surplus de Coins de **NIVEAU DE HÉROS** (idem) |
+| `pass_xp_bonus_pct` | barème du Pass sur l'XP de profil, en **% de bonus ENTIER** (50) |
+
+`pass_xp_bonus_pct` est servi **même sans Pass** : c'est lui qui permet au Rapport Post-Op
+d'afficher, pour un non-détenteur *et seulement s'il a laissé le réglage `pass_hints` allumé*, ce
+que le Pass lui aurait ajouté — **sans qu'aucun multiplicateur ne vive côté client**. Le client
+applique un taux SERVEUR à un montant SERVEUR ; c'est la seule façon d'écrire cet argument de vente
+sans rouvrir le trou que ce chantier vient de fermer.
+
+### 4. Missions & carte du Pass
+
+- `GET /missions` → chaque mission gagne **`reward_coins_pass`** = `floor(reward × mission_mult)`,
+  calculé par la MÊME expression que le claim. Servi à tout le monde : à un détenteur il dit ce
+  qu'il touchera, à un autre ce que le Pass ajouterait.
+- `POST /missions/claim` → gagne **`reward_base`**, pour animer « base → payé » au moment exact où
+  l'avantage se produit.
+- `GET /profile/pass` → l'avantage `hero_coins` (kind `range`) gagne **`base_value`** = `[1, 5]`,
+  la fourchette SANS Pass. Le libellé disait « X-Y au lieu de **1-5** » avec le « 1-5 » écrit en dur
+  dans les trois traductions : exact aujourd'hui, faux au premier rééquilibrage du barème de base.
+  C'était le **dernier** chiffre de gain codé côté client.
+
+### 5. ⚠️ Piège JSON float (§5) — inchangé et re-vérifié
+
+`fee_base`, `reward_coins_pass`, `reward_base`, `coins_pass_bonus`, `hero_coins_pass_bonus`,
+`pass_xp_bonus_pct`, `window_start_epoch`, `base_value` : **`int` PURS**, sans exception.
+`pass_xp_bonus_pct` est en particulier un **pourcentage entier** et non le multiplicateur flottant
+du registre — la conversion se fait côté serveur, comme pour `pass_tiers()`.

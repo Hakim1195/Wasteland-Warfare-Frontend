@@ -496,12 +496,24 @@ func _rebuild_playlist_buttons(row: HBoxContainer, editable: bool) -> void:
 		# leur gratuité en prix la transformerait en tarif.
 		var fee := int(spec.get("fee", 0))
 		var fee_with_pass := int(spec.get("fee_with_pass", 0))
+		var fee_base := int(spec.get("fee_base", fee))
 		if fee > 0:
 			btn.text += "  ·  " + tr("FEE_LABEL") % fee
-			# Le joueur paie plus cher qu'un détenteur de Pass : on le lui dit, sans encombrer le
-			# libellé (l'infobulle est le seul canal qui ne coûte pas un pixel de large).
-			if fee_with_pass < fee:
-				btn.tooltip_text = tr("FEE_HALF_WITH_PASS")
+		# 🩸 LA PHRASE QUI EXPLIQUE LE PRIX (chantier CORRECTIFS ÉCONOMIQUES). Règle UNIQUE dans
+		# `WarzoneUI.fee_pass_hint` — les trois surfaces de frais l'appellent, aucune ne la réécrit.
+		# Elle est calculée MÊME quand `fee == 0`, parce que c'est précisément le cas d'un détenteur
+		# exonéré : l'ancien code, imbriqué sous `if fee > 0`, se taisait exactement là où le Pass
+		# donnait le plus (le prix disparaissait, et l'avantage avec lui).
+		var hint: Dictionary = WarzoneUI.fee_pass_hint(fee, fee_base, fee_with_pass)
+		if String(hint.get("text", "")) != "":
+			# L'avantage EXERCÉ par le lecteur s'inscrit sur le bouton, en or : c'est un gain
+			# présent, pas une publicité. L'argument de vente, lui, reste en infobulle — proposer
+			# sans encombrer (piège n° 5 : séduire, jamais harceler).
+			if bool(hint.get("owned", false)):
+				btn.text += "  ·  " + String(hint["text"])
+				btn.add_theme_color_override("font_color", GOLD)
+			else:
+				btn.tooltip_text = String(hint["text"])
 		btn.add_theme_font_override("font", _font)
 		btn.add_theme_font_size_override("font_size", 14)
 		btn.custom_minimum_size = Vector2(200, 44)
