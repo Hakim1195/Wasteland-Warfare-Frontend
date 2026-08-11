@@ -3934,3 +3934,105 @@ sans rouvrir le trou que ce chantier vient de fermer.
 `pass_xp_bonus_pct`, `window_start_epoch`, `base_value` : **`int` PURS**, sans exception.
 `pass_xp_bonus_pct` est en particulier un **pourcentage entier** et non le multiplicateur flottant
 du registre — la conversion se fait côté serveur, comme pour `pass_tiers()`.
+
+---
+
+## ⚙️🤖 §8.149 — RÈGLES EN SOUFFRANCE, BOUCLIER ANTI-RADIATIONS, BOTS V2 (2026-08-11)
+
+> Règles & moteur : **§8.149 de [`ARCHITECTURE_ET_REGLES.md`](ARCHITECTURE_ET_REGLES.md)**.
+> Rendu client : **§8.149 de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md)**.
+>
+> **Tout est ADDITIF (§1.5)**, à une exception près, documentée en fin de section : le RETRAIT du
+> champ mort `PlayerState.immune_to_contamination`.
+
+### 1. `PlayerState` — deux champs pour la reprise de siège (LOT A)
+
+| Champ | Type | Défaut | Sens |
+|---|---|---|---|
+| `afk_forced_turns` | `int` | `0` | Tours de CE joueur terminés de force par la minuterie **alors qu'il n'avait rien fait**. **CUMULÉ sur la partie, jamais remis à zéro** (« même NON consécutifs »). Un tour où il a AGI mais laissé filer le chrono n'incrémente rien. |
+| `afk_bot_controlled` | `bool` | `false` | Le siège est joué par l'IA. Posé au 2ᵉ tour AFK (`router.AFK_BOT_TAKEOVER_TURNS`), **jamais relevé** (en v1 un joueur qui revient ne reprend pas la main). |
+
+⚠️⚠️ **« bot ⇔ id NÉGATIF » a CESSÉ D'ÊTRE VRAI.** Un siège d'id **positif** peut être joué par
+l'IA. Le prédicat unique est `bot_ai.is_ai_controlled(state, pid)` ; `bot_runner._has_active_bot_turn`,
+`engine._ai_plays` et `router._ai_seat` y délèguent tous les trois. Côté CLIENT, le préfixe
+« [IA] » doit donc tester `is_bot` **OU** `afk_bot_controlled`.
+⚠️ En revanche `is_bot` reste **FALSE** sur un siège repris, et c'est essentiel : ce joueur a un
+compte, une ligne `users`, un historique — donc une persistance de fin de partie, où sa pénalité
+atterrit. Toute décision de **PERSISTANCE** continue de se prendre sur le **signe de l'id**
+(`process_match_results` saute les `< 0`), jamais sur ce prédicat.
+
+### 2. `TerritoryState` — le bouclier anti-radiations (LOT B)
+
+| Champ | Type | Défaut | Sens |
+|---|---|---|---|
+| `radiation_shield_turns_left` | `int` | `0` | Immunité à la **ZONE**, achetée 1 PP par territoire. Décrémenté à chaque `_end_turn` (donc à chaque tour de n'importe qui), **exactement comme `shield_turns_left`**. |
+
+⚠️ **DISTINCT de `shield_turns_left`**, qui reste l'immunité aux **ATTAQUES** (Bastion d'Acier).
+Deux menaces, deux protections, deux prix. Les fusionner aurait donné au Bastion une immunité de
+zone que nul équilibrage n'a décidée.
+⚠️ Durée posée = `hero_abilities.shield_turns_for(state)` (= nombre de joueurs en lice) ⇒ **UN ROUND
+COMPLET** (décision Hakim 2026-08-11, et non « un seul tick »).
+
+### 3. `PlayerState` — troisième drapeau de capacité (LOT B)
+
+`ability_shield_used: bool = false`. Les **trois** capacités (RATIONNER, BOUCLIER, pouvoir de
+faction) sont **CUMULABLES le même tour** → trois drapeaux distincts, et non un compteur partagé.
+Rechargés ensemble dans le bloc de reset de `_end_turn`.
+
+### 4. Action WS `hero_ability` — nouvelle valeur d'`ability`
+
+```json
+{"action_type": "hero_ability", "payload": {"ability": "radiation_shield"}}
+```
+Aucune cible : `needs_target: false`. Le SERVEUR choisit les territoires — (a) ceux du télégraphe
+(`contamination_zone.next_territories`), (b) puis les garnisons les plus faibles, (c) puis un
+départage déterministe dérivé de l'état. Les territoires **déjà immunisés** sont EXCLUS (passif
+Culte, ou bouclier encore actif) : un joueur du **Culte de l'Isotope** n'a donc **aucune cible** et
+reçoit `invalid_target` — sans qu'aucun cas particulier ne soit codé pour lui nulle part.
+
+`describe(faction_id)` gagne une clé ADDITIVE `radiation_shield` à côté de `ration` et `power`.
+Refus possibles : les codes EXISTANTS (`wrong_phase`, `already_used`, `invalid_target`,
+`insufficient_pp`) — **aucun code neuf**, donc aucun client à mettre à jour pour les traduire.
+⚠️ `casual_only: false` ⇒ **AUTORISÉ EN CLASSÉE** (comme RATIONNER, contrairement aux 3 pouvoirs de
+faction pilotes).
+
+### 5. Évènements système structurés — deux codes NEUFS
+
+```json
+{"code": "zone_shielded", "territory_id": "<tid>", "player_id": 42, "turns": 4}
+{"code": "afk_bot_takeover", "player_id": 42}
+```
+
+`zone_shielded` est émis **DEUX FOIS dans la vie d'un bouclier** : une fois **à la pose** (un par
+territoire couvert, dans le lot de l'action `hero_ability`) et une fois **à CHAQUE tick évité**
+(dans le lot du tour concerné). Ce n'est pas un doublon : le premier dit « je me suis protégé », le
+second « ça vient de servir ». Une protection invisible n'existe pas — la leçon de §8.145.
+⚠️ Un territoire bouclé **n'attribue AUCUN kill** (`zone_kills_by_player` intact) et **ne touche
+AUCUN objectif** : 0 dégât = 0 statistique, exactement comme les protégés du Culte.
+⚠️ `zone_protected` (Culte) est **INCHANGÉ** et garde son propre code : les deux protections se
+racontent différemment parce qu'elles ne coûtent pas la même chose.
+
+`afk_bot_takeover` accompagne le `turn_timeout` qui l'a provoqué (chemin minuterie) ou son propre
+`action_result` (chemin déconnexion brutale).
+
+### 6. `match_stats` — clé ADDITIVE `afk_forfeit`
+
+`GameEngine.build_match_stats` ajoute `"afk_forfeit": bool` par joueur. C'est le canal — le MÊME que
+`team_id` — par lequel un fait d'ÉTAT atteint `process_match_results`, qui ne connaît pas la
+`GameState`. Un `match_stats` d'AVANT le chantier se lit « personne n'a abandonné » : tous les
+appelants historiques et leurs suites restent valides sans une ligne de changement.
+
+**Effet** : le rang retenu au RELEVÉ de ce joueur est forcé au **dernier** (`len(ranking) - 1`).
+⚠️⚠️ C'est une **SURCHARGE de SA ligne**, PAS une réécriture du classement : `ranking` et les rangs
+des autres joueurs sont INTOUCHÉS, personne n'est poussé. Il peut donc y avoir deux « derniers » —
+le vrai dernier, et le partant. Ce n'est pas un podium, c'est un relevé individuel.
+
+### 7. ⛔ LE SEUL RETRAIT : `PlayerState.immune_to_contamination`
+
+Champ **SUPPRIMÉ**. C'était un modificateur DÉCLARÉ et JAMAIS CÂBLÉ : lu par
+`_apply_contamination_damage`, remis à `False` par `_end_turn`, et **posé à `True` par aucun code du
+dépôt** (inventaire AST, §8.145 §5.3). Le supprimer ne change donc **aucun comportement observable**.
+
+**Rétro-compat Redis** : un état sérialisé qui porte encore le champ se redésérialise sans erreur
+(clé inconnue ignorée) — contre-épreuve dans `test_zone_shield.py` [5]. Aucune action humaine, aucune
+migration.

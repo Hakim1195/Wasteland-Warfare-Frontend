@@ -39,6 +39,12 @@ const FORECAST_COLOR := Color(1.0, 0.75, 0.1)
 # du télégraphe (les trois peuvent cohabiter sur un même badge).
 const SHIELD_COLOR := Color("36c5d9")
 const SHIELD_RING_WIDTH := 3.0
+# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) — anneau MENTHE, volontairement distinct des trois autres
+# signaux du badge : cyan = protégé de l'ENNEMI, or = annoncé, vert nucléaire = contaminé. Un
+# territoire peut porter les quatre en même temps (contaminé, annoncé, bouclé contre l'attaque ET
+# contre la zone) : chaque anneau a donc son propre rayon, aucun n'en remplace un autre.
+const RAD_SHIELD_COLOR := Color("a8f0e0")
+const RAD_SHIELD_RING_WIDTH := 3.0
 
 @onready var _label: Label = $Label
 @onready var _rad_label: Label = $RadLabel
@@ -62,6 +68,8 @@ var _initial: String = ""
 var _initial_label: Label = null
 # Vrai si ce territoire est sous BOUCLIER (§8.119 — `shield_turns_left > 0`) : liseré cyan + écusson.
 var _shielded: bool = false
+# Vrai si ce territoire est sous BOUCLIER ANTI-RADIATIONS (§8.149 — `radiation_shield_turns_left`).
+var _rad_shielded: bool = false
 
 func _ready() -> void:
 	_apply_text()
@@ -75,12 +83,14 @@ func _ready() -> void:
 # ANNONCE de prochaine zone (`forecast` → ⚠ or, télégraphe G1 §8.62).
 # Défauts → rétro-compatible avec d'anciens appels à 2/3/4 arguments.
 func set_data(troops: int, accent: Color, contaminated: bool = false, pending: int = 0,
-		forecast: bool = false, initial: String = "", shielded: bool = false) -> void:
+		forecast: bool = false, initial: String = "", shielded: bool = false,
+		rad_shielded: bool = false) -> void:
 	_border_color = accent
 	_contaminated = contaminated
 	_forecast = forecast
 	_initial = initial
 	_shielded = shielded
+	_rad_shielded = rad_shielded
 	_has_pending = pending > 0
 	if _has_pending:
 		_troops_text = "%d+%d" % [troops, pending]
@@ -155,6 +165,14 @@ func _draw() -> void:
 		draw_arc(Vector2.ZERO, RADIUS + RAD_RING_WIDTH * 2.0 + SHIELD_RING_WIDTH, 0.0, TAU, 48,
 			SHIELD_COLOR, SHIELD_RING_WIDTH, true)
 		_draw_shield_crest()
+	# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) : anneau menthe, ENCORE plus à l'extérieur — il ne
+	# recouvre donc jamais le liseré cyan du bouclier d'attaque. Les deux protections sont
+	# indépendantes et se cumulent : le joueur doit pouvoir lire « à l'abri de l'ennemi » et « à
+	# l'abri des radiations » d'un seul coup d'œil, sans les confondre.
+	if _rad_shielded:
+		draw_arc(Vector2.ZERO, RADIUS + RAD_RING_WIDTH * 2.0 + SHIELD_RING_WIDTH * 2.0
+			+ RAD_SHIELD_RING_WIDTH, 0.0, TAU, 48,
+			RAD_SHIELD_COLOR, RAD_SHIELD_RING_WIDTH, true)
 
 # Écusson DESSINÉ (et non un glyphe texte) : les pictogrammes de bouclier Unicode (⛨ et voisins) ne
 # sont couverts par aucune des polices embarquées → ils s'afficheraient en « tofu » (constaté sur

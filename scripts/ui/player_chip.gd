@@ -121,9 +121,9 @@ func setup(pid: int, compact: bool = false) -> void:
 		p = {}
 
 	# Pseudo résolu comme main._display_name : username serveur (§8.28), préfixe « [IA] » pour un
-	# bot (id négatif OU is_bot public), repli « Joueur N » séquentiel (GameState.player_number).
+	# siège piloté par l'IA, repli « Joueur N » séquentiel (GameState.player_number).
 	# i18n : replis traduits (CHIP_BOT_FALLBACK / WR_PLAYER_FALLBACK — clé partagée waiting_room).
-	var is_bot: bool = int(pid) < 0 or bool(p.get("is_bot", false))
+	var is_bot: bool = _is_ai_seat(p, pid)
 	var uname := str(p.get("username", ""))
 	if uname == "":
 		uname = (tr("CHIP_BOT_FALLBACK") % absi(int(pid))) if is_bot \
@@ -197,12 +197,28 @@ func _peer_name(pid: int) -> String:
 	var p = GameState.players.get(str(int(pid)), {})
 	if typeof(p) != TYPE_DICTIONARY:
 		p = {}
-	var is_bot: bool = int(pid) < 0 or bool(p.get("is_bot", false))
+	var is_bot: bool = _is_ai_seat(p, pid)
 	var uname := str(p.get("username", ""))
 	if uname == "":
 		uname = (tr("CHIP_BOT_FALLBACK") % absi(int(pid))) if is_bot \
 			else (tr("WR_PLAYER_FALLBACK") % GameState.player_number(pid))
 	return ("[IA] " + uname) if is_bot else uname
+
+# « Ce siège est-il joué par l'IA ? » — MIROIR de `bot_ai.is_ai_controlled` (§8.149, LOT A).
+# Deux populations, un seul marqueur : le BOT de remplissage (id négatif / `is_bot`) et le siège
+# HUMAIN REPRIS après deux tours d'inactivité (`afk_bot_controlled`, id POSITIF).
+#
+# ⚠️ « bot ⇔ id négatif » a cessé d'être vrai côté serveur : le client doit suivre, sinon les coups
+# du bot passent pour ceux du joueur parti — et la table croit affronter quelqu'un qui n'est plus là.
+# Le pseudo RÉEL est conservé (« [IA] Hakim1195 ») : ça distingue au premier coup d'œil une place
+# désertée d'un bot de remplissage, sans humilier personne. ⚙ Une pastille dédiée « ABANDON » reste
+# possible si Hakim la préfère au playtest.
+#
+# ⚠️ Facteur commun des DEUX sites de ce fichier, qui portaient la même ligne en double : avec un
+# troisième cas à reconnaître, la duplication devenait une divergence en attente.
+func _is_ai_seat(p: Dictionary, pid: int) -> bool:
+	return int(pid) < 0 or bool(p.get("is_bot", false)) \
+		or bool(p.get("afk_bot_controlled", false))
 
 # Couleur plateau du joueur — TOUJOURS board.get_player_color (source unique E1) ; gris neutre
 # si le plateau est absent (boot isolé du composant). Engine.get_main_loop() plutôt que

@@ -1268,10 +1268,15 @@ func _faction_display_name(fid: String) -> String:
 # oublier un. `GameState.tagged_name` est la SOURCE UNIQUE de sa forme, et rend le pseudo INCHANGÉ
 # quand le joueur n'a pas de compagnie (bots compris) — aucune garde à écrire ailleurs.
 func _display_name(pid: int) -> String:
-	# Bot de remplissage (G2 §8.72) : id NÉGATIF → préfixe « [IA] » (l'état public porte is_bot ET
-	# l'indicatif dans username ; le préfixe est posé ICI, côté client, comme prévu au contrat).
+	# Siège piloté par l'IA → préfixe « [IA] » (le préfixe est posé ICI, côté client, comme prévu
+	# au contrat). DEUX populations depuis §8.149 (LOT A) : le bot de remplissage (id NÉGATIF /
+	# `is_bot`, G2 §8.72) et le siège HUMAIN REPRIS après deux tours d'inactivité
+	# (`afk_bot_controlled`, id POSITIF) — ce dernier garde son vrai pseudo, d'où « [IA] Hakim1195 ».
+	# ⚠️ Ce site EST la source unique des six surfaces citées ci-dessus : l'oublier ici aurait laissé
+	# le journal, les toasts, le kill feed, le VS et le Post-Op attribuer les coups du bot au joueur.
 	var p = GameState.players.get(str(pid), {})
-	var is_bot: bool = pid < 0 or (typeof(p) == TYPE_DICTIONARY and bool(p.get("is_bot", false)))
+	var is_bot: bool = pid < 0 or (typeof(p) == TYPE_DICTIONARY
+		and (bool(p.get("is_bot", false)) or bool(p.get("afk_bot_controlled", false))))
 	if typeof(p) == TYPE_DICTIONARY:
 		var uname := str(p.get("username", ""))
 		if uname != "":
@@ -1788,6 +1793,19 @@ func _push_power_card() -> void:
 			"disabled": ration_block != "",
 			"tooltip": tr(ration_block) if ration_block != "" else tr("ABILITY_RATION_DESC"),
 		})
+		# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) : universel comme RATIONNER, donc affiché aux 10
+		# héros — y compris au Culte, où il apparaît GRISÉ avec sa raison (« déjà immunisé »). Un
+		# bouton absent n'enseignerait pas au joueur du Culte qu'il n'en a pas besoin.
+		var shield_preview: Array = _shield_preview()
+		var shield_block := _ability_block_reason(ABILITY_RADIATION_SHIELD)
+		buttons.append({
+			"label": tr("ABILITY_SHIELD"),
+			"subtitle": tr("ABILITY_SHIELD_PREVIEW") % [int(shield_preview[0]),
+				int(shield_preview[1])],
+			"action": "ability_shield",
+			"disabled": shield_block != "",
+			"tooltip": tr(shield_block) if shield_block != "" else tr("ABILITY_SHIELD_DESC"),
+		})
 		# Pouvoir de faction : UNIQUEMENT les 3 pilotes, et JAMAIS en Classée (les 7 autres
 		# factions n'ont pas encore le leur → l'afficher serait un avantage arbitraire).
 		var spec := _my_power()
@@ -2039,6 +2057,10 @@ func _on_power_action_requested(action: String) -> void:
 				_maybe_prompt_spy()
 		"ability_ration":
 			_send_ability(ABILITY_RATION)
+		"ability_shield":
+			# §8.149 (LOT B) : UN clic, aucun ciblage — le serveur choisit les territoires
+			# (télégraphe d'abord, puis les plus faibles) et les annonce par `zone_shielded`.
+			_send_ability(ABILITY_RADIATION_SHIELD)
 		"ability_power":
 			_start_power_activation()
 		"br_surrender":
@@ -2143,11 +2165,24 @@ func _coup_power(pid: int) -> int:
 
 const ABILITY_RATION := "ration"
 const ABILITY_FACTION_POWER := "faction_power"
+const ABILITY_RADIATION_SHIELD := "radiation_shield"   # §8.149, LOT B
 
 # Phases où RATIONNER est proposé (miroir de HERO_ABILITIES["ration"]["phases"]).
 const RATION_PHASES := [2, 3, 4]
 const RATION_PP_MAX := 5
 const RATION_PV_PER_PP := 6
+
+# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) — miroir de HERO_ABILITIES["radiation_shield"].
+const SHIELD_PHASES := [2, 3, 4]
+const SHIELD_PP_MAX := 5
+const SHIELD_PP_PER_TERRITORY := 1
+# Factions dont TOUS les territoires sont immunisés à la zone GRATUITEMENT et en permanence
+# (`free_contamination_immunity`). Elles n'ont donc aucune cible à acheter, et le serveur leur
+# refuse la capacité. ⚠️ MIROIR d'AFFICHAGE, comme `FACTION_POWERS` juste au-dessus : il sert à
+# GRISER le bouton avec la bonne raison, jamais à décider. Si un jour une 2ᵉ faction reçoit ce
+# passif sans que cette liste suive, le bouton restera cliquable et le SERVEUR refusera proprement
+# (`invalid_target`) — affichage périmé, jamais règle fausse.
+const ZONE_IMMUNE_FACTIONS := ["culte_isotope"]
 
 # Modes de ciblage (miroir de hero_abilities.TARGET_*).
 const TARGET_NONE := "none"
@@ -2254,6 +2289,32 @@ func _ration_preview() -> Array:
 	var missing: int = maxi(int(hero.get("pv_max", 0)) - int(hero.get("pv_current", 0)), 0)
 	return [pp_spent, mini(pp_spent * RATION_PV_PER_PP, missing)]
 
+# Territoires que le BOUCLIER pourrait encore couvrir : les miens qui ne sont PAS déjà protégés.
+# Miroir d'AFFICHAGE de `hero_abilities.radiation_shield_targets` — on ne reproduit que le critère
+# d'ÉLIGIBILITÉ (combien), jamais l'ORDRE de sélection (lesquels) : c'est le serveur qui choisit, et
+# c'est son évènement `zone_shielded` qui dit ensuite lesquels ont été couverts. Dupliquer l'ordre
+# ici aurait créé deux vérités — exactement la divergence affichage ↔ effet du §8.148.
+func _shield_eligible_tids() -> Array:
+	if ZONE_IMMUNE_FACTIONS.has(str(_my_state().get("faction", ""))):
+		return []          # immunisé partout, gratuitement : rien à acheter.
+	var out: Array = []
+	for tid in GameState.territories.keys():
+		if _owner(str(tid)) != _my_id():
+			continue
+		if int(_terr(str(tid)).get("radiation_shield_turns_left", 0)) > 0:
+			continue
+		out.append(str(tid))
+	return out
+
+# Aperçu du bouclier : (PP dépensés, territoires couverts) — les DEUX sont le même nombre à un
+# taux de 1 PP par territoire, mais on rend le couple pour que le libellé reste juste si le taux
+# du registre change un jour. Le joueur voit donc la vraie affaire AVANT de cliquer, y compris
+# quand il n'a que 2 territoires à couvrir pour 5 PP disponibles.
+func _shield_preview() -> Array:
+	var affordable: int = clampi(_pp_available(), 0, SHIELD_PP_MAX) / SHIELD_PP_PER_TERRITORY
+	var covered: int = mini(affordable, _shield_eligible_tids().size())
+	return [covered * SHIELD_PP_PER_TERRITORY, covered]
+
 # Raison de GRISAGE d'une capacité (clé i18n), "" si elle est activable. Ordre calqué sur celui de
 # `hero_abilities.can_use` pour que l'infobulle annonce la MÊME raison que le refus serveur.
 func _ability_block_reason(ability: String) -> String:
@@ -2272,6 +2333,20 @@ func _ability_block_reason(ability: String) -> String:
 			return "ABILITY_ERR_INSUFFICIENT_PP"
 		if int(_ration_preview()[1]) <= 0:
 			return "ABILITY_ERR_FULL_PV"
+		return ""
+	# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) — ordre calqué sur `_can_radiation_shield` pour que
+	# l'infobulle annonce EXACTEMENT la raison que le serveur renverrait.
+	if ability == ABILITY_RADIATION_SHIELD:
+		if not SHIELD_PHASES.has(phase):
+			return "ABILITY_ERR_WRONG_PHASE"
+		if bool(me.get("ability_shield_used", false)):
+			return "ABILITY_ERR_ALREADY_USED"
+		if _shield_eligible_tids().is_empty():
+			# Aucun territoire à protéger : soit on n'en possède plus, soit ils sont TOUS déjà
+			# immunisés — le cas d'un joueur du Culte, qui l'est gratuitement et partout.
+			return "ABILITY_ERR_INVALID_TARGET"
+		if _pp_available() < SHIELD_PP_PER_TERRITORY:
+			return "ABILITY_ERR_INSUFFICIENT_PP"
 		return ""
 	var spec := _my_power()
 	if spec.is_empty():
@@ -2358,6 +2433,12 @@ func _push_ability_toast(sev: Dictionary) -> void:
 		# Flotteur vert « +N PV » sur MA jauge de héros (le soin doit se voir autant que les dégâts).
 		if pid == _my_id():
 			hud.float_hero_heal(int(sev.get("pv_healed", 0)))
+	elif str(sev.get("ability", "")) == ABILITY_RADIATION_SHIELD:
+		# §8.149 (LOT B) — combien de territoires, pour combien de PP. Le DÉTAIL (lesquels) est
+		# raconté par les `zone_shielded` qui suivent dans le même lot d'évènements.
+		var tids = sev.get("territories", [])
+		var count: int = tids.size() if typeof(tids) == TYPE_ARRAY else 0
+		text = tr("SYSEV_ABILITY_SHIELD") % [who, int(sev.get("pp_spent", 0)), count]
 	else:
 		var tname := _territory_name(str(sev.get("territory_id", "")))
 		match str(sev.get("power_id", "")):
@@ -3504,6 +3585,15 @@ func _play_event_feedback(event) -> void:
 				# journal, elle, est déjà produite par WarFeed (évènement structuré) — ici on
 				# n'ajoute QUE ce que le texte ne dit pas : OÙ, et MAINTENANT.
 				_on_zone_damage(sev)
+			elif code == "zone_shielded":
+				# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) : émis à la POSE (un par territoire
+				# couvert) ET à CHAQUE tick évité. Une protection invisible n'existe pas — c'est
+				# exactement la leçon que §8.145 avait payée sur l'attrition.
+				_on_zone_shielded(sev)
+			elif code == "afk_bot_takeover":
+				# §8.149 (LOT A) : un siège vient de passer sous contrôle de l'IA. La table DOIT
+				# l'apprendre — sans ça, les coups du bot passent pour ceux du joueur parti.
+				_on_afk_bot_takeover(int(sev.get("player_id", -9999)))
 			elif code == "pact_broken":
 				# §8.123 — LA TRAHISON. Portée par les `system_events` de l'`attack_result` qui l'a
 				# provoquée : le bandeau part donc AVEC le combat, pas plusieurs actions plus tard.
@@ -3526,6 +3616,31 @@ func _on_zone_grew(tid: String) -> void:
 	hud.add_feed_entries([{"category": "zone", "icon": "☢", "tid": tid, "major": false,
 		"rich_text": tr("ZONE_GREW_LOG") % _territory_name(tid).to_upper()}])
 	AudioManager.play_sfx("zone_alarm")
+
+
+# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) : le territoire a ENCAISSÉ zéro. Ligne verte au Journal
+# et flash court — même moule que `zone_grew`, mais en vert et sans alarme : ici il ne se passe
+# précisément RIEN, et c'est ça la bonne nouvelle qu'il faut rendre lisible. Le halo permanent, lui,
+# est posé par `board.gd` depuis `radiation_shield_turns_left` au rafraîchissement d'état.
+func _on_zone_shielded(sev: Dictionary) -> void:
+	var tid := str(sev.get("territory_id", ""))
+	if tid == "":
+		return
+	if _vfx_enabled():
+		board.flash_territory(tid)
+	hud.add_feed_entries([{"category": "zone", "icon": "☢", "tid": tid, "major": false,
+		"rich_text": tr("ZONE_SHIELDED_LOG") % _territory_name(tid).to_upper()}])
+
+
+# §8.149 (LOT A) : le siège d'un joueur inactif vient d'être REPRIS par l'IA. Annonce SOBRE — une
+# ligne de journal et un toast, aucun bandeau ni son. Ce n'est pas un exploit, c'est une info de
+# service : la partie continue, et les coups qui suivront ne sont plus ceux de ce joueur.
+func _on_afk_bot_takeover(pid: int) -> void:
+	if pid == -9999:
+		return
+	var text := tr("SYSEV_AFK_BOT_TAKEOVER") % _display_name(pid)
+	hud.show_power_toast(text, Color("8a97a5"))
+	hud.add_log(text)
 
 
 # Contexte de résolution injecté à war_feed.parse : pseudos BBCode (E1), noms de territoires,

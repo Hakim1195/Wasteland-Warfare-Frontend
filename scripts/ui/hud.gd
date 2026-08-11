@@ -1710,7 +1710,9 @@ func _player_label(pid: int) -> String:
 	var name := str(p.get("username", "")).strip_edges()
 	if name == "":
 		name = "#%d" % pid
-	if bool(p.get("is_bot", false)):
+	# §8.149 (LOT A) : « [IA] » couvre AUSSI le siège humain repris pour inactivité — l'onglet ORDRE
+	# doit dire qui joue réellement, sinon on prépare son tour contre un adversaire qui a quitté.
+	if bool(p.get("is_bot", false)) or bool(p.get("afk_bot_controlled", false)):
 		name = "[IA] " + name
 	# §8.126 — préfixe `[TAG]` par la SOURCE UNIQUE (rend le pseudo inchangé sans compagnie).
 	return GameState.tagged_name(pid, name)

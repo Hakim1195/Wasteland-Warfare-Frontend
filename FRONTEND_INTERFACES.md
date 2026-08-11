@@ -5800,3 +5800,59 @@ voie `insufficient_coins`, qui passe par le même rendu de statut sans appel ré
 interrompu (timeout, assert), il laisse `ladder_division` sali et le **run suivant échoue au premier
 cas** pour une raison sans rapport avec le code. Vu, diagnostiqué, non corrigé (hors périmètre) —
 mais à savoir avant d'accuser un diff.
+
+---
+
+## ⚙️🤖 §8.149 — ABRI ANTI-RADIATIONS, SIÈGE REPRIS PAR L'IA (2026-08-11)
+
+> Règles & moteur : **§8.149 de `ARCHITECTURE_ET_REGLES.md`** (dépôt racine).
+> Contrat réseau : **§8.149 de [`CONTRAT_RESEAU.md`](CONTRAT_RESEAU.md)**.
+
+### 1. Bouton ABRI ANTI-RADIATIONS (carte POUVOIR, onglet ACTIONS)
+
+Nouvelle entrée dans `main.gd::_refresh_power_card`, juste après RATIONNER — **affichée aux 10
+héros**, y compris au Culte de l'Isotope où elle apparaît **GRISÉE** avec sa raison. Un bouton
+absent n'enseignerait pas au joueur du Culte qu'il n'en a pas besoin ; un bouton grisé qui explique
+pourquoi enseigne la règle (même principe que RATIONNER, §8.119).
+
+- Libellé `ABILITY_SHIELD`, sous-titre `ABILITY_SHIELD_PREVIEW` (« −N PP → N territoire(s) »),
+  infobulle `ABILITY_SHIELD_DESC` ou la raison de grisage.
+- **UN clic, aucun ciblage** : `_send_ability(ABILITY_RADIATION_SHIELD)`. Le SERVEUR choisit les
+  territoires et les annonce par `zone_shielded`.
+- ⚠️ `_shield_eligible_tids()` ne reproduit que le critère d'**ÉLIGIBILITÉ** (combien), **jamais
+  l'ORDRE de sélection** (lesquels). Dupliquer l'ordre côté client aurait créé deux vérités —
+  exactement la divergence affichage ↔ effet que le §8.148 a payée. Le client dit *combien* il va
+  payer ; le serveur dit *lesquels* il a couverts.
+- `ZONE_IMMUNE_FACTIONS` est un **MIROIR D'AFFICHAGE** (comme `FACTION_POWERS` au-dessus) : il sert
+  à griser avec la bonne raison, jamais à décider. Une 2ᵉ faction recevant le passif sans que la
+  liste suive laisserait le bouton cliquable et le SERVEUR refuserait proprement — affichage
+  périmé, jamais règle fausse.
+
+### 2. Rendu plateau — l'anneau MENTHE (`territory_badge.gd`)
+
+`radiation_shield_turns_left > 0` → anneau `#a8f0e0`, dessiné **PLUS À L'EXTÉRIEUR** que le liseré
+cyan du bouclier d'attaque. Les quatre signaux du badge cohabitent sans se recouvrir, chacun à son
+rayon : **vert nucléaire** = contaminé · **or** = annoncé (télégraphe) · **cyan** = protégé de
+l'ENNEMI (Bastion) · **menthe** = protégé des RADIATIONS. Un territoire peut porter les quatre.
+⚠️ L'ÉTAT SERVEUR fait foi, jamais une mémoire locale : à l'expiration du compteur l'anneau
+disparaît de lui-même au rafraîchissement suivant, sans qu'aucun code n'ait à le retirer.
+
+### 3. Journal & toasts
+
+- `zone_shielded` → ligne verte-menthe `ZONE_SHIELDED_LOG` + flash bref sur le territoire. Émis à la
+  POSE **et** à chaque tick évité : le premier dit « je me suis protégé », le second « ça vient de
+  servir ». *Une protection invisible n'existe pas* — la leçon que §8.145 avait payée sur l'attrition.
+- `SYSEV_ABILITY_SHIELD` → toast PUBLIC d'activation (combien de PP, combien de territoires).
+- `afk_bot_takeover` → toast SOBRE gris acier + ligne de journal (`SYSEV_AFK_BOT_TAKEOVER`). Aucun
+  bandeau, aucun son : ce n'est pas un exploit, c'est une info de service.
+
+### 4. ⚠️ « [IA] » ne veut plus dire « bot de remplissage »
+
+Le préfixe couvre désormais **DEUX** populations : le bot d'id négatif **et** le siège HUMAIN repris
+pour inactivité (`afk_bot_controlled`, id POSITIF), qui **garde son vrai pseudo** — d'où
+« [IA] Hakim1195 », qui distingue au premier coup d'œil une place désertée d'un bot de remplissage.
+**Trois sites** portent la règle : `main.gd::_display_name` (source unique du journal, des toasts,
+du kill feed, du VS et du Post-Op), `hud.gd::_player_label` (onglet ORDRE) et
+`player_chip.gd::_is_ai_seat` — ce dernier NOUVEAU, factorisant deux lignes jusque-là dupliquées.
+Un site oublié, et les coups du bot passent pour ceux du joueur parti.
+⚙ Une pastille dédiée « ABANDON » reste possible si le playtest la préfère au préfixe.

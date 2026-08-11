@@ -734,8 +734,12 @@ func generate_board() -> void:
 		# compteur SERVEUR est armé. L'état fait foi, jamais une mémoire locale : à l'expiration
 		# du compteur, le marquage disparaît au rafraîchissement suivant.
 		var is_shielded: bool = int(t.get("shield_turns_left", 0)) > 0
+		# BOUCLIER ANTI-RADIATIONS (§8.149, LOT B) : même discipline — l'ÉTAT SERVEUR fait foi,
+		# jamais une mémoire locale. À l'expiration du compteur, l'anneau menthe disparaît de
+		# lui-même au rafraîchissement suivant, sans qu'aucun code n'ait à le retirer.
+		var is_rad_shielded: bool = int(t.get("radiation_shield_turns_left", 0)) > 0
 		_update_badge(tid, garrison, accent, is_contaminated, pending, is_forecast, initial,
-			is_shielded)
+			is_shielded, is_rad_shielded)
 
 		# Libellé/garnison : on n'écrase un texte que si le nœud expose la propriété `text`
 		# (cas fallback BaseButton ; les Area2D dessinés à la main n'ont pas de `text`).
@@ -919,7 +923,7 @@ func _owner_initial(pid: int) -> String:
 
 func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool = false,
 		pending: int = 0, forecast: bool = false, initial: String = "",
-		shielded: bool = false) -> void:
+		shielded: bool = false, rad_shielded: bool = false) -> void:
 	var pos := get_territory_position(tid)
 	if pos == Vector2.INF:
 		return
@@ -939,7 +943,8 @@ func _update_badge(tid: String, troops: int, accent: Color, contaminated: bool =
 	# Ré-affiche un badge masqué par un passage hors-carte (changement de carte, G5 §8.71).
 	badge.visible = true
 	badge.global_position = pos
-	badge.set_data(troops, accent, contaminated, pending, forecast, initial, shielded)
+	badge.set_data(troops, accent, contaminated, pending, forecast, initial, shielded,
+		rad_shielded)
 
 # Position monde (espace du SubViewport) du centre d'un territoire — utilisée par la
 # caméra tactique pour cadrer les combats. Centre = centroïde du CollisionPolygon2D si

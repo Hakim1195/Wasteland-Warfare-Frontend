@@ -16,13 +16,28 @@ const UnlockScript := preload("res://scripts/ui/unlock_celebration.gd")
 const XpCoinsBar := preload("res://scripts/ui/xp_coins_bar.gd")
 
 
+# Photographie des persistances RÉELLES prise au démarrage, et drapeau d'idempotence de la
+# restauration. MEMBRES et non variables locales : c'est ce qui permet à `_exit_tree` de restaurer
+# même quand `_ready` ne va PAS jusqu'au bout (§8.149, LOT E).
+var _backup := {}
+var _restored := false
+
+
 func _ready() -> void:
 	var asserts := 0
 	# ⚠️ Ce harnais ÉCRIT dans les vraies persistances de la machine (`user://seen_items.json` et la
-	# section [progress] de settings.cfg). On les photographie ici et on les restaure à la fin :
+	# section [progress] de settings.cfg). On les photographie ici et on les restaure ensuite :
 	# sans ça, un `ladder_division` de test resterait en place et supprimerait (ou inventerait) le
 	# toast de promotion au prochain lancement du VRAI jeu.
-	var backup := {
+	#
+	# ⚠️⚠️ CORRECTIF §8.149 (LOT E) : la restauration ne vivait QU'EN FIN de `_ready`, donc sur le
+	# seul chemin heureux. Un `assert` rouge, un `--quit-after` trop court, un Ctrl+C — et la
+	# machine gardait une division de test. Le run SUIVANT partait alors d'un état pollué et
+	# échouait à son tour : le harnais rendait faux le résultat qu'il servait à mesurer. GDScript
+	# n'a pas de `finally` ; `_exit_tree` en tient lieu — il s'exécute à la sortie de l'arbre, y
+	# compris quand `_ready` s'est interrompu en chemin. `_restore_all` est idempotente, l'appel de
+	# fin de `_ready` et celui de `_exit_tree` ne se marchent donc pas dessus.
+	_backup = {
 		"seen": _read_seen_file(),
 		"division": SettingsManager.get_progress(TopNav.PROGRESS_DIVISION_KEY),
 		"points": SettingsManager.get_progress(TopNav.PROGRESS_POINTS_KEY),
@@ -134,14 +149,33 @@ func _ready() -> void:
 	asserts += 3
 	print("[OK] compteur de Coins : décompte visible, atterrissage exact (3 asserts)")
 
-	# --- Restauration des persistances RÉELLES (cf. `backup` en tête) --------------------------
-	_restore_seen_file(backup["seen"])
-	SettingsManager.set_progress(TopNav.PROGRESS_DIVISION_KEY, str(backup["division"]))
-	SettingsManager.set_progress(TopNav.PROGRESS_POINTS_KEY, str(backup["points"]))
-	print("[OK] persistances de la machine restaurées (seen_items.json + [progress])")
+	# --- Restauration des persistances RÉELLES (cf. `_backup` en tête) -------------------------
+	_restore_all()
 
 	print("[OK] TEST HUB CELEBRATIONS (§8.122 LOT F) : %d asserts verts" % asserts)
 	get_tree().quit(0)
+
+
+# Filet de sécurité : appelé par Godot à la sortie de l'arbre, donc AUSSI quand `_ready` s'est
+# interrompu (assert rouge, `--quit-after` expiré, fermeture). C'est le « finally » que GDScript
+# n'a pas. Le seul cas non couvert reste le kill brutal du processus — borne assumée.
+func _exit_tree() -> void:
+	_restore_all()
+
+
+# Remet la machine EXACTEMENT dans l'état photographié au démarrage. IDEMPOTENTE (drapeau
+# `_restored`) : un double appel ne réécrit rien. Purge aussi les clés de test, qui restaient
+# sinon à vie dans le `settings.cfg` du joueur — elles ne cassaient rien, mais un fichier de
+# configuration qui accumule les résidus d'anciens harnais finit par mentir sur ce qu'il contient.
+func _restore_all() -> void:
+	if _restored or _backup.is_empty():
+		return
+	_restored = true
+	_restore_seen_file(_backup["seen"])
+	SettingsManager.set_progress(TopNav.PROGRESS_DIVISION_KEY, str(_backup["division"]))
+	SettingsManager.set_progress(TopNav.PROGRESS_POINTS_KEY, str(_backup["points"]))
+	SettingsManager.set_progress("__test_key__", "")
+	print("[OK] persistances de la machine restaurées (seen_items.json + [progress])")
 
 
 # Contenu BRUT de seen_items.json avant le test — `null` s'il n'existait pas encore.
