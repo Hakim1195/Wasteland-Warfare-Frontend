@@ -5856,3 +5856,51 @@ du kill feed, du VS et du Post-Op), `hud.gd::_player_label` (onglet ORDRE) et
 `player_chip.gd::_is_ai_seat` — ce dernier NOUVEAU, factorisant deux lignes jusque-là dupliquées.
 Un site oublié, et les coups du bot passent pour ceux du joueur parti.
 ⚙ Une pastille dédiée « ABANDON » reste possible si le playtest la préfère au préfixe.
+
+---
+
+## 🎲 §8.150 — PP PROPORTIONNELS AUX DÉS CONTESTÉS (volet CLIENT : **zéro ligne de GDScript**)
+
+> Chantier **100 % serveur**. Aucun script, aucune scène, aucun shader modifié. Le client voit
+> simplement d'autres VALEURS dans un payload dont la forme n'a pas bougé (§8.150 de
+> [`CONTRAT_RESEAU.md`](CONTRAT_RESEAU.md)). **Trois clés de traduction** ont changé, et elles
+> seules.
+
+### 1. Ce que le client consomme déjà, et qui suffit
+
+Grep exhaustif de `pp_delta` / `attacker_pp` sur **tous** les `.gd` du dépôt : **un seul**
+consommateur réel, plus deux fixtures d'outil.
+
+- `scripts/game/split_screen_vs.gd` — flotteur `"%+d PP" % pp_delta`, gardé par `if pp_delta != 0`.
+  Format **générique** : il encaisse les nouvelles valeurs sans une ligne de plus.
+  ⚠️ **Conséquence VISIBLE** : un partage 1 gagné / 1 perdu valait `0` et **n'affichait rien** ; il
+  vaut désormais **+1** et **affichera un flotteur**. Ce n'est pas un bug, c'est la règle.
+- `split_screen_vs.gd::pp_gauge_value` — clampe `attacker_pp` sur `[pp_min, pp_max]` : **inchangé**,
+  le serveur borne déjà.
+- `tools/test_e2_vs.gd` et `tools/test_e8_combat_rhythm.gd` — fixtures `{"pp_delta": 2,
+  "attacker_pp": 2}` : **valides telles quelles** sous la nouvelle règle (2 dés gagnés). Aucune ne
+  figeait l'ancienne.
+- ⚠️ `war_feed.gd` et `main.gd` **ne lisent AUCUN champ du duel** — contrairement à ce qu'annonçait
+  la fiche de chantier. Rien à y vérifier.
+
+Le champ neuf `pp_counted` est **ignoré** par le client actuel, et c'est voulu : il ne diffère de
+`attacker_pp` que si un plafond serveur est allumé (il ne l'est pas). Un HUD futur pourra l'afficher.
+
+### 2. i18n — 3 clés, FR/EN/IT
+
+| Clé | Ce qui change |
+|---|---|
+| `CHAR_STAT_PP_DESC` | décrivait « monte ou descend selon vos jets de dés » → énonce la règle réelle (gagner au moins un dé fait MONTER) |
+| `PP_TOOLTIP` | même correction **+ l'ABRI ANTI-RADIATIONS ajouté à la liste des usages dépensables** |
+| `MANUAL_SEC_HERO_BODY` | Manuel de Guerre : règle d'accumulation corrigée, **paragraphe ABRI ANTI-RADIATIONS ajouté**, et la phrase « seul RATIONNER reste disponible en CLASSÉE » corrigée (l'ABRI l'est aussi, `casual_only: False`) |
+
+🩸 **DEUXIÈME oubli du §8.149 démasqué ici** : l'ABRI ANTI-RADIATIONS est universel aux 10 héros
+depuis ce chantier-là, mais ni l'infobulle des PP ni le Manuel ne le mentionnaient — le seul endroit
+qu'un joueur lit réellement annonçait donc une capacité de moins qu'il n'en a.
+
+### 3. À VÉRIFIER EN F5 (rien n'est automatisable côté client)
+
+1. Un assaut à **2 dés contestés partagés 1/1** → le flotteur **« +1 PP »** apparaît (avant : rien).
+2. La **jauge PP** monte plus vite sur une partie agressive, et reste bornée à `pp_max`.
+3. **Aucun flotteur fantôme** : un `0` ne doit jamais s'afficher (le garde `pp_delta != 0` tient).
+4. **Infobulle PP** et **Manuel de Guerre** : relire la règle et la présence de l'ABRI, en FR/EN/IT.

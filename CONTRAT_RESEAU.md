@@ -575,7 +575,7 @@ tour). ⚠️ Runtime complet (FastAPI/Redis) à revalider sur le VPS après red
 > Référence réseau de la **surcouche RPG des héros** (sprint RPG & Survie) — **jamais documentée ici** jusqu'ici — et **réalignement** du réglage sur le cahier des charges. Côté client, le HUD qui consomme tout ceci est détaillé en **§8.60** de [`FRONTEND_INTERFACES.md`](FRONTEND_INTERFACES.md). ⚠️ **Backend → redéploiement VPS requis** ; **AUCUN COMMIT**. Toutes les valeurs entières = **entiers PURS** (piège JSON float §5 ; clés de `players`/`objectives` = `string` après JSON).
 - **Stats héros dans le `state` diffusé (`PlayerState`, PUBLIQUES).** Chaque `players[pid]` porte : `hero_level`, `hero_pv_max`, `hero_pv_current`, `hero_pa`, `hero_pb` (réduction **fraction 0.0–0.30**, PAS un %), `hero_pp_min`, `hero_pp_max`, `hero_pp_current`, `hero_regen` (fraction), `is_dead`. **La State Redaction ne masque QUE les objectifs secrets** → les stats héros sont **publiques** (inspection d'un adversaire OK). Tous à défaut 0/False → rétro-compat (un état Redis antérieur se redésérialise sans erreur). **Éphémères** (Redis only) : `hero_pv_current`/`hero_pp_current`/`is_dead` ne sont **jamais** persistés en SQL.
 - **NEUFS — barre d'XP in-game.** `hero_xp_in_level` / `hero_xp_for_level` : **instantané méta-jeu pris au DÉMARRAGE** de la partie (XP dans le niveau courant / coût du niveau), **statique pendant le match** (les montées de niveau s'appliquent en FIN de partie) ; `0/0` = niveau max (barre masquée). Peuplés par `hero_progression.get_hero_progress` côté REST `start_game` ET draft WS `faction_choice`. Éphémères (Redis), non SQL.
-- **Combat — `action_result.event.hero_duel`.** UN duel par ATTAQUE (pas par dé). Dict `{attacker_id, defender_id, pp_delta, attacker_pp, damage, defender_pv, defender_pv_max, hero_died}` (ou `null` si héros non initialisés / défenseur déjà mort). Asymétrique : seul le PP de l'**attaquant** bouge (`pp_delta = dés_gagnés − dés_perdus`, borné `[pp_min,pp_max]`), seul le PV du **défenseur** baisse (`damage = max(1, floor((PA+PP)·(1−PB)))`). **Permadeath** : `defender_pv ≤ 0` → joueur `status="eliminated"`, **tous ses territoires garnison forcée à 1** (conservés, pas neutres). La mécanique Risk (dés/troupes/conquête) et la Time Bank (+10 s/attaque, max 90 s) sont **inchangées**.
+- **Combat — `action_result.event.hero_duel`.** UN duel par ATTAQUE (pas par dé). Dict `{attacker_id, defender_id, pp_delta, attacker_pp, pp_counted, damage, defender_pv, defender_pv_max, hero_died}` (ou `null` si héros non initialisés / défenseur déjà mort). Asymétrique : seul le PP de l'**attaquant** bouge (`pp_delta` : **+dés gagnés** si au moins un dé gagné, sinon **−dés perdus** — règle §8.150 ; le résultat est ensuite borné `[pp_min,pp_max]` dans `attacker_pp`), seul le PV du **défenseur** baisse (`damage = max(1, floor((PA + pp_counted)·(1−PB)))`). **`pp_counted`** (ADDITIF §8.150) = part des PP réellement comptée dans les dégâts : égale à `attacker_pp` tant que le tunable `PP_DUEL_DAMAGE_CAP` vaut 0 (état livré). **Permadeath** : `defender_pv ≤ 0` → joueur `status="eliminated"`, **tous ses territoires garnison forcée à 1** (conservés, pas neutres). La mécanique Risk (dés/troupes/conquête) et la Time Bank (+10 s/attaque, max 90 s) sont **inchangées**.
 - **Fin de partie — `game_over.match_rewards[pid]` (champs héros).** `hero_xp_earned`, `hero_level` (avant), `hero_new_level`, `hero_levels_gained`, `hero_total_xp`, `hero_level_up`, `hero_xp_in_level`, `hero_xp_for_level`, `hero_milestones[{level,bonus}]`, **+ NEUF `hero_coins_earned`**. Barème XP héros : +1/unité tuée, +150 objectif, +5/territoire en fin, +100/coup de grâce, +1/4 PV de dégâts. **Coins par niveau** : 1-5 aléatoire **par niveau** franchi (sans gating Pass pour l'instant — palier « avec Pass Season » 10-20 différé), crédités sur `User.coins`. La progression (`HeroProgression(user_id, faction_id)` : `hero_level`, `hero_xp` lifetime) est la **SEULE** donnée héros persistée en SQL.
 - **Fin de partie — `game_over.match_rewards[pid].xp_inputs` (bloc ADDITIF).** Les entrées **EXACTES** du barème telles que le serveur les a utilisées : `rank`, `territories_end`, `continents_end`, `continents_conquered`, `eliminations`, `enemy_kills`, `conquests`, `hero_kills`, `hero_damage`, `objective_win`, `xp_pass_bonus`. Le Rapport Post-Op rend son détail **depuis ce bloc** au lieu de ré-estimer localement → la ligne « Ajustement serveur » retombe structurellement à **0**. Il corrige deux divergences historiques : (1) `continents_conquered` (continents conquis **pendant** la partie, métrique de l'XP) ≠ `continents_end` (continents **possédés en fin**, métrique des POINTS et seule dont disposait le client) ; (2) `xp_pass_bonus` = surplus RÉEL du Pass (palier exact ×1.10 / ×1.25 / ×1.50), là où le client supposait ×1.25 pour tout le monde. Bloc **absent** sur un serveur antérieur → le client retombe sur son estimation locale (rétro-compatible). Entiers/booléens purs (§5).
   > **§8.147 — deux mises à jour de CE bloc.** (1) Le Pass n'a plus qu'**UN** palier : `xp_pass_bonus` est le surplus du seul `×1.50` (la liste « ×1.10 / ×1.25 / ×1.50 » ci-dessus est HISTORIQUE — elle décrit les trois paliers retirés, dont les détenteurs actifs sont lus `season`, cf. §8.147). (2) Clé **ADDITIVE `hero_xp_pass_bonus`** = le JUMEAU côté héros (`hero_xp_earned − base_hero_xp`, 0 sans Pass), né en même temps que l'axe « XP de héros ×2 ». ⚠️ Sans elle le client rejouait le barème héros **sans** connaître le multiplicateur et retombait sur la BASE : l'onglet XP HÉROS affichait un « Ajustement serveur » égal au bonus entier (mesuré : 329 reconstruit contre 658 crédités) — exactement le défaut que `xp_pass_bonus` avait fermé côté profil, et que l'axe neuf avait rouvert côté héros.
@@ -4036,3 +4036,35 @@ dépôt** (inventaire AST, §8.145 §5.3). Le supprimer ne change donc **aucun c
 **Rétro-compat Redis** : un état sérialisé qui porte encore le champ se redésérialise sans erreur
 (clé inconnue ignorée) — contre-épreuve dans `test_zone_shield.py` [5]. Aucune action humaine, aucune
 migration.
+
+---
+
+## 🎲 §8.150 — PP PROPORTIONNELS AUX DÉS CONTESTÉS (volet RÉSEAU — **ADDITIF STRICT §1.5**)
+
+> **Un champ AJOUTÉ, zéro champ renommé, zéro champ supprimé.** Un client §8.149 non mis à jour
+> continue de fonctionner à l'identique : il ignore simplement le nouveau champ.
+
+### 1. `action_result.event.hero_duel` — le champ neuf `pp_counted`
+
+| champ | avant | après §8.150 |
+|---|---|---|
+| `pp_delta` | `int` — **`dés gagnés − dés perdus`** | `int` — **même clé, même type, NOUVELLE sémantique de valeur** : `+dés gagnés` si au moins un dé gagné, sinon `−dés perdus`. Plage inchangée en pratique : **[−3, +3]** |
+| `attacker_pp` | `int`, PP bornés post-delta | **inchangé** |
+| `pp_counted` | — | **NOUVEAU**, `int` : part des PP réellement comptée dans les dégâts. **Égale à `attacker_pp`** tant que `PP_DUEL_DAMAGE_CAP` vaut 0 — c'est l'état LIVRÉ |
+| `damage` | `max(1, floor((PA + PP)·(1 − PB)))` | `max(1, floor((PA + **pp_counted**)·(1 − PB)))` — la formule est littéralement la même, seule son ENTRÉE peut être plafonnée |
+
+⚠️ **`pp_delta` change de VALEUR, pas de CONTRAT.** C'est le seul point d'attention pour un
+relecteur : la clé, le type et le signe se comportent comme avant (un flotteur `"%+d PP"` côté
+client fonctionne tel quel), mais un partage 1 gagné / 1 perdu vaut désormais **+1** et non **0** —
+le flotteur apparaîtra donc là où il n'apparaissait pas.
+
+⚠️ **`pp_delta` est la valeur QUI A MUTÉ L'ÉTAT**, jamais un second calcul fait pour le réseau.
+`pp_delta`, `attacker_pp` et `pp_counted` sortent tous les trois du même passage dans
+`engine._resolve_hero_duel` — contre-épreuve de parité dans `test_duel_rules.py` [5].
+
+### 2. Rien d'autre ne bouge
+
+Aucun nouvel évènement, aucune nouvelle raison de refus, aucune nouvelle route. Le tunable
+`PP_DUEL_DAMAGE_CAP` est **serveur seul** : il n'est ni diffusé ni lisible par le client — celui-ci
+n'en voit que la conséquence, dans `pp_counted` et `damage`. Le HUD actuel ignore `pp_counted` ;
+un HUD futur pourra afficher « PP comptés » le jour où un plafond serait allumé.
