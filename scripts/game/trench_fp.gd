@@ -3002,6 +3002,11 @@ func _build_help_panel() -> void:
 			["TRENCH_HELP_STANCE", "TRENCH_HELP_STANCE_D"],
 			["TRENCH_HELP_AIM", "TRENCH_HELP_AIM_D"],
 			["TRENCH_HELP_FIRE", "TRENCH_HELP_FIRE_D"],
+			# ⛔ AJOUTÉES AU §8.153.3, ET C ÉTAIT UNE DETTE. La visée à l œil (§8.152.10) et le head
+			# shot (§8.153) sont deux mécaniques que le joueur ne pouvait DÉCOUVRIR nulle part : ni
+			# dans cette aide, ni ailleurs. Une commande qui n existe pas dans l aide n existe pas.
+			["TRENCH_HELP_ADS", "TRENCH_HELP_ADS_D"],
+			["TRENCH_HELP_HEADSHOT", "TRENCH_HELP_HEADSHOT_D"],
 			["TRENCH_HELP_GRENADE", "TRENCH_HELP_GRENADE_D"],
 			["TRENCH_HELP_RELOAD", "TRENCH_HELP_RELOAD_D"],
 			["TRENCH_HELP_BANDAGE", "TRENCH_HELP_BANDAGE_D"],
@@ -3391,6 +3396,18 @@ func _show_result(msg: Dictionary) -> void:
 	if score.size() >= 2:
 		box.add_child(_label(tr("TRENCH_SCORE") % [int(score[_my_slot - 1]),
 			int(score[2 - _my_slot])], 18, COL_TEXT, true))
+
+	# 🎯 §8.153.3 — LE COMPTE DE TIRS À LA TÊTE. Un head shot majore les dégâts de moitié : ne le
+	# compter nulle part, c est laisser le joueur sans aucun moyen de savoir s il y arrive.
+	# ⚠️ LES DEUX CHIFFRES VIENNENT DE L ÉTAT SERVEUR, jamais d un cumul tenu ici : un compteur
+	# client divergerait à la première reconnexion, et les deux joueurs verraient deux scores.
+	# ⛔ Affiché SEULEMENT si le joueur a touché quelque chose. « 0 sur 0 » n apprend rien et
+	# encombre un écran de fin qui doit d abord dire qui a gagné.
+	var moi := _player_of(latest, _my_slot)
+	var au_but := int(moi.get("hits_total", 0))
+	if au_but > 0:
+		box.add_child(_label(tr("TRENCH_HEADSHOTS")
+			% [int(moi.get("headshots_total", 0)), au_but], 15, COL_MUTED, true))
 
 	if bool(msg.get("training", _training)):
 		box.add_child(_label(tr("TRENCH_VS_BOT_NOTE"), 14, COL_MUTED))

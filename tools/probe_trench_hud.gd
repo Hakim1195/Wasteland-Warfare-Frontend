@@ -96,7 +96,7 @@ var _ordinary: Dictionary = {}
 
 # Relevé le 2026-08-28 en headless, après la bascule du viewmodel 3D. À RELEVER À NOUVEAU
 # si une section est volontairement ajoutée ou retirée — jamais à baisser pour faire passer.
-const PASS_MINIMUM := 247
+const PASS_MINIMUM := 260
 
 
 func _ok(label: String, cond: bool, detail := "") -> void:
@@ -144,6 +144,7 @@ func _ready() -> void:
 	await _section_damage_pixels(duel)
 	_section_hitmarker(duel)
 	_section_headshot(duel)
+	_section_aide(duel)
 	await _section_pixels(duel)
 
 	print("\n%d PASS / %d FAIL" % [_pass, _fails.size()])
@@ -2750,3 +2751,48 @@ func _section_headshot(duel) -> void:
 		"hitmarker=%s headshot=%s" % [str(AudioManager.has_sfx("trench_hitmarker")),
 			str(AudioManager.has_sfx("trench_headshot"))])
 	_clear_damage(duel)
+
+
+# =================================================================================================
+# 4ter. L AIDE F1 DIT-ELLE LA VERITE ? (§8.153.3)
+# =================================================================================================
+# ╔═ 🩸 CE CONTROLE NAIT D UN MENSONGE QUI A VECU DEUX LOTS ══════════════════════════════════════╗
+# ║ Le §8.152.10 a retire le clic droit de la grenade pour en faire la VISEE A L OEIL. La ligne   ║
+# ║ d aide, elle, a continue d annoncer « G ou CLIC DROIT (maintenir) » pendant deux lots.        ║
+# ║ ⚠️ Une aide qui ment est PIRE que pas d aide : le joueur essaie, ca ne marche pas, et il en   ║
+# ║ conclut que le JEU est casse. Et rien ne rougissait — un texte n a pas de type.               ║
+# ║                                                                                                ║
+# ║ ⛔ Ce controle lie le tableau d aide au CODE : chaque commande que le duel ecoute doit avoir   ║
+# ║ sa ligne, et aucune ligne ne doit nommer une touche que le code n ecoute plus.                 ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _section_aide(duel) -> void:
+	_section("4ter. AIDE F1 — elle decrit ce que le code ecoute VRAIMENT")
+	var aide := ""
+	for cle: String in ["TRENCH_HELP_MOVE", "TRENCH_HELP_STANCE", "TRENCH_HELP_AIM",
+			"TRENCH_HELP_FIRE", "TRENCH_HELP_ADS", "TRENCH_HELP_HEADSHOT",
+			"TRENCH_HELP_GRENADE", "TRENCH_HELP_RELOAD", "TRENCH_HELP_BANDAGE"]:
+		aide += tr(cle) + " | " + tr(cle + "_D") + "
+"
+		_ok("l aide a bien un texte pour %s" % cle,
+			tr(cle) != cle and tr(cle + "_D") != cle + "_D")
+
+	# ⛔ LE MEMBRE DUR : la grenade ne doit PLUS nommer le clic droit, et la visee DOIT le nommer.
+	# Les deux ensemble — sinon une aide qui aurait simplement perdu la ligne de grenade passerait.
+	var gren := tr("TRENCH_HELP_GRENADE").to_upper()
+	var ads := tr("TRENCH_HELP_ADS").to_upper()
+	_ok("la GRENADE ne revendique plus le clic droit (il sert la visee depuis le §8.152.10)",
+		not gren.contains("DROIT") and not gren.contains("RIGHT") and not gren.contains("DESTRO"),
+		"« %s »" % tr("TRENCH_HELP_GRENADE"))
+	_ok("la VISEE A L OEIL, elle, le revendique",
+		ads.contains("DROIT") or ads.contains("RIGHT") or ads.contains("DESTRO"),
+		"« %s »" % tr("TRENCH_HELP_ADS"))
+	_ok("le HEAD SHOT est documente, avec sa majoration",
+		tr("TRENCH_HELP_HEADSHOT_D").contains("50"),
+		"« %s »" % tr("TRENCH_HELP_HEADSHOT_D"))
+
+	# Le compte de tirs a la tete de l ecran de fin : il LIT l etat serveur, il ne cumule rien.
+	_ok("le compte de tirs a la tete a son texte, et il attend DEUX nombres",
+		tr("TRENCH_HEADSHOTS") != "TRENCH_HEADSHOTS"
+			and tr("TRENCH_HEADSHOTS").count("%d") == 2,
+		"« %s »" % tr("TRENCH_HEADSHOTS"))
+

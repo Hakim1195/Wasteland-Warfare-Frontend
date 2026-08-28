@@ -10155,3 +10155,69 @@ Client : 14 sondes, **0 rouge, 0 erreur de script** · `probe_trench_hud` **247 
 `test_trench_ambient` **94 contrôles, 11 sabotages sur 11**.
 Backend : `sim` 153 ✅ · `angles` 20 ✅ · `bot` 27 ✅ · `flow` 90 ✅ · `headshot` 24 ✅ — **0 ❌**.
 Inventaire de recette : **20 fichiers sur 20**.
+
+---
+
+## §8.153.3 — L'INTERFACE : deux mécaniques que le joueur ne pouvait pas découvrir
+
+Question de Hakim : « il manque les éléments de l'interface non ? ». Vérifié plutôt que supposé —
+et oui, il manquait trois choses, dont **deux que j'avais créées moi-même**.
+
+Sondes : `probe_trench_hud` — **260 PASS / 0 FAIL** (+13, `PASS_MINIMUM` relevé) ·
+`test_trench_headshot` — **27 ✅**.
+
+### 🩸 L'AIDE F1 MENTAIT DEPUIS DEUX LOTS
+
+`TRENCH_HELP_GRENADE` annonçait **« G ou CLIC DROIT (maintenir) »**. Or le §8.152.10 a retiré le
+clic droit de la grenade pour en faire la **visée à l'œil** — et la ligne d'aide, elle, n'a pas
+bougé. Deux lots durant, l'écran d'aide décrivait une commande que le code n'écoutait plus.
+
+⚠️ **Une aide qui ment est PIRE que pas d'aide** : le joueur essaie, ça ne marche pas, et il en
+conclut que le JEU est cassé. Et rien ne pouvait rougir — **un texte n'a pas de type**. Aucun
+contrôle du dépôt ne reliait le tableau d'aide aux touches réellement écoutées.
+
+### Ce qui manquait, et qui n'était écrit nulle part
+
+| mécanique | livrée au | documentée |
+|---|---|---|
+| visée à l'œil (clic droit) | §8.152.10 | **nulle part** |
+| head shot (+50 % de dégâts) | §8.153 | **nulle part** |
+
+Deux mécaniques qu'un joueur ne pouvait **pas découvrir**. La seconde change les dégâts de moitié.
+⚠️ Le libellé du head shot dit ce qui compte, pas ce qui flatte : *« viser le centre reste un tir
+au corps »* — c'est la propriété mesurée au §8.153 (centre de fenêtre à 50 %, menton à 58,7 %), et
+c'est elle qui rend le head shot méritant.
+
+### ⛔ LE CONTRÔLE QUI LIE LE TEXTE AU CODE
+
+Nouveau, section 4ter : la ligne de grenade **ne doit plus nommer le clic droit**, et celle de
+visée **doit** le nommer — *les deux ensemble*. Un seul des deux membres serait satisfait par une
+aide qui aurait simplement perdu sa ligne de grenade.
+⚠️ Le contrôle interroge les trois langues (`to_upper()` sur DROIT / RIGHT / DESTRO) : une
+traduction qui garderait le mensonge dans une seule langue serait un mensonge quand même.
+
+### 🎯 LE COMPTE DE TIRS À LA TÊTE
+
+`headshots_total`, **compté par le SERVEUR**, à côté de `hits_total`. Affiché en fin de duel :
+« TIRS À LA TÊTE : 3 sur 5 ».
+
+⛔ **Purement informatif** : il ne déclenche aucune escalade et ne modifie aucune règle. Un head
+shot ne fait pas monter d'arme plus vite qu'un tir au corps — ce serait une règle déguisée en
+statistique, et un contrôle l'interdit.
+⚠️ **Compté serveur, pas client.** Un cumul tenu par le client divergerait à la première
+reconnexion et les deux joueurs verraient deux scores. L'écran de fin **LIT** la vue rédigée.
+⚠️ Affiché seulement si le joueur a touché quelque chose : « 0 sur 0 » n'apprend rien et encombre
+un écran qui doit d'abord dire qui a gagné.
+
+### 🩸 UN TEST QUI COMPTAIT L'ESCALADE SANS LE SAVOIR
+
+Le contrôle du compteur annonçait **6 touches pour 5 pressions de détente**. Cause : au 4ᵉ coup au
+but, `_credit_hit` donne le **FRELON**, qui tire par **rafale de 3**. La simulation était juste ;
+c'est le test qui ignorait une règle du jeu.
+⚠️ **Un test qui compte des touches doit FIGER l'arme**, sinon il compte l'escalade.
+
+### ⚠️ Ce que ce lot NE fait pas
+
+Le head shot n'apparaît **pas en direct** dans le HUD — seulement en fin de duel. C'est délibéré :
+le retour immédiat existe déjà (croix blanche, son plus aigu, chiffre distinct), et un compteur qui
+défile en plein duel prendrait de la place sur un écran déjà chargé.
