@@ -33,7 +33,14 @@ extends Control
 const WarzoneUI := preload("res://scripts/ui/warzone_ui.gd")
 const Geo := preload("res://scripts/game/trench_geometry.gd")
 const WorldScene := preload("res://scenes/game/trench_fp_world.tscn")
-const ViewmodelScript := preload("res://scripts/game/trench_viewmodel.gd")
+# §8.152 (lot 3D-H) — **LA BASCULE TIENT EN CETTE LIGNE.** L'hôte 3D présente exactement
+# l'API du viewmodel 2D peint et traduit vers le rig en interne. Les huit sites d'appel de
+# ce fichier n'ont pas bougé d'un caractère — ce qui veut dire que **le retour arrière tient
+# lui aussi en cette ligne**, et c'est la seule raison pour laquelle un remplacement de cette
+# ampleur peut se faire sans filet.
+# ⚠️ L'ancien reste en place et compile : `trench_viewmodel.gd` n'est PAS supprimé tant que
+# les captures avant/après n'ont pas été jugées.
+const ViewmodelScript := preload("res://scripts/game/trench_viewmodel3d_host.gd")
 const AmbientScript := preload("res://scripts/game/trench_ambient.gd")
 const TuningScript := preload("res://scripts/game/trench_tuning.gd")
 const CelebrationScript := preload("res://scripts/ui/unlock_celebration.gd")
@@ -191,6 +198,41 @@ var _laser_warn_token := -1
 var _send_accum := 0.0
 var _sent_at: Array = []           # horodatages des envois de la dernière seconde (anti-flood)
 var _fire_queued := false
+
+# ╔═ §8.152.1 — LES DEUX CAUSES DE « LE CONDOR RATE DES TIRS » ═══════════════════════╗
+# ║ Verdict de partie réelle : « la latence entre le clic et le tir effectif, et des fois ça  ║
+# ║ tire même pas ». Deux défauts distincts, tous deux CÔTÉ CLIENT — aucune règle en cause :  ║
+# ║                                                                                            ║
+# ║ **(a) LE CLIC PERDU.** `_queue_fire()` interroge `_fire_refusal()` ; si la cadence n'est  ║
+# ║ pas échue, le clic est **jeté** avec un clac de refus. Le condor a `cooldown_ticks = 22`  ║
+# ║ à 20 Hz, soit **1,10 s** où TOUT clic disparaît. Un joueur qui anticipe de 150 ms perd son ║
+# ║ tir et doit recliquer — c'est le « ça tire même pas ».                                   ║
+# ║                                                                                            ║
+# ║ **(b) LE CLIC SANS ACCUSÉ DE RÉCEPTION.** Un tir télégraphié ne produit RIEN localement au  ║
+# ║ clic (c'est la règle du §8.151-2bis, et elle est JUSTE : pas de faux coup). Le pavé        ║
+# ║ affirmait que « le retour immédiat existe déjà : c'est le rayon laser » — **mais le rayon  ║
+# ║ est rendu depuis l'ÉTAT SERVEUR.** Il n'apparaît donc qu'après un aller-retour réseau,     ║
+# ║ par-dessus les 0,5 s de télégraphe. Entre les deux : le silence complet.                   ║
+# ║                                                                                            ║
+# ║ ⛔ CE QUI N'EST PAS TOUCHÉ : la cadence, le télégraphe, la dispersion. Hakim accepte la     ║
+# ║ latence ENTRE les tirs (« ça reste un sniper ») — ce qui n'est pas acceptable, c'est de   ║
+# ║ PERDRE un tir. Le tampon ne fait jamais tirer plus vite : il ne fait que déplacer un clic  ║
+# ║ au premier instant OÙ IL EST LÉGAL, et le serveur reste seul juge.                         ║
+# ╚══════════════════════════════════════════════════════════════════════════════════════════╝
+#
+# La fenêtre de tampon. ⚠️ Elle n'est pas choisie au goût : l'anticipation humaine sur un signal
+# attendu se situe vers **150 à 250 ms**, et 250 ms couvrent 5 pas de simulation à 20 Hz et deux
+# envois du budget anti-flood (9 msg/s). En deçà, un joueur précis perd encore des tirs ; au-delà,
+# le tampon commencerait à ressembler à du tir automatique et à tirer à la place du joueur.
+const FIRE_BUFFER := 0.25
+var _fire_buffer_until := 0.0
+
+# Prédiction locale du rayon laser — même nature que `_pred_fire_ready` et `_pred_pos`, qui sont
+# prédits depuis toujours dans ce fichier. Elle est BORNÉE : passée la fenêtre, seul l'état
+# serveur parle. Si le serveur refuse le tir, le rayon prédit disparaît — comme toute prédiction.
+var _laser_pred_until := 0.0
+var _laser_pred_aim := Vector2.ZERO
+var _laser_pred_pos := 2
 var _throw_queued: Dictionary = {}
 var _pick_queued := ""
 var _reload_queued := false
@@ -201,6 +243,25 @@ var _item_queued := ""
 # `_grenade_cancelled` = verrou d'annulation, levé seulement quand la touche est VRAIMENT relâchée.
 # `_grenade_refuse` = durée restante du refus visuel (stock vide) — jamais un silence.
 var _aiming_grenade := false
+
+# ╔═ §8.152 (lot 3D-H) — LA VISÉE À L'ŒIL ═════════════════════════════════╗
+# ║ ⚠️ 100 % CONFORT, AUCUN AVANTAGE — et c'est vérifiable, pas promis. La visée resserre    ║
+# ║ le champ du viewmodel et la sensibilité de la souris. Elle ne touche **ni la dispersion, ║
+# ║ ni la cadence, ni la fenêtre de touche** : ce que le serveur reçoit est bit-identique     ║
+# ║ qu'on vise ou non, et `probe_trench_feel_aim` le prouve déjà pour le reste du confort.  ║
+# ║                                                                                            ║
+# ║ ⛔ Le rig 3D ne détient PAS cette valeur, il la REÇOIT. Chez la référence, `adsT` vit dans ║
+# ║ le viewmodel et la dispersion le lit (`index.js:223` puis `:662`) — la précision dépend    ║
+# ║ alors d'une variable d'animation. C'est l'inversion que le §8.141.6 interdit.              ║
+# ╚════════════════════════════════════════════════════════════════════════════════════════════╝
+var _ads_active := false
+var _ads_held_prev := false
+var _ads_toggle: bool = TuningScript.defaults()["ads_toggle"]
+
+# Poussés depuis `_refresh_hud` : le rig est une VUE, il ne relit jamais l'état serveur.
+# (Même contrat que le viewmodel peint — « on le lui pousse ».)
+var _rig_weapon := ""
+var _rig_empty := false
 var _grenade_point := 0.0
 var _grenade_cancelled := false
 var _grenade_refuse := 0.0
@@ -512,6 +573,12 @@ func _build_layers() -> void:
 	# reprend le service — d'où l'aiguillage unique `_apply_weapon()`.
 	_viewmodel = ViewmodelScript.new()
 	add_child(_viewmodel)
+	# ⛔ LA DURÉE DE RECHARGEMENT EST UNE RÈGLE : on ne la DONNE pas à l'hôte, on lui donne
+	# de quoi la DEMANDER. La différence est tout le lot : `_apply_weapon` tourne dans
+	# `_ready()`, **avant** que le registre serveur n'existe. Une valeur passée ici serait
+	# figée à zéro pour toujours ; un fournisseur, lui, redonne la bonne dès qu'elle arrive.
+	if _viewmodel.has_method("_reload_seconds"):
+		_viewmodel.reload_source = Callable(self, "_reload_seconds")
 	_viewmodel.set_reduced_motion(_reduced_motion)
 	_apply_weapon(STARTING_WEAPON)
 
@@ -1270,6 +1337,12 @@ func _fire_refusal() -> String:
 # ⚠️ « Chargeur vide » est le seul refus qui PRODUIT quelque chose côté serveur (il déclenche le
 # rechargement, confort standard du genre) : on laisse donc le clic partir dans ce cas-là.
 func _refuse_fire(reason: String) -> void:
+	# ⚠️ LA CADENCE EST LE SEUL REFUS QU'ON MÉMORISE, et c'est délibéré : c'est le seul où
+	# le joueur a raison sur le FOND (il veut tirer, il tirera) et se trompe seulement sur
+	# l'INSTANT. Un clic pendant un rechargement, un pansement ou sous un panneau n'est pas
+	# une anticipation : c'est un autre geste, et le mémoriser tirerait à la place du joueur.
+	if reason == "cadence":
+		_fire_buffer_until = _clock + FIRE_BUFFER
 	if reason == "chargeur vide":
 		_fire_queued = true
 		_fire_aim = Vector2(_aim_yaw, _aim_pitch)
@@ -1334,6 +1407,14 @@ func _local_fire_feedback() -> void:
 	# ║ elle ne joue simplement rien. Retoucher le ⚙ `laser_lead_ticks` ne peut plus rien casser.   ║
 	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 	if lead > 0.0:
+		# ⚠️ ON NE JOUE TOUJOURS RIEN DE BALISTIQUE — ni détonation, ni recul, ni traçante :
+		# la règle du §8.151-2bis tient. Ce qu'on rend immédiatement, c'est le RAYON, qui est
+		# la seule chose que le clic a réellement produite côté serveur. Le pavé ci-dessus le
+		# disait déjà — il se trompait seulement en le croyant IMMÉDIAT, alors qu'il attendait
+		# un aller-retour réseau. On le prédit, exactement comme la cadence et la position.
+		_laser_pred_until = _clock + FIRE_BUFFER + lead / _tick_rate
+		_laser_pred_aim = _fire_aim
+		_laser_pred_pos = _pred_pos
 		return
 	_fire_feel_kick()             # §8.151 : roulis + punch de FOV — cosmétiques, retour-à-zéro
 	_fire_fx_mute = 0.45          # l'événement serveur de CE tir ne doit pas le rejouer
@@ -1538,6 +1619,7 @@ func _step_feel(delta: float) -> void:
 # c'est la condition pour que ce panneau reste un réglage de CONFORT et pas un avantage.
 func _apply_tuning(values: Dictionary) -> void:
 	_sensitivity = float(values.get("mouse_sensitivity", _sensitivity))
+	_ads_toggle = bool(values.get("ads_toggle", _ads_toggle))
 	_invert_y = bool(values.get("invert_y", _invert_y))
 	# §8.151 — les intensités de feel. Bornées ici aussi : le fichier de réglages est une
 	# commodité, jamais une autorité. `feel_shake`/`feel_breath` transitent vers leurs
@@ -1614,6 +1696,13 @@ func _process(delta: float) -> void:
 		_bolt_armed = false
 		AudioManager.play_sfx("trench_bolt")
 
+	_vider_tampon_de_tir()
+	_update_ads()
+	# Le rig est une VUE : il ne relit jamais l'état, on le lui pousse. Le garde
+	# `has_method` n'est pas de la prudence décorative — il rend le retour au viewmodel 2D
+	# possible en changeant une seule ligne, sans toucher à celle-ci.
+	if _viewmodel != null and _viewmodel.has_method("pousser_etat"):
+		_viewmodel.pousser_etat(_rig_state())
 	_update_grenade_aim(delta)
 	# §8.151 (2ter, §4bis.5) — LE TIR MAINTENU. Il REMPLACE l'ancien appel manette inconditionnel
 	# (`is_joy_button_pressed(A) → _queue_fire()` à chaque frame), qui claquait le son de refus ~7
@@ -1749,9 +1838,98 @@ func _process(delta: float) -> void:
 # ║ accidentel (le clic droit est à un doigt du clic gauche) dépenserait une grenade sur deux. Un   ║
 # ║ geste qu'on ne peut pas reprendre est un geste qu'on n'ose pas commencer.                        ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ⚠️ LA VISÉE, MAINTIEN OU BASCULE. Le maintien est le défaut (convention AAA).
+# ⛔ Deux interdits, et ils ne sont pas cosmétiques : on ne vise pas une grenade à la main
+# (les deux gestes se disputeraient le même bouton et la même pose de main), et on ne vise
+# pas après la fin du match (une pose figée en visée serait un défaut de capture).
+# ⚠️ LE TAMPON NE FAIT JAMAIS TIRER PLUS TÔT QUE LA RÈGLE. Il repasse par `_queue_fire()`,
+# donc par les SIX refus au complet : si la cadence n'est pas échue, il ne se passe rien et le
+# tampon attend la frame suivante. Il ne fait que convertir un clic PERDU en un clic HONORÉ
+# au premier instant légal — et le serveur reste seul juge de ce qui part vraiment.
+# ⚠️ Il est vidé DÈS qu'il a servi : sans ça, un seul clic anticipé armerait tous les tirs de
+# la fenêtre suivante, ce qui SERAIT tirer à la place du joueur.
+func _vider_tampon_de_tir() -> void:
+	if _fire_buffer_until <= 0.0:
+		return
+	if _clock > _fire_buffer_until:
+		_fire_buffer_until = 0.0
+		return
+	if _ui_blocks_actions() or _fire_queued:
+		return
+	if _fire_refusal() != "":
+		return
+	_fire_buffer_until = 0.0
+	_queue_fire()
+
+
+# ⚠️ SÉPARÉ EN DEUX À DESSEIN : la LECTURE du bouton d'un côté, la DÉCISION de l'autre.
+# 🩸 Sans cette séparation, la sonde ne pouvait pas éprouver la décision — elle ne peut pas
+# presser un bouton en headless — et elle en rejouait donc une COPIE. **Un contrôle qui teste sa
+# propre copie de l'algorithme ne teste rien** : le sabotage qui supprimait les deux interdits
+# la laissait VERTE. Depuis, elle appelle `_apply_ads()`, c'est-à-dire le vrai code.
+# ⚠️ La leçon est générale : **une décision qu'on ne peut pas appeler depuis un test doit être
+# séparée de son entrée.**
+func _update_ads() -> void:
+	_apply_ads(Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+		or (Input.get_connected_joypads().size() > 0
+			and Input.is_joy_button_pressed(0, JOY_BUTTON_LEFT_SHOULDER)))
+
+
+func _apply_ads(held: bool) -> void:
+	if _ads_toggle:
+		# Front MONTANT : sans le souvenir de l'image précédente, un maintien basculerait
+		# soixante fois par seconde et la visée clignoterait.
+		if held and not _ads_held_prev:
+			_ads_active = not _ads_active
+	else:
+		_ads_active = held
+	_ads_held_prev = held
+	if _aiming_grenade or _match_over:
+		_ads_active = false
+
+
+# ╔═ L'ÉTAT POUSSÉ AU RIG 3D — tout ce qu'il a le droit de savoir, et rien d'autre ═══════╗
+# ║ ⚠️ **LES ANGLES SONT EN RADIANS ICI, EN DEGRÉS LÀ-BAS.** `_aim_yaw` et `_aim_pitch` sont ║
+# ║ en DEGRÉS (la sensibilité est en « degrés par pixel », le site est borné à 14). Le rig,   ║
+# ║ lui, dérive une vitesse angulaire avec `wrap_pi`, donc en RADIANS. Pousser les degrés   ║
+# ║ tels quels donnerait une vitesse **57 fois trop grande**, bornée à ±9 rad/s : la couche  ║
+# ║ de traîne serait saturée en permanence, l'arme resterait collée en butée, et RIEN         ║
+# ║ n'aurait l'air cassé — juste « bizarre ». C'est exactement le genre d'erreur d'unités     ║
+# ║ qu'aucune compilation n'attrape.                                                          ║
+# ║                                                                                          ║
+# ║ ⛔ `cycle_time` est une CADENCE, donc une RÈGLE : elle passe par `_cadence_seconds`, qui ║
+# ║ lit `public_rules`. Aucun barème en dur ne traverse cette fonction.                       ║
+# ║ ⚠️ `crouch` N'EST PAS poussé : le rig ne le consomme pas (la posture change la hauteur   ║
+# ║ de l'ŒIL, pas la pose de l'arme). Une clé annoncée que personne ne lit est pire qu'une   ║
+# ║ clé absente : l'appelant la remplit et croit avoir branché quelque chose.                 ║
+# ╚════════════════════════════════════════════════════════════════════════════════════════════╝
+func _rig_state() -> Dictionary:
+	return {
+		"ads": _ads_active,
+		# Le joueur est CONFINÉ (§6 du cahier : pas de course, pas de saut, pas de strafe).
+		# Les couches correspondantes du rig existent et resteront au repos — c'est ce qui
+		# rend la contre-épreuve de bit-stabilité possible.
+		"sprint": false,
+		"speed": 0.0,
+		"airborne": false,
+		# Grenade en main = arme abaissée. La correspondance sémantique est exacte.
+		"low_ready": _aiming_grenade,
+		"trigger": _fire_hold_active(),
+		"empty": _rig_empty,
+		"cycle_time": _cadence_seconds(_rig_weapon),
+		"yaw": deg_to_rad(_aim_yaw),
+		"pitch": deg_to_rad(_aim_pitch),
+	}
+
+
 func _update_grenade_aim(_delta: float) -> void:
+	# ⚠️ §8.152 (lot 3D-H) — LE CLIC DROIT A ÉTÉ RETIRÉ D'ICI, il sert maintenant à la VISÉE.
+	# C'est la convention de tous les grands FPS (clic droit = épauler, G = grenade), et
+	# ça ne coûte rien : `KEY_G` était DÉJÀ une liaison complète, le clic droit n'en était
+	# qu'un doublon. Le pavé ci-dessus le disait lui-même : « le clic droit est à un doigt
+	# du clic gauche » et dépensait des grenades par accident. Le libérer est donc AUSSI un
+	# correctif, pas seulement un déplacement.
 	var holding := Input.is_key_pressed(KEY_G) \
-		or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) \
 		or (Input.get_connected_joypads().size() > 0
 			and Input.is_joy_button_pressed(0, JOY_BUTTON_X))
 	# Une annulation (ÉCHAP ou re-tape de G) verrouille le maintien jusqu'à ce que la touche soit
@@ -2038,6 +2216,13 @@ func _refresh_view(delta: float) -> void:
 
 	# --- Laser CONDOR : rendu DÈS l'événement serveur, dans la direction réelle du tireur ---
 	var laser := {}
+	# ⚠️ LE RAYON PRÉDIT, tant que l'état serveur n'a pas encore le mien. Il est ÉCRASÉ dès
+	# que le serveur en annonce un (la boucle ci-dessous réécrit `laser`), et il expire tout
+	# seul. C'est ce qui donne au clic un accusé de réception IMMÉDIAT sans rien inventer :
+	# le rayon est exactement ce que le clic a produit côté serveur.
+	if _clock < _laser_pred_until:
+		laser = {"active": true, "mine": true, "from_pos": _laser_pred_pos,
+			"yaw": _laser_pred_aim.x, "pitch": _laser_pred_aim.y}
 	var enemy_laser_now := false
 	# Le tick auquel la balle adverse PARTIRA — c'est lui qui borne l'avertissement sonore.
 	var enemy_laser_tick := 0.0
@@ -2794,6 +2979,9 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 	# Le VIEWMODEL PEINT (§8.138) est une VUE : il ne relit pas l'état, on le lui pousse.
 	# (§8.151 : plus de valeur de recul à pousser — le kick vit dans ses ressorts, `notify_fire`.)
 	_viewmodel.set_reloading(reloading)
+	# §8.152 — ce dont le rig 3D a besoin, et qui n'existe QUE dans l'état serveur.
+	_rig_weapon = str(me.get("weapon", "vipere"))
+	_rig_empty = int(me.get("ammo", 0)) <= 0
 	_weapon_label.text = _weapon_name(str(me.get("weapon", "vipere")))
 	_progress_label.text = _escalation_text(int(me.get("hits_total", 0)))
 

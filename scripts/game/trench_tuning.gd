@@ -81,6 +81,12 @@ static func defaults() -> Dictionary:
 		# le client n'émet jamais un tir que la prédiction des six refus rejetterait. Le couper
 		# rend EXACTEMENT le comportement d'avant : un clic, un tir.
 		"auto_fire": true,
+		# §8.152 (lot 3D-H) — LA VISÉE. Interrupteur et non curseur : on tient le bouton ou
+		# on bascule, il n'y a rien à doser. **MAINTIEN par défaut**, comme tous les grands
+		# FPS. ⚠️ 100 % confort, aucun avantage : la visée resserre le champ et la
+		# sensibilité, elle ne touche NI la dispersion NI la cadence NI la fenêtre de touche.
+		# Ce que le serveur reçoit est bit-identique dans les deux modes.
+		"ads_toggle": false,
 	}
 
 
@@ -116,6 +122,7 @@ var _readouts: Dictionary = {}
 var _invert_box: CheckBox
 var _fov_punch_box: CheckBox
 var _auto_fire_box: CheckBox
+var _ads_toggle_box: CheckBox
 var _journal: Label
 
 
@@ -264,6 +271,9 @@ func _build() -> void:
 	_auto_fire_box = _build_checkbox("TRENCH_TUNE_AUTO_FIRE", "auto_fire")
 	column.add_child(_auto_fire_box)
 
+	_ads_toggle_box = _build_checkbox("TRENCH_TUNE_ADS_TOGGLE", "ads_toggle")
+	column.add_child(_ads_toggle_box)
+
 	column.add_child(HSeparator.new())
 	# LE JOURNAL DES ENTRÉES (§ LOT C.3) : le symptôme « les déplacements ne fonctionnent pas » n'a
 	# jamais été reproduit ni diagnostiqué. S'il revient en partie réelle, il faut pouvoir lire À
@@ -344,6 +354,8 @@ func _on_reset() -> void:
 		_invert_box.set_pressed_no_signal(bool(_values["invert_y"]))
 	if _fov_punch_box != null:
 		_fov_punch_box.set_pressed_no_signal(bool(_values["fov_punch"]))
+	if _ads_toggle_box != null:
+		_ads_toggle_box.set_pressed_no_signal(bool(_values["ads_toggle"]))
 	if _auto_fire_box != null:
 		_auto_fire_box.set_pressed_no_signal(bool(_values["auto_fire"]))
 	_commit()

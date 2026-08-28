@@ -9277,3 +9277,151 @@ maillage a fait tourner Godot plusieurs minutes sans rendre la main (19 s de CPU
 la main). Les exécutions suivantes, avec les mêmes fonctions appelées correctement, rendent en
 **moins de 100 ms**. Je n'ai pas reproduit le blocage et je ne lui attribue **aucune cause** — c'est
 noté parce qu'un blocage non expliqué qu'on oublie revient toujours au pire moment.
+
+---
+
+## §8.152.10 — VUE 3D : LOT 3D-H — LE RIG 3D EST BRANCHÉ DANS LE JEU
+
+**Deux fichiers NEUFS** : `scripts/game/trench_viewmodel3d_host.gd` (l'adaptateur) et
+`tools/probe_vue3d_etat.gd`. Le viewmodel 2D peint est **débranché**.
+Sondes : `probe_vue3d_etat` — **5 contrôles verts, 6 sabotages sur 6**.
+
+### La bascule tient en UNE ligne, et c'est le point de conception du lot
+
+Le viewmodel 2D expose onze méthodes appelées depuis huit endroits de `trench_fp.gd` — le fichier
+le plus chargé du projet, dont deux crans de rafale gardés par `probe_trench_falseshot`. Les
+réécrire, c'est huit occasions de casser quelque chose.
+
+L'hôte 3D présente donc **exactement la même API** et traduit vers le rig en interne. Le seul
+changement de site d'appel est le `preload` de la couche 3. **Ce qui veut dire que le retour arrière
+tient lui aussi en une ligne** — et c'est la seule raison pour laquelle un remplacement de cette
+ampleur peut se faire sans filet. `trench_viewmodel.gd` n'est **pas** supprimé.
+
+Il est un `SubViewportContainer`, donc un `Control` : la secousse d'écran (`layer.position` sur les
+trois couches) et la garde d'ordre des six couches de `test_trench_ambient` continuent **sans une
+ligne de changement**.
+
+### ⭐ POURQUOI UN VIEWPORT SÉPARÉ — le pavé de `trench_fp_world.gd:21-30` était PÉRIMÉ
+
+Il justifiait l'absence d'un second viewport par « il n'y a AUCUNE géométrie à moins de 2 m devant
+les yeux », et se terminait par « si un jour l'arène gagne un obstacle proche, c'est CE commentaire
+qu'il faudra rouvrir ». **On l'a rouvert : c'était faux.**
+
+Le parapet proche occupe z ∈ [0 ; 0,6] ; l'œil est à z = −0,5. **Sa face proche est à 0,50 m, pas à
+2 m.** Et accroupi (`EYE_DOWN = 0,90`) l'œil est 0,35 m sous le sommet des sacs alors que l'origine
+du rig est 0,29 à 0,34 m devant lui. La capture `02_accroupi_apres.png` le montre : l'œil est contre
+les sacs et **l'arme est dessinée entièrement devant**. Sans le viewport séparé, elle les traverse.
+
+### 🩸 UN FACTEUR 4 OUBLIÉ, ET CE N'ÉTAIT PAS UN GOÛT
+
+L'éclairage du viewmodel avait perdu le `× 4` du banc `shot_vue3d_parts.gd:58` — **l'appareil sur
+lequel l'`ALBEDO_GAIN` des matériaux a été calibré au lot 3D-C**, par mesure de luminance contre la
+capture de référence. Résultat en capture : une arme **quasi noire**.
+⚠️ **Un éclairage n'est pas un goût quand des matériaux ont été calibrés dessus : c'est une cote**,
+et la changer invalide silencieusement toute la calibration d'un lot antérieur.
+
+### 🩸🩸 DEUX SONDES EXISTANTES DISAIENT « TOUT VERT » SUR DES SECTIONS MUETTES
+
+La bascule les a réveillées, et le défaut était **antérieur** :
+
+| sonde | ce qui est mort | ce qu'elle annonçait |
+|---|---|---|
+| `probe_trench_hud` | la section grenade entière (le clic droit n'arme plus, et elle lisait `_viewmodel._grenade_aim`, un champ **privé**) | **TOUT VERT** |
+| `probe_trench_feel_aim` | la section 2 (elle lisait `kick_px`, une grandeur que le rig 3D ne rend pas) | **TOUT VERT** |
+
+Ni l'une ni l'autre **ne comptait ce qu'elle avait joué**. Les deux ont désormais un minimum
+(`PASS_MINIMUM = 237`, `CHECKS_MINIMUM = 5`) qui rougit si une section devient muette. Corrigée,
+la sonde du HUD passe de « TOUT VERT » à **237 PASS / 0 FAIL**.
+⚠️ Une sonde qui lit un champ **privé** d'une vue pour apprendre un fait de JEU ne survit pas au
+remplacement de cette vue. Les deux lectures passent désormais par `_rig_state()`, c'est-à-dire par
+la plomberie — ce qui les rend en plus utiles.
+
+### ⚠️ LA MESURE DU RETOUR DU KICK, MAINTENANT SÉPARÉE
+
+- **le kick** (`rec_pos`, `rec_rot` + roulis caméra) retombe en **0,546 s**, pour une cadence
+  minimale de **0,800 s** : un tir sans lendemain, la règle du §8.151 tient ;
+- **la dérive lente** (`settle`, 2,2 Hz) vit jusqu'à **1,025 s** — et c'est **voulu** (« the muzzle
+  keeps wandering a little »). La mélanger au kick faisait rougir le contrôle sur un comportement
+  intentionnel. Son retour à zéro exact est déjà prouvé par V1 du rig.
+
+### Trois trous du rig, comblés dans l'adaptateur
+
+`set_feel_tuning` (le curseur de recul F10 mettait à l'échelle rien du tout), `set_reduced_motion`
+(**c'était une régression d'accessibilité** : sway, bob et traîne auraient tourné quoi qu'il arrive)
+et `notify_flinch` (réemploi assumé du ressort d'atterrissage, dont la forme — plongeon + piqué —
+est exactement celle d'un encaissement).
+
+### ⚠️ LE PIÈGE D'ORDONNANCEMENT, DÉSAMORCÉ
+
+`_apply_weapon()` tourne dans `_ready()`, **avant** l'arrivée du registre : `_rules` est vide et
+`_tick_rate` vaut encore 10 quand le contrat est à 20 Hz. Or le rig **fige la durée de rechargement
+dans ses clips à la construction**. D'où deux mesures : l'hôte reçoit un **fournisseur** (`Callable`)
+et non une valeur, et le rig sait **reconstruire ses clips** (`set_reload_seconds`) quand la durée
+change — en ignorant les zéros, pour ne jamais écraser des clips justes par des clips instantanés.
+
+### La visée à l'œil (lot 3D-F2, moitié restante)
+
+**Clic droit en maintien**, bascule réglable au F10 (`ads_toggle`, maintien par défaut — convention
+AAA). La grenade garde `G`, qui était **déjà** une liaison complète : le clic droit n'en était qu'un
+doublon, et le code notait lui-même qu'il « est à un doigt du clic gauche » et dépensait des
+grenades par accident. Le libérer est donc **aussi un correctif**.
+
+⚠️ **Les angles traversent la frontière en RADIANS.** `_aim_yaw` est en DEGRÉS ; le rig dérive une
+vitesse angulaire avec `wrap_pi`. Pousser les degrés donnerait une vitesse **57 fois trop grande**,
+écrêtée à ±9 rad/s : la traîne saturée en permanence, l'arme collée en butée, et **rien n'aurait
+l'air cassé** — juste « bizarre ». Le contrôle H2 le garde des deux côtés (c'est bien un radian, et
+ce n'est PAS un degré).
+
+### 🩸 UN CONTRÔLE QUI TESTAIT SA PROPRE COPIE
+
+La sonde ne peut pas presser un bouton en headless, alors elle **reproduisait** la logique de visée.
+Le sabotage qui supprimait les deux interdits (grenade en main, fin de match) la laissait **VERTE**.
+`trench_fp.gd` a été scindé pour ça : `_update_ads()` LIT le bouton, `_apply_ads(held)` DÉCIDE.
+⚠️ **Une décision qu'on ne peut pas appeler depuis un test doit être séparée de son entrée.**
+
+---
+
+## §8.152.11 — LE CONDOR RATAIT DES TIRS — deux causes, aucune règle en cause
+
+Verdict de partie réelle : « la latence entre le clic et le tir effectif, et des fois ça tire même
+pas ». Sonde : `tools/probe_trench_fire_buffer.tscn` — **6 contrôles verts, 6 sabotages sur 6**.
+
+### (a) LE CLIC PERDU
+
+`_queue_fire()` interrogeait `_fire_refusal()` ; si la cadence n'était pas échue, le clic était
+**jeté** avec un clac de refus. Le condor a `cooldown_ticks = 22` à 20 Hz : **1,10 s pendant
+lesquelles tout clic disparaissait**. Un joueur qui anticipe de 150 ms — ce que fait tout le monde
+sur une arme lente — perdait son tir.
+
+Remède : un **tampon d'entrée de 0,25 s**. ⚠️ La fenêtre n'est pas choisie au goût : l'anticipation
+humaine sur un signal attendu se situe vers 150-250 ms, et 250 ms couvrent 5 pas de simulation et
+deux envois du budget anti-flood. En deçà un joueur précis perd encore des tirs ; au-delà, le tampon
+commencerait à tirer à la place du joueur.
+
+⛔ **L'INVARIANT, gardé par le contrôle B2** : le tampon **ne fait jamais tirer plus tôt que la
+règle**. Il repasse par les six refus au complet ; il ne fait que convertir un clic PERDU en un clic
+HONORÉ au premier instant légal. Le contrôle balaie **toute** la fenêtre de cadence en 60 pas — un
+tampon qui ne mordrait qu'au dernier instant passerait un contrôle ponctuel sans rien prouver.
+
+⚠️ **Seule la cadence est mémorisée** (contrôle B5). C'est le seul refus où le joueur a raison sur
+le FOND et se trompe seulement sur l'INSTANT. Un clic pendant un rechargement ou un pansement est un
+AUTRE geste : le mémoriser ferait partir un tir que le joueur ne demande plus.
+
+### (b) LE CLIC SANS ACCUSÉ DE RÉCEPTION
+
+Un tir télégraphié ne produit **rien** localement au clic — et cette règle du §8.151-2bis est
+**juste** : pas de faux coup. Mais son pavé affirmait que « le retour immédiat existe déjà : c'est
+le rayon laser ». 🩸 **Le rayon est rendu depuis l'ÉTAT SERVEUR.** Il n'apparaît donc qu'après un
+aller-retour réseau, par-dessus les 0,5 s de télégraphe. Entre le clic et lui : **le silence
+complet** — d'où « l'arme met trop de temps à prendre en compte le tir ».
+
+Remède : **prédire le rayon localement**, exactement comme ce fichier prédit déjà la cadence
+(`_pred_fire_ready`) et la position (`_pred_pos`). On ne rend toujours rien de balistique — ni
+détonation, ni recul, ni traçante. On rend le **rayon**, qui est exactement ce que le clic a produit
+côté serveur. La prédiction est **bornée** et couvre au moins le télégraphe (contrôle B6 : un rayon
+qui s'éteindrait avant la balle mentirait sur la fin du danger).
+
+### ⛔ Ce qui n'a PAS été touché
+
+La cadence, le télégraphe, la dispersion, la table angulaire. Hakim accepte la latence **entre** les
+tirs (« ça reste un sniper ») ; ce qui n'était pas acceptable, c'était d'en **perdre**.

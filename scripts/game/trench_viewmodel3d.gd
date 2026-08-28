@@ -260,6 +260,7 @@ func add_weapon(weapon_id: String, reload_seconds: float) -> Dictionary:
 		"id": weapon_id, "vue": vue, "modele": modele, "groupe": groupe, "pieces": pieces,
 		"tris": tris,
 		"clips": Clips.build_clips(noeuds, vue, reload_seconds),
+	"reload_s": reload_seconds,
 		"sight": noeuds["sight"],
 		"muzzle": noeuds["muzzle"],
 		"eject": noeuds["eject"],
@@ -319,6 +320,36 @@ func _ancrer_main_de_soutien(e: Dictionary) -> void:
 	arm_l.fit_to_cylinder(gl["pos"], q, hg["axis"], hg["dir"], float(hg["r"]),
 		{"clearance": 0.001, "poseName": e["pose_l"]})
 	arm_l.set_pose(e["pose_l"])
+
+
+# ╔═ ⚠️⚠️ LE PIÈGE D'ORDONNANCEMENT DU LOT 3D-H, ET SON DÉSAMORÇAGE ════════════════════╗
+# ║ `_apply_weapon()` est appelé depuis `_build_layers()`, donc dans `_ready()` — **bien avant**   ║
+# ║ `_on_init`. À cet instant le registre serveur est VIDE et la cadence de tick vaut encore 10  ║
+# ║ alors que le contrat courant est à 20 Hz : un facteur DEUX, même si les règles étaient là.    ║
+# ║                                                                                              ║
+# ║ Le viewmodel 2D s'en moquait — il ne consommait aucune règle. Le rig 3D, lui, **fige la      ║
+# ║ durée de rechargement dans ses clips à la construction**. Construire l'arme en `_ready()`     ║
+# ║ avec un zéro donnerait une animation de rechargement instantanée, pour toujours, en silence.  ║
+# ║                                                                                              ║
+# ║ D'où cette méthode : reconstruire les CLIPS quand la durée change. C'est bon marché — les     ║
+# ║ clips ne sont que des tables de clés, aucun maillage n'est refait — et ça évite d'avoir à   ║
+# ║ retarder la construction de l'arme, qui elle est coûteuse.
+# ║ ⚠️ Un zéro est IGNORÉ : c'est la valeur que rend `_reload_seconds` quand le registre est     ║
+# ║ muet, et écraser des clips justes par des clips instantanés serait une régression.            ║
+# ╚════════════════════════════════════════════════════════════════════════════════════════════╝
+func set_reload_seconds(weapon_id: String, secondes: float) -> bool:
+	if secondes <= 0.0 or not weapons.has(weapon_id):
+		return false
+	var e: Dictionary = weapons[weapon_id]
+	if absf(float(e.get("reload_s", -1.0)) - secondes) < 1e-9:
+		return false
+	e["reload_s"] = secondes
+	e["clips"] = Clips.build_clips((e["modele"] as Dictionary)["nodes"], e["vue"], secondes)
+	# ⚠️ Un clip en cours a été construit avec l'ANCIENNE durée : le laisser tourner ferait
+	# jouer une timeline sur une table qui n'existe plus. On l'arrête.
+	if _clip != null:
+		stop_clip()
+	return true
 
 
 func set_active(weapon_id: String) -> void:

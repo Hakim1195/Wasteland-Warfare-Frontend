@@ -47,11 +47,16 @@ const STEPS_BETWEEN_SHOTS := 18
 const SHOTS := 10
 
 var _duel: Control = null
+# Relevé le 2026-08-28 après la bascule du rig 3D. À RELEVER À NOUVEAU si une section est
+# volontairement ajoutée ou retirée — jamais à baisser pour faire passer.
+const CHECKS_MINIMUM := 5
+var _joues := 0
 var _fails: Array = []
 var _saboter := false
 
 
 func _ok(label: String, cond: bool, detail := "") -> void:
+	_joues += 1
 	if not cond:
 		_fails.append(label)
 	print("  %s %s%s" % ["[OK]  " if cond else "[ROUGE]", label,
@@ -162,7 +167,18 @@ func _ready() -> void:
 		print("--- 3. CAPTURES à frame fixe (feel aux défauts livrés) ---")
 		await _captures()
 
-	print("\n%s" % ("TOUT VERT" if _fails.is_empty()
+	# ╔═ 🩸 GARDE-FOU DE COMPTAGE — ajouté au §8.152 (lot 3D-H) ═══════════════════════════════╗
+	# ║ Cette sonde annonçait « TOUT VERT » dès que `_fails` était vide, sans compter ce qu'elle ║
+	# ║ avait joué. La bascule du viewmodel 3D a fait mourir sa section 2 sur une lecture de      ║
+	# ║ `kick_px` qui n'existait plus — **deux contrôles ne tournaient plus, et elle disait TOUT  ║
+	# ║ VERT**. Même défaut trouvé le même jour dans `probe_trench_hud`.                          ║
+	# ╚══════════════════════════════════════════════════════════════════════════════════════════╝
+	if _joues < CHECKS_MINIMUM and _fails.is_empty():
+		print("\nINCOMPLETE : %d controles joues, %d attendus — une section est MUETTE"
+			% [_joues, CHECKS_MINIMUM])
+		get_tree().quit(1)
+	print("\n%d controles joues" % _joues)
+	print("%s" % ("TOUT VERT" if _fails.is_empty()
 		else "ECHEC : " + str(_fails.size()) + " controle(s) rouge(s)"))
 	get_tree().quit(0 if _fails.is_empty() else 1)
 
@@ -242,9 +258,24 @@ func _min_cadence_interval() -> float:
 	return min_ticks / maxf(tick_rate, 0.001)
 
 
+# ╔═ ⚠️⚠️ SECTION RÉÉCRITE AU §8.152 (lot 3D-H) — ET ELLE MENTAIT AVANT ═════════════╗
+# ║ Elle lisait `feel_probe()["kick_px"]`, c'est-à-dire des PIXELS — une grandeur que le      ║
+# ║ viewmodel 2D peint pouvait rendre parce qu'il ÉTAIT une image. Le rig 3D rend des        ║
+# ║ mètres et des radians : il n'y a pas de conversion en pixels qui ait un sens sans une     ║
+# ║ distance de projection.                                                                    ║
+# ║                                                                                            ║
+# ║ 🩸 Après la bascule, la lecture échouait — et **la sonde annonçait quand même TOUT VERT**, ║
+# ║ parce que la section mourait avant ses deux `_ok` et que rien ne comptait ce qui avait    ║
+# ║ tourné. C'est le même défaut que dans `probe_trench_hud`, trouvé le même jour.            ║
+# ║                                                                                            ║
+# ║ La QUESTION, elle, n'a pas changé et reste la bonne : **le recul est-il retombé avant que  ║
+# ║ le joueur puisse retirer ?** Un kick qui survit à la cadence s'accumule, et l'arme dérive  ║
+# ║ sans que le joueur ait rien fait. On la pose donc dans les unités du rig.                  ║
+# ║ ⚠️ Le seuil de « visible » est dérivé, pas inventé : le rig assèche ses ressorts à 1e-7,    ║
+# ║ donc « retombé » veut dire **exactement zéro**, et on peut l'exiger au bit près.          ║
+# ╚══════════════════════════════════════════════════════════════════════════════════════════╝
 func _probe_kick_return() -> void:
 	_apply_feel(true)
-	# Tout se pose d'abord (2 s de pas fixes) : la mesure part d'un repos propre.
 	_settle(2.0)
 	var interval := _min_cadence_interval()
 	_duel._clock = 900.0
@@ -257,31 +288,54 @@ func _probe_kick_return() -> void:
 
 	var horizon: float = interval + 0.5
 	var t := 0.0
-	var last_visible := 0.0
-	var peak_px := 0.0
+	var derniere_vivante := 0.0
+	var derniere_derive := 0.0
+	var pic := 0.0
 	while t < horizon:
 		t += DT_MEASURE
 		_duel._step_feel(DT_MEASURE)
 		_duel._viewmodel._process(DT_MEASURE)
-		var vm: Dictionary = _duel._viewmodel.feel_probe()
-		var kick: Vector2 = vm["kick_px"]
-		peak_px = maxf(peak_px, absf(kick.y))
-		var visible: bool = absf(kick.x) >= PX_VISIBLE or absf(kick.y) >= PX_VISIBLE \
-			or absf(float(vm["flinch_px"])) >= PX_VISIBLE \
-			or absf(float(vm["roll_deg"])) >= DEG_VISIBLE \
+		var r: Dictionary = _duel._viewmodel.feel_probe()
+		var rp: Vector3 = r["rec_pos"]
+		var rr: Vector3 = r["rec_rot"]
+		var st: Vector3 = r["settle"]
+		pic = maxf(pic, rp.length())
+		# ⚠️ La caméra compte AUSSI : le roulis et le pincement de champ sont la moitié du
+		# coup de feu, et ils vivent côté duel, pas dans le rig.
+		# ⚠️⚠️ LA DÉRIVE LENTE EST COMPTÉE À PART, ET C'EST UNE DÉCISION.
+		# Le rig porte une couche `settle` à **2,2 Hz** que la référence documente comme voulue :
+		# « Slow settling drift after a burst — the muzzle keeps wandering a little. » Elle dure
+		# délibérément plus d'une seconde. La compter dans « le kick est-il retombé ? » faisait
+		# rougir le contrôle sur un comportement INTENTIONNEL — mesuré : 1,025 s contre une
+		# cadence de 0,800 s.
+		#
+		# La règle du §8.151 vise l'IMPULSION par coup, celle qui s'accumulerait en rafale et
+		# ferait dériver l'arme sans que le joueur ait rien fait. La dérive lente, elle, est
+		# cosmétique, d'amplitude décroissante, et **son retour à zéro exact est déjà prouvé**
+		# par le contrôle V1 du rig (bit-stabilité après 6 s). On la MESURE et on l'AFFICHE
+		# quand même : une couche qu'on exclut d'un contrôle sans la montrer est une couche
+		# qu'on a cachée.
+		if st.length() > 0.0:
+			derniere_derive = t
+		var vivant: bool = rp.length() > 0.0 or rr.length() > 0.0 \
 			or absf(_duel._cam_roll.value) >= DEG_VISIBLE \
 			or absf(_duel._fov_punch.value) >= DEG_VISIBLE
-		if visible:
-			last_visible = t
+		if vivant:
+			derniere_vivante = t
 
-	print("  kick max mesuré : %.1f px (intensité F10 ×2) — pic attendu ~24 px" % peak_px)
-	print("  temps de retour (arme < %.1f px ET caméra < %.2f°) : %.3f s" % [PX_VISIBLE,
-		DEG_VISIBLE, last_visible])
+	print("  pic de recul mesuré : %.4f m (intensité F10 ×2)" % pic)
+	print("  temps de retour (ressorts du rig à ZÉRO ET caméra < %.2f°) : %.3f s"
+		% [DEG_VISIBLE, derniere_vivante])
+	print("  dérive lente (`settle`) vivante jusqu'à : %.3f s — voulue, cf. ci-dessus"
+		% derniere_derive)
 	print("  intervalle de cadence minimal du registre : %.3f s" % interval)
 	_ok("le kick est un tir SANS lendemain : retour %.3f s < cadence min %.3f s"
-		% [last_visible, interval], last_visible < interval)
-	_ok("le kick a bien eu lieu (pic > 10 px à intensité max)", peak_px > 10.0,
-		"%.1f px" % peak_px)
+		% [derniere_vivante, interval], derniere_vivante < interval)
+	# ⚠️ Contre-face : sans elle, un rig qui ne bougerait PAS DU TOUT passerait le contrôle
+	# ci-dessus haut la main. Le seuil est un ordre de grandeur, pas un réglage : le recul du
+	# `chacal` déplace le rig de plusieurs millimètres.
+	_ok("le kick a bien eu lieu (pic > 1 mm à intensité max)", pic > 0.001,
+		"%.4f m" % pic)
 
 
 func _settle(seconds: float) -> void:

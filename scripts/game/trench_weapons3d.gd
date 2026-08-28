@@ -28,9 +28,9 @@ extends RefCounted
 # ║   `vipere`  ← leur `pistol` (P-19)   — ⚠️ AUCUNE OPTIQUE : visée mécanique guidon + hausse.   ║
 # ║   `frelon`  ← leur `smg`    (MPX-9)  — optique point rouge COMPACTE.                          ║
 # ║   `chacal`  ← leur `rifle`  (M4A1)   — optique point rouge LARGE, flancs très moletés.        ║
-# ║   `condor`  ← ⚙ EXTRAPOLÉ du fusil   — canon long, optique à grossissement. **Aucune capture  ║
+# ║   `condor`  ← dérivé du fusil        — canon long, optique à grossissement. **VALIDÉ par     ║
 # ║              de référence n'existe pour lui** : le cahier impose d'en soumettre une à Hakim    ║
-# ║              avant de le figer. Tout ce qui le concerne est marqué `⚙ EXTRAPOLÉ`.             ║
+# ║              Hakim le 2026-08-28** sur les trois vues rendues (3/4, profil, visée). FIGÉ.    ║
 # ║                                                                                               ║
 # ║ ⚠️ Le nom affiché vient du `name_key` d'i18n du projet, PAS du `label` de la référence : nos  ║
 # ║ armes ne s'appellent pas P-19 ni M4A1.                                                        ║
@@ -127,7 +127,11 @@ const VIEW_DEFS := {
 			"climb_shape": [1.0], "drift": 1.2,
 		},
 	},
-	# ⚙ EXTRAPOLÉ — aucune capture de référence. Bâti sur le fusil : arme plus lourde, donc recul
+	# ✅ FIGÉ — validé par Hakim le 2026-08-28 sur les trois vues rendues, aucune réserve. C'est notre
+	# arme, pas la leur : elle n'a et n'aura jamais de capture de référence, et c'est normal.
+	# ⚠️ Ces cotes ne sont plus à soumettre — elles sont à CONSERVER. Une retouche demande une
+	# nouvelle capture et un nouveau verdict, comme n'importe quelle cote figée du projet.
+	# Bâti sur le fusil : arme plus lourde, donc recul
 	# plus sec mais plus lent à revenir, dégagement d'œil plus long (optique à grossissement),
 	# balancement plus ample (canon lourd), montée à l'œil plus lente.
 	# ⛔ À SOUMETTRE À HAKIM AVANT DE FIGER (cahier §2.2quinquies).
@@ -576,7 +580,7 @@ static func _build_frelon() -> Dictionary:
 # `chacal` — LE FUSIL D'ASSAUT (leur `rifle`, M4A1) · et `condor` en variante LONGUE
 # =================================================================================================
 # ⚙ `long = true` produit le `condor` : canon rallongé, optique à grossissement, garde-main
-# étendu. EXTRAPOLÉ — aucune capture de référence, à soumettre à Hakim avant de figer.
+# étendu. ✅ FIGÉ — validé par Hakim le 2026-08-28 sur les trois vues rendues.
 static func _build_chacal(long: bool) -> Dictionary:
 	var bore := 0.075
 	var r_upper := 0.0192

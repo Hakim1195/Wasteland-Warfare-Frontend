@@ -94,6 +94,11 @@ var _draws := 0
 var _ordinary: Dictionary = {}
 
 
+# Relevé le 2026-08-28 en headless, après la bascule du viewmodel 3D. À RELEVER À NOUVEAU
+# si une section est volontairement ajoutée ou retirée — jamais à baisser pour faire passer.
+const PASS_MINIMUM := 237
+
+
 func _ok(label: String, cond: bool, detail := "") -> void:
 	if cond:
 		_pass += 1
@@ -141,6 +146,21 @@ func _ready() -> void:
 	await _section_pixels(duel)
 
 	print("\n%d PASS / %d FAIL" % [_pass, _fails.size()])
+	# ╔═ 🩸 LE GARDE-FOU QUI MANQUAIT — ajouté au §8.152 (lot 3D-H) ═══════════════════════════╗
+	# ║ Cette sonde annonçait « TOUT VERT » dès que `_fails` était vide, **sans jamais compter    ║
+	# ║ ce qu'elle avait joué**. La bascule du viewmodel 3D a déplacé la grenade du clic droit    ║
+	# ║ vers G : trois contrôles de la section grenade ne s'exécutaient plus du tout, la section  ║
+	# ║ mourait sur une erreur de script — et la sonde disait TOUT VERT.                          ║
+	# ║                                                                                          ║
+	# ║ C'est exactement le défaut que le pavé du sabotage X8 décrit plus bas pour un AUTRE       ║
+	# ║ contrôle, et qu'elle ne se gardait pas d'elle-même.                                       ║
+	# ║ ⚠️ Un MINIMUM, pas une égalité : la passe fenêtrée en joue davantage que la passe headless ║
+	# ║ (les sections de pixels). Une égalité stricte casserait la voie fenêtrée sans rien gagner.║
+	# ╚══════════════════════════════════════════════════════════════════════════════════════════╝
+	if _pass < PASS_MINIMUM and _fails.is_empty():
+		print("INCOMPLETE : %d controles joues, %d attendus au minimum — une section est MUETTE"
+			% [_pass, PASS_MINIMUM])
+		get_tree().quit(1)
 	print("%s" % ("TOUT VERT" if _fails.is_empty() else "ECHEC : " + ", ".join(_fails)))
 	get_tree().quit(0 if _fails.is_empty() else 1)
 
@@ -1335,7 +1355,7 @@ func _section_panels_grenade(duel) -> void:
 	# C'est le cas réel du CHOIX D'ARME : personne ne l'appelle, il arrive. Geler la visée pour la
 	# rendre à la fermeture relâcherait, des secondes plus tard, un lancer que le joueur ne vise
 	# plus — et une grenade rendue au mauvais moment coûte autant qu'une grenade volée.
-	_mouse_button(MOUSE_BUTTON_RIGHT, true)
+	_key(KEY_G, true)
 	duel._update_grenade_aim(1.0 / 60.0)
 	_ok("EN COURS DE VISEE : SENTINELLE — le decalque est bien a l'ecran AVANT l'ouverture",
 		duel._aiming_grenade and duel._world._aim_decal != null
@@ -1347,10 +1367,11 @@ func _section_panels_grenade(duel) -> void:
 	duel._update_grenade_aim(1.0 / 60.0)
 	_ok("EN COURS DE VISEE : le panneau RANGE la grenade (decalque eteint, pose abandonnee)",
 		not duel._aiming_grenade and not duel._world._aim_decal.visible
-			and not duel._viewmodel._grenade_aim,
+			and not bool((duel._rig_state() as Dictionary).get("low_ready", false)),
 		"vise=%s decalque=%s pose=%s" % [duel._aiming_grenade,
-			duel._world._aim_decal.visible, duel._viewmodel._grenade_aim])
-	_mouse_button(MOUSE_BUTTON_RIGHT, false)
+			duel._world._aim_decal.visible,
+			bool((duel._rig_state() as Dictionary).get("low_ready", false))])
+	_key(KEY_G, false)
 	duel._update_grenade_aim(1.0 / 60.0)
 	_ok("EN COURS DE VISEE : le relachement ne LANCE rien (le geste interrompu ne coute rien)",
 		duel._throw_queued.is_empty(), "file = %s" % str(duel._throw_queued))
@@ -1359,7 +1380,7 @@ func _section_panels_grenade(duel) -> void:
 	duel._throw_queued = {}
 
 	# --- (e) LE VERROU : la touche encore tenue à la FERMETURE ne relance rien toute seule -------
-	_mouse_button(MOUSE_BUTTON_RIGHT, true)
+	_key(KEY_G, true)
 	duel._tuning.toggle()
 	duel._update_grenade_aim(1.0 / 60.0)     # sous le panneau : le geste est verrouillé
 	duel._tuning.toggle()                    # … le panneau se referme, la touche est TOUJOURS tenue
@@ -1367,7 +1388,7 @@ func _section_panels_grenade(duel) -> void:
 	_ok("VERROU : touche encore tenue a la FERMETURE -> rien ne se rearme tout seul",
 		not duel._aiming_grenade and not duel._world._aim_decal.visible,
 		"vise=%s decalque=%s" % [duel._aiming_grenade, duel._world._aim_decal.visible])
-	_mouse_button(MOUSE_BUTTON_RIGHT, false)
+	_key(KEY_G, false)
 	duel._update_grenade_aim(1.0 / 60.0)
 	_ok("VERROU : et le relachement ne LANCE rien non plus", duel._throw_queued.is_empty(),
 		"file = %s" % str(duel._throw_queued))
@@ -1468,7 +1489,7 @@ func _section_panels_keyboard(duel) -> void:
 	# Aucun bouton de souris tenu : sinon `_step_held_fire` armerait des tirs et rendrait l'envoi
 	# « urgent », donc la trame de frames non déterministe.
 	_mouse_button(MOUSE_BUTTON_LEFT, false)
-	_mouse_button(MOUSE_BUTTON_RIGHT, false)
+	_key(KEY_G, false)
 	duel._fire_queued = false
 	duel._throw_queued = {}
 	# LE PANNEAU F10 EST RÉSERVÉ À L'ENTRAÎNEMENT (`_input`, `KEY_F10`) : sans ce drapeau, la touche
@@ -1823,7 +1844,7 @@ func _section_mouse_capture(duel) -> void:
 	var training_was: bool = duel._training
 	duel._training = true
 	_mouse_button(MOUSE_BUTTON_LEFT, false)
-	_mouse_button(MOUSE_BUTTON_RIGHT, false)
+	_key(KEY_G, false)
 	var esc := _key_event(KEY_ESCAPE)
 	var f10 := _key_event(KEY_F10)
 
@@ -2519,20 +2540,24 @@ func _key(code: int, pressed: bool) -> void:
 # — le décalque au sol (`_world._aim_decal`), la pose de lancer du viewmodel, et la charge utile
 # `_throw_queued` réellement mise en file. Elle n'écrit dans AUCUN état de grenade.
 func _grenade_gesture(duel, by_key := false) -> Dictionary:
-	if by_key:
-		_key(KEY_G, true)
-	else:
-		_mouse_button(MOUSE_BUTTON_RIGHT, true)
+	# ⚠️⚠️ §8.152 (lot 3D-H) — LE CLIC DROIT N'ARME PLUS LA GRENADE : il sert à la VISÉE.
+	# La grenade garde `KEY_G`, qui était déjà une liaison complète. Ce geste-ci passe donc
+	# TOUJOURS par la touche, quel que soit `by_key` — le paramètre ne distingue plus deux
+	# boutons mais deux CHEMINS de code, et il est conservé pour ne pas réécrire les appels.
+	# 🩸 Sans ce correctif, le geste n'armait plus rien : trois contrôles de cette section
+	# tombaient — et la sonde annonçait quand même TOUT VERT, faute de compter ce qu'elle joue.
+	_key(KEY_G, true)
 	duel._update_grenade_aim(1.0 / 60.0)
 	var out := {
 		"aimed": duel._aiming_grenade,
 		"decal": duel._world._aim_decal != null and duel._world._aim_decal.visible,
-		"pose": duel._viewmodel._grenade_aim,
+		# ⚠️ On lisait `_viewmodel._grenade_aim`, un champ PRIVÉ de la vue — une sonde qui
+		# plonge dans les entrailles d'un affichage pour apprendre un fait de JEU. On lit
+		# désormais ce que le duel POUSSE à la vue : ça éprouve la plomberie, et ça survit au
+		# remplacement du viewmodel.
+		"pose": bool((duel._rig_state() as Dictionary).get("low_ready", false)),
 	}
-	if by_key:
-		_key(KEY_G, false)
-	else:
-		_mouse_button(MOUSE_BUTTON_RIGHT, false)
+	_key(KEY_G, false)
 	duel._update_grenade_aim(1.0 / 60.0)
 	out["thrown"] = duel._throw_queued.duplicate()
 	duel._throw_queued = {}                # la file de SORTIE se vide comme à la section 2
