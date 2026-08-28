@@ -3,3 +3,6 @@
 /android/
 /addons/
 assets/models/*.glb
+
+# Bytecode Python des usines/outils (tools/*.py) — ne doit jamais partir dans un commit
+__pycache__/

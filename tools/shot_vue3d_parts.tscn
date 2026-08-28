@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/shot_vue3d_parts.gd" id="1_sv3p"]
+
+[node name="ShotVue3dParts" type="Node"]
+script = ExtResource("1_sv3p")

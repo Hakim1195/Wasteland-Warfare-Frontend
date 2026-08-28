@@ -37,6 +37,7 @@ const Geo := preload("res://scripts/game/trench_geometry.gd")
 const Sprites := preload("res://scripts/game/trench_sprites.gd")
 const BlockoutScene := preload("res://scenes/game/trench_arena_blockout.tscn")
 const ExplosionScene := preload("res://scenes/game/trench_explosion.tscn")
+const Springs := preload("res://scripts/game/trench_springs.gd")
 
 # Champ de vision VERTICAL de la caméra ⚙. À 9 m (§8.141), la silhouette adverse EXPOSÉE fait
 # 3,44° de large sur 3,47° de haut, soit ~67 × 68 px en 1080p : elle se VISE, elle ne se devine plus.
@@ -173,20 +174,42 @@ const COL_GRENADE_OUT := Color(0.86, 0.29, 0.25)
 # Deux explosions simultanées au maximum (bon de commande §C.2) : au-delà, ce sont deux grenades
 # tombées à 0,1 s l'une de l'autre, et la troisième n'ajouterait que du bruit.
 const EXPLOSION_POOL := 2
-# ╔═ LA SECOUSSE — MODÈLE « TRAUMA », ET JAMAIS DE ROTATION ══════════════════════════════════════╗
-# ⚠️ ON TRANSLATE L'ŒIL, ON NE LE FAIT PAS TOURNER. Une rotation de caméra déplacerait la visée
-# RENDUE par rapport à la visée ENVOYÉE : le joueur verrait son réticule dériver au moment précis
-# où il doit riposter, et il l'imputerait au jeu. Une translation de quelques centimètres secoue
-# l'image sans toucher à un seul degré de lacet.
-# CONVERSION : à la distance du duel (~10 m) et au FOV nominal, 6 cm de translation valent
-# `atan(0.06/10)` = 0,34°, soit ~6,7 px en 1080p — l'amplitude demandée par le bon de commande.
-const SHAKE_METRES_MAX := 0.06
+# ╔═ LA SECOUSSE — MODÈLE « TRAUMA » CONSERVÉ, SORTIE RE-FONDÉE EN ÉCRAN (§8.151 LOT B) ══════════╗
+# ║ v1 (§8.141) translatait l'ŒIL 3D : la ligne de mire restait juste (aucune rotation), mais le   ║
+# ║ RÉTICULE — projeté depuis une DIRECTION, invariante par translation — ne suivait PAS le monde  ║
+# ║ secoué : jusqu'à ~7 px de désaccord transitoire entre la croix et l'image, au moment précis    ║
+# ║ d'une riposte. Le cahier §4.2 tranche : on translate l'IMAGE ENTIÈRE, monde + réticule         ║
+# ║ ENSEMBLE. La caméra ne bouge donc PLUS DU TOUT (ni translation, ni lacet/site — §8.141.6) :    ║
+# ║ ce script AVANCE le trauma (impulsions et décroissance inchangées) et PUBLIE un décalage       ║
+# ║ ÉCRAN (`shake_screen_px`) que l'hôte applique d'un seul geste aux couches ET au réticule.      ║
+# ║ Le bruit vient de `hash_noise` (déterministe, aucun RNG global) : les captures du LOT E        ║
+# ║ rejouent la même secousse au bit près — un `sin` d'horloge accumulée l'aurait permis aussi,    ║
+# ║ mais le cahier §4.1 impose la même source de bruit pour TOUT le feel.                          ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 const SHAKE_DECAY := 3.2          # décroissance exponentielle du « trauma » ⚙
-const SHAKE_FREQ := 26.0          # oscillations par seconde ⚙
+# Amplitude ÉCRAN ⚙, en fraction de hauteur : l'équivalent MESURÉ de l'ancienne translation d'œil
+# (0,06 m à ~10 m = atan(0.06/10) = 0,34° ≈ 6,7 px en 1080p — la conversion du bon de commande).
+const SHAKE_PX_RATIO := 6.7 / 1080.0
+# Cadence du bruit ⚙ : ~9 cellules de hash_noise par seconde ≈ l'ancien sin à 26 rad/s (4,1 Hz)
+# une fois le lissage de Hermite passé ; 1,37 d'écart entre axes — à cadence égale, l'œil lirait
+# une diagonale rectiligne (« glissement »), pas une secousse.
+const SHAKE_NOISE_RATE := 9.0
+const SHAKE_SEED_X := 8151
+const SHAKE_SEED_Y := 8152
 # Impulsions ⚙ : dans le rayon · ma tranchée touchée ailleurs · au-delà, rien.
 const SHAKE_ON_ME := 0.4
 const SHAKE_ON_MY_TRENCH := 0.15
 const SHAKE_RANGE := 15.0
+# ╔═ LE FEEL DE CAMÉRA (poussé par l'hôte, §8.151) — LES DEUX SEULES LIBERTÉS DE LA CAMÉRA ═══════╗
+# ║ ROULIS : rotation autour de l'AXE DE VISÉE (le Z local), plafonnée ±0,3° ICI, à l'application  ║
+# ║ — aucun appelant ne peut dépasser. Le centre de l'image est invariant par ce roulis, et le     ║
+# ║ réticule (projeté par la même caméra) tourne AVEC le monde : la relation visée/pixel tient.    ║
+# ║ PUNCH DE FOV : le rayon CENTRAL est invariant par FOV ; l'écartement de dispersion du réticule ║
+# ║ suit `camera_fov()`, donc le vrai FOV du moment — l'honnêteté de §5.4 est conservée.           ║
+# ║ Un offset de LACET/SITE, lui, déplacerait le centre : c'est le §8.141.6, et c'est NON.         ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const FEEL_ROLL_CAP_DEG := 0.3
+const FEEL_FOV_OFFSET_MAX := 3.0
 
 var _viewport: SubViewport
 var _root: Node3D
@@ -213,8 +236,12 @@ var _local_tracers: Array = []
 # c'est le registre SERVEUR qui décide de ce qui est dessiné (invariant d'honnêteté §C.1).
 var _grenade_radius := 2.5
 var _shake := 0.0                 # « trauma » courant, 0..1
-var _shake_time := 0.0
-var _shake_offset := Vector3.ZERO
+var _shake_time := 0.0            # horloge de secousse : n'avance QUE pendant le trauma (delta cumulés)
+var _shake_px := Vector2.ZERO     # décalage ÉCRAN publié à l'hôte — l'œil 3D, lui, ne bouge plus
+var _shake_scale := 1.0           # intensité F10 (`feel_shake`, 0..2)
+var _feel_roll_deg := 0.0         # roulis courant (±0,3° max), poussé par l'hôte
+var _feel_fov_offset := 0.0       # punch de FOV courant (degrés au-dessus du FOV réglé)
+var _fov_base := CAMERA_FOV       # le FOV du panneau F10 — `_camera.fov` = base + punch
 
 # Pose courante, INTERPOLÉE (la caméra ne saute jamais d'une position à l'autre).
 var _pose_pos := 2
@@ -1038,8 +1065,33 @@ func apply_tuning(tuning: Dictionary) -> void:
 	# ⚠️ La borne HAUTE du clamp est la borne dérivée, pas un 80 en dur : un panneau qui pourrait
 	# poser plus que le plafond de sécurité rendrait ce plafond décoratif.
 	_follow_max = clampf(float(tuning.get("follow_max_deg", ceiling)), 5.0, ceiling)
+	# §8.151 : l'intensité de secousse du panneau F10, et le FOV réglé qui devient la BASE sur
+	# laquelle le punch de tir s'ajoute (les deux écritures de `_camera.fov` passent par le même
+	# point — deux mains sur le même champ finiraient par s'écraser l'une l'autre).
+	_shake_scale = clampf(float(tuning.get("feel_shake", _shake_scale)), 0.0, 2.0)
+	_fov_base = clampf(float(tuning.get("fov", _fov_base)), 50.0, 100.0)
+	_apply_camera_fov()
+
+
+# §8.151 — LE FEEL DE CAMÉRA, poussé par l'hôte à chaque frame. Les plafonds vivent ICI, à
+# l'application : aucun appelant — panneau compris — ne peut faire dépasser le roulis de ±0,3°.
+func set_camera_feel(roll_deg: float, fov_offset_deg: float) -> void:
+	_feel_roll_deg = clampf(roll_deg, -FEEL_ROLL_CAP_DEG, FEEL_ROLL_CAP_DEG)
+	var offset := clampf(fov_offset_deg, 0.0, FEEL_FOV_OFFSET_MAX)
+	if offset != _feel_fov_offset:
+		_feel_fov_offset = offset
+		_apply_camera_fov()
+
+
+func _apply_camera_fov() -> void:
 	if _camera != null:
-		_camera.fov = clampf(float(tuning.get("fov", CAMERA_FOV)), 50.0, 100.0)
+		_camera.fov = _fov_base + _feel_fov_offset
+
+
+# Le décalage de secousse, en px d'ÉCRAN — consommé par l'hôte qui l'applique aux couches ET au
+# réticule d'un seul geste (monde + réticule ENSEMBLE, cahier §4.2). ZÉRO exact au repos.
+func shake_screen_px() -> Vector2:
+	return _shake_px
 
 
 # Teinte le soldat adverse à l'accent de SA faction (système d'accents existant, §5.2).
@@ -1147,34 +1199,40 @@ func _process(delta: float) -> void:
 	# reste du débattement se lit sur l'écran, pas dans la rotation — les poses restent FIXES.
 	_cam_yaw = clampf(_aim_yaw * _follow, -_follow_max, _follow_max)
 	_cam_pitch = clampf(_aim_pitch * _follow, -_follow_max, _follow_max)
-	# ╔═ LA SECOUSSE S'APPLIQUE À LA POSITION, PAS À L'ORIENTATION ══════════════════════════════╗
-	# ║ Le `look_at` ci-dessous vise `position + direction(visée)` : en décalant les DEUX du même   ║
-	# ║ vecteur, l'axe de vue reste RIGOUREUSEMENT celui de la visée du joueur. L'image tremble,    ║
-	# ║ la ligne de mire ne bouge pas d'un centième de degré. C'est la condition pour qu'une        ║
-	# ║ secousse ne soit jamais un handicap déguisé.                                                ║
-	# ╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+	# ╔═ §8.151 — LA SECOUSSE NE TOUCHE PLUS LA CAMÉRA DU TOUT ═════════════════════════════════╗
+	# ║ Ni rotation (elle déplacerait la visée rendue — §8.141.6), ni translation (le réticule,    ║
+	# ║ projeté depuis une direction, ne suivait pas le monde translaté : ~7 px de désaccord).     ║
+	# ║ Le trauma avance ici et SORT en px d'écran (`shake_screen_px`) ; l'hôte translate les      ║
+	# ║ couches et le réticule ENSEMBLE. La seule liberté angulaire est le ROULIS ±0,3° autour de  ║
+	# ║ l'axe de visée, appliqué APRÈS `look_at` : le centre de l'image est invariant, et le       ║
+	# ║ réticule projeté par cette même caméra tourne AVEC le monde.                               ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 	_advance_shake(delta)
-	var eye := _cam_current + _shake_offset
+	var eye := _cam_current
 	_camera.position = eye
 	_camera.look_at(eye + _direction(_cam_yaw, _cam_pitch), Vector3.UP)
+	if _feel_roll_deg != 0.0:
+		_camera.rotate_object_local(Vector3(0.0, 0.0, 1.0), deg_to_rad(_feel_roll_deg))
 
 
-# DÉCROISSANCE EXPONENTIELLE du trauma, et oscillation à deux fréquences légèrement différentes sur
-# les deux axes : à fréquence égale, l'œil suivrait une diagonale rectiligne et lirait « glissement »
+# DÉCROISSANCE EXPONENTIELLE du trauma, et bruit à deux cadences légèrement différentes sur les
+# deux axes : à cadence égale, l'œil suivrait une diagonale rectiligne et lirait « glissement »
 # plutôt que « secousse ». L'amplitude est le CARRÉ du trauma — c'est ce qui rend une petite
 # détonation discrète et une grosse franche, au lieu d'un continuum plat.
+# §8.151 : sortie en PX D'ÉCRAN par `hash_noise` (déterministe — LOT E) ; `_shake_time` n'avance
+# que pendant le trauma, donc deux exécutions du même scénario rejouent la même phase.
 func _advance_shake(delta: float) -> void:
 	if _shake <= 0.0001:
 		_shake = 0.0
-		_shake_offset = Vector3.ZERO
+		_shake_px = Vector2.ZERO
 		return
 	_shake_time += delta
 	_shake = maxf(0.0, _shake - _shake * SHAKE_DECAY * delta - 0.001)
-	var amplitude: float = SHAKE_METRES_MAX * _shake * _shake
-	_shake_offset = Vector3(
-		sin(_shake_time * SHAKE_FREQ) * amplitude,
-		sin(_shake_time * SHAKE_FREQ * 1.37 + 1.1) * amplitude * 0.75,
-		0.0)
+	var amplitude: float = SHAKE_PX_RATIO * size.y * _shake * _shake * _shake_scale
+	_shake_px = Vector2(
+		Springs.hash_noise(_shake_time * SHAKE_NOISE_RATE, SHAKE_SEED_X),
+		Springs.hash_noise(_shake_time * SHAKE_NOISE_RATE * 1.37, SHAKE_SEED_Y) * 0.75) \
+		* amplitude
 
 
 # Direction unitaire d'un couple (lacet, site) exprimé en degrés dans le repère de l'arène
@@ -1326,6 +1384,9 @@ func _notice_step(whole: int) -> void:
 # peut déjà s'être accroupi, donc sa position aurait disparu de la vue redactée. Un tir TRAHIT son
 # auteur (c'est la règle assumée du §1.6, la même qui rend le `from_pos` des projectiles public) —
 # mais il ne le trahit qu'à l'instant où il a tiré.
+# §8.151 (2bis) — appelé UNE FOIS PAR PROJECTILE de la rafale adverse (crans cadencés par l'hôte
+# sur les `launch_tick` serveur) : re-poser `_enemy_muzzle_left` à chaque cran fait PULSER la lueur
+# (0,035 s de vie ≪ 100 ms d'espacement) au vrai rythme de la mitraille — trois éclats, pas un.
 func notify_enemy_fire(from_pos: int) -> void:
 	if _enemy_muzzle == null:
 		return
@@ -1388,12 +1449,18 @@ func _shot_direction(yaw_deg: float, pitch_deg: float, mine: bool) -> Vector3:
 # ║ ⚠️ Tant qu'une traçante LOCALE vit, les traçantes MIENNES venues de l'état sont supprimées —    ║
 # ║ sans quoi le même tir serait dessiné deux fois, à 100 ms d'écart.                               ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ╔═ §8.151 (2bis) — LA RAFALE EST CADENCÉE PAR L'HÔTE, PAS ICI ═════════════════════════════════╗
+# ║ Depuis l'effet mitraillette (§4bis.4), `trench_fp.gd` appelle cette fonction UNE FOIS PAR      ║
+# ║ PROJECTILE, à l'instant où le serveur fait réellement partir chaque balle (`burst_gap_ticks`   ║
+# ║ du registre côté local, `launch_tick` par projectile côté événement) : chaque cran a SA        ║
+# ║ traçante, née à son heure — plus une gerbe superposée au clic. Le paramètre `rounds` reste en  ║
+# ║ REPLI pour un appelant qui présenterait encore une rafale d'un bloc : le décalage cosmétique    ║
+# ║ de -0,03 n'existe que pour que ces traçantes-là ne se confondent pas au pixel près.            ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 func notify_local_shot(from_pos: int, yaw_deg: float, pitch_deg: float, seconds: float,
 		rounds: int) -> void:
 	for i in range(maxi(1, rounds)):
 		_local_tracers.append({"from_pos": int(from_pos), "yaw": yaw_deg, "pitch": pitch_deg,
-			# Les balles d'une rafale partent décalées : sans ça les trois se superposent au pixel
-			# près et la rafale se lit comme un tir unique.
 			"t": -0.03 * float(i), "life": maxf(0.05, seconds)})
 
 

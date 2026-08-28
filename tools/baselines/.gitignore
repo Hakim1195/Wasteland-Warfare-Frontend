@@ -1,0 +1,4 @@
+# Sorties de mesure (PNG de baseline) : jamais dans le depot ni dans l import Godot.
+*
+!.gitignore
+!.gdignore

@@ -67,6 +67,20 @@ static func defaults() -> Dictionary:
 		"aim_follow": 1.0,           # part de la visée que la caméra accompagne (0 = tête fixe)
 		"follow_max_deg": Geo.camera_follow_max_deg(),   # plafond de rotation de la caméra
 		"fov": 55.0,                 # champ de vision VERTICAL
+		# §8.151 LOT B — les intensités du FEEL (1.0 = le réglage livré, 0 = coupé, 2 = doublé).
+		# 100 % cosmétiques : la visée envoyée est bit-identique quel que soit le curseur
+		# (`probe_trench_feel_aim` le prouve), donc aucun de ces curseurs n'est un avantage.
+		"feel_recoil": 1.0,          # kick + micro-roulis du viewmodel, roulis caméra au tir
+		"feel_shake": 1.0,           # secousse d'explosion (translation de l'image entière)
+		"feel_breath": 1.0,          # respiration du viewmodel (dérive lente 2-3 px)
+		"feel_flinch": 1.0,          # plongeon + pouls rouge directionnel à l'encaissement
+		"fov_punch": true,           # +1,5° ~100 ms au tir (interrupteur, défaut modéré §4.2)
+		# §8.151 VAGUE 2ter — LE TIR MAINTENU (cahier §4bis.5, décision produit §1.8 : ACTIF PAR
+		# DÉFAUT). Interrupteur et non curseur : il n'y a rien à doser, on tient la gâchette ou on
+		# clique. Mécaniquement NEUTRE — la cadence reste `cooldown_ticks` du registre serveur, et
+		# le client n'émet jamais un tir que la prédiction des six refus rejetterait. Le couper
+		# rend EXACTEMENT le comportement d'avant : un clic, un tir.
+		"auto_fire": true,
 	}
 
 
@@ -86,6 +100,13 @@ static func sliders() -> Dictionary:
 		# donc la borne basse à 50 : la plage demandée reste entièrement accessible, et l'état de
 		# départ est représentable. C'est la seule des cinq bornes qui s'écarte du bon de commande.
 		"fov": [50.0, 90.0, 1.0, "TRENCH_TUNE_FOV", 0],
+		# §8.151 — le FEEL (cahier §4.2). Bornes 0..2 : 0 coupe l'effet net (le curseur qui « ne
+		# fait rien » sur une partie de sa course est un mensonge d'interface, cf. ci-dessus), 2
+		# double le réglage livré — la sonde de visée reste verte sur TOUTE la plage.
+		"feel_recoil": [0.0, 2.0, 0.05, "TRENCH_TUNE_FEEL_RECOIL", 2],
+		"feel_shake": [0.0, 2.0, 0.05, "TRENCH_TUNE_FEEL_SHAKE", 2],
+		"feel_breath": [0.0, 2.0, 0.05, "TRENCH_TUNE_FEEL_BREATH", 2],
+		"feel_flinch": [0.0, 2.0, 0.05, "TRENCH_TUNE_FEEL_FLINCH", 2],
 	}
 
 
@@ -93,11 +114,20 @@ var _values: Dictionary = defaults()
 var _sliders: Dictionary = {}
 var _readouts: Dictionary = {}
 var _invert_box: CheckBox
+var _fov_punch_box: CheckBox
+var _auto_fire_box: CheckBox
 var _journal: Label
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# ╔═ §8.151 — ANCRES ÉGALES (TOP_LEFT), PLUS JAMAIS FULL_RECT ICI ════════════════════════════╗
+	# ║ Ce nœud posait sa taille à la main SOUS des ancres opposées inégales (FULL_RECT) : à chaque ║
+	# ║ boot, Godot avertissait « Nodes with non-equal opposite anchors will have their size        ║
+	# ║ overridden after _ready() » — la moitié jumelle du piège de `share_card.gd` (l.533), et la  ║
+	# ║ WARNING consignée par l'étape 1 de la vague 2. Des ancres en POINT (TOP_LEFT) rendent la    ║
+	# ║ taille manuelle LÉGITIME : plus d'avertissement, et le layout ne l'écrasera pas.            ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	set_anchors_preset(Control.PRESET_TOP_LEFT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# ╔═ ⚠️⚠️ 7ᵉ RÉCIDIVE DE « UN CONTROL CRÉÉ PAR CODE GARDE size = (0,0) » ═════════════════════╗
 	# ║ Vue en CAPTURE, et par aucun autre moyen : le panneau était introuvable à l'écran alors que ║
@@ -150,7 +180,9 @@ func _load() -> Dictionary:
 	for key in defaults():
 		if not parsed.has(key):
 			continue
-		if key == "invert_y":
+		# Les INTERRUPTEURS (invert_y, fov_punch §8.151) se relisent en booléen — le type du défaut
+		# fait foi, pas une liste de noms à tenir à jour.
+		if typeof(defaults()[key]) == TYPE_BOOL:
 			out[key] = bool(parsed[key])
 			continue
 		var bounds: Array = sliders().get(key, [])
@@ -223,16 +255,14 @@ func _build() -> void:
 	for key in sliders():
 		column.add_child(_build_slider(key))
 
-	_invert_box = CheckBox.new()
-	_invert_box.text = tr("TRENCH_TUNE_INVERT_Y")
-	_invert_box.add_theme_font_override("font", _font(14))
-	_invert_box.add_theme_font_size_override("font_size", 14)
-	_invert_box.add_theme_color_override("font_color", COL_TEXT)
-	_invert_box.button_pressed = bool(_values.get("invert_y", false))
-	_invert_box.toggled.connect(func(pressed: bool):
-		_values["invert_y"] = pressed
-		_commit())
+	_invert_box = _build_checkbox("TRENCH_TUNE_INVERT_Y", "invert_y")
 	column.add_child(_invert_box)
+	# §8.151 — l'interrupteur du punch de FOV (cahier §4.2 : « derrière un réglage F10 »).
+	_fov_punch_box = _build_checkbox("TRENCH_TUNE_FOV_PUNCH", "fov_punch")
+	column.add_child(_fov_punch_box)
+	# §8.151 (2ter) — l'interrupteur du TIR MAINTENU (cahier §4bis.5 : « réglage F10 pour le couper »).
+	_auto_fire_box = _build_checkbox("TRENCH_TUNE_AUTO_FIRE", "auto_fire")
+	column.add_child(_auto_fire_box)
 
 	column.add_child(HSeparator.new())
 	# LE JOURNAL DES ENTRÉES (§ LOT C.3) : le symptôme « les déplacements ne fonctionnent pas » n'a
@@ -249,6 +279,21 @@ func _build() -> void:
 	reset.add_theme_font_size_override("font_size", 14)
 	reset.pressed.connect(_on_reset)
 	column.add_child(reset)
+
+
+# Un interrupteur du panneau — même patron pour tous : la clé de `_values` fait foi, `_commit()`
+# écrit sur disque et prévient l'hôte, exactement comme un curseur.
+func _build_checkbox(label_key: String, value_key: String) -> CheckBox:
+	var box := CheckBox.new()
+	box.text = tr(label_key)
+	box.add_theme_font_override("font", _font(14))
+	box.add_theme_font_size_override("font_size", 14)
+	box.add_theme_color_override("font_color", COL_TEXT)
+	box.button_pressed = bool(_values.get(value_key, false))
+	box.toggled.connect(func(pressed: bool):
+		_values[value_key] = pressed
+		_commit())
+	return box
 
 
 func _build_slider(key: String) -> Control:
@@ -297,6 +342,10 @@ func _on_reset() -> void:
 		_refresh_readout(key)
 	if _invert_box != null:
 		_invert_box.set_pressed_no_signal(bool(_values["invert_y"]))
+	if _fov_punch_box != null:
+		_fov_punch_box.set_pressed_no_signal(bool(_values["fov_punch"]))
+	if _auto_fire_box != null:
+		_auto_fire_box.set_pressed_no_signal(bool(_values["auto_fire"]))
 	_commit()
 
 

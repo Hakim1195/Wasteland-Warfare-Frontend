@@ -19,6 +19,20 @@ extends Node
 #
 # ⚠️ LANCEMENT FENÊTRÉ OBLIGATOIRE :
 #   & <godot_console> --path frontend res://tools/probe_trench_grenade.tscn
+#
+# ╔═ §8.151 (2bis, correctif) — ELLE SORTAIT « TOUT VERT » EN CRACHANT 8 LIGNES `ERROR` ══════════╗
+# ║ Sous `--headless`, le pilote d'affichage ne rend RIEN : `get_viewport().get_texture()` est     ║
+# ║ servi par le stockage DUMMY, qui logge LUI-MÊME « Parameter "t" is null. » dès qu'on lui       ║
+# ║ demande une image — puis `save_png` partait sur un null. Cinq `ERROR` + trois `SCRIPT ERROR`,  ║
+# ║ TOUTES hors des contrôles PASS/FAIL : le verdict restait vert et le code de sortie 0. Or cette ║
+# ║ sonde EST une mesure en pixels : sans rendu, elle ne mesure rien du tout. Un vert obtenu sans  ║
+# ║ mesure est pire qu'un rouge — il entraîne à ignorer la colonne `ERROR`, et c'est comme ça      ║
+# ║ qu'on rate la vraie (même leçon que `probe_trench_feel_aim`, corrigée à la même passe).        ║
+# ║ RÈGLE : la garde est AVANT tout `get_image()` (tester le retour arrive trop tard, la ligne     ║
+# ║ `ERROR` est déjà écrite), et l'absence de rendu se DÉCLARE — verdict « NON APPLICABLE » et     ║
+# ║ code de sortie **2**, jamais 0 : ni vert ni rouge, la porte n'a pas pu être appliquée (même    ║
+# ║ convention que `tools/imagediff_trench.py`, qui refuse le vert vide).                          ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 
 const DuelScene := preload("res://scenes/game/trench_fp.tscn")
 const DuelScript := preload("res://scripts/game/trench_fp.gd")
@@ -33,7 +47,21 @@ var _out := ""
 var _fails: Array = []
 
 
+# LE RENDU EST-IL DISPONIBLE ? On interroge l'AFFICHAGE, jamais le résultat d'un `get_image()`.
+func _no_render() -> bool:
+	return DisplayServer.get_name() == "headless"
+
+
 func _ready() -> void:
+	if _no_render():
+		print("=== SONDE §C.1 — NON APPLICABLE ===")
+		print("  Aucun rendu sous --headless (affichage : %s) : cette sonde MESURE des pixels,"
+			% DisplayServer.get_name())
+		print("  elle n'a donc rien a mesurer. Relancer FENETRE :")
+		print("    & <godot_console> --path frontend res://tools/probe_trench_grenade.tscn")
+		print("\nNON APPLICABLE (ni vert ni rouge) — code de sortie 2")
+		get_tree().quit(2)
+		return
 	_out = OS.get_user_data_dir() + "/trench_grenade_probe"
 	DirAccess.make_dir_recursive_absolute(_out)
 
@@ -70,17 +98,29 @@ func _ok(label: String, cond: bool, detail := "") -> void:
 		("   | " + detail) if detail != "" else ""])
 
 
+# Une capture du viewport — `null` si le pilote n'a rien rendu. Ceinture ET bretelles : le cas
+# `--headless` est déjà refusé dans `_ready` (c'est LUI qui logge « Parameter "t" is null »),
+# celui-ci attrape un pilote muet quelconque sans jamais appeler `save_png` sur un null.
+func _capture() -> Image:
+	var tex := get_viewport().get_texture()
+	return tex.get_image() if tex != null else null
+
+
 # LA MESURE : largeur RENDUE du cercle, en pixels, contre sa largeur PROJETÉE théorique.
 func _measure_decal(at_x: float, tag: String) -> void:
 	var world = _duel._world
 	world.show_grenade_aim(true, at_x, Geo.far_soldier_z(), true)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var with_decal := get_viewport().get_texture().get_image()
+	var with_decal := _capture()
 	world.show_grenade_aim(false)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var without := get_viewport().get_texture().get_image()
+	var without := _capture()
+	if with_decal == null or without == null:
+		_ok("%s : le viewport a RENDU quelque chose" % tag, false,
+			"aucune image (affichage : %s)" % DisplayServer.get_name())
+		return
 	with_decal.save_png("%s/%s.png" % [_out, tag])
 
 	var box := _diff_box(with_decal, without)
@@ -125,13 +165,17 @@ func _shoot_explosion() -> void:
 	var ring_mat: StandardMaterial3D = ring.material_override
 	print("    [diag] alpha=%.2f · no_depth_test=%s · priorite=%d"
 		% [ring_mat.albedo_color.a, ring_mat.no_depth_test, ring_mat.render_priority])
-	var with_ring := get_viewport().get_texture().get_image()
-	with_ring.save_png("%s/anneau_de_choc.png" % _out)
+	var with_ring := _capture()
 	boom.visible = false
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var without := get_viewport().get_texture().get_image()
+	var without := _capture()
 	boom.visible = true
+	if with_ring == null or without == null:
+		_ok("anneau de choc : le viewport a RENDU quelque chose", false,
+			"aucune image (affichage : %s)" % DisplayServer.get_name())
+		return
+	with_ring.save_png("%s/anneau_de_choc.png" % _out)
 
 	var box := _diff_box(with_ring, without)
 	if int(box["count"]) == 0:

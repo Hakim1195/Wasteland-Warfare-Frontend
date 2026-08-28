@@ -3075,9 +3075,9 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
     trench_sim.public_rules(), your_slot: 1|2, training: bool, opponent: {name, is_bot},
     state | null}` — le client n'a AUCUNE constante du mini-jeu en dur (patron
     `battle_royale.public_rules` §8.131). `rules` porte désormais aussi, par arme,
-    `dispersion_deg`/`mag_size`/`reload_ticks`, le bloc `bandage`, et le bloc `geometry` (cotes du
-    blockout : `no_mans_land`, `positions`, `position_spacing`, `parapet_y`, `eye_up`, `eye_down`,
-    `aim_quantum_deg`).
+    `dispersion_deg`/`mag_size`/`reload_ticks` (et, depuis §8.151, `burst_gap_ticks`), le bloc
+    `bandage`, et le bloc `geometry` (cotes du blockout : `no_mans_land`, `positions`,
+    `position_spacing`, `parapet_y`, `eye_up`, `eye_down`, `aim_quantum_deg`).
     ⚠️ **`rules.grenade.radius_m` EST LE CONTRAT VISUEL DU §8.141**, et pas seulement une donnée
     d'équilibrage : c'est CETTE valeur — celle qui décide des dégâts — que le client utilise pour
     ouvrir son décalque de visée, ses marqueurs d'impact et son anneau de choc. Il n'y a pas deux
@@ -4068,3 +4068,42 @@ Aucun nouvel évènement, aucune nouvelle raison de refus, aucune nouvelle route
 `PP_DUEL_DAMAGE_CAP` est **serveur seul** : il n'est ni diffusé ni lisible par le client — celui-ci
 n'en voit que la conséquence, dans `pp_counted` et `damage`. Le HUD actuel ignore `pp_counted` ;
 un HUD futur pourra afficher « PP comptés » le jour où un plafond serait allumé.
+
+---
+
+## 🔫 §8.151 — LA TRANCHÉE (vague 2bis) : `burst_gap_ticks` dans `trench_init.rules.weapons` (**ADDITIF STRICT §1.5**)
+
+> **Une clé AJOUTÉE par arme, zéro champ renommé, zéro champ supprimé, zéro changement de
+> simulation.** Un client antérieur ignore simplement la clé et fonctionne à l'identique.
+
+### 1. La clé neuve, et pourquoi elle descend au client
+
+Chaque entrée de `trench_init.rules.weapons` porte désormais **`burst_gap_ticks: int`** —
+l'espacement, en ticks, des projectiles d'une même rafale (`0` pour les armes à projectile
+unique ; `2` pour FRELON ×3 et CHACAL ×2 au registre actuel ⚙). La valeur existait depuis §8.136
+dans `TRENCH_WEAPONS` et cadençait déjà les `launch_tick` des projectiles serveur
+(`_fire_burst` : `launch = tick + i × burst_gap_ticks`) ; elle n'était simplement pas diffusée.
+
+**Le besoin est de PRÉSENTATION, pas de règle** : le client joue le retour d'arme de SA rafale à
+l'instant du clic (prédiction §8.141.9) — pour donner à chaque projectile SA détonation, sa
+traçante et son cran de recul au **vrai rythme du serveur**, il lui faut l'espacement AU REGISTRE,
+jamais recopié en dur (§8.137 : aucune constante du mini-jeu côté Godot). Côté ADVERSE, le client
+n'en a pas besoin : les `launch_tick` par-projectile du flux d'états font foi (la clé ne sert que
+de repli si l'état ne portait pas les projectiles de la rafale).
+
+### 2. Rien d'autre ne bouge
+
+Aucun message nouveau, aucun champ d'état modifié, aucune règle changée : la rafale serveur était
+déjà cadencée ainsi. Suites trench relancées ENTIÈRES avant/après la ligne (`test_trench_sim` 153 ✅,
+`test_trench_bot` 27 ✅, `test_trench_angles` 20 ✅, **`test_trench_flow` 90 ✅ / 0 ❌**,
+`test_trench_window_open` 10 ✅) : neutralité prouvée à l'identique près.
+
+> 🩸 **CORRECTIF DE DOC (vague 2ter, 2026-08-26).** Ce paragraphe consignait
+> « `test_trench_flow` 89 ✅ + 1 ❌ PRÉEXISTANT » — la fenêtre calendrier `trench_week` de la
+> section D. Ce ❌ avait en réalité été **soldé dans la même passe** : la suite est à **90 ✅ / 0 ❌**
+> (re-mesuré ici : `PYTHONUTF8=1 py backend/test_trench_flow.py` → `EXIT=0`,
+> « RÉSULTAT : 90 ✅ | 0 ❌ »), ce que `FRONTEND_INTERFACES.md` §8.151.3 §7 écrivait déjà
+> (« flow 90 »). Les deux documents partagés se contredisaient donc, **au même hash des deux
+> côtés** : la règle de synchronisation était tenue, c'est le CONTENU qui était périmé — la même
+> signature qu'au §8.151.3 §8. Un ❌ « préexistant » se re-mesure avant d'être recopié : sinon on
+> lègue à la passe suivante une dette qui n'existe plus, et un vert réel passe pour un rouge admis.

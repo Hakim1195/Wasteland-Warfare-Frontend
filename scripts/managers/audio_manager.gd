@@ -83,6 +83,65 @@ const AMB_RADIO_HUB_DB := -20.0   # radio militaire du QG : présente, jamais en
 const AMB_GEIGER_DB_BY_DISTANCE := [-6.0, -14.0, -22.0]
 const AMB_GEIGER_FADE_TIME := 1.0
 
+# =============================================================================
+# LA TRANCHÉE (§8.151, LOT A) — FAMILLES DE VARIANTES : ROTATION + JITTER DE PITCH
+# =============================================================================
+# L'usine audio (tools/trench_audio_factory.py) livre des FAMILLES de fichiers numérotés
+# (`trench_shot_1..6.wav`, …) : « deux tirs consécutifs ne sont jamais la même onde — LA
+# différence entre audio de jeu et sample en boucle ». Si les fichiers d'une famille existent,
+# `play_sfx("trench_shot")` tire une ROTATION round-robin (index persistant, jamais deux fois la
+# même variante d'affilée) et pose un jitter de `pitch_scale` de ± 3 % à chaque lecture. Si les
+# fichiers manquent (headless nu, dépôt sans assets) : repli sur la clé simple de `_sfx` — le
+# synthé actuel — comportement STRICTEMENT inchangé, sans le moindre log (l'absence d'assets est
+# un cas NOMINAL, même contrat que `_start_battle_layers`).
+# ⚠️ `trench_shell` est DÉCOUVERT par la même mécanique mais n'a AUCUN site d'appel : le LOT D le
+# jouera au rebond des douilles. Enregistrer n'est pas brancher.
+# §8.151 (vague 2bis) — LES VOIX PAR ARME : `trench_shot_<id d'arme de la sim>` (§3.6 du bon de
+# commande). Le client choisit la famille avec l'id d'arme LU DANS L'ÉTAT (`_shot_sfx_key` de
+# trench_fp.gd) et RETOMBE sur `trench_shot` si la famille manque (arbre nu / headless) — la voix
+# générique 1..6 n'est PAS supprimée, elle devient le repli. La découverte reste par fichiers :
+# `trench_shot_7` n'existant pas, la famille générique s'arrête à 6 et n'avale jamais les voix
+# suffixées ; chaque famille d'arme sonde `<base>_1..N` comme les autres.
+const TRENCH_VARIANT_BASES := ["trench_shot", "trench_whizz", "trench_explosion_near",
+	"trench_explosion_far", "trench_shell", "trench_step",
+	"trench_shot_vipere", "trench_shot_frelon", "trench_shot_chacal", "trench_shot_condor"]
+const TRENCH_PITCH_JITTER := 0.03
+
+# =============================================================================
+# LE POOL DE VOIX SFX (§8.151, vague 2bis) — DIMENSIONNÉ PAR LA MESURE, ET SANS VOL À L'AVEUGLE
+# =============================================================================
+# ⚠️ LE DÉFAUT QU'ON SOLDE ICI. Le pool valait 6 lecteurs et `play_sfx` prenait `_sfx_players[
+# _sfx_next]` en round-robin PUR : aucun test de `playing`, aucune stratégie. Tant qu'une rafale
+# valait UNE détonation, six voix suffisaient. Depuis que la rafale se présente PAR PROJECTILE
+# (§4bis.4), un échange FRELON/FRELON — le cœur de la boucle après l'escalade à 4 touches — pose
+# 3 + 3 détonations en 250 ms : la 7ᵉ lecture (sifflement, hitmarker, culasse, pas, explosion)
+# ÉCRASAIT `stream` d'un lecteur encore en cours et TRONQUAIT sa queue. C'est exactement le son
+# que l'étape existe pour livrer.
+#
+# LE DIMENSIONNEMENT (mesuré sur les durées RÉELLES des .wav de l'usine et les cadences du
+# registre serveur `TRENCH_WEAPONS` — aucune valeur devinée) :
+#     détonations       6   (chacal ×2 à 0,752 s toutes les 0,80 s, ou frelon ×3 à 0,42 s toutes
+#                            les 1,20 s — pic 3 par tireur, × 2 tireurs)
+#     sifflements       3   (une rafale adverse de 3 balles manquées, whizz ≤ 0,330 s à 100 ms d'écart)
+#     culasses          2   (`trench_bolt` 0,420 s, un réarmement par tireur)
+#     touches           2   (`trench_hitmarker` 0,055 s + `trench_hit` 0,150 s)
+#     grenade           3   (départ 0,160 s + explosion ≤ 1,443 s + retombées 0,550 s)
+#     pas               1   (`trench_step` 0,150 s)
+#                     ----
+#     PIC                17  ->  pool de 20, soit 3 voix de marge.
+# Un `AudioStreamPlayer` au repos ne coûte qu'un nœud : la marge est gratuite, la troncature non.
+const SFX_POOL_SIZE := 20
+# Bornes DURES du `pitch_scale` posé sur un lecteur. Le jitter de variantes (± 3 %) vit très à
+# l'intérieur ; elles n'existent que pour le pitch PILOTÉ de `play_sfx_tracked` (le télégraphe
+# CONDOR cale la durée de son bourdonnement sur la fenêtre de danger réelle, §3.6) — un réglage
+# serveur extrême ne peut donc pas transformer une alerte en grondement ni en cri.
+const SFX_PITCH_MIN := 0.5
+const SFX_PITCH_MAX := 2.0
+# Encodage du JETON rendu par `play_sfx_tracked` : `index * STRIDE + génération`. La génération
+# d'un lecteur avance à chaque prise ET à chaque arrêt — un jeton dont la voix a été reprise entre
+# temps ne peut donc plus arrêter le son de quelqu'un d'autre.
+const SFX_TOKEN_STRIDE := 1000000
+
 # --- Musique : niveau cible et fondu d'entrée (REFONTE UI ARÈNE, lot F) ---
 # MESURE (diagnostic du 2026-07-27, poste de dev) : la chaîne réelle empile TROIS atténuations —
 # bus Master 0,7 (≈ −3,1 dB) × bus Music 0,46 (≈ −6,7 dB) × lecteur (−6,0 dB à l'époque), soit
@@ -97,10 +156,22 @@ const MUSIC_FADE_TIME := 2.0
 
 var _sfx: Dictionary = {}          # nom -> AudioStream (vrai fichier OU WAV synthétisé)
 var _sfx_players: Array = []       # pool de AudioStreamPlayer (évite de couper un son en cours)
-var _sfx_next := 0
+var _sfx_next := 0                 # curseur du round-robin : PAR OÙ commencer la recherche
+# --- §8.151 (2bis) : la comptabilité du pool (lue par les sondes, jamais par le jeu) ------------
+var _sfx_gen: Array = []           # génération par lecteur (invalide le jeton d'une voix reprise)
+var _sfx_plays := 0                # compteur MONOTONE des lectures réellement parties
+var _sfx_steals := 0               # voix VOLÉES faute de lecteur libre — doit rester 0 en jeu
+var _sfx_last := -1                # index du dernier lecteur servi (−1 = aucun)
 var _music_player: AudioStreamPlayer
 var _music_cache: Dictionary = {}  # base_name -> AudioStream (vrai fichier OU synthèse), chargé 1×
 var _real_count := 0               # nb d'assets réels chargés (info / journal)
+
+# --- Variantes TRANCHÉE (§8.151) : base -> Array[AudioStream], et dernier index joué par base. ---
+var _sfx_variants: Dictionary = {}
+var _variant_last: Dictionary = {}
+# RNG PROPRE au tirage (départ de rotation + jitter de pitch) : il ne consomme JAMAIS le RNG
+# global — le déterminisme des captures et des sondes visuelles n'a pas à dépendre du son.
+var _variant_rng := RandomNumberGenerator.new()
 
 # --- Musique dynamique à couches (LOT B) ---
 # 3 lecteurs bus Music, ou [] tant que le mode couches n'a pas pu démarrer (fichiers absents).
@@ -131,12 +202,13 @@ var _enabled := true
 
 func _ready() -> void:
 	_enabled = DisplayServer.get_name() != "headless"
-	# Pool de lecteurs SFX (round-robin).
-	for i in 6:
+	# Pool de lecteurs SFX (round-robin + recherche d'une voix LIBRE, §8.151 2bis).
+	for i in SFX_POOL_SIZE:
 		var p := AudioStreamPlayer.new()
 		p.bus = _bus_or_master("SFX")
 		add_child(p)
 		_sfx_players.append(p)
+		_sfx_gen.append(0)
 
 	_music_player = AudioStreamPlayer.new()
 	_music_player.bus = _bus_or_master("Music")
@@ -243,6 +315,23 @@ func _ready() -> void:
 	# laisserait croire que le geste est parti. Ici, l'oreille comprend « rien n'a eu lieu ».
 	_register_sfx("trench_refused", func(): return _make_blip(140.0, 0.045, 0.22))
 
+	# --- LA TRANCHÉE (§8.151, LOT A) : la CULASSE, et les familles de variantes de l'usine. ---
+	# `trench_bolt` : le cycle de culasse au RÉARMEMENT (la cadence redevient disponible). C'est un
+	# repère de RYTHME, pas un doublon de la couche mécanique du tir — elle vit DANS les
+	# `trench_shot_*.wav`, 20-40 ms après le départ ; lui parle 0,8 à 2,5 s plus tard. Repli : blip
+	# grave DISCRET, distinct de `trench_refused` (140 Hz) et de `trench_hit` (180 Hz) — il dit
+	# « prête », jamais « refusé » ni « touché ».
+	_register_sfx("trench_bolt", func(): return _make_blip(300.0, 0.05, 0.13))
+	# --- LA TRANCHÉE (§8.151, vague 2bis) : le TÉLÉGRAPHE CONDOR s'entend. ---
+	# `trench_laser_warn` : bourdonnement discret joué côté CIBLE quand le laser adverse commence
+	# (une fois par visée — le câblage vit dans trench_fp.gd, calé sur le MÊME signal que le rendu
+	# du rayon). ⚠️ OVERRIDE SEUL, PAS de repli synthé : même doctrine que le whizz (§8.151.1) —
+	# fichier absent (arbre nu/headless) => la clé reste nulle et `play_sfx` se tait, le repli est
+	# le silence d'avant, jamais un synthé inventé.
+	_sfx["trench_laser_warn"] = _load_override("sfx", "trench_laser_warn")
+	# Familles à variantes (rotation round-robin + jitter de pitch — bloc de constantes §8.151).
+	_register_trench_variants()
+
 # Enregistre un SFX par nom : vrai fichier prioritaire (assets/audio/sfx/<nom>), sinon repli
 # synthétisé (Callable() -> AudioStreamWAV). Factorise le pattern _load_override / _make_*.
 func _register_sfx(sfx_name: String, synth: Callable) -> void:
@@ -250,19 +339,171 @@ func _register_sfx(sfx_name: String, synth: Callable) -> void:
 	_sfx[sfx_name] = override if override != null else synth.call()
 
 
-# Joue un SFX par nom (silencieux si inconnu). Round-robin sur le pool.
+# Joue un SFX par nom (silencieux si inconnu). Le pool sert une voix LIBRE (§8.151 2bis) — API
+# INCHANGÉE pour les ~160 sites d'appel du jeu : seule la façon de choisir le lecteur a changé.
 # ⚠️ `volume_db` (§8.141) : ATTÉNUATION seulement, jamais d'amplification. Un appelant qui pourrait
 # monter le volume d'un son pourrait le rendre plus fort que le mixage réglé par le joueur — on
 # borne donc à 0 dB par le haut. Le pool étant partagé et réutilisé en round-robin, la valeur est
 # REPOSÉE à chaque lecture : sans ça, un pas lointain laisserait le joueur suivant à −18 dB.
 func play_sfx(sfx_name: String, volume_db: float = 0.0) -> void:
-	if not _enabled or not _sfx.has(sfx_name) or _sfx[sfx_name] == null or _sfx_players.is_empty():
-		return
-	var p: AudioStreamPlayer = _sfx_players[_sfx_next]
-	_sfx_next = (_sfx_next + 1) % _sfx_players.size()
-	p.stream = _sfx[sfx_name]
+	play_sfx_tracked(sfx_name, volume_db)
+
+
+# §8.151 (2bis) — LA MÊME LECTURE, avec un JETON et un pitch PILOTÉ. Deux besoins, un seul chemin :
+#  • `pitch_mul` MULTIPLIE le pitch qui aurait été posé (1,0 pour une clé simple, le jitter pour une
+#    famille) : c'est ainsi que le télégraphe CONDOR fait tenir son bourdonnement dans la fenêtre de
+#    danger RÉELLE, au lieu de la durée figée de son fichier ;
+#  • le JETON rendu permet d'ARRÊTER précisément CE son (`stop_sfx`) — et lui seul : si la voix a
+#    été reprise entre temps, le jeton est périmé et l'arrêt ne fait rien.
+# Renvoie −1 quand rien n'a été joué (lecture coupée, clé inconnue, pool vide).
+func play_sfx_tracked(sfx_name: String, volume_db: float = 0.0, pitch_mul: float = 1.0) -> int:
+	if not _enabled or _sfx_players.is_empty():
+		return -1
+	# §8.151 : une FAMILLE DE VARIANTES sur disque prime sur la clé simple — rotation sans
+	# répétition immédiate + jitter de pitch. Sans famille, chemin historique à l'identique
+	# (clé inconnue ou nulle → silence, aucun état touché).
+	var stream: AudioStream = null
+	var pitch := 1.0
+	if _sfx_variants.has(sfx_name):
+		var streams: Array = _sfx_variants[sfx_name]
+		stream = streams[_pick_variant_index(sfx_name)]
+		pitch = _variant_pitch()
+	elif _sfx.has(sfx_name) and _sfx[sfx_name] != null:
+		stream = _sfx[sfx_name]
+	if stream == null:
+		return -1
+	var index := _take_sfx_player()
+	var p: AudioStreamPlayer = _sfx_players[index]
+	p.stream = stream
 	p.volume_db = clampf(volume_db, -40.0, 0.0)
+	# ⚠️ REPOSÉ à chaque lecture, comme le volume : le pool est PARTAGÉ — sans ce 1.0 explicite,
+	# un clic de menu emprunterait le jitter du tir joué avant lui sur le même lecteur.
+	p.pitch_scale = clampf(pitch * pitch_mul, SFX_PITCH_MIN, SFX_PITCH_MAX)
 	p.play()
+	_sfx_plays += 1
+	_sfx_last = index
+	return index * SFX_TOKEN_STRIDE + int(_sfx_gen[index])
+
+
+# ╔═ §8.151 (2bis) — QUELLE VOIX PRENDRE : la LIBRE d'abord, le vol en DERNIER RECOURS ══════════╗
+# ║ 1. On balaie tout le pool DEPUIS le curseur : la première voix qui ne joue pas est servie —    ║
+# ║    quand rien ne sature (le cas nominal, et tout le jeu hors duel), c'est le round-robin        ║
+# ║    d'avant, à l'identique.                                                                     ║
+# ║ 2. Pool PLEIN : on vole la voix à laquelle il reste le MOINS à jouer (durée du flux ÷ pitch     ║
+# ║    − position), pas « la suivante ». Le vol devient la troncature la plus courte possible au    ║
+# ║    lieu d'une coupure au hasard — et `_sfx_steals` le COMPTE : une sonde peut donc prouver      ║
+# ║    qu'un échange de rafales n'en provoque aucun (ce que l'arithmétique `_sfx_next % taille`     ║
+# ║    ne pouvait pas voir — elle prouvait le bouclage, jamais le vol).                             ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _take_sfx_player() -> int:
+	var size: int = _sfx_players.size()
+	var start: int = posmod(_sfx_next, size)
+	for k in size:
+		var i: int = (start + k) % size
+		if not (_sfx_players[i] as AudioStreamPlayer).playing:
+			_claim_sfx_player(i)
+			return i
+	var victim := start
+	var least := INF
+	for i in size:
+		var p: AudioStreamPlayer = _sfx_players[i]
+		var left := 0.0
+		if p.stream != null:
+			left = maxf(0.0, p.stream.get_length() / maxf(0.01, p.pitch_scale)
+				- p.get_playback_position())
+		if left < least:
+			least = left
+			victim = i
+	_sfx_steals += 1
+	(_sfx_players[victim] as AudioStreamPlayer).stop()
+	_claim_sfx_player(victim)
+	return victim
+
+
+# La PRISE d'une voix : sa génération avance (tout jeton plus ancien devient caduc) et le curseur
+# repart derrière elle — le tour du pool reste complet, quel que soit le lecteur choisi.
+func _claim_sfx_player(index: int) -> void:
+	_sfx_gen[index] = (int(_sfx_gen[index]) + 1) % SFX_TOKEN_STRIDE
+	_sfx_next = (index + 1) % _sfx_players.size()
+
+
+# §8.151 (2bis) — ARRÊTE le son d'un jeton rendu par `play_sfx_tracked`, et RIEN d'autre : si la
+# voix a été reprise depuis (génération différente), l'appel est un no-op. Idempotent.
+func stop_sfx(token: int) -> void:
+	if token < 0 or _sfx_players.is_empty():
+		return
+	var index := token / SFX_TOKEN_STRIDE
+	if index < 0 or index >= _sfx_players.size():
+		return
+	if int(_sfx_gen[index]) != token % SFX_TOKEN_STRIDE:
+		return
+	var p: AudioStreamPlayer = _sfx_players[index]
+	p.stop()
+	p.stream = null
+	_sfx_gen[index] = (int(_sfx_gen[index]) + 1) % SFX_TOKEN_STRIDE
+
+
+# §8.151 (2bis) — LA DURÉE de ce que cette clé jouerait, en secondes (0,0 si elle ne joue rien).
+# Lecture PURE : aucun tirage, aucun état touché. Elle existe pour que l'appelant puisse caler un
+# son sur une fenêtre de jeu (le télégraphe CONDOR) au lieu de recopier la durée d'un fichier.
+func sfx_length(sfx_name: String) -> float:
+	if _sfx_variants.has(sfx_name):
+		var streams: Array = _sfx_variants[sfx_name]
+		if not streams.is_empty() and streams[0] != null:
+			return float((streams[0] as AudioStream).get_length())
+		return 0.0
+	if _sfx.has(sfx_name) and _sfx[sfx_name] != null:
+		return float((_sfx[sfx_name] as AudioStream).get_length())
+	return 0.0
+
+
+# §8.151 (vague 2bis) — « cette clé JOUERAIT-elle quelque chose ? » : famille de variantes servie,
+# OU clé simple non nulle (vrai fichier ou synthé). C'est la question du REPLI par arme côté duel
+# (`trench_shot_frelon` absent en arbre nu → retour à la voix générique `trench_shot`), posée au
+# manager plutôt que déduite de son état interne. Lecture pure : aucun tirage, aucun état touché.
+func has_sfx(sfx_name: String) -> bool:
+	return _sfx_variants.has(sfx_name) \
+		or (_sfx.has(sfx_name) and _sfx[sfx_name] != null)
+
+
+# §8.151 — DÉCOUVERTE des familles de variantes sur disque. Une famille est enregistrée dès que
+# `<base>_1` existe ; on sonde les indices croissants SANS TROU (la convention de l'usine —
+# `trench_shot_1..6`). Aucun fichier → aucune entrée → `play_sfx` retombe sur la clé simple.
+func _register_trench_variants() -> void:
+	for base in TRENCH_VARIANT_BASES:
+		var streams: Array = []
+		var index := 1
+		while true:
+			var stream := _load_override("sfx", "%s_%d" % [base, index])
+			if stream == null:
+				break
+			streams.append(stream)
+			index += 1
+		if not streams.is_empty():
+			_sfx_variants[base] = streams
+			_variant_last[base] = -1
+
+
+# §8.151 — LA ROTATION : round-robin à index persistant. Le pas séquentiel garantit PAR
+# CONSTRUCTION « jamais deux fois la même variante d'affilée » et « toutes utilisées » — là où un
+# tirage aléatoire ne fait que le rendre probable ; c'est le jitter de pitch qui casse la monotonie
+# de l'ordre. Départ ALÉATOIRE (posé au premier tirage) : deux sessions n'ouvrent pas le duel sur
+# la même onde. (Famille à variante unique : la rotation dégénère en répétition — inévitable.)
+func _pick_variant_index(base: String) -> int:
+	var streams: Array = _sfx_variants[base]
+	var last := int(_variant_last.get(base, -1))
+	var index: int
+	if last < 0:
+		index = _variant_rng.randi_range(0, streams.size() - 1)
+	else:
+		index = (last + 1) % streams.size()
+	_variant_last[base] = index
+	return index
+
+
+# §8.151 — le jitter : ± TRENCH_PITCH_JITTER autour de 1,0, borné PAR CONSTRUCTION (randf_range).
+func _variant_pitch() -> float:
+	return 1.0 + _variant_rng.randf_range(-TRENCH_PITCH_JITTER, TRENCH_PITCH_JITTER)
 
 
 # Démarre/maintient la MUSIQUE DE MENU (bouclée) sur le bus Music. Idempotent.

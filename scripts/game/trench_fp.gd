@@ -37,6 +37,8 @@ const ViewmodelScript := preload("res://scripts/game/trench_viewmodel.gd")
 const AmbientScript := preload("res://scripts/game/trench_ambient.gd")
 const TuningScript := preload("res://scripts/game/trench_tuning.gd")
 const CelebrationScript := preload("res://scripts/ui/unlock_celebration.gd")
+const Springs := preload("res://scripts/game/trench_springs.gd")
+const FlinchShader := preload("res://shaders/trench_flinch.gdshader")
 
 # Arme de départ du duel (miroir de `trench_sim.STARTING_WEAPON`) — sert AVANT le premier état,
 # le temps que le serveur nous dise où en est l'escalade.
@@ -151,7 +153,39 @@ var _fire_aim := Vector2.ZERO
 # Fenêtre pendant laquelle l'événement `fire` du serveur ne REJOUE pas le retour d'arme déjà joué
 # localement. Un seul événement `fire` par pression côté serveur (la rafale naît dedans), donc une
 # fenêtre suffit — elle n'avalera jamais un second tir légitime.
+# ⚠️ §8.151 (2bis) : elle n'est posée QUE lorsqu'un retour d'arme a RÉELLEMENT été joué au clic —
+# donc jamais pour un tir télégraphié (CONDOR), dont le clic ne joue rien. Elle ne court plus
+# jamais contre `laser_lead_ticks` : c'était la course que le condor perdait.
 var _fire_fx_mute := 0.0
+
+# ╔═ §8.151 (VAGUE 2bis) — L'« EFFET MITRAILLETTE » : la rafale se PRÉSENTE par projectile ═══════╗
+# ║ AVANT : un tir à `burst > 1` (FRELON ×3, CHACAL ×2) était AGRÉGÉ en UNE détonation, UN kick et  ║
+# ║ des traçantes superposées au même instant — alors que le serveur espace ses projectiles de      ║
+# ║ `burst_gap_ticks` (2 ticks = 100 ms : `_fire_burst`, launch = tick + i × gap). C'est LE défaut  ║
+# ║ nommé par le cahier §4bis.4. Désormais chaque projectile a SA détonation (round-robin de la     ║
+# ║ famille de l'arme), SA traçante, SON flash et SON cran de recul (réduit, cumul borné).          ║
+# ║ CADENCEMENT — deux sources, jamais une minuterie inventée :                                     ║
+# ║  • côté LOCAL (mon clic, prédit §8.141.9) : `burst_gap_ticks` LU au registre `trench_init`      ║
+# ║    (§8.137 : aucune valeur d'arme en dur) — le serveur cadencera EXACTEMENT pareil ;            ║
+# ║  • côté ADVERSE : les `launch_tick` PAR PROJECTILE du flux d'états font foi (l'état du même     ║
+# ║    message que l'événement `fire` porte déjà toute la rafale) ; le registre n'est qu'un repli.  ║
+# ║ Un clic REFUSÉ ne planifie RIEN (§8.141.9) : la file ne se remplit que depuis un tir accepté    ║
+# ║ par la prédiction ou confirmé par le serveur. Elle se vide en < 0,25 s (2 crans × 100 ms).      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Cran de rafale : kick RÉDUIT de ~40 % par coup suiveur (le premier coup garde le kick plein). Le
+# cumul reste borné par l'existant : roulis plafonné ROLL_CAP_DEG, punch de FOV posé en VALEUR (pas
+# additionné), ressorts du viewmodel à décroissance entre deux crans (API feel INCHANGÉE).
+const BURST_KICK_SCALE := 0.6
+# Volume du télégraphe CONDOR audible (§3.6) : discret — un avertissement, pas une sirène.
+const LASER_WARN_DB := -6.0
+# Crans de rafale EN ATTENTE : {due, mode local|mine_event|enemy, weapon, pos, yaw, pitch, flight_s}.
+var _burst_queue: Array = []
+# Verrou « une fois par visée » du télégraphe CONDOR audible — armé sur le front MONTANT du signal
+# de rendu du laser ADVERSE, relâché quand le rayon s'éteint (tir parti, annulation, accroupi).
+var _laser_warn_latch := false
+# Jeton de la voix qui porte ce bourdonnement (§8.151 2bis) : il sert à le COUPER quand le rayon
+# s'éteint, et à lui seul — si la voix a été reprise entre temps, l'arrêt est un no-op. −1 = aucune.
+var _laser_warn_token := -1
 
 # --- Entrées coalescées entre deux envois --------------------------------------------------------
 var _send_accum := 0.0
@@ -175,18 +209,137 @@ var _grenade_refuse := 0.0
 # la RÉCONCILIE sur l'événement `fire` du serveur — la seule source qui dise « ce tir est parti ».
 var _pred_fire_ready := 0.0
 var _fire_refuse := 0.0
+# §8.151 (LOT A) : la CULASSE du réarmement. Armée UNIQUEMENT par un tir RÉEL (retour d'arme local
+# prédit, ou tir confirmé par l'événement `fire` du serveur) — JAMAIS par un clic refusé
+# (§8.141.9 : un refus ne joue rien de balistique). Le clac part quand `_clock` franchit
+# `_pred_fire_ready`, la porte de cadence prédite — elle-même dérivée du registre des règles
+# (`cooldown_ticks / tick_rate`), aucun barème recopié.
+var _bolt_armed := false
 var _stance_toggle := false
 
 # --- FX éphémères --------------------------------------------------------------------------------
+# Durée de vie du hitmarker, en secondes — UNE seule constante pour la pose et pour le fondu (les
+# deux valaient 0,35 en dur à deux endroits, et un jour l'une des deux aurait bougé sans l'autre).
+const HITMARKER_TIME := 0.35
 var _hitmarker := 0.0
+# §8.151 (2ter, §4bis.2) — CE QUE LE HITMARKER DIT DE PLUS, et rien qu'à partir de l'événement.
+# `_hitmarker_kill` : ce coup a mis la cible à 0 PV (`hp` de l'événement `hit`) → croix ROUGE.
+# `_hitmarker_scale` : échelle DISCRÈTE du coup = dégâts de l'événement rapportés à `hp_max` du
+# registre (jamais un barème d'arme recopié). Les deux sont POSÉS par l'événement serveur et par
+# lui seul — un tir refusé, une balle qui manque ou un dégât SUBI n'y écrivent jamais.
+var _hitmarker_kill := false
+var _hitmarker_scale := 1.0
 var _hurt_flash := 0.0
 var _hurt_dir := 0.0
-var _recoil := 0.0
 var _enemy_hit := 0.0
 var _known_projectiles: Dictionary = {}
 var _reduced_motion := false
 var _clock := 0.0
 var _last_seen_enemy_pos := 2.0
+
+# ╔═ §8.151 (VAGUE 2ter) — LE HUD DE COMBAT : IL NE MONTRE QUE DES MÉCANIQUES RÉELLES (§1.9) ═════╗
+# ║ Trois ajouts, une seule règle. Chacun n'affiche QUE ce que la simulation possède vraiment :     ║
+# ║  1. RÉTICULE PAR ARME — son écartement EST le cône `dispersion_deg` de l'arme courante, LU au   ║
+# ║     registre `trench_init.rules.weapons` et projeté par la MÊME fonction que la visée           ║
+# ║     (`_world.project_aim`, cf. `_dispersion_pixels`). ⛔ AUCUN BLOOM PROGRESSIF : la sim n'a    ║
+# ║     pas de dispersion qui grossit en tirant ; en dessiner une serait exactement le mensonge     ║
+# ║     que §8.141.6 a coûté une partie. Le seul mouvement admis est un PULSE cosmétique bref au    ║
+# ║     tir, POSÉ (jamais cumulé) et éteint bien avant que la cadence n'autorise le coup suivant.   ║
+# ║  2. HITMARKER — enrichi, mais toujours sur le SEUL événement `hit` serveur (croix de KILL       ║
+# ║     rouge quand `hp` tombe à 0, échelle discrète selon `damage`).                                ║
+# ║  3. DÉGÂTS FLOTTANTS — un chiffre par touche CONFIRMÉE, jamais un chiffre prédit.                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Le PULSE du réticule (§4bis.1). Ressort CRITIQUE (zeta 1) posé à 1.0 au tir : (1+wt)e⁻ʷᵗ à 8 Hz
+# ≈ 4 % restants à 100 ms — donc éteint TRÈS avant la cadence la plus rapide du registre (le CHACAL,
+# 16 ticks = 0,80 s). Posé en VALEUR (`set_value`) comme le punch de FOV : une rafale de 3 coups
+# repart du même plafond au lieu de s'empiler — un réticule qui s'ouvrirait à chaque balle SERAIT
+# le bloom interdit.
+const RETICLE_PULSE_FREQ := 8.0
+const RETICLE_PULSE_PX := 5.0
+var _reticle_pulse := Springs.TrenchSpring.new(RETICLE_PULSE_FREQ, 1.0, 0.0)
+
+# ╔═ §8.151 (2ter, §4bis.3) — LES DÉGÂTS FLOTTANTS : POOL PRÉALLOUÉ, TEMPS DE SCÈNE ══════════════╗
+# ║ ⚠️ AUCUN `Label.new()` HORS DE LA CONSTRUCTION. Le pool est bâti une fois dans `_build_hud`     ║
+# ║ (`DAMAGE_POOL` étiquettes, taille POSÉE — 8ᵉ récidive du `size = (0,0)` d'un Control créé par   ║
+# ║ code, cf. §8.140.3), et un chiffre qui naît RECYCLE le plus ancien plutôt que d'allouer. Une    ║
+# ║ rafale de FRELON peut placer 3 balles en 200 ms, deux rafales se recouvrent : 12 places est le  ║
+# ║ premier multiple confortable au-dessus du minimum de 8 du cahier.                               ║
+# ║ ⚠️ PILOTÉ PAR LE TEMPS DE SCÈNE (`_clock`, avancé par `_process(delta)`) et jamais par           ║
+# ║ `Time.get_ticks_msec()` : l'horloge murale est la cause n° 1 des baselines instables du         ║
+# ║ §8.151.0, et une capture à frame fixe doit rejouer le même pixel.                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const DAMAGE_POOL := 12
+const DAMAGE_RISE_S := 0.6          # montée + fondu (cahier : « ~0,6 s »)
+const DAMAGE_RISE_PX := 46.0        # de combien le chiffre monte sur toute sa vie
+const DAMAGE_BOX := Vector2(96, 26) # taille POSÉE de chaque étiquette du pool
+const DAMAGE_JITTER_PX := 26.0      # décalage latéral d'un chiffre à l'autre (lisibilité §4bis.3)
+const DAMAGE_SEED := 81513          # graine du décalage — hash_noise déterministe, aucun RNG global
+var _damage_pool: Array = []        # les Labels préalloués — sa TAILLE ne change JAMAIS après _ready
+# ⚠️ LA LISTE DES LIBRES EST OBLIGATOIRE, ET C'EST UN CORRECTIF. La première écriture prenait
+# `_damage_pool[_damage_live.size()]` : dès qu'un chiffre du MILIEU expirait (le plus ancien n'est
+# pas toujours celui qui part en premier quand une rafale recouvre une rafale), l'index retombait
+# sur une étiquette ENCORE EN VOL — deux entrées vivantes partageaient un Label, et l'expiration de
+# la première éteignait le chiffre de la seconde en plein écran. Un pool sans liste de libres n'est
+# pas un pool, c'est un compteur.
+var _damage_free: Array = []        # les Labels DISPONIBLES (invariant : libres ∪ en vol = pool)
+var _damage_live: Array = []        # {node, born, from, jitter} — les chiffres en vol
+var _damage_spawned := 0            # compteur de naissances : la clé du décalage déterministe
+
+# ╔═ §8.151 (2ter, §4bis.5 / décision §1.8) — LE TIR MAINTENU, ACTIF PAR DÉFAUT ══════════════════╗
+# ║ Maintenir le clic enchaîne les tirs à la cadence AUTORISÉE PAR LE SERVEUR. Mécaniquement        ║
+# ║ NEUTRE : la sim impose déjà `cooldown_ticks`, un cliqueur rapide obtenait exactement ce rythme  ║
+# ║ (c'est même le scénario de `probe_trench_falseshot`). Ce qui change est le CONFORT, pas la      ║
+# ║ cadence — et surtout PAS la visée : le tir maintenu n'écrit dans aucune variable de visée, il   ║
+# ║ ne décide QUE de l'instant d'émission (`probe_trench_aim`/`probe_trench_feel_aim` restent       ║
+# ║ vertes, c'est la contre-épreuve nommée du cahier).                                              ║
+# ║ ⚠️ ON N'ÉMET JAMAIS UN TIR VOUÉ AU REJET : chaque frame tenue repasse par la prédiction des SIX ║
+# ║ refus (`_fire_refusal`, miroir de `trench_sim.step`). Sans elle, une gâchette tenue enverrait   ║
+# ║ ~60 messages/s dans un budget anti-flood de 9 — et le premier tir LÉGAL serait celui qu'on      ║
+# ║ jetterait. Le refus SONORE, lui, reste réservé au geste VOLONTAIRE (le clic, front montant) :   ║
+# ║ un maintien qui claquerait `trench_refused` 7 fois par seconde serait un hachoir.                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+var _auto_fire: bool = TuningScript.defaults()["auto_fire"]
+var _fire_hold_pad_prev := false    # front montant de la gâchette manette (le clic a `_input`)
+var _hold_empty_latch := false      # « chargeur vide » n'envoie qu'UN déclencheur de rechargement
+
+# ╔═ §8.151 LOT B — LE FEEL DE L'HÔTE : roulis, punch de FOV, secousse d'image entière ═══════════╗
+# ║ RE-FONDATION de l'existant, pas superposition. Ce qui disparaît, et pourquoi :                 ║
+# ║  • `_recoil` (0→1, décru linéairement à 6/s) : le kick vit désormais dans les ressorts du      ║
+# ║    viewmodel (`notify_fire`), qui montent d'un coup et se POSENT (deux étages §4.1).           ║
+# ║  • le KICK DE RÉTICULE (`aim_screen.y -= _recoil * 10`) : SUPPRIMÉ SANS REMPLAÇANT DIRECT.     ║
+# ║    Il décalait la croix de 10 px SANS bouger le monde : pendant chaque recul, le réticule      ║
+# ║    montrait un point que la balle ne visait pas — un mensonge de 10 px en contradiction        ║
+# ║    frontale avec §8.141.6. La secousse, elle, translate monde + réticule ENSEMBLE.             ║
+# ║ Ce qui arrive, et dans quelles limites (le catalogue AUTORISÉ du cahier §4.2) :                ║
+# ║  • ROULIS au tir : rotation autour de l'axe de visée SEULEMENT, plafonnée ±0,3° — le centre    ║
+# ║    de l'image est invariant. JAMAIS d'offset de lacet/site caméra (§8.141.6).                  ║
+# ║  • PUNCH DE FOV au tir (+1,5° ~100 ms, interrupteur F10) : le rayon central est invariant      ║
+# ║    par FOV — le réticule central reste vrai, et l'écartement de dispersion suit le vrai FOV.   ║
+# ║  • SECOUSSE : le monde garde son modèle « trauma » (impulsions/décroissance inchangées) mais   ║
+# ║    publie un décalage ÉCRAN (`shake_screen_px`) appliqué ICI aux couches ET au réticule d'un   ║
+# ║    seul geste — la relation visée/pixel est préservée à l'octet près.                          ║
+# ║ RIEN de tout cela n'écrit dans `_aim_yaw`/`_aim_pitch`/`_fire_aim` : `probe_trench_feel_aim`   ║
+# ║ le prouve à chaque passe, octet par octet.                                                     ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Roulis ⚙ : même forme deux étages que le kick du viewmodel (§4.1), tau résiduel 0,2 s pour rendre
+# le calme avant la cadence minimale du registre (0,8 s) — mesuré par la sonde.
+const ROLL_KICK_DEG := 0.22
+const ROLL_CAP_DEG := 0.3
+const ROLL_FREQ := 9.5
+const ROLL_ZETA := 0.52
+const ROLL_RESIDUAL_TAU := 0.2
+const ROLL_RESIDUAL_SHARE := 0.34
+const ROLL_SIDE_SEED := 8153       # graine du côté du roulis — hash_noise, aucun RNG global
+const FOV_PUNCH_DEG := 1.5         # « +1-2° pendant ~100 ms » (§4.2) — défaut modéré
+const FOV_PUNCH_FREQ := 8.0        # ressort CRITIQUE : (1+wt)e⁻ʷᵗ ≈ 4 % restants à 100 ms
+var _cam_roll := Springs.TrenchRecoilAxis.new(ROLL_FREQ, ROLL_ZETA,
+	ROLL_RESIDUAL_TAU, ROLL_RESIDUAL_SHARE)
+var _fov_punch := Springs.TrenchSpring.new(FOV_PUNCH_FREQ, 1.0, 0.0)
+var _shot_count := 0
+var _shake_px := Vector2.ZERO      # le décalage appliqué CETTE frame (couches + réticule ensemble)
+var _feel_recoil: float = TuningScript.defaults()["feel_recoil"]
+var _feel_flinch: float = TuningScript.defaults()["feel_flinch"]
+var _feel_fov_punch: bool = TuningScript.defaults()["fov_punch"]
 # Visée du DERNIER laser adverse annoncé (§5.3) : le serveur la joint à l'événement `laser`, sans
 # quoi le rayon pointerait au hasard et le télégraphe mentirait sur qui est visé.
 var _enemy_laser_yaw := 0.0
@@ -233,6 +386,8 @@ var _choice_buttons: Array = []
 var _abandon_overlay: Control
 var _result_overlay: Control
 var _banner_tween: Tween
+# LA DÉCISION DE CAPTURE, gardée à côté de l'appel plateforme — cf. le pavé de `_capture_mouse`.
+var _mouse_captured := false
 
 
 func _ready() -> void:
@@ -271,8 +426,35 @@ func _exit_tree() -> void:
 
 # La souris est CAPTURÉE pendant le duel (c'est une visée libre) et RELÂCHÉE dès qu'un panneau
 # demande un clic — confirmation d'abandon, choix d'arme, écran de fin.
+# ⚠️ `_mouse_captured` N'EST PAS UN DOUBLON DÉCORATIF de `Input.mouse_mode` : sous `--headless` le
+# pilote est MUET et ne retient RIEN (mesuré — on lui demande `CAPTURED`, il rend `VISIBLE`). Une
+# sonde qui ne lirait que la plateforme serait donc VERTE quoi qu'on fasse. On garde ici la
+# DÉCISION du client ; la sonde la lit sous pilote muet, et la recolle à `Input.mouse_mode` sous
+# pilote réel (section 2quater) — l'état ET son image, jamais l'un sans l'autre.
 func _capture_mouse(capture: bool) -> void:
+	_mouse_captured = capture
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if capture else Input.MOUSE_MODE_VISIBLE
+
+
+# ╔═ §8.151 (2quinquies, CORRECTIF) — REFERMER UN PANNEAU NE REND PAS LA SOURIS AU DUEL ══════════╗
+# ║ 🩸 LE CURSEUR DISPARAISSAIT SUR UNE INTERFACE QUI ATTEND UN CLIC. `_capture_mouse` est un      ║
+# ║ poseur NU, et ses cinq appelants raisonnaient chacun sur LEUR seul panneau                     ║
+# ║ (`not _tuning.visible`, `not _abandon_overlay.visible`, `not _match_over`…). Chemin le plus    ║
+# ║ court, avec le réflexe le plus naturel qui soit, en ENTRAÎNEMENT : F10 ouvre les réglages      ║
+# ║ (souris relâchée) → ÉCHAP (le réflexe pour fermer un panneau) ouvre en fait la boîte           ║
+# ║ « abandonner ? » → ÉCHAP à nouveau la referme et RECAPTURAIT la souris alors que le panneau    ║
+# ║ F10 était TOUJOURS à l'écran : plus de curseur, plus un seul réglage cliquable. Même classe en ║
+# ║ duel CLASSÉ, où le panneau de CHOIX D'ARME s'ouvre TOUT SEUL : ÉCHAP + ÉCHAP par-dessus lui et ║
+# ║ ses deux boutons devenaient inatteignables à la souris.                                        ║
+# ║ ⚠️ LA QUESTION « QUI TIENT L'ÉCRAN ? » A UNE SEULE RÉPONSE, et c'est `_ui_blocks_actions()` —   ║
+# ║ exactement la liste des panneaux qui relâchent le curseur. Nier UN drapeau, c'était répondre à ║
+# ║ la question « mon panneau à moi est-il fermé ? », qui n'est pas la même.                        ║
+# ║ ⚠️ UN SEUL SITE DE DÉCISION : tout ce qui OUVRE ou FERME un panneau appelle cette fonction —    ║
+# ║ elle rend la souris au duel si l'écran est libre, la laisse au joueur sinon. Les seuls          ║
+# ║ `_capture_mouse` restants sont les inconditionnels (entrée en duel, sortie, écran de fin).      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _restore_mouse() -> void:
+	_capture_mouse(not _ui_blocks_actions())
 
 
 # =================================================================================================
@@ -539,22 +721,42 @@ func _on_duel_event(event: Dictionary) -> void:
 				# c'est LUI qui a raison sur le moment où le suivant sera permis. Sans ce recalage,
 				# une dérive d'horloge finirait par rendre la prédiction trop permissive — et le
 				# faux coup reviendrait par la porte de derrière.
-				_pred_fire_ready = _clock + _cadence_seconds(str(event.get("weapon", "")))
+				# §8.151 (2bis, correctif) : ce qui RESTE de la cadence, pas la cadence ENTIÈRE —
+				# le serveur a posé sa porte au CLIC, qui précède cet événement de
+				# `laser_lead_ticks` pour une arme télégraphiée (cf. `_cadence_remaining_seconds`).
+				_pred_fire_ready = _clock + _cadence_remaining_seconds(str(event.get("weapon", "")))
+				_arm_bolt()          # §8.151 : le serveur confirme un tir → le réarmement s'entendra
 				if _fire_fx_mute <= 0.0:
-					_recoil = 1.0
-					# Depuis §8.138, le tween de recul s'applique au VIEWMODEL 2D peint.
+					# Depuis §8.138 le recul s'applique au VIEWMODEL 2D peint — et depuis §8.151
+					# il vit dans SES ressorts ; ici on n'arme plus que le feel de caméra.
+					# §8.151 (2bis) : détonation dans la VOIX de l'arme (repli générique), et les
+					# coups 2..N de la rafale non anticipée sont planifiés eux aussi — cadencés par
+					# les `launch_tick` serveur du même message (mode mine_event : kick + son, pas
+					# de traçante locale — celles de l'état suffisent à ce tir-là, comme avant).
+					_fire_feel_kick()
 					_viewmodel.notify_fire()
-					AudioManager.play_sfx("trench_shot")
+					AudioManager.play_sfx(_shot_sfx_key(str(event.get("weapon", ""))))
+					_schedule_burst_followups("mine_event", event)
 			else:
 				# LE DÉPART DE FEU ADVERSE — le danger s'annonce à l'oreille avant de se voir.
-				AudioManager.play_sfx("trench_shot")
+				# §8.151 : le SIFFLEMENT de cette balle (si elle me manque) ne part PAS d'ici — au
+				# départ, personne ne sait encore si elle touche. Il part de l'événement `impact`
+				# (damage == 0), que le serveur émet à la fin du même vol que la traçante.
+				# §8.151 (2bis) : la détonation prend la VOIX de l'arme de l'événement (`frelon`
+				# ne sonne plus comme `condor`), et une rafale adverse fait N départs de feu — les
+				# crans 2..N sont planifiés sur les `launch_tick` PAR PROJECTILE du flux d'états
+				# (le même message porte déjà toute la rafale) : le serveur fait foi, pas une
+				# minuterie locale.
+				AudioManager.play_sfx(_shot_sfx_key(str(event.get("weapon", ""))))
 				# … ET À L'ŒIL (§8.141). Le bot voit MON tir — ma traçante naît à ma position, et
 				# `from_pos` la trahit. Moi je n'avais que le SON du sien, alors que sa balle met un
 				# temps de vol à arriver : je savais qu'on tirait, jamais d'où. Une lueur de deux
 				# frames à son canon rétablit la parité d'information, et elle ne révèle rien qui ne
 				# le soit déjà — tirer, c'est se montrer (§1.6, la même règle que le `from_pos` des
-				# projectiles, publics eux aussi).
+				# projectiles, publics eux aussi). §8.151 (2bis) : re-déclenchée par cran → la lueur
+				# PULSE au rythme réel de la rafale au canon d'en face.
 				_world.notify_enemy_fire(int(round(_last_seen_enemy_pos)))
+				_schedule_burst_followups("enemy", event)
 		"impact":
 			# ╔═ L'EXPLOSION NAÎT DE L'ÉVÉNEMENT SERVEUR, JAMAIS D'UNE HORLOGE LOCALE ═════════╗
 			# ║ Le client connaît le tick d'impact dès le lancer : il POURRAIT jouer l'explosion ║
@@ -567,6 +769,19 @@ func _on_duel_event(event: Dictionary) -> void:
 				# `on_my_side` : la grenade tombe chez CELUI QUI N'EST PAS son lanceur.
 				_world.play_explosion(float(event.get("target_x", 0.0)),
 					int(event.get("slot", 0)) != _my_slot)
+			elif int(event.get("slot", 0)) != _my_slot and int(event.get("damage", 0)) <= 0:
+				# ╔═ §8.151 (LOT A) — LA BALLE ADVERSE QUI ME MANQUE SIFFLE EN PASSANT ═════════════╗
+				# ║ « Minuscule, bon marché, énormément efficace pour rendre le feu ennemi           ║
+				# ║ dangereux » (recette Claude-of-Duty). L'`impact` d'une BALLE est émis par le      ║
+				# ║ serveur au tick d'ARRIVÉE (départ + flight_ticks) : le retard de vol est donc     ║
+				# ║ DÉJÀ dans l'événement, calé sur la même horloge que la traçante adverse qui       ║
+				# ║ achève sa course — aucune minuterie locale à inventer, même règle que             ║
+				# ║ l'explosion ci-dessus. `damage == 0` = résolu MANQUÉ par la table angulaire :     ║
+				# ║ un tir qui TOUCHE ne siffle pas (c'est `hit` qui parle — trench_hit, jamais les   ║
+				# ║ deux). Pas de fichier `trench_whizz_*` ? La clé est inconnue et `play_sfx`        ║
+				# ║ l'ignore en silence — le repli est le silence d'avant, pas un synthé inventé.     ║
+				# ╚═════════════════════════════════════════════════════════════════════════════════╝
+				AudioManager.play_sfx("trench_whizz")
 		"grenade_thrown":
 			# L'ADVERSAIRE arme et lance : frame `throw` du sprite peint (§8.138). Mon propre
 			# lancer ne déclenche rien — je ne me vois pas lancer, je vois mes mains.
@@ -591,19 +806,35 @@ func _on_duel_event(event: Dictionary) -> void:
 				# ⚠️ C'est LA seule chose qu'on refuse de jouer en avance : la détonation et le
 				# recul disent « j'ai tiré », et le joueur le sait déjà — il vient de cliquer. Le
 				# hitmarker, lui, dit « j'ai TOUCHÉ » : ça, seul le serveur le sait.
-				_hitmarker = 0.35
+				# ⚠️ LE FILTRE EXISTANT EST PRÉSERVÉ TEL QUEL (`by == _my_slot`) : la sim ne blesse
+				# jamais l'auteur d'un projectile (`victim = players[_other(owner_slot)]`, balles ET
+				# grenades), donc cette seule condition suffit à exclure les dégâts SUBIS.
+				# §8.151 (2ter, §4bis.2) — ce que l'ÉVÉNEMENT dit de plus, lu et jamais deviné :
+				#   `damage` → l'échelle discrète du marqueur ET le chiffre flottant ;
+				#   `hp`     → 0 = le coup était FATAL, croix ROUGE.
+				var damage := int(event.get("damage", 0))
+				var victim_hp := int(event.get("hp", 1))
+				_hitmarker_kill = victim_hp <= 0
+				_hitmarker_scale = _damage_scale(damage)
+				_hitmarker = HITMARKER_TIME
 				_enemy_hit = 0.35
+				_spawn_damage_number(damage, _hitmarker_kill)
 				AudioManager.play_sfx("trench_hitmarker")
 			if victim == _my_slot:
 				AudioManager.play_sfx("trench_hit")
 				_hurt_flash = 0.5
 				_hurt_dir = _last_seen_enemy_pos - float(_pred_pos)
+				# §8.151 — le FLINCH : l'encaissement se sent dans les mains aussi (plongeon bref
+				# du viewmodel) ; le pouls rouge directionnel, lui, est lu par `_refresh_hud`
+				# depuis `_hurt_flash`/`_hurt_dir` (overlay dédié, shader `trench_flinch`).
+				if _viewmodel != null:
+					_viewmodel.notify_flinch()
 		"escalation", "weapon_chosen":
 			if int(event.get("slot", 0)) == _my_slot:
 				_apply_weapon(str(event.get("weapon", STARTING_WEAPON)))
 				if kind == "weapon_chosen":
 					_choice_panel.visible = false
-					_capture_mouse(not _match_over)
+					_restore_mouse()
 				_show_banner(tr("TRENCH_ESCALATION") % _weapon_name(str(event.get("weapon", ""))),
 					COL_GOLD)
 		"weapon_choice":
@@ -654,8 +885,93 @@ func _on_game_error(message: String) -> void:
 # =================================================================================================
 # ENTRÉES
 # =================================================================================================
+# ╔═ §8.151 (2ter, CORRECTIF) — UNE SEULE LISTE DE PORTES POUR LES QUATRE CHEMINS D'ACTION ═══════╗
+# ║ 🩸🩸 LE MÊME DÉFAUT, TROIS FOIS, PARCE QUE LA LISTE ÉTAIT RECOPIÉE. Le correctif précédent a    ║
+# ║ refermé l'asymétrie entre le CLIC (`_input`) et le MAINTIEN (`_step_held_fire`) en RECOPIANT    ║
+# ║ la liste des panneaux dans le second. Il restait un TROISIÈME chemin d'action issu du même      ║
+# ║ `_process` : `_update_grenade_aim`, appelé juste AVANT `_step_held_fire`, qui ne testait NI     ║
+# ║ `_tuning`, NI `_abandon_overlay`, NI `_choice_panel` — rien que la posture et le stock. Et      ║
+# ║ comme il SONDE la plateforme (`Input.is_mouse_button_pressed(RIGHT)`, `Input.is_key_pressed(G)`)║
+# ║ plutôt que d'attendre un événement, le relâchement du curseur (`_capture_mouse(false)`) ne le   ║
+# ║ protégeait pas davantage.                                                                       ║
+# ║ MESURÉ, et c'est le pire des trois : F10 ouvert en ENTRAÎNEMENT, un clic DROIT sur un curseur   ║
+# ║ de réglage ARMAIT la visée (décalque au sol + viewmodel en pose de lancer) et le relâchement    ║
+# ║ LANÇAIT une vraie grenade. Idem ÉCHAP (boîte « abandonner ? » à l'écran) et panneau de CHOIX    ║
+# ║ D'ARME — qui, lui, s'ouvre TOUT SEUL à 10 touches, en plein combat, et relâche la souris. Le    ║
+# ║ coût n'est pas un chargeur qui se recharge : `stock_start` = 2 et `regen_ticks` = 300 (15 s),   ║
+# ║ c'est-à-dire LA MOITIÉ DU STOCK et une explosion à 40 dégâts, pour un geste jamais voulu.       ║
+# ║                                                                                                 ║
+# ║ ⚠️ LE CORRECTIF N'EST PAS « UNE TROISIÈME COPIE ». Recopier la liste une fois de plus, c'est    ║
+# ║ programmer la quatrième divergence. Elle vit désormais ICI, à un seul endroit, et les trois     ║
+# ║ chemins l'APPELLENT. La sonde, elle, continue de mesurer les trois SÉPARÉMENT — c'est           ║
+# ║ l'asymétrie qui était le défaut, une garde qui n'en lirait qu'un laisserait les autres dériver. ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ╔═ §8.151 (2quater, CORRECTIF) — ET IL Y AVAIT UN QUATRIÈME CHEMIN : LE CLAVIER ════════════════╗
+# ║ 🩸🩸 LE CORRECTIF PRÉCÉDENT S'EST ARRÊTÉ AUX GESTES OFFENSIFS. Les trois chemins refermés       ║
+# ║ (clic, maintien, grenade) sont ceux qui TIRENT ou LANCENT. Restait tout ce que le SOLDAT fait   ║
+# ║ d'autre, et qui partait exactement de la même façon, panneau ouvert :                           ║
+# ║   • `_gather_move_dir()` — appelé par `_process`, il SONDE la plateforme                        ║
+# ║     (`Input.is_key_pressed(KEY_LEFT/RIGHT/A/D/Q)`) : c'est le MOTIF EXACT qui rendait la        ║
+# ║     grenade insensible au relâchement du curseur. Aucune porte de panneau.                      ║
+# ║   • le bloc de touches d'`_input`, traité AU-DESSUS de la garde : `R` (rechargement),           ║
+# ║     `S`/`CTRL`/`↑`/`↓` (posture) et `2` (pansement) armaient leurs drapeaux, et la charge       ║
+# ║     coalescée les emportait sans conditionner quoi que ce soit au panneau.                      ║
+# ║ CONSÉQUENCE, MESURÉE, PANNEAU F10 OUVERT : `pos 2 → 1` à la flèche DROITE, `posture = down` à   ║
+# ║ la flèche BAS, `reload` et `item` VRAIMENT partis dans une charge passée à                      ║
+# ║ `send_trench_input`. Les trois panneaux relâchent la souris : le joueur ne pouvait plus viser,  ║
+# ║ mais son soldat marchait, s'accroupissait, rechargeait et se soignait. Pire, les HSlider du     ║
+# ║ panneau F10 et les boutons des trois panneaux se pilotent AUX FLÈCHES (navigation de focus      ║
+# ║ Godot) : régler un curseur faisait littéralement marcher le soldat, et un pansement — ressource ║
+# ║ rare, 1 par manche — se dépensait sur un geste jamais voulu.                                    ║
+# ║                                                                                                 ║
+# ║ ⚠️ UNE PORTE PAR ACTION, JAMAIS UNE PORTE GLOBALE EN TÊTE D'`_input`. Un panneau qu'on ne peut  ║
+# ║ plus FERMER serait un défaut pire que celui qu'on corrige : ÉCHAP, F10, F1 et F3 doivent        ║
+# ║ continuer de répondre, et `1`/`2` doivent continuer de CHOISIR L'ARME tant que le panneau de    ║
+# ║ choix est à l'écran — ce sont SES touches à lui. Le bloc de touches est donc coupé en          ║
+# ║ deux : ce qui pilote les PANNEAUX répond toujours, ce qui agit sur le SOLDAT passe sous        ║
+# ║ sa PROPRE porte (`_ui_blocks_survival()`, §8.151 2quinquies — pavé ci-dessous).                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ╔═ §8.151 (2quinquies, CORRECTIF) — ET LA PORTE PARTAGÉE GELAIT LE SOLDAT EN PLEIN COMBAT ══════╗
+# ║ 🩸🩸 LE CORRECTIF PRÉCÉDENT A ÉTENDU CETTE LISTE — `_choice_panel` COMPRIS — À TOUT CE QUE FAIT ║
+# ║ LE SOLDAT. Or le panneau de CHOIX D'ARME n'est pas un panneau comme F10 ou la boîte d'abandon : ║
+# ║   • ce n'est pas le joueur qui l'ouvre, c'est le SERVEUR (`_credit_hit`, 10ᵉ coup au but) ;     ║
+# ║   • il reste à l'écran 5,0 s pleines (`choice_window_ticks` = 100 à 20 Hz) ;                    ║
+# ║   • et pendant ces 5 s LA SIMULATION CONTINUE : `trench_sim.step` applique `stance`, `move`,    ║
+# ║     `reload` et `item` SANS aucune condition d'échéance, et l'adversaire joue normalement.      ║
+# ║ Manette en main : Hakim place son 10ᵉ coup, le sélecteur s'affiche, et pendant qu'il lit        ║
+# ║ « CHACAL ou CONDOR » son soldat ne marchait plus, ne s'accroupissait plus (la posture est LE    ║
+# ║ bouton de panique du jeu), ne rechargeait plus et ne se soignait plus — sous le feu. Le client  ║
+# ║ REFUSAIT des entrées que le serveur, lui, honore : une désynchronisation intention-joueur /     ║
+# ║ simulation, exactement la famille de défaut qui a coûté la partie du §8.141.                    ║
+# ║                                                                                                 ║
+# ║ LE REMÈDE EST DANS LA DOCTRINE DU FICHIER (« une porte PAR ACTION ») — DEUX portes, une seule   ║
+# ║ liste écrite, et leur différence tient en un panneau :                                          ║
+# ║   • `_ui_blocks_survival()` — ce que le soldat fait pour SURVIVRE (pas, posture, rechargement,  ║
+# ║     pansement). Ferme sous les panneaux que LE JOUEUR ouvre : leurs curseurs et leurs boutons   ║
+# ║     se pilotent AUX FLÈCHES (navigation de focus Godot), régler un curseur ferait marcher le    ║
+# ║     soldat. Le sélecteur, lui, n'y est PLUS.                                                    ║
+# ║   • `_ui_blocks_actions()` — les gestes OFFENSIFS (clic, maintien, visée de grenade). La même   ║
+# ║     liste PLUS le sélecteur : ces trois-là ont besoin de la SOURIS, et les trois panneaux la    ║
+# ║     relâchent. C'est aussi, mot pour mot, « un panneau tient l'écran » — d'où son usage par     ║
+# ║     `_restore_mouse()`.                                                                         ║
+# ║ ⚠️ ET LE SÉLECTEUR NE VOLE PLUS LES FLÈCHES : ses deux boutons sont en `FOCUS_NONE`             ║
+# ║ (`_build_choice_panel`), donc marcher pendant qu'il est à l'écran ne peut plus déplacer un      ║
+# ║ focus ni choisir une arme par accident. `1`/`2` et la souris restent SES entrées à lui.         ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _ui_blocks_survival() -> bool:
+	return _match_over or _abandon_overlay.visible or (_tuning != null and _tuning.visible)
+
+
+func _ui_blocks_actions() -> bool:
+	return _ui_blocks_survival() or _choice_panel.visible
+
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		# ═══ 1) LES TOUCHES QUI PILOTENT LES PANNEAUX — elles répondent TOUJOURS ═══════════════════
+		# Elles sont AU-DESSUS de la garde À DESSEIN : un panneau qu'on ouvre doit pouvoir se
+		# refermer, et le panneau de CHOIX D'ARME garde SES touches (`1`/`2`) tant qu'il est à
+		# l'écran. Rien ici ne touche au soldat — cf. le pavé « UNE PORTE PAR ACTION » ci-dessus.
 		match event.keycode:
 			KEY_ESCAPE:
 				accept_event()
@@ -667,7 +983,7 @@ func _input(event: InputEvent) -> void:
 					return
 				if not _match_over:
 					_abandon_overlay.visible = not _abandon_overlay.visible
-					_capture_mouse(not _abandon_overlay.visible)
+					_restore_mouse()
 				return
 			KEY_G:
 				# RE-TAPER G pendant la visée annule, comme ÉCHAP. Deux chemins pour un même geste :
@@ -677,20 +993,6 @@ func _input(event: InputEvent) -> void:
 					accept_event()
 					_cancel_grenade()
 					return
-			KEY_S, KEY_CTRL:
-				# POSTURE = une BASCULE (§5.6), pas un maintien : le joueur doit pouvoir rester
-				# à couvert sans garder un doigt en tension pendant 90 s.
-				_stance_toggle = not _stance_toggle
-			KEY_DOWN:
-				# ⚠️ LA FLÈCHE BAS N'ÉTAIT LIÉE À RIEN — verdict de partie réelle : « la touche pour
-				# se cacher ne fonctionne pas ». Ce n'était pas un bug, c'était une absence : le
-				# §8.137 avait retenu S et CTRL, et il ne l'a écrit que dans un commentaire. Or un
-				# joueur qui se déplace aux FLÈCHES cherche naturellement à s'accroupir avec ↓.
-				# Bas = SE CACHER, Haut = SE RELEVER : deux touches EXPLICITES plutôt qu'une
-				# bascule, parce qu'à couvert on ne se souvient plus dans quel état on est.
-				_stance_toggle = true
-			KEY_UP:
-				_stance_toggle = false
 			KEY_F1:
 				# LE GUIDE DES COMMANDES — les DEUX modes, lecture seule, aucune pause, la souris
 				# reste capturée. Il ne peut rien offrir à personne, donc rien ne justifierait de
@@ -707,16 +1009,26 @@ func _input(event: InputEvent) -> void:
 					accept_event()
 					_diag.visible = not _diag.visible
 					return
-			KEY_R:
-				_reload_queued = true
 			KEY_1:
+				# LES TOUCHES DU PANNEAU DE CHOIX D'ARME. Elles n'agissent QUE quand il est ouvert —
+				# et c'est précisément pour ça qu'elles vivent AU-DESSUS de la garde : le panneau de
+				# choix EST l'un des trois panneaux bloquants, une porte globale rendrait le choix
+				# d'arme injouable au clavier. Hors panneau, `1` ne fait rien (comme avant).
 				if _choice_panel.visible:
 					_queue_pick(0)
+					return
 			KEY_2:
+				# `2` a DEUX rôles selon le contexte : arme n°2 quand le panneau est ouvert (ici),
+				# PANSEMENT sinon (bloc 3, sous la garde). Le second est une dépense de ressource,
+				# le premier une réponse à une question posée à l'écran.
+				# ⚠️⚠️ LE `return` N'EST PAS DÉCORATIF, et la sonde l'a exigé : `_queue_pick()`
+				# REFERME le panneau séance tenante, donc la garde ci-dessous ne bloque PLUS rien
+				# quand elle est atteinte — sans ce retour, la même frappe choisissait l'arme ET
+				# dépensait un pansement (MESURÉ : `arme = « condor »` + `file objet = « bandage »`).
+				# Une touche = un geste : celle-ci a répondu à la question posée, elle s'arrête là.
 				if _choice_panel.visible:
 					_queue_pick(1)
-				else:
-					_item_queued = "bandage"
+					return
 			KEY_F10:
 				# LE PANNEAU DE RÉGLAGE — ENTRAÎNEMENT SEULEMENT. En duel, il relâcherait la souris
 				# et clouerait le joueur sur place pendant qu'un adversaire, lui, continue de
@@ -724,9 +1036,67 @@ func _input(event: InputEvent) -> void:
 				if _training and _tuning != null and not _match_over:
 					accept_event()
 					_tuning.toggle()
-					_capture_mouse(not _tuning.visible)
+					_restore_mouse()
 					return
-	if _match_over or _abandon_overlay.visible or _choice_panel.visible:
+	# ═══ 2) LES TOUCHES QUI AGISSENT SUR LE SOLDAT — sous la porte des actions de SURVIE ═════
+	# Elles ne posent que des drapeaux, mais ces drapeaux PARTENT : `_process` les recopie dans la
+	# charge coalescée (`stance`, `reload`, `item`) et les vide juste après l'envoi. Un pansement est
+	# une ressource rare ; le dépenser parce qu'un curseur de réglage avait le focus est exactement
+	# l'incohérence de comportement que la garde de la grenade a déjà refermée.
+	# ⚠️ §8.151 (2quinquies) — CE BLOC-CI NE FERME PLUS SOUS LE SÉLECTEUR D'ARME : celui-là s'ouvre TOUT
+	# SEUL, en pleine manche, pour 5,0 s pendant lesquelles la sim continue de tourner et l'adversaire
+	# de jouer. Se cacher, recharger et se soigner sont précisément ce qu'on fait pendant qu'on lit une
+	# question sous le feu — cf. le pavé des DEUX portes, au-dessus de `_ui_blocks_survival()`.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if _ui_blocks_survival():
+			return
+		match event.keycode:
+			KEY_S, KEY_CTRL:
+				# POSTURE = une BASCULE (§5.6), pas un maintien : le joueur doit pouvoir rester
+				# à couvert sans garder un doigt en tension pendant 90 s.
+				_stance_toggle = not _stance_toggle
+			KEY_DOWN:
+				# ⚠️ LA FLÈCHE BAS N'ÉTAIT LIÉE À RIEN — verdict de partie réelle : « la touche pour
+				# se cacher ne fonctionne pas ». Ce n'était pas un bug, c'était une absence : le
+				# §8.137 avait retenu S et CTRL, et il ne l'a écrit que dans un commentaire. Or un
+				# joueur qui se déplace aux FLÈCHES cherche naturellement à s'accroupir avec ↓.
+				# Bas = SE CACHER, Haut = SE RELEVER : deux touches EXPLICITES plutôt qu'une
+				# bascule, parce qu'à couvert on ne se souvient plus dans quel état on est.
+				_stance_toggle = true
+			KEY_UP:
+				_stance_toggle = false
+			KEY_R:
+				_reload_queued = true
+			KEY_2:
+				# ⚠️ LE PANSEMENT, et lui seul : le cas « panneau de choix ouvert » a déjà été traité
+				# au-dessus, et le bloc 1 s'y ARRÊTE (`return`). Aucun des deux rôles de la
+				# touche ne peut donc voler l'autre — la seule chose qui reste vraie du
+				# sélecteur ici, depuis que la porte de SURVIE ne le lit plus.
+				_item_queued = "bandage"
+		return
+	# ╔═ §8.151 (2ter, CORRECTIF) — LE CLIC ET LE MAINTIEN N'AVAIENT PAS LES MÊMES PORTES ═══════════╗
+	# ║ 🩸 CE QUI N'ALLAIT PAS. Cette liste s'arrêtait à `_match_over / _abandon / _choice` : le       ║
+	# ║ panneau F10 n'y figurait pas. Le chemin du MAINTIEN, lui, le fermait déjà (`_step_held_fire`, ║
+	# ║ dont le commentaire écrit noir sur blanc « un glissé de curseur sur un réglage ne doit pas    ║
+	# ║ vider un chargeur ») — le raisonnement était juste, il n'avait été appliqué qu'à UN des deux  ║
+	# ║ chemins. Conséquence, manette en main : en ENTRAÎNEMENT, ouvrir F10 et cliquer sur un curseur ║
+	# ║ de réglage ARMAIT un vrai tir — détonation, traçante, cran de recul, une munition consommée.  ║
+	# ║ MESURÉ : panneau posé visible, état `playing`, cadence échue → `_input(clic gauche)` rendait  ║
+	# ║ `_fire_queued = true` et `_shot_count = 1`, là où `_step_held_fire(true)` sur le MÊME état    ║
+	# ║ rendait `false` / `0`.                                                                         ║
+	# ║ ⚠️ CE N'EST PAS UN CHANGEMENT DE VISÉE : la branche de mouvement de souris ci-dessous est déjà ║
+	# ║ inerte quand le panneau est ouvert (`_capture_mouse(false)` relâche le curseur, donc           ║
+	# ║ `mouse_mode != CAPTURED`). Seule la porte du TIR change — les deux chemins ont désormais la    ║
+	# ║ MÊME liste, et la sonde exige les deux ENSEMBLE pour que l'asymétrie ne se rouvre pas.        ║
+	# ║ ⚠️ CETTE LISTE N'EST PLUS ÉCRITE ICI : elle vit dans `_ui_blocks_actions()`, partagée avec le  ║
+	# ║ maintien ET la grenade (cf. le pavé au-dessus de cette fonction) — une copie de plus était     ║
+	# ║ précisément ce qui a laissé le troisième chemin dériver.                                       ║
+	# ║ ⚠️ §8.151 (2quater) — ELLE COUPE LE BLOC DE TOUCHES EN DEUX : ce qui pilote les PANNEAUX       ║
+	# ║ répond TOUJOURS, ce qui agit sur le SOLDAT est passé AU-DESSUS de cette porte-ci, sous la     ║
+	# ║ sienne (`_ui_blocks_survival()`, §8.151 2quinquies) : le SÉLECTEUR d'arme ne gèle plus le     ║
+	# ║ soldat. Ne restent ici que la VISÉE et le TIR — les deux gestes qui ont besoin de la souris.  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	if _ui_blocks_actions():
 		return
 	# VISÉE : mouvement souris relatif → lacet/site, bornés.
 	# ⚠️ Le SIGNE du site vient maintenant du panneau. Le testeur a rapporté « le mouvement de la
@@ -785,15 +1155,104 @@ func _queue_fire() -> void:
 	_local_fire_feedback()
 
 
-# LES SIX REFUS DU SERVEUR, dans l'ordre où `trench_sim.step` les applique. Renvoie "" si le tir
+# =================================================================================================
+# §8.151 (VAGUE 2ter, §4bis.5) — LE TIR MAINTENU (décision produit §1.8 : ACTIF PAR DÉFAUT)
+# =================================================================================================
+# ╔═ POURQUOI DEUX FONCTIONS, ET PAS UNE ═════════════════════════════════════════════════════════╗
+# ║ `_fire_hold_active()` LIT la plateforme (souris, manette) ; `_step_held_fire()` DÉCIDE. La      ║
+# ║ séparation n'est pas un ornement : elle rend la décision jouable par une sonde, alors que       ║
+# ║ l'état d'un bouton physique ne l'est pas — et une règle de cadence qu'aucune garde ne peut      ║
+# ║ rejouer est une règle qu'on croit sur parole. C'est le même découpage que `_fire_refusal()`,    ║
+# ║ que `probe_trench_falseshot` appelle directement depuis 8.141.9.                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _fire_hold_active() -> bool:
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return true
+	return Input.get_connected_joypads().size() > 0 \
+		and Input.is_joy_button_pressed(0, JOY_BUTTON_A)
+
+
+# ╔═ LA RÈGLE : ON N'ÉMET QUE CE QUE LE SERVEUR ACCEPTERAIT ══════════════════════════════════════╗
+# ║ Chaque frame tenue repasse par la prédiction des SIX refus. C'est ce qui rend le tir maintenu   ║
+# ║ MÉCANIQUEMENT NEUTRE (§1.8) : le rythme obtenu est exactement `cooldown_ticks` du registre,     ║
+# ║ celui qu'un cliqueur rapide obtenait déjà — et le budget anti-flood de 9 msg/s n'est jamais     ║
+# ║ dépensé pour un tir que `trench_sim.step` jetterait.                                            ║
+# ║ ⚠️ LE SON DE REFUS N'APPARTIENT QU'AU GESTE VOLONTAIRE. Un clic (front montant, `_input`) qui    ║
+# ║ tombe pendant la cadence CLAQUE — c'est le §8.141.9, « un refus n'est jamais silencieux ». Un   ║
+# ║ MAINTIEN, lui, n'est pas une demande répétée : c'est une demande CONTINUE, déjà exaucée dès     ║
+# ║ que la porte s'ouvre. La claquer 7 fois par seconde en serait la caricature.                    ║
+# ║ ⚠️ « chargeur vide » est le seul refus qui PRODUISE quelque chose côté serveur (il déclenche le  ║
+# ║ rechargement) : le maintien l'envoie UNE fois — verrou `_hold_empty_latch`, relâché dès que le  ║
+# ║ chargeur n'est plus vide. Sans ce verrou, une gâchette tenue sur un chargeur vide inonderait.    ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _step_held_fire(held: bool) -> void:
+	# LES MÊMES PORTES QUE `_input` ET QUE LA GRENADE — une seule liste, `_ui_blocks_actions()` :
+	# un glissé de curseur sur un réglage ne doit pas vider un chargeur.
+	if _ui_blocks_actions():
+		_fire_hold_pad_prev = false
+		_hold_empty_latch = false
+		return
+	# LE FRONT MONTANT DE LA MANETTE vaut un clic — refus audible compris. La souris, elle, a déjà
+	# son front montant dans `_input` (`InputEventMouseButton.pressed`).
+	var pad: bool = Input.get_connected_joypads().size() > 0 \
+		and Input.is_joy_button_pressed(0, JOY_BUTTON_A)
+	var pad_edge: bool = pad and not _fire_hold_pad_prev
+	_fire_hold_pad_prev = pad
+	if pad_edge:
+		_queue_fire()
+		return
+	if not held or not _auto_fire:
+		_hold_empty_latch = false
+		return
+	var refusal := _fire_refusal()
+	if refusal == "":
+		_hold_empty_latch = false
+		_queue_fire()
+	elif refusal == "chargeur vide" and not _hold_empty_latch:
+		_hold_empty_latch = true
+		_queue_fire()
+
+
+# LES HUIT REFUS DU SERVEUR, dans l'ordre où `trench_sim.step` les applique. Renvoie "" si le tir
 # part vraiment. ⚠️ Miroir EXACT : toute condition ajoutée côté sim doit apparaître ici, sinon le
 # faux coup revient — c'est pour ça qu'elles sont énumérées dans le même ordre et nommées pareil.
+# ⚠️⚠️ ELLES ÉTAIENT SIX, ET IL EN MANQUAIT DEUX. Les deux oubliées ne sont pas des conditions du
+# bloc de tir : ce sont deux `return`/`continue` ANTICIPÉS qui n'atteignent jamais ce bloc — donc
+# exactement le genre de refus qu'une relecture du bloc de tir ne peut pas voir. Les deux sont
+# devenus routiniers avec le TIR MAINTENU (§4bis.5, actif par défaut) : ce qui était un clic
+# malheureux occasionnel est devenu une salve automatique à la cadence de l'arme.
 func _fire_refusal() -> String:
-	var me := _player_of(_latest(), _my_slot)
+	var latest := _latest()
+	var me := _player_of(latest, _my_slot)
 	if me.is_empty():
 		return "attente"                                  # aucun état : on ne promet rien
+	# ╔═ 7ᵉ REFUS — LA PHASE (`trench_sim.step`, tout en haut : deux `return` anticipés) ══════════╗
+	# ║ `PHASE_OVER` rend la main immédiatement ; `PHASE_INTERMISSION` — le bandeau de 3 s          ║
+	# ║ (`intermission_ticks` = 60) qui précède CHAQUE manche, la première comprise — ne traite que  ║
+	# ║ le bookkeeping et `pick_weapon` avant de sortir. Tout `fire` de ces fenêtres est JETÉ, en    ║
+	# ║ silence. Gâchette tenue, cela faisait une salve complète à chaque transition de manche :     ║
+	# ║ détonation, traçante, cran de recul et frame d'arme joués pour des balles qui n'ont jamais   ║
+	# ║ existé — le « faux coup » du §8.141.9 rentré par la porte de derrière.                       ║
+	# ║ ⚠️ LE TEST PORTE SUR « LA MANCHE TOURNE », JAMAIS SUR LE NOM D'UNE PHASE PARTICULIÈRE : une   ║
+	# ║ phase inconnue (ou ajoutée demain côté serveur) est traitée comme un refus, et un état sans  ║
+	# ║ champ `phase` garde l'ancien comportement — le défaut par excès de prudence coûte un retour  ║
+	# ║ d'arme de 100 ms rejoué par l'événement serveur, le défaut inverse coûte un mensonge.        ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	if str(latest.get("phase", "playing")) != "playing":
+		return "hors manche"
 	if _pred_stance != "up":
 		return "accroupi"                                 # `step` : on ne tire pas accroupi
+	# ╔═ 8ᵉ REFUS — LA GRENADE DÉJÀ EN FILE (`trench_sim.step`, branche de lancer) ════════════════╗
+	# ║ Elle se termine par `continue  # lancer ce tick = pas de tir ce tick (un soldat n'a que      ║
+	# ║ deux mains)` : le `fire` du MÊME message est écarté sans un mot. Or l'envoi est COALESCÉ sur ║
+	# ║ 105 ms et `_step_held_fire` s'exécute juste APRÈS `_update_grenade_aim` dans `_process` —    ║
+	# ║ toute grenade relâchée gâchette tenue tombait donc dans la même fenêtre, et le tir était     ║
+	# ║ présenté au joueur avant d'être jeté par la sim. On ne l'arme plus tant que le lancer n'est  ║
+	# ║ pas parti : il repassera à la frame suivante (l'attente est bornée — cf. l'exclusion         ║
+	# ║ mutuelle à la construction de la charge utile, qui traite l'ordre inverse).                  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	if not _throw_queued.is_empty():
+		return "grenade"
 	if int(me.get("laser_fire_tick", 0)) > 0:
 		return "laser"                                    # CONDOR : le tir est déjà armé
 	if int(me.get("reload_until_tick", 0)) > 0:
@@ -824,38 +1283,253 @@ func _refuse_fire(reason: String) -> void:
 # strictement serveur (règle maison §5.5). Mais attendre l'aller-retour pour bouger l'arme et faire
 # le bruit, c'est ~250 ms de silence après un clic : le tir paraît « en retard » même quand il ne
 # l'est pas. On garde donc l'honnêteté là où elle porte (la TOUCHE) et on rend la main immédiate.
+# ⚠️ SAUF SI LE TIR EST TÉLÉGRAPHIÉ (CONDOR) : là, le clic n'a pas fait partir de balle — voir le
+# pavé au milieu de cette fonction. Ce qu'il a VRAIMENT produit (cadence consommée, réarmement
+# programmé) est posé avant la garde ; le reste attend le tir réel.
 func _local_fire_feedback() -> void:
 	if int(_my("ammo")) <= 0:
 		return
-	_recoil = 1.0
-	_fire_fx_mute = 0.45          # l'événement serveur de CE tir ne doit pas le rejouer
-	if _viewmodel != null:
-		_viewmodel.notify_fire()
-	AudioManager.play_sfx("trench_shot")
-	# ⚠️ LA TRAÇANTE PART ELLE AUSSI TOUT DE SUITE (§8.141.5). Elle était bâtie depuis la paire de
-	# rendu RETARDÉE et apparaissait donc ~100 ms APRÈS le hitmarker : le joueur voyait la
-	# confirmation de sa touche AVANT la balle. On la joue au clic, avec la visée FIGÉE au clic —
-	# même raisonnement que le recul et la détonation ci-dessus. Le hitmarker, lui, reste serveur.
 	var weapon_id := str(_my("weapon"))
 	var flight := 1.0
 	var rounds := 1
 	var cadence := 0.0
 	var lead := 0.0
+	var gap := 0.0
 	for weapon in _rules.get("weapons", []):
 		if str(weapon.get("id", "")) == weapon_id:
 			flight = float(weapon.get("flight_ticks", 1))
 			rounds = int(weapon.get("burst", 1))
 			cadence = float(weapon.get("cooldown_ticks", 0))
 			lead = float(weapon.get("laser_lead_ticks", 0))
+			# §8.151 (2bis) — l'espacement RÉEL des projectiles d'une rafale, diffusé par le
+			# serveur depuis cette vague (patron dispersion_deg §8.137). Repli 0 (registre
+			# d'avant cette vague) : les crans tombent ensemble, comme l'ancienne présentation.
+			gap = float(weapon.get("burst_gap_ticks", 0))
 			break
 	# ⚠️ LA CADENCE EST CONSOMMÉE MÊME PAR UN TIR TÉLÉGRAPHIÉ : c'est ce que fait `step` (il pose
 	# `fire_ready_tick` AVANT de brancher sur le laser). Sans ça le CONDOR laisserait cliquer en
-	# rafale pendant son propre temps de visée.
+	# rafale pendant son propre temps de visée. Elle est donc posée AVANT toute branche, et le
+	# réarmement (`_arm_bolt`) avec elle : ce sont les deux seules choses qu'un clic télégraphié
+	# a réellement produites côté serveur.
 	_pred_fire_ready = _clock + cadence / _tick_rate
-	if _world != null and lead <= 0.0:
-		# ⚠️ PAS DE TRAÇANTE POUR LE CONDOR : son clic ARME UN LASER, la balle ne part que 0,5 s
-		# plus tard. En dessiner une tout de suite serait remplacer un faux coup par un autre.
-		_world.notify_local_shot(_pred_pos, _fire_aim.x, _fire_aim.y, flight / _tick_rate, rounds)
+	_arm_bolt()          # §8.151 : un tir réel est parti → le réarmement s'entendra
+	# ╔═ §8.151 (2bis) — LE CLIC DU CONDOR N'EST PAS LE COUP : IL ARME UN LASER ══════════════════╗
+	# ║ ⚠️ DÉFAUT SOLDÉ ICI. Le code écrivait déjà la règle, en garde de la traçante (« PAS DE       ║
+	# ║ TRAÇANTE POUR LE CONDOR : son clic ARME UN LASER, la balle ne part que 0,5 s plus tard ; en ║
+	# ║ dessiner une tout de suite serait remplacer un faux coup par un autre ») — et il            ║
+	# ║ l'enfreignait :                                                                             ║
+	# ║ la garde ne protégeait QUE la traçante. Le faux coup VISUEL était refusé pendant que le     ║
+	# ║ faux coup SONORE (détonation), le recul et la frame de tir partaient au clic. Puis          ║
+	# ║ `_fire_fx_mute` expirait AVANT l'événement `fire` du serveur (émis `laser_lead_ticks` plus  ║
+	# ║ tard, `_fire_burst` du tir laser échu) : le vrai tir rejouait TOUT. Un coup de CONDOR       ║
+	# ║ valait DEUX détonations complètes de 1,15 s, recouvertes sur ~0,65 s.                       ║
+	# ║ RÈGLE : un tir TÉLÉGRAPHIÉ (`laser_lead_ticks > 0`, LU au registre — jamais un id d'arme    ║
+	# ║ codé en dur) ne produit RIEN de balistique au clic. Ni son, ni recul, ni frame d'arme, ni   ║
+	# ║ traçante, ni cran de rafale — et surtout PAS de `_fire_fx_mute`, dont la seule raison       ║
+	# ║ d'être est d'empêcher le rejeu d'un retour d'arme DÉJÀ JOUÉ. Le tir se voit et s'entend au  ║
+	# ║ moment où il part VRAIMENT, sur l'événement `fire` du serveur (branche `_fire_fx_mute       ║
+	# ║ <= 0.0` de `_on_duel_event`) : une seule détonation, à l'heure de la balle. Le retour       ║
+	# ║ immédiat du clic, lui, existe déjà et il est HONNÊTE : c'est le rayon laser lui-même.       ║
+	# ║ ⚠️ Aucune fenêtre à régler : la garde ne compare plus deux durées (0,45 s contre 0,50 s),    ║
+	# ║ elle ne joue simplement rien. Retoucher le ⚙ `laser_lead_ticks` ne peut plus rien casser.   ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	if lead > 0.0:
+		return
+	_fire_feel_kick()             # §8.151 : roulis + punch de FOV — cosmétiques, retour-à-zéro
+	_fire_fx_mute = 0.45          # l'événement serveur de CE tir ne doit pas le rejouer
+	if _viewmodel != null:
+		_viewmodel.notify_fire()
+	# §8.151 (2bis) — la détonation dans la VOIX de l'arme courante (repli : voix générique).
+	AudioManager.play_sfx(_shot_sfx_key(weapon_id))
+	# ⚠️ LA TRAÇANTE PART ELLE AUSSI TOUT DE SUITE (§8.141.5). Elle était bâtie depuis la paire de
+	# rendu RETARDÉE et apparaissait donc ~100 ms APRÈS le hitmarker : le joueur voyait la
+	# confirmation de sa touche AVANT la balle. On la joue au clic, avec la visée FIGÉE au clic —
+	# même raisonnement que le recul et la détonation ci-dessus. Le hitmarker, lui, reste serveur.
+	if _world != null:
+		# §8.151 (2bis) — UN SEUL projectile part MAINTENANT : les suivants de la rafale ont
+		# chacun leur cran (traçante comprise), planifiés ci-dessous au rythme du registre.
+		_world.notify_local_shot(_pred_pos, _fire_aim.x, _fire_aim.y, flight / _tick_rate, 1)
+	# §8.151 (2bis) — LES CRANS 2..N DE MA RAFALE, au rythme où le serveur les fera partir
+	# (`launch = tick + i × burst_gap_ticks`, miroir de `_fire_burst`). Le nombre est borné par mes
+	# munitions comme côté sim (`rounds = min(burst, ammo)`), la visée/position/arme sont FIGÉES au
+	# clic (le serveur fige les siennes au tick du tir — un pas ou un pansement pendant les 200 ms
+	# de rafale ne doit dévier ni le vrai projectile ni sa présentation). §8.141.9 tient : on
+	# n'arrive ici QUE depuis un tir accepté par la prédiction des six refus.
+	var real_rounds := mini(rounds, maxi(1, int(_my("ammo"))))
+	for i in range(1, real_rounds):
+		_burst_queue.append({"due": _clock + float(i) * gap / _tick_rate, "mode": "local",
+			"weapon": weapon_id, "pos": _pred_pos, "yaw": _fire_aim.x, "pitch": _fire_aim.y,
+			"flight_s": flight / _tick_rate})
+
+
+# ╔═ §8.151 (LOT A) — LE RÉARMEMENT S'ENTEND : trench_bolt quand la cadence redevient disponible ═╗
+# ║ Le clac de culasse est un REPÈRE DE RYTHME : il dit « prête » sans que le joueur regarde le     ║
+# ║ HUD. Il n'est PAS la couche mécanique du tir (elle vit dans trench_shot_*.wav, 20-40 ms après   ║
+# ║ le départ) : les cadences réelles vont de 0,8 à 2,5 s, il parle donc toujours loin du coup.     ║
+# ║ ⚠️ Armé par un TIR RÉEL uniquement — `_local_fire_feedback` (prédit) ou l'événement `fire` du   ║
+# ║ serveur (réconcilié) — donc JAMAIS par un clic refusé : `_refuse_fire` ne passe par aucun des   ║
+# ║ deux chemins (§8.141.9 : un refus ne joue rien de balistique, seulement `trench_refused`).      ║
+# ║ La garde de 0,1 s écarte le repli dégénéré (arme absente du registre → cadence 0) : un          ║
+# ║ réarmement « immédiat » se confondrait avec la mécanique du tir et signalerait un faux rythme.  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const BOLT_MIN_DELAY := 0.1
+
+
+func _arm_bolt() -> void:
+	_bolt_armed = _pred_fire_ready > _clock + BOLT_MIN_DELAY
+
+
+# ╔═ §8.151 — LE FEEL DE CAMÉRA AU TIR : roulis + punch de FOV, sur tir ACCEPTÉ SEULEMENT ════════╗
+# ║ Appelé exactement là où `_recoil = 1.0` vivait : `_local_fire_feedback` (tir prédit accepté)   ║
+# ║ et l'événement `fire` non prédit. Un clic refusé ne passe par AUCUN des deux (§8.141.9).       ║
+# ║ Le côté du roulis alterne au hachage du compteur de tirs — déterministe, aucun RNG global.     ║
+# ║ §8.151 (2bis) — `scale` : le cran d'un coup SUIVEUR de rafale kicke à BURST_KICK_SCALE (~40 %  ║
+# ║ de moins) ; le cumul du roulis reste borné par le plafond ROLL_CAP_DEG existant, et le punch   ║
+# ║ de FOV est POSÉ (set_value), donc re-tirer pendant le retour repart du plafond, sans s'empiler.║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _fire_feel_kick(scale := 1.0) -> void:
+	if _reduced_motion:
+		return          # le kick du viewmodel, lui, reste (réduit de moitié, géré chez lui)
+	# §8.151 (2ter, §4bis.1) — LE PULSE DU RÉTICULE naît ICI et nulle part ailleurs : ce point est
+	# déjà, par construction, « un projectile PRÉSENTÉ » (clic accepté, événement `fire` non prédit,
+	# ou cran de rafale). Un clic REFUSÉ n'y passe pas — le réticule ne peut donc pas pulser pour un
+	# coup qui n'existe pas. POSÉ, jamais cumulé : trois balles de FRELON = un plafond, pas un bloom.
+	_reticle_pulse.set_value(1.0)
+	_shot_count += 1
+	var side: float = 1.0 if Springs.hash_noise(float(_shot_count), ROLL_SIDE_SEED) >= 0.0 else -1.0
+	_cam_roll.kick(ROLL_KICK_DEG * side * _feel_recoil * scale)
+	if _feel_fov_punch:
+		# En DÉPLACEMENT (`set_value`), pas en impulsion : le punch est un saut qui revient, pas
+		# une poussée qui gonfle. Un second tir pendant le retour repart simplement du plafond.
+		_fov_punch.set_value(FOV_PUNCH_DEG * scale)
+
+
+# =================================================================================================
+# §8.151 (VAGUE 2bis) — L'EFFET MITRAILLETTE : voix par arme + crans de rafale (cahier §4bis.4/§3.6)
+# =================================================================================================
+# La CLÉ de détonation de l'arme : famille `trench_shot_<id>` si le manager peut la servir, sinon
+# la voix générique `trench_shot` (repli d'arbre nu/headless — elle garde, elle, un synthé). L'id
+# vient de l'ÉTAT ou de l'ÉVÉNEMENT serveur, jamais d'une table locale (§8.137).
+func _shot_sfx_key(weapon_id: String) -> String:
+	if weapon_id != "" and AudioManager.has_sfx("trench_shot_" + weapon_id):
+		return "trench_shot_" + weapon_id
+	return "trench_shot"
+
+
+# Le facteur de vitesse qui fait TENIR le bourdonnement du télégraphe dans la fenêtre de danger :
+# durée du fichier ÷ fenêtre (1,0 si l'une des deux est inconnue — un télégraphe muet ou une
+# fenêtre nulle n'a rien à caler). La durée vient du manager, jamais d'une constante recopiée ;
+# le bornage [SFX_PITCH_MIN, SFX_PITCH_MAX] est appliqué par le manager, à la pose du lecteur.
+func _laser_warn_pitch(window_s: float) -> float:
+	var length: float = AudioManager.sfx_length("trench_laser_warn")
+	if length <= 0.0 or window_s <= 0.0:
+		return 1.0
+	return length / window_s
+
+
+# Les crans 2..N d'une rafale ANNONCÉE par l'événement `fire` (adverse, ou mienne non prédite).
+# CADENCEMENT : les `launch_tick` PAR PROJECTILE de l'état arrivé dans le MÊME message font foi
+# (`_on_state` pousse l'état AVANT de dispatcher ses événements — l'ordre est garanti par le code,
+# pas par la chance). Si l'état ne portait pas la rafale (harnais minimal, paquet exotique), le
+# repli est l'espacement du REGISTRE — la valeur même que `_fire_burst` a utilisée.
+func _schedule_burst_followups(mode: String, event: Dictionary) -> void:
+	var rounds := int(event.get("rounds", 1))
+	if rounds <= 1:
+		return
+	var weapon_id := str(event.get("weapon", ""))
+	var slot := int(event.get("slot", 0))
+	var state := _latest()
+	var state_tick := int(state.get("tick", 0))
+	# Les départs FUTURS de cette rafale : les projectiles de CE tireur lancés APRÈS le tick de
+	# l'événement. Ceux d'une rafale précédente sont déjà partis (cooldown ≫ rafale) — le filtre
+	# `launch_tick > state_tick` les écarte d'office, ainsi que le cran 1 (déjà joué à l'instant).
+	var delays: Array = []
+	for proj in state.get("projectiles", []):
+		if int(proj.get("owner_slot", 0)) != slot or str(proj.get("kind", "")) == "grenade":
+			continue
+		var launch := int(proj.get("launch_tick", 0))
+		if launch > state_tick:
+			delays.append(float(launch - state_tick) / _tick_rate)
+	delays.sort()
+	# Repli registre pour les crans que l'état n'a pas montrés (jamais plus que `rounds - 1`).
+	var gap := 0.0
+	for weapon in _rules.get("weapons", []):
+		if str(weapon.get("id", "")) == weapon_id:
+			gap = float(weapon.get("burst_gap_ticks", 0))
+			break
+	while delays.size() < rounds - 1:
+		delays.append(float(delays.size() + 1) * gap / _tick_rate)
+	var pos := int(round(_last_seen_enemy_pos))
+	for i in range(rounds - 1):
+		_burst_queue.append({"due": _clock + float(delays[i]), "mode": mode,
+			"weapon": weapon_id, "pos": pos, "yaw": 0.0, "pitch": 0.0, "flight_s": 0.0})
+
+
+# Le POMPAGE de la file, à chaque frame — y compris après la fin de match (un duel qui se termine
+# SUR une rafale laisse ses derniers crans se poser, comme le serveur laisse voler ses derniers
+# projectiles). La file se vide seule en moins d'un quart de seconde.
+func _step_burst_queue() -> void:
+	if _burst_queue.is_empty():
+		return
+	var still: Array = []
+	for cran in _burst_queue:
+		if _clock < float(cran["due"]):
+			still.append(cran)
+		else:
+			_play_burst_cran(cran)
+	_burst_queue = still
+
+
+# UN cran de rafale — la présentation d'UN projectile suiveur (le cran 1 vit à son site d'origine :
+# `_local_fire_feedback` ou l'événement `fire`). Toujours en aval d'un tir ACCEPTÉ/CONFIRMÉ :
+# jamais d'écriture dans une variable de visée, la règle §8.141.6 ne bouge pas d'un octet.
+func _play_burst_cran(cran: Dictionary) -> void:
+	var weapon_id := str(cran.get("weapon", ""))
+	AudioManager.play_sfx(_shot_sfx_key(weapon_id))
+	match str(cran.get("mode", "")):
+		"local":
+			_fire_feel_kick(BURST_KICK_SCALE)
+			if _viewmodel != null:
+				_viewmodel.notify_fire()
+			if _world != null:
+				_world.notify_local_shot(int(cran.get("pos", 2)), float(cran.get("yaw", 0.0)),
+					float(cran.get("pitch", 0.0)), maxf(0.05, float(cran.get("flight_s", 0.05))), 1)
+		"mine_event":
+			# Tir MIEN non anticipé (reconnexion…) : kick + frame d'arme, pas de traçante locale —
+			# celles de l'état portent déjà ce tir-là (même contrat que le cran 1 de cette branche).
+			_fire_feel_kick(BURST_KICK_SCALE)
+			if _viewmodel != null:
+				_viewmodel.notify_fire()
+		"enemy":
+			# La lueur re-déclenchée pulse au canon d'en face — `from_pos` figé au départ de la
+			# rafale, comme les projectiles du serveur (ils partent tous de la MÊME position).
+			if _world != null:
+				_world.notify_enemy_fire(int(cran.get("pos", 2)))
+
+
+# §8.151 — LE PAS DE FEEL, à chaque frame (même après la fin de match : les effets se POSENT).
+# Il LIT la secousse publiée par le monde et l'applique à l'IMAGE ENTIÈRE — les couches visibles ET
+# le réticule (via `_refresh_hud`) reçoivent LE MÊME vecteur : la relation visée/pixel est intacte.
+# Le ciel de dernier recours (couche 0) ne bouge pas : c'est lui qui remplit les bords révélés.
+func _step_feel(delta: float) -> void:
+	_cam_roll.step(delta)
+	_fov_punch.step(delta)
+	# §8.151 (2ter) — le pulse du réticule suit la MÊME horloge que les autres ressorts : il se pose
+	# aussi après la fin de match (un réticule figé ouvert serait un défaut de capture).
+	_reticle_pulse.step(delta)
+	if _world != null:
+		_world.set_camera_feel(clampf(_cam_roll.value, -ROLL_CAP_DEG, ROLL_CAP_DEG),
+			_fov_punch.value if _feel_fov_punch else 0.0)
+		var px: Vector2 = _world.shake_screen_px()
+		if px != _shake_px:
+			_shake_px = px
+			# Écrit SEULEMENT au changement : au repos la secousse est un ZÉRO exact (assèchement
+			# du trauma) et plus rien n'est posé — la condition de bit-stabilité des captures.
+			for layer: Control in [_world, _ambient, _viewmodel]:
+				if layer != null:
+					layer.position = px
+	if _viewmodel != null:
+		_viewmodel.set_aim(_aim_yaw, _aim_pitch)
 
 
 # Les réglages du panneau F10, appliqués À LA FRAME. Le lacet et le site ENVOYÉS au serveur ne
@@ -865,11 +1539,38 @@ func _local_fire_feedback() -> void:
 func _apply_tuning(values: Dictionary) -> void:
 	_sensitivity = float(values.get("mouse_sensitivity", _sensitivity))
 	_invert_y = bool(values.get("invert_y", _invert_y))
+	# §8.151 — les intensités de feel. Bornées ici aussi : le fichier de réglages est une
+	# commodité, jamais une autorité. `feel_shake`/`feel_breath` transitent vers leurs
+	# propriétaires (le monde pour la secousse, le viewmodel pour la respiration).
+	_feel_recoil = clampf(float(values.get("feel_recoil", _feel_recoil)), 0.0, 2.0)
+	_feel_flinch = clampf(float(values.get("feel_flinch", _feel_flinch)), 0.0, 2.0)
+	_feel_fov_punch = bool(values.get("fov_punch", _feel_fov_punch))
+	# §8.151 (2ter) — l'interrupteur du TIR MAINTENU (§4bis.5 : « réglage F10 pour le couper »).
+	# Il ne touche ni la cadence ni la visée : coupé, un clic = un tir, exactement comme avant.
+	_auto_fire = bool(values.get("auto_fire", _auto_fire))
+	if _viewmodel != null:
+		_viewmodel.set_feel_tuning(values)
 	if _world != null:
 		_world.apply_tuning(values)
 
 
 func _gather_move_dir() -> int:
+	# ╔═ §8.151 (2quater) — LE 4ᵉ CHEMIN D'ACTION, ET LE MÊME MOTIF QUE LA GRENADE ══════════════════╗
+	# ║ Cette fonction SONDE la plateforme depuis `_process` (`Input.is_key_pressed`) au lieu          ║
+	# ║ d'attendre un événement : la garde d'`_input` ne pouvait RIEN pour elle, et le relâchement du  ║
+	# ║ curseur (`_capture_mouse(false)`) pas davantage. Panneau ouvert, le joueur ne pouvait plus     ║
+	# ║ viser — mais son soldat MARCHAIT, et la charge coalescée emportait le `move` sans condition.   ║
+	# ║ ⚠️ ET LE PANNEAU F10 SE PILOTE AUX FLÈCHES : la navigation de focus de Godot règle ses HSlider ║
+	# ║ avec ←/→. Régler un curseur faisait littéralement faire des pas au soldat.                     ║
+	# ║ ⚠️ ZÉRO, PAS « ON IGNORE » : la valeur rendue alimente à la fois la prédiction locale ET le    ║
+	# ║ champ `move` du message. Rendre 0 les tient tous les deux d'un seul geste — un client qui      ║
+	# ║ cesserait de prédire tout en continuant d'envoyer divergerait d'un pas à chaque appui.         ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	# ⚠️ §8.151 (2quinquies) — LA PORTE DE SURVIE, PAS CELLE DES GESTES OFFENSIFS. Marcher pendant que
+	# le SÉLECTEUR d'arme est à l'écran est non seulement légitime, c'est ce que la simulation HONORE : elle
+	# applique `move` sans regarder `choice_deadline_tick`, et l'adversaire, lui, joue pendant ces 5,0 s.
+	if _ui_blocks_survival():
+		return 0
 	var dir := 0
 	if Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_Q):
 		dir -= 1
@@ -894,14 +1595,30 @@ func _gather_move_dir() -> int:
 func _process(delta: float) -> void:
 	_clock += delta
 	_decay(delta)
+	# §8.151 — le feel se pose AUSSI après la fin de match : un roulis qui resterait figé sur
+	# l'écran de résultat serait un défaut de capture ET une image penchée pour rien.
+	_step_feel(delta)
+	# §8.151 (2ter) — les chiffres de dégâts en vol avancent AUSSI après la fin de match : le coup
+	# fatal est, par définition, celui qui la déclenche — son chiffre doit pouvoir finir sa montée.
+	_step_damage_numbers()
+	# §8.151 (2bis) — les crans de rafale en attente partent à leur heure (avant la porte de fin de
+	# match : une manche gagnée SUR une rafale laisse ses derniers coups se poser, < 0,25 s).
+	_step_burst_queue()
 	if _match_over:
 		_refresh_view(delta)
 		return
 
+	# §8.151 (LOT A) : le clac de culasse à l'instant où la cadence redevient disponible (le pavé
+	# au-dessus de `_arm_bolt`). Après la fin de match, le bloc ci-dessus a déjà rendu la main.
+	if _bolt_armed and _clock >= _pred_fire_ready:
+		_bolt_armed = false
+		AudioManager.play_sfx("trench_bolt")
+
 	_update_grenade_aim(delta)
-	if Input.get_connected_joypads().size() > 0 \
-			and Input.is_joy_button_pressed(0, JOY_BUTTON_A):
-		_queue_fire()
+	# §8.151 (2ter, §4bis.5) — LE TIR MAINTENU. Il REMPLACE l'ancien appel manette inconditionnel
+	# (`is_joy_button_pressed(A) → _queue_fire()` à chaque frame), qui claquait le son de refus ~7
+	# fois par seconde dès que la cadence n'était pas échue. Voir `_step_held_fire`.
+	_step_held_fire(_fire_hold_active())
 
 	# --- Prédiction locale : posture et position immédiates (le ressenti ne dépend jamais du réseau) ---
 	var wanted_stance := "down" if _stance_toggle else "up"
@@ -967,7 +1684,22 @@ func _process(delta: float) -> void:
 			_sent_aim = quantized
 		if _fire_queued:
 			payload["fire"] = true
-		if not _throw_queued.is_empty():
+		# ╔═ UN SOLDAT N'A QUE DEUX MAINS — LE MESSAGE NON PLUS ══════════════════════════════════╗
+		# ║ `trench_sim.step` traite le lancer AVANT le tir et sort par `continue` : les deux      ║
+		# ║ champs dans le même message, c'est le TIR qui est jeté — alors qu'il a DÉJÀ été        ║
+		# ║ présenté au joueur (`_local_fire_feedback` joue détonation, traçante et recul au clic).║
+		# ║ Le 8ᵉ refus empêche d'ARMER un tir pendant qu'un lancer attend ; il reste l'ordre      ║
+		# ║ inverse — le clic d'abord, la grenade relâchée ensuite dans la même fenêtre de         ║
+		# ║ coalescence, ou un budget anti-flood épuisé qui fait patienter un tir déjà armé.       ║
+		# ║ Là, c'est le LANCER qui cède le message, et la priorité est dans ce sens-là pour une   ║
+		# ║ raison précise : le lancer n'a RIEN présenté localement (aucun son, aucune frame — la  ║
+		# ║ grenade ne se voit qu'à l'événement serveur), donc le retarder d'un message ne ment à  ║
+		# ║ personne, tandis que jeter le tir mentirait. Aucun des deux gestes n'est perdu :       ║
+		# ║ `_throw_queued` n'est vidé que s'il est VRAIMENT parti, et `urgent` le fait repartir   ║
+		# ║ dès la frame suivante — pendant laquelle le 8ᵉ refus interdit tout nouveau tir.        ║
+		# ║ L'attente est donc bornée à UN message, jamais à une famine.                           ║
+		# ╚═════════════════════════════════════════════════════════════════════════════════════╝
+		elif not _throw_queued.is_empty():
 			payload["throw"] = _throw_queued
 		if _pick_queued != "":
 			payload["pick_weapon"] = _pick_queued
@@ -978,7 +1710,11 @@ func _process(delta: float) -> void:
 		NetworkManager.send_trench_input(payload)
 		_log_input(payload)
 		_fire_queued = false
-		_throw_queued = {}
+		# ⚠️ ON NE VIDE QUE CE QUI EST PARTI. Vider inconditionnellement, c'était perdre en silence
+		# le lancer que l'exclusion ci-dessus vient de faire patienter — un geste du joueur avalé
+		# par le client, exactement le symptôme « ma touche ne répond pas » du §8.140.1.
+		if payload.has("throw"):
+			_throw_queued = {}
 		_pick_queued = ""
 		_reload_queued = false
 		_item_queued = ""
@@ -1025,6 +1761,29 @@ func _update_grenade_aim(_delta: float) -> void:
 		_grenade_cancelled = false
 	if _grenade_cancelled:
 		holding = false
+
+	# ╔═ §8.151 (2ter, CORRECTIF) — LE 3ᵉ CHEMIN D'ACTION PASSE PAR LA MÊME PORTE QUE LE TIR ════════╗
+	# ║ Cf. le pavé de `_ui_blocks_actions()` : ce chemin-ci n'avait AUCUNE porte de panneau, et       ║
+	# ║ c'était le seul des trois à DÉPENSER une ressource — la moitié du stock de grenades.           ║
+	# ║ ⚠️ ON ANNULE, ON NE MET PAS EN PAUSE. Un panneau qui s'ouvre PENDANT la visée (le CHOIX        ║
+	# ║ D'ARME s'ouvre tout seul, en plein combat) doit RANGER la grenade : la geler pour la rendre    ║
+	# ║ à la fermeture relâcherait, des secondes plus tard, un lancer que le joueur ne vise plus. Le   ║
+	# ║ verrou `_grenade_cancelled` finit le travail — rien ne se réarme tant que la touche n'a pas    ║
+	# ║ été VRAIMENT relâchée, exactement comme après une annulation à ÉCHAP.                          ║
+	# ║ ⚠️ ET ANNULER NE COÛTE RIEN : aucune grenade n'est consommée, `_throw_queued` reste vide.      ║
+	# ║ ⚠️ §8.151 (2quinquies) — ELLE GARDE LA PORTE OFFENSIVE, LE SÉLECTEUR COMPRIS, là où le pas,    ║
+	# ║ la posture, le rechargement et le pansement viennent d'en sortir. Ce n'est pas une            ║
+	# ║ exception : viser demande LA SOURIS, et les trois panneaux la relâchent. Sous le              ║
+	# ║ sélecteur, lacet et site sont GELÉS (`_input` n'écoute la souris que CAPTÉE) : le décalque    ║
+	# ║ promettrait un point que le joueur ne peut plus corriger. Elle suit le TIR, mot pour          ║
+	# ║ mot — et c'est déjà ce que les deux chemins de tir faisaient avant cette vague.               ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	if _ui_blocks_actions():
+		if _aiming_grenade:
+			_cancel_grenade()
+		elif holding:
+			_grenade_cancelled = true
+		return
 
 	if holding and not _aiming_grenade:
 		if _pred_stance != "up":
@@ -1148,7 +1907,8 @@ func _decay(delta: float) -> void:
 	_hitmarker = maxf(0.0, _hitmarker - delta)
 	_hurt_flash = maxf(0.0, _hurt_flash - delta)
 	_enemy_hit = maxf(0.0, _enemy_hit - delta * 3.0)
-	_recoil = maxf(0.0, _recoil - delta * 6.0)
+	# §8.151 : `_recoil` (décru linéairement ici même) a disparu — le recul vit dans les ressorts
+	# du viewmodel et de `_step_feel`, qui portent leur propre retour.
 
 
 # =================================================================================================
@@ -1188,6 +1948,22 @@ func _render_pair() -> Array:
 
 
 func _refresh_view(delta: float) -> void:
+	# ╔═ §8.151 (2ter, CORRECTIF) — LA CROIX SE POSE AVANT TOUTE GARDE D'ÉTAT ════════════════════╗
+	# ║ 🩸 CE QUI N'ALLAIT PAS, ET LA DURÉE EXACTE DE LA FENÊTRE. La pose du réticule vivait 840   ║
+	# ║ lignes plus bas, DERRIÈRE le `return` ci-dessous : tant qu'aucun `trench_state` n'était     ║
+	# ║ arrivé, la croix gardait la position d'un `Control` neuf — (0, 0), c'est-à-dire le coin     ║
+	# ║ HAUT-GAUCHE de l'écran. Pendant ce temps `_process` appelait `_world.set_aim()` sans        ║
+	# ║ condition : la CAMÉRA suivait la souris, la croix NON. Le joueur regardait autour de lui    ║
+	# ║ avec un viseur cloué dans le coin.                                                          ║
+	# ║ ⚠️ ET LA FENÊTRE N'EST PAS UNE FRAME : `trench_runner.py` attend les DEUX humains jusqu'à   ║
+	# ║ `CONNECT_TIMEOUT_S = 20 s` avant de créer l'état initial, et `_init_payload` envoie         ║
+	# ║ « state: None » tant que la sim n'a pas démarré. Le PREMIER connecté d'un duel classé       ║
+	# ║ voyait donc le coin de son écran jusqu'à VINGT SECONDES.                                     ║
+	# ║ La croix ne dépend d'AUCUN état serveur — elle est la projection de la visée, qui est une   ║
+	# ║ grandeur purement locale. Elle se pose donc AVANT la garde, et elle s'y pose à chaque       ║
+	# ║ frame, état ou pas. (Section 0 de `probe_trench_hud` : registre ET tampon vides.)           ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	_place_reticle()
 	var latest := _latest()
 	if latest.is_empty():
 		return
@@ -1211,6 +1987,8 @@ func _refresh_view(delta: float) -> void:
 	var tracers: Array = []
 	var grenades: Array = []
 	var markers: Array = []
+	# Le tick de l'état LU — c'est lui qui date les départs (cf. le pavé de la garde de rafale).
+	var state_tick := int(s1.get("tick", 0))
 	for proj in s1.get("projectiles", []):
 		var launch := float(proj.get("launch_tick", 0))
 		var impact := float(proj.get("impact_tick", launch + 1))
@@ -1226,15 +2004,49 @@ func _refresh_view(delta: float) -> void:
 			markers.append({"target_x": impact_x, "on_my_side": not mine,
 				"eta": clampf((impact - render_tick) / maxf(1.0, impact - launch), 0.0, 1.0)})
 		else:
+			# ╔═ §8.151 (2bis, correctif) — UNE BALLE QUI N'EST PAS ENCORE PARTIE NE SE DESSINE PAS ═╗
+			# ║ ⚠️ LE DEMI-CORRECTIF DE L'EFFET MITRAILLETTE, SOLDÉ ICI. Le son, la lueur de canon et  ║
+			# ║ le cran de recul d'une rafale PULSAIENT bien par projectile (crans calés sur les       ║
+			# ║ `launch_tick`) — mais les TRAÇANTES, elles, apparaissaient toutes au tick du clic. La   ║
+			# ║ raison : `_fire_burst` fait naître les 3 balles du FRELON AU MÊME TICK (`_spawn` les    ║
+			# ║ ajoute immédiatement à `state.projectiles`) et ne diffère que leur `launch_tick`        ║
+			# ║ (T, T+2, T+4). L'état du tick T porte donc DÉJÀ toute la rafale, et cette boucle, sans  ║
+			# ║ garde, produisait `t = clamp(négatif) = 0` pour les balles à venir : trois segments     ║
+			# ║ VISIBLES au canon d'en face (0,4 d'échelle — la garde de dégagement `MUZZLE_CLEAR` ne   ║
+			# ║ couvre que les MIENNES). La victime entendait 3 détonations sur 200 ms et voyait les    ║
+			# ║ 3 balles dès la première frame : la présentation se contredisait elle-même.            ║
+			# ║                                                                                        ║
+			# ║ ⚠️⚠️ LA RÉFÉRENCE EST LE TICK DE L'ÉTAT, **PAS** `render_tick` — ET C'EST MESURÉ. Le    ║
+			# ║ télégraphe laser, trois blocs plus bas, compare bien à `render_tick` : ça marche pour   ║
+			# ║ LUI parce qu'un laser dure 10 ticks. Une balle, non : `flight_ticks` vaut 1 pour les    ║
+			# ║ QUATRE armes, et la sim RETIRE le projectile au tick de son impact (`launch + 1`). Un   ║
+			# ║ projectile n'est donc présent que dans des états dont le tick est ≤ à son `launch_tick`,║
+			# ║ alors que `render_tick` vit UN TICK EN ARRIÈRE du plus récent (RENDER_DELAY) : il       ║
+			# ║ n'atteint JAMAIS `launch` tant que la balle est encore dans la liste. Filtrer sur       ║
+			# ║ `launch > render_tick` — la lettre du remède — n'aurait pas retardé les balles 2 et 3 : ║
+			# ║ il aurait effacé TOUTES les traçantes adverses, la première comprise. On date donc le   ║
+			# ║ départ avec l'horloge qui le décide : le tick de l'état que le serveur vient d'écrire.  ║
+			# ║ Conséquence exacte : la balle 1 ne bouge pas d'une frame (elle était déjà rendue à      ║
+			# ║ l'état T), les balles 2 et 3 se montrent aux états T+2 et T+4 — une traçante par        ║
+			# ║ détonation, à 100 ms d'écart, comme au canon.                                          ║
+			# ╚════════════════════════════════════════════════════════════════════════════════════════╝
+			if int(launch) > state_tick:
+				continue
 			tracers.append({"from_pos": int(proj.get("from_pos", 2)), "mine": mine, "t": t,
 				"yaw": float(proj.get("aim_yaw", 0.0)),
 				"pitch": float(proj.get("aim_pitch", 0.0))})
 
 	# --- Laser CONDOR : rendu DÈS l'événement serveur, dans la direction réelle du tireur ---
 	var laser := {}
+	var enemy_laser_now := false
+	# Le tick auquel la balle adverse PARTIRA — c'est lui qui borne l'avertissement sonore.
+	var enemy_laser_tick := 0.0
 	for player in s1.get("players", []):
 		if int(player.get("laser_fire_tick", 0)) > int(render_tick):
 			var mine := int(player.get("slot", 0)) == _my_slot
+			if not mine:
+				enemy_laser_now = true
+				enemy_laser_tick = float(player.get("laser_fire_tick", 0))
 			# Le mien suit ma visée en direct ; le SIEN suit la direction annoncée par son
 			# événement `laser` — et il est forcément DEBOUT pour lasériser, donc jamais masqué.
 			laser = {"active": true, "mine": mine,
@@ -1242,6 +2054,36 @@ func _refresh_view(delta: float) -> void:
 					else _enemy_laser_pos,
 				"yaw": _aim_yaw if mine else _enemy_laser_yaw,
 				"pitch": _aim_pitch if mine else _enemy_laser_pitch}
+	# ╔═ §8.151 (2bis) — LE TÉLÉGRAPHE CONDOR S'ENTEND (§3.6) : « le danger annoncé doit           ═╗
+	# ║ S'ENTENDRE, pas seulement se voir ». Le son se cale sur le MÊME signal que le rayon rendu    ║
+	# ║ (`laser_fire_tick > render_tick`, lu dans l'état) — jamais une minuterie locale. FRONT       ║
+	# ║ MONTANT + verrou : UNE lecture par visée, relâchée quand le rayon s'éteint (tir parti,       ║
+	# ║ annulation, accroupi) — une nouvelle visée ré-avertit. ⚠️ ADVERSE SEULEMENT : c'est un       ║
+	# ║ avertissement de CIBLE — MON propre laser ne me menace pas, il ne bipe pas (et le suivi est  ║
+	# ║ fait PAR CAMP : mon télégraphe à moi ne masque pas l'alerte du sien).                        ║
+	# ║ ⚠️ §8.151 (2bis, correctif) — LA FENÊTRE ANNONCÉE EST CELLE DE LA SIM, PAS CELLE DU FICHIER.  ║
+	# ║ L'alerte était jouée en entier, à sa durée d'asset (0,620 s), pour annoncer une fenêtre de   ║
+	# ║ `laser_lead_ticks / tick_rate` (0,500 s aujourd'hui, mais ⚙ AMENDABLE au registre) : elle    ║
+	# ║ bourdonnait encore 120 ms APRÈS le départ de la balle, et un simple réglage serveur l'aurait ║
+	# ║ fait déborder de 370 ms (5 ticks) ou se taire 400 ms trop tôt (20 ticks). L'oreille annonçait║
+	# ║ une fenêtre qui n'était pas celle du danger — le §1.9 l'interdit à l'œil, il n'y a aucune    ║
+	# ║ raison de le tolérer à l'oreille. Désormais la fenêtre est LUE dans l'état : le serveur      ║
+	# ║ diffuse `laser_fire_tick`, le tick où la balle part ; il reste donc                          ║
+	# ║ `(laser_fire_tick − render_tick) / tick_rate` — le temps de danger RÉEL, latence comprise,   ║
+	# ║ meilleur encore que le barème nominal. Le bourdonnement est ÉTIRÉ/COMPRIMÉ sur cette fenêtre ║
+	# ║ (pitch = durée du fichier ÷ fenêtre, borné par le manager) et il est COUPÉ à l'extinction du ║
+	# ║ rayon : il ne peut plus survivre au tir, ni s'arrêter loin avant lui.                        ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	if enemy_laser_now and not _laser_warn_latch:
+		var window: float = maxf(0.0, (enemy_laser_tick - render_tick) / _tick_rate)
+		_laser_warn_token = AudioManager.play_sfx_tracked("trench_laser_warn", LASER_WARN_DB,
+			_laser_warn_pitch(window))
+	elif _laser_warn_latch and not enemy_laser_now:
+		# Le rayon s'éteint (tir parti, annulation, accroupi) : le danger est passé, l'alerte se
+		# tait AVEC lui. Jeton périmé (voix reprise entre temps) → l'arrêt ne fait rien.
+		AudioManager.stop_sfx(_laser_warn_token)
+		_laser_warn_token = -1
+	_laser_warn_latch = enemy_laser_now
 
 	# `aiming` et `dead` pilotent la MACHINE À FRAMES du sprite peint (§8.138). Les deux se LISENT
 	# dans l'état déjà reçu — `aiming` est le drapeau de lisibilité du §8.137, `dead` se déduit des
@@ -1311,25 +2153,47 @@ func _build_hud() -> void:
 	_build_center()
 	_build_ammo()
 	_build_item_slots()
+	_build_damage_numbers()
 	_build_reticle()
 	_build_help_panel()
 	_build_choice_panel()
 	_build_abandon_overlay()
 
 
-# Flash directionnel de bord d'écran + vignette rouge sous 25 PV (§5.5).
+# Flinch directionnel à l'encaissement + vignette rouge sous 25 PV (§5.5, refondu §8.151).
 func _build_damage_feedback() -> void:
+	# ╔═ §8.151 — L'OVERLAY DE FLINCH, DÉDIÉ ═════════════════════════════════════════════════════╗
+	# ║ RE-FONDATION du flash plat (`color.a = _hurt_flash * 0.45`, sans direction — `_hurt_dir`   ║
+	# ║ était calculé depuis §5.5 et JAMAIS lu) : le pouls et le côté vivent dans un shader à part ║
+	# ║ (`trench_flinch.gdshader`), monté ICI, premier enfant du HUD — donc SOUS les éléments du   ║
+	# ║ HUD et AU-DESSUS de l'étalonnage (`_grade` précède `_hud` dans l'ordre des couches). On ne ║
+	# ║ touche PAS à `trench_grade.gdshader` : propriété exclusive du LOT C, zéro couture.         ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 	_hurt_overlay = ColorRect.new()
-	_hurt_overlay.color = Color(COL_DANGER.r, COL_DANGER.g, COL_DANGER.b, 0.0)
-	_hurt_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hurt_overlay.color = Color(1, 1, 1, 1)      # le shader décide de tout, la teinte vit chez lui
+	var flinch_mat := ShaderMaterial.new()
+	flinch_mat.shader = FlinchShader
+	_hurt_overlay.material = flinch_mat
 	_hurt_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# ⚠️ 8ᵉ récidive ÉVITÉE de « un Control créé par code garde size = (0,0) » (§8.140.3) : taille
+	# POSÉE depuis le viewport + reconnexion `size_changed`. Ancres ÉGALES (TOP_LEFT) et non
+	# FULL_RECT : des ancres opposées inégales + une taille posée à la main, c'est l'avertissement
+	# « non-equal opposite anchors will have their size overridden » — l'autre moitié du piège.
+	_hurt_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_hud.add_child(_hurt_overlay)
+	_fit_hurt_overlay()
+	get_viewport().size_changed.connect(_fit_hurt_overlay)
 
 	_low_hp_vignette = ColorRect.new()
 	_low_hp_vignette.color = Color(0.45, 0.05, 0.05, 0.0)
 	_low_hp_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_low_hp_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_low_hp_vignette)
+
+
+func _fit_hurt_overlay() -> void:
+	if _hurt_overlay != null:
+		_hurt_overlay.size = get_viewport_rect().size
 
 
 # PV haut-gauche (barre + valeur) — §6.
@@ -1478,11 +2342,192 @@ func _build_reticle() -> void:
 	_reticle.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_reticle.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_reticle.size = Vector2(80, 80)
+	# ⚠️ POSE INITIALE — un `Control` créé par code naît à (0, 0), c'est-à-dire dans le COIN
+	# HAUT-GAUCHE, et il y reste jusqu'à ce que quelqu'un le déplace. `_place_reticle()` s'en
+	# charge dès la première frame de `_process`, mais la frame qui SÉPARE `_ready()` du premier
+	# `_process` est peinte, elle aussi : on ne la laisse pas montrer le coin. La taille vient du
+	# VIEWPORT et non de `size` — les ancres du duel ne sont résolues qu'à la passe de mise en page
+	# suivante, `size` vaut donc encore (0, 0) ici (8ᵉ récidive de §8.140.3, évitée).
+	_reticle.position = get_viewport_rect().size * 0.5 - _reticle.size * 0.5
 	_hud.add_child(_reticle)
 	_reticle.draw.connect(_draw_reticle)
 
 
-func _draw_reticle() -> void:
+# ╔═ LA POSE DE LA CROIX — SON SEUL POINT D'ÉCRITURE, ET IL NE DÉPEND D'AUCUN ÉTAT SERVEUR ══════╗
+# ║ Type ANNOTÉ explicitement : `_world` est typé `Control`, l'appel est donc « non sûr » aux     ║
+# ║ yeux de l'analyseur et rend un Variant — sans annotation, `:=` ne peut rien inférer.          ║
+# ║ ╔═ §8.151 — LE KICK DE RÉTICULE EST MORT, ET IL NE REVIENDRA PAS ═══════════════════════════╗ ║
+# ║ ║ Ici vivait `aim_screen.y -= _recoil * 10` : dix pixels de croix déplacée SANS que le monde ║ ║
+# ║ ║ bouge — pendant chaque recul, le réticule montrait un point que la balle ne visait pas.    ║ ║
+# ║ ║ C'est le mensonge exact que §8.141.6 interdit. Le seul décalage admis est `_shake_px`,     ║ ║
+# ║ ║ parce qu'il est appliqué AUSSI aux couches du monde : monde + réticule ENSEMBLE.           ║ ║
+# ║ ╚═══════════════════════════════════════════════════════════════════════════════════════════╝ ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _place_reticle() -> void:
+	var aim_screen: Vector2 = _world.project_aim(_aim_yaw, _aim_pitch)
+	_reticle.position = aim_screen - _reticle.size * 0.5 + _shake_px
+	_reticle.queue_redraw()
+
+
+# =================================================================================================
+# §8.151 (VAGUE 2ter, §4bis.3) — LES DÉGÂTS FLOTTANTS
+# =================================================================================================
+# ╔═ CE QU'ILS PEUVENT DIRE, ET CE QU'ILS NE DIRONT JAMAIS ═══════════════════════════════════════╗
+# ║ Un chiffre ne naît QUE dans la branche `hit` de `_on_duel_event` — c'est-à-dire sur un          ║
+# ║ événement SERVEUR, la même source unique que le hitmarker (§5.5). Le client sait « j'ai tiré » ;║
+# ║ il ne sait PAS « j'ai touché », et il ne sait surtout pas COMBIEN : les dégâts dépendent de la  ║
+# ║ table angulaire, de la posture de la cible et de son bandage. Un chiffre prédit serait le pire  ║
+# ║ des mensonges de HUD — celui qu'on croit sur parole parce qu'il est chiffré.                    ║
+# ║ Une RAFALE place N balles → le serveur émet N événements `hit` → N chiffres, décalés            ║
+# ║ latéralement pour rester lisibles (le décalage vient de `hash_noise` sur le compteur de         ║
+# ║ naissances : déterministe, donc une capture rejouée rend le même pixel).                        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _build_damage_numbers() -> void:
+	for i in range(DAMAGE_POOL):
+		var node := _label("", 22, COL_GOLD, true)
+		node.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		node.visible = false
+		_hud.add_child(node)
+		# ⚠️ TAILLE POSÉE, ancres en POINT : un Control créé par code garde `size = (0,0)` et son
+		# texte serait alors centré sur une boîte vide, donc collé au coin. 8ᵉ récidive évitée.
+		_anchored(node, Control.PRESET_TOP_LEFT, Vector2.ZERO, DAMAGE_BOX)
+		_damage_pool.append(node)
+		_damage_free.append(node)
+
+
+# L'ÉCHELLE DISCRÈTE d'un coup — dégâts rapportés au `hp_max` du REGISTRE (jamais un 100 en dur, ni
+# un barème d'arme recopié : le §4ter va justement rebattre les dégâts par balle). Bornée pour que
+# la différence se LISE sans que le marqueur devienne un panneau : un coup à 5 % des PV rend 0,85,
+# un coup à 30 % rend ~1,35.
+func _damage_scale(damage: int) -> float:
+	var hp_max: float = maxf(1.0, float(_rules.get("hp_max", 100)))
+	return clampf(0.75 + float(maxi(0, damage)) / hp_max * 2.0, 0.75, 1.4)
+
+
+func _spawn_damage_number(damage: int, fatal: bool) -> void:
+	if damage <= 0 or _damage_pool.is_empty():
+		return
+	# RECYCLAGE, jamais d'allocation : une étiquette LIBRE si le pool en a une, sinon on reprend le
+	# plus ANCIEN chiffre encore en vol (une rafale qui recouvre une rafale). Aucun `Label.new()` ne
+	# peut naître ici — c'est la seule chose que ce chemin garantit vraiment à chaque frame.
+	var node: Label = null
+	if not _damage_free.is_empty():
+		node = _damage_free.pop_back()
+	else:
+		var oldest: Dictionary = _damage_live.pop_front()
+		node = oldest["node"]
+	_damage_spawned += 1
+	var entry := {
+		"node": node,
+		"born": _clock,                       # TEMPS DE SCÈNE — jamais l'horloge murale
+		"from": _enemy_screen_point(),
+		"jitter": Springs.hash_noise(float(_damage_spawned), DAMAGE_SEED) * DAMAGE_JITTER_PX,
+	}
+	_damage_live.append(entry)
+	node.text = str(damage)
+	node.add_theme_color_override("font_color", COL_DANGER if fatal else COL_GOLD)
+	node.add_theme_font_size_override("font_size", 30 if fatal else 22)
+	node.visible = true
+	# ⚠️ PLACÉ TOUT DE SUITE, ET C'EST UN CORRECTIF, PAS UNE COMMODITÉ. Un événement serveur arrive
+	# par le rappel réseau, à un instant quelconque du tour de boucle : rendre l'étiquette VISIBLE
+	# sans la placer la laisse une frame entière à sa position d'origine — le coin haut-gauche de
+	# l'écran (`_anchored(..., Vector2.ZERO, ...)`). C'est très exactement la famille de défauts que
+	# ce dépôt n'attrape qu'EN CAPTURE, jamais au boot headless (§8.140.3). La sonde le voit parce
+	# qu'elle lit la position AVANT le premier pas.
+	_place_damage_number(entry, 0.0)
+
+
+# ╔═ D'OÙ PART LE CHIFFRE : LA SILHOUETTE ADVERSE, PROJETÉE COMME LA VISÉE ═══════════════════════╗
+# ║ On ne peut pas demander sa position écran au monde 3D (`trench_fp_world.gd` n'est pas ouvert    ║
+# ║ dans cette étape et n'expose pas de projection de nœud). On la DÉRIVE donc des cotes            ║
+# ║ partagées — `Geo.yaw_to`/`pitch_to` depuis MON œil vers le milieu de la bande VISIBLE de la     ║
+# ║ silhouette — puis on projette avec `project_aim`, la fonction de la visée. Une direction        ║
+# ║ projetée est un POINT : peu importe la distance choisie le long du rayon, le pixel est le même. ║
+# ║ ⚠️ `_shake_px` est ajouté comme pour le réticule : monde et HUD encaissent LE MÊME vecteur.     ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _enemy_screen_point() -> Vector2:
+	var fallback := size * 0.5
+	if _world == null:
+		return fallback
+	var eye: Vector3 = Geo.eye_position(_pred_pos, _pred_stance)
+	var their_stance := str(_player_of(_latest(), 3 - _my_slot).get("stance", "up"))
+	var band: Array = Geo.visible_band(eye, their_stance)
+	# Accroupi (bande vide) : rien ne dépasse du parapet — on vise alors le haut de la silhouette
+	# accroupie, qui est l'endroit où une grenade vient de le trouver.
+	var y: float = ((float(band[0]) + float(band[1])) * 0.5) if band.size() >= 2 \
+		else Geo.SILHOUETTE_TOP_DOWN
+	var at := Vector3(Geo.position_x(int(round(_last_seen_enemy_pos))), y, Geo.far_soldier_z())
+	var screen: Vector2 = _world.project_aim(Geo.yaw_to(eye, at), Geo.pitch_to(eye, at))
+	return screen + _shake_px
+
+
+# LE PAS DES CHIFFRES — monte + fondu sur DAMAGE_RISE_S, piloté par le TEMPS DE SCÈNE. Il tourne
+# aussi après la fin de match : un chiffre figé en plein vol sur l'écran de résultat serait le même
+# défaut de capture qu'un roulis resté penché.
+func _step_damage_numbers() -> void:
+	var still: Array = []
+	for entry: Dictionary in _damage_live:
+		var node: Label = entry["node"]
+		var age: float = _clock - float(entry["born"])
+		if age >= DAMAGE_RISE_S:
+			node.visible = false
+			_damage_free.append(node)      # l'étiquette RETOURNE au pool : l'invariant tient
+			continue
+		_place_damage_number(entry, clampf(age / DAMAGE_RISE_S, 0.0, 1.0))
+		still.append(entry)
+	_damage_live = still
+
+
+# LA POSE D'UN CHIFFRE À L'INSTANT `t` (0 = naissance, 1 = fin de vie) — un seul endroit, appelé par
+# la naissance ET par le pas : deux poses séparées finiraient par se contredire d'une frame.
+func _place_damage_number(entry: Dictionary, t: float) -> void:
+	var node: Label = entry["node"]
+	var from: Vector2 = entry["from"]
+	# Montée qui DÉCÉLÈRE (1−(1−t)²) : le chiffre jaillit puis se pose — un déplacement linéaire se
+	# lit « ascenseur ». Le fondu, lui, ne mord que sur le dernier tiers.
+	var rise: float = (1.0 - (1.0 - t) * (1.0 - t)) * DAMAGE_RISE_PX
+	node.position = from + Vector2(float(entry["jitter"]), -rise) - DAMAGE_BOX * 0.5
+	node.modulate.a = clampf((1.0 - t) / 0.35, 0.0, 1.0)
+
+
+const RETICLE_GAP_PX := 6.0        # écartement MINIMAL — le trou central de lisibilité
+const RETICLE_ARM_PX := 7.0        # longueur d'un trait de croix (arme ordinaire)
+const RETICLE_REFUSE_PX := 4.0     # l'écart SUPPLÉMENTAIRE du claquement de refus (§8.141.9)
+
+# ╔═ §8.151 (2ter §4bis.1, CORRECTIF) — CE QUI EST PEINT EST UNE VALEUR, PAS UNE DÉCISION ════════╗
+# ║ 🩸🩸 CE QUI N'ALLAIT PAS, ET QUI A ÉTÉ MESURÉ. `_draw_reticle()` calculait son propre           ║
+# ║ écartement (`var spread := _reticle_spread_px()`) puis peignait ; la sonde, elle, lisait        ║
+# ║ `_reticle_spread_px()`. Les deux ne se rejoignaient QUE par cette ligne-là. Remplacée par une   ║
+# ║ constante décorative (« spread := 12.0 »), la sonde restait INTÉGRALEMENT VERTE — 84 PASS /     ║
+# ║ 0 FAIL — sur un réticule sans plus AUCUN lien avec `dispersion_deg` : la propriété phare du lot ║
+# ║ n'était pas gardée, elle était seulement récitée par une fonction que le dessin n'était pas     ║
+# ║ tenu d'appeler.                                                                                 ║
+# ║ ⚠️ ET AUCUN HARNAIS NE PEUT RELIRE CE QU'UN `CanvasItem` A PEINT : sous `--headless` le rendu    ║
+# ║ est un pilote muet, et Godot n'expose de toute façon aucune relecture des primitives soumises.  ║
+# ║ Tant que le PINCEAU décide de quoi que ce soit, ce qu'il décide est invérifiable — par          ║
+# ║ construction, pas par paresse de la sonde.                                                      ║
+# ║ LA CORRECTION EST DONC STRUCTURELLE, et c'est la seule qui referme vraiment : la géométrie      ║
+# ║ peinte devient une VALEUR (`_reticle_paint_list()`, transcription littérale des appels de       ║
+# ║ dessin), et le pinceau n'est plus qu'un rejeu mécanique — pas un chiffre, pas un axe, pas une   ║
+# ║ couleur à lui. La sonde mesure la LISTE (donc ce qui est peint) et AUDITE la source des deux    ║
+# ║ fonctions de rejeu : aucun littéral numérique, aucun argument de dessin qui ne vienne de la     ║
+# ║ commande. Le sabotage « le pinceau ignore la formule » n'a plus d'endroit où s'écrire.          ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Les CLÉS d'une commande de peinture, et les deux seules primitives du réticule. Des noms, jamais
+# des chiffres : ils voyagent jusqu'au pinceau, qui n'a rien d'autre à savoir.
+const PAINT_KIND := "kind"
+const PAINT_A := "a"
+const PAINT_B := "b"
+const PAINT_COLOR := "color"
+const PAINT_WIDTH := "width"
+const PAINT_RADIUS := "radius"
+const PAINT_LINE := "line"
+const PAINT_DOT := "dot"
+
+
+# LA GÉOMÉTRIE PEINTE DU RÉTICULE, dans l'ordre où elle est soumise. Tout ce qui décide de quelque
+# chose vit ICI, et rien de ce qui vit ici n'échappe à la sonde.
+func _reticle_paint_list() -> Array:
 	var latest := _latest()
 	var me := _player_of(latest, _my_slot)
 	var empty := int(me.get("ammo", 1)) <= 0 or int(me.get("reload_until_tick", 0)) > 0
@@ -1492,37 +2537,148 @@ func _draw_reticle() -> void:
 	# symptôme « la flèche bas ne fonctionne pas » du §8.140.1, et il ne se reproduira pas ici.
 	var color := COL_DANGER if (empty or _fire_refuse > 0.0) else COL_ACCENT
 	var center := _reticle.size * 0.5
-	# ÉCARTEMENT = dispersion de l'arme, convertie en pixels par le même champ de vision que la
-	# scène 3D. Le joueur LIT donc sa précision — la promesse du CONDOR se voit avant de tirer.
-	var spread := 6.0 + _dispersion_pixels() + (4.0 if _fire_refuse > 0.0 else 0.0)
-	var arm := 7.0
+	var spread := _reticle_spread_px()
+	# ╔═ §8.151 (2ter, §4bis.1) — LE CONDOR À 0° A SA PROPRE CROIX, ET C'EST SA PROMESSE ══════════╗
+	# ║ Une arme dont le cône vaut ZÉRO ne peut pas se dire avec le même dessin qu'une arme qui       ║
+	# ║ arrose : à écartement nul, quatre traits épais collés au centre bouchent précisément l'endroit║
+	# ║ qu'on vise. On dessine donc une croix FINE (traits d'1 px, longs, et un point central plus     ║
+	# ║ petit) — la lecture « ce coup part exactement là » sans un pixel de plus. Le test porte sur la ║
+	# ║ DISPERSION LUE, jamais sur l'id « condor » : le jour où le registre donne 0° à une autre arme, ║
+	# ║ elle héritera de la croix de précision sans qu'on rouvre ce fichier.                           ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	var precise := _reticle_is_precise()
+	var arm: float = (RETICLE_ARM_PX * 1.7) if precise else RETICLE_ARM_PX
+	var thickness: float = 1.0 if precise else 2.0
+	var list: Array = []
 	for axis: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
 		var start := center + axis * spread
-		_reticle.draw_line(start, start + axis * arm, color, 2.0)
-	_reticle.draw_circle(center, 1.5, color)
+		list.append({PAINT_KIND: PAINT_LINE, PAINT_A: start, PAINT_B: start + axis * arm,
+			PAINT_COLOR: color, PAINT_WIDTH: thickness})
+	list.append({PAINT_KIND: PAINT_DOT, PAINT_A: center,
+		PAINT_RADIUS: 1.0 if precise else 1.5, PAINT_COLOR: color})
 	# HITMARKER — quatre traits en croix d'André, uniquement sur touche CONFIRMÉE par le serveur.
+	# §8.151 (2ter, §4bis.2) : le KILL est ROUGE et plus long, et la longueur du trait suit les
+	# dégâts RÉELS du coup (`_hitmarker_scale`, posée par l'événement). Rien ici ne s'allume tout
+	# seul : `_hitmarker` n'est écrit que dans la branche `hit` de `_on_duel_event`, et il ne
+	# s'éteint que par `_decay` — la sonde exige les deux, l'allumage ET l'extinction par le temps.
 	if _hitmarker > 0.0:
-		var alpha: float = clampf(_hitmarker / 0.35, 0.0, 1.0)
-		var marker := Color(COL_GOLD.r, COL_GOLD.g, COL_GOLD.b, alpha)
+		var marker := _hitmarker_color()
+		var near: float = 5.0 * _hitmarker_scale
+		var far: float = (16.0 if _hitmarker_kill else 12.0) * _hitmarker_scale
+		var width: float = 3.0 if _hitmarker_kill else 2.0
 		for diagonal: Vector2 in [Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]:
-			_reticle.draw_line(center + diagonal * 5.0, center + diagonal * 12.0, marker, 2.0)
+			list.append({PAINT_KIND: PAINT_LINE, PAINT_A: center + diagonal * near,
+				PAINT_B: center + diagonal * far, PAINT_COLOR: marker, PAINT_WIDTH: width})
+	return list
 
 
-# Conversion dispersion (degrés) → pixels d'écran, au champ de vision réel de la scène 3D.
+# LE REJEU — il ne connaît ni les armes, ni la dispersion, ni le hitmarker : il repasse la liste.
+func _draw_reticle() -> void:
+	for cmd: Dictionary in _reticle_paint_list():
+		_paint_command(_reticle, cmd)
+
+
+# LE PINCEAU GÉNÉRIQUE — une commande, une primitive. TOUS ses arguments viennent de la commande :
+# il n'a rien à inventer, et c'est cette propriété-là que la sonde audite sur la source.
+func _paint_command(target: CanvasItem, cmd: Dictionary) -> void:
+	if cmd[PAINT_KIND] == PAINT_LINE:
+		target.draw_line(cmd[PAINT_A], cmd[PAINT_B], cmd[PAINT_COLOR], cmd[PAINT_WIDTH])
+	else:
+		target.draw_circle(cmd[PAINT_A], cmd[PAINT_RADIUS], cmd[PAINT_COLOR])
+
+
+# LA COULEUR DU HITMARKER, en un seul endroit : ROUGE si le coup a été FATAL (`hp` de l'événement
+# serveur tombé à 0), OR sinon — l'alpha porte le fondu. Elle part dans la LISTE DE PEINTURE, et
+# c'est cette liste que la sonde lit : une garde qui recalculerait la couleur de son côté, ou qui
+# lirait une fonction que la peinture n'est pas tenue d'appeler, ne garderait rien.
+func _hitmarker_color() -> Color:
+	var base := COL_DANGER if _hitmarker_kill else COL_GOLD
+	return Color(base.r, base.g, base.b, clampf(_hitmarker / HITMARKER_TIME, 0.0, 1.0))
+
+
+# ╔═ §8.151 (2ter, CORRECTIF) — « DISPERSION INCONNUE » N'EST PAS « DISPERSION NULLE » ══════════╗
+# ║ 🩸 CE QUI N'ALLAIT PAS. `_dispersion_degrees()` rendait 0,0 quand l'arme courante n'était pas  ║
+# ║ au registre — ce qui inclut le cas le PLUS FRÉQUENT au démarrage : `_rules` encore VIDE, avant ║
+# ║ que `trench_init` n'arrive (jusqu'à 20 s en compétition, cf. le pavé de `_refresh_view`). Et   ║
+# ║ `_reticle_is_precise()` testant `<= 0.0`, le doute était rendu par l'interprétation la PLUS    ║
+# ║ FLATTEUSE : la croix de PRÉCISION, c'est-à-dire la promesse propre au CONDOR — « ce coup part  ║
+# ║ exactement là » — peinte pour une VIPÈRE à 0,30°. C'est mot pour mot ce que la décision §1.9   ║
+# ║ interdit : le HUD ne montre que des mécaniques RÉELLES.                                        ║
+# ║ Le registre est donc la SEULE source d'un cône, et son silence a désormais sa propre valeur —  ║
+# ║ un sentinelle NÉGATIF, qu'aucun `dispersion_deg` légal ne peut prendre. Le repli sur doute est ║
+# ║ la croix ORDINAIRE, jamais celle de précision : on préfère promettre moins que la sim ne donne.║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const DISPERSION_UNKNOWN := -1.0
+
+
+# LA CROIX DE PRÉCISION — dérivée de la DISPERSION LUE, jamais d'un id d'arme (le jour où le
+# registre donne 0° à une autre arme, elle en hérite sans qu'on rouvre ce fichier).
+func _reticle_is_precise() -> bool:
+	var degrees := _dispersion_degrees()
+	if degrees < 0.0:
+		return false        # DISPERSION INCONNUE : croix ORDINAIRE, jamais la promesse du Condor
+	return degrees <= 0.0
+
+
+# L'ÉCARTEMENT RENDU, en un seul endroit — et il n'a plus qu'UN appelant, `_reticle_paint_list()`,
+# c'est-à-dire la description de ce qui est peint. La sonde mesure cette liste, jamais cette
+# fonction pour elle-même : mesurer ce que le pinceau n'est pas tenu d'utiliser était PRÉCISÉMENT
+# le faux vert de la première livraison. Trois termes, tous justifiés : le trou de lisibilité, la
+# DISPERSION RÉELLE de l'arme, et le claquement de refus. Le pulse de tir s'y ajoute, borné et POSÉ
+# (§4bis.1) — il vaut zéro au repos, donc la sonde mesure bien la dispersion seule dès que le
+# ressort est collé.
+func _reticle_spread_px() -> float:
+	return RETICLE_GAP_PX + _dispersion_pixels() \
+		+ (RETICLE_REFUSE_PX if _fire_refuse > 0.0 else 0.0) \
+		+ RETICLE_PULSE_PX * clampf(_reticle_pulse.value, 0.0, 1.0)
+
+
+# ╔═ §8.151 (2ter) — LA DISPERSION SE PROJETTE PAR LA MÊME FONCTION QUE LA VISÉE ═════════════════╗
+# ║ AVANT : `tan(d) / tan(fov/2) × (size.y/2)` — une SECONDE arithmétique de projection, écrite à   ║
+# ║ côté de celle qui place réellement le réticule (`_world.project_aim` → `unproject_position`).   ║
+# ║ Les deux coïncident au centre de l'écran et divergent partout ailleurs : elle ignorait le suivi ║
+# ║ de caméra, le roulis et le punch de FOV, c'est-à-dire tout ce que la vague 2 a ajouté. Deux     ║
+# ║ arithmétiques pour une même grandeur finissent TOUJOURS par se contredire — c'est mot pour mot  ║
+# ║ la leçon de la table v1/v4 (§8.141.6), qui a coûté une partie entière.                          ║
+# ║ On MESURE donc l'écart en projetant les DEUX BORDS du cône avec la fonction de la visée, et on  ║
+# ║ prend la demi-distance : `dispersion_deg` est un DEMI-angle (registre serveur, §8.137), le      ║
+# ║ segment [yaw−d, yaw+d] vaut donc le cône entier et sa moitié est le rayon cherché.              ║
+# ║ ⚠️ AUCUNE ÉCRITURE DE VISÉE : `_aim_yaw`/`_aim_pitch` sont LUS, les deux sondes de visée le      ║
+# ║ prouvent. Le repli (pas de monde, pas de caméra) est l'ancienne trigonométrie — un réticule      ║
+# ║ dessiné vaut mieux qu'un réticule absent, et le repli ne sert qu'aux harnais sans scène 3D.      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
 func _dispersion_pixels() -> float:
-	var me := _player_of(_latest(), _my_slot)
-	var weapon_id := str(me.get("weapon", "vipere"))
-	var degrees := 0.0
-	for weapon in _rules.get("weapons", []):
-		if str(weapon.get("id", "")) == weapon_id:
-			degrees = float(weapon.get("dispersion_deg", 0.0))
-			break
+	var degrees := _dispersion_degrees()
+	# Cône NUL (Condor) et cône INCONNU (`DISPERSION_UNKNOWN`, registre muet) donnent tous deux
+	# zéro pixel à ajouter : il n'y a rien à projeter dans les deux cas. Ce qui les sépare est la
+	# FORME de la croix, et ça se décide dans `_reticle_is_precise()` — pas ici.
 	if degrees <= 0.0:
 		return 0.0
+	if _world != null:
+		var left: Vector2 = _world.project_aim(_aim_yaw - degrees, _aim_pitch)
+		var right: Vector2 = _world.project_aim(_aim_yaw + degrees, _aim_pitch)
+		var half := left.distance_to(right) * 0.5
+		if half > 0.0:
+			return half
 	# Le champ de vision appartient à la CAMÉRA : on le demande au monde 3D plutôt que d'en
 	# recopier la valeur ici (une seule source, comme partout ailleurs dans ce chantier).
-	var half_fov := deg_to_rad(_world.camera_fov()) * 0.5
+	var half_fov := deg_to_rad(_world.camera_fov() if _world != null else 55.0) * 0.5
 	return tan(deg_to_rad(degrees)) / maxf(0.001, tan(half_fov)) * (size.y * 0.5)
+
+
+# LE CÔNE DE L'ARME COURANTE, LU AU REGISTRE — jamais un barème recopié (§8.137, §1.9). L'arme vient
+# de l'ÉTAT serveur, la dispersion de `trench_init.rules.weapons` : aucune des deux n'est devinée.
+func _dispersion_degrees() -> float:
+	var me := _player_of(_latest(), _my_slot)
+	var weapon_id := str(me.get("weapon", STARTING_WEAPON))
+	for weapon in _rules.get("weapons", []):
+		if str(weapon.get("id", "")) == weapon_id:
+			return float(weapon.get("dispersion_deg", 0.0))
+	# ⚠️ PAS DE REGISTRE, PAS DE CÔNE — et surtout pas un cône NUL (cf. le pavé de
+	# `_reticle_is_precise`). Le sentinelle négatif traverse `_dispersion_pixels()` par la même
+	# porte que le zéro (« aucun pixel à ajouter ») et se distingue de lui là où ça compte : la
+	# forme de la croix. Deux ignorances, un seul dessin — l'ORDINAIRE.
+	return DISPERSION_UNKNOWN
 
 
 # =================================================================================================
@@ -1636,8 +2792,8 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 		COL_DANGER if (int(me.get("ammo", 0)) <= 0 or reloading) else COL_TEXT)
 	_reload_label.text = tr("TRENCH_RELOADING") if reloading else ""
 	# Le VIEWMODEL PEINT (§8.138) est une VUE : il ne relit pas l'état, on le lui pousse.
+	# (§8.151 : plus de valeur de recul à pousser — le kick vit dans ses ressorts, `notify_fire`.)
 	_viewmodel.set_reloading(reloading)
-	_viewmodel.set_recoil(_recoil)
 	_weapon_label.text = _weapon_name(str(me.get("weapon", "vipere")))
 	_progress_label.text = _escalation_text(int(me.get("hits_total", 0)))
 
@@ -1690,17 +2846,15 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 	if score.size() >= 2:
 		_score_label.text = tr("TRENCH_SCORE") % [int(score[_my_slot - 1]), int(score[2 - _my_slot])]
 
-	# --- Réticule : il suit la VISÉE (poses fixes + visée libre, §1.1) ---
-	# Type ANNOTÉ explicitement : `_world` est typé `Control`, l'appel est donc « non sûr » aux
-	# yeux de l'analyseur et rend un Variant — sans annotation, `:=` ne peut rien inférer.
-	var aim_screen: Vector2 = _world.project_aim(_aim_yaw, _aim_pitch)
-	if _recoil > 0.0 and not _reduced_motion:
-		aim_screen.y -= _recoil * 10.0     # kick vertical du recul (§5.4)
-	_reticle.position = aim_screen - _reticle.size * 0.5
-	_reticle.queue_redraw()
-
-	# --- Dégâts subis ---
-	_hurt_overlay.color.a = _hurt_flash * 0.45
+	# --- Dégâts subis : le pouls directionnel du flinch (overlay dédié §8.151, shader sans TIME) ---
+	var flinch_mat := _hurt_overlay.material as ShaderMaterial
+	if flinch_mat != null:
+		# L'enveloppe 0,5 s de §5.5 devient l'uniform `intensity` (1 → 0) ; le CÔTÉ vient de la
+		# position d'arène relative (`_hurt_dir` > 0 = adversaire côté +X monde = GAUCHE écran,
+		# la mesure de SCREEN_TO_WORLD_X) et sature au-delà de 2 crans d'écart ⚙.
+		flinch_mat.set_shader_parameter("intensity",
+			clampf(_hurt_flash / 0.5 * _feel_flinch, 0.0, 1.0))
+		flinch_mat.set_shader_parameter("side", clampf(-_hurt_dir * 0.5, -1.0, 1.0))
 	_low_hp_vignette.color.a = 0.30 if my_hp <= hp_max * 0.25 and my_hp > 0.0 else 0.0
 
 	if _choice_panel.visible:
@@ -1710,7 +2864,7 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 				/ _tick_rate))))
 		else:
 			_choice_panel.visible = false
-			_capture_mouse(not _match_over)
+			_restore_mouse()
 
 
 # Cadence d'une arme, en SECONDES. Lue dans `public_rules` : aucun barème en dur côté client.
@@ -1718,6 +2872,61 @@ func _cadence_seconds(weapon_id: String) -> float:
 	for weapon in _rules.get("weapons", []):
 		if str(weapon.get("id", "")) == weapon_id:
 			return float(weapon.get("cooldown_ticks", 0)) / _tick_rate
+	return 0.0
+
+
+# ╔═ §8.151 (2bis, correctif) — CE QUI RESTE DE LA CADENCE QUAND LE SERVEUR CONFIRME LE TIR ══════╗
+# ║ La sim pose `fire_ready_tick = tick + cooldown_ticks` AU CLIC, AVANT même de brancher sur le    ║
+# ║ laser (`trench_sim.step`). Pour une arme TÉLÉGRAPHIÉE (CONDOR), l'événement `fire` n'est émis   ║
+# ║ qu'au tir échu, `laser_lead_ticks` plus tard : recaler la porte prédite sur la cadence ENTIÈRE  ║
+# ║ à cet instant-là la repoussait de 0,5 s au-delà de la porte réelle. Tant que le décalage était  ║
+# ║ muet, il rendait seulement la prédiction « prudente » ; depuis que `_arm_bolt` s'y branche, le  ║
+# ║ clac de culasse — dont TOUT le rôle est de dire « prête » sans regarder le HUD — annonçait la   ║
+# ║ disponibilité une demi-seconde APRÈS qu'elle soit acquise. Un repère de rythme qui ment sur une ║
+# ║ mécanique réelle : le §1.9 l'interdit à l'œil, il n'y a pas de raison de le tolérer à l'oreille ║
+# ║ (même argument que le recalage du bourdonnement du télégraphe sur la fenêtre de la SIM).        ║
+# ║ ⚠️ LES DEUX BARÈMES SONT LUS AU REGISTRE, c'est leur ÉCART qui est la réponse : retoucher le ⚙   ║
+# ║ `laser_lead_ticks` ou `cooldown_ticks` suit tout seul. Une arme ordinaire (`lead` 0) retrouve   ║
+# ║ EXACTEMENT `_cadence_seconds` — le chemin nominal ne bouge pas d'un octet.                      ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _cadence_remaining_seconds(weapon_id: String) -> float:
+	var lead := 0.0
+	for weapon in _rules.get("weapons", []):
+		if str(weapon.get("id", "")) == weapon_id:
+			lead = float(weapon.get("laser_lead_ticks", 0))
+			break
+	# La cadence PLEINE passe par le helper existant : `cooldown_ticks` n'a qu'UN site de lecture.
+	return maxf(0.0, _cadence_seconds(weapon_id) - lead / _tick_rate)
+
+
+# ╔═ §8.152 (lot 3D-H, étage 0) — LA DURÉE DE RECHARGEMENT, LUE AU REGISTRE ════════════════════╗
+# ║ Le viewmodel 3D anime le rechargement, et il lui faut une DURÉE. ⛔ Celle-ci est une valeur   ║
+# ║ de RÈGLE : le serveur détient `reload_ticks` et c'est LUI qui remplit le chargeur, à          ║
+# ║ `reload_until_tick`. Le client n'avait jamais eu à la lire — il ne connaissait du            ║
+# ║ rechargement que l'échéance dans l'état.                                                     ║
+# ║                                                                                               ║
+# ║ 🩸 POURQUOI IL N'Y A PAS DE VALEUR PAR DÉFAUT. La référence portée écrit                      ║
+# ║ `def.reloadTac ?? 2.15`. Recopié tel quel, ça donnerait 2,15 s d'animation pour une VIPÈRE    ║
+# ║ que le serveur recharge en 1,50 s : la main reviendrait au garde-main **0,65 s après** que le ║
+# ║ joueur a été autorisé à tirer. C'est le patron exact du §8.148 — une seconde source de vérité ║
+# ║ qui diverge au premier rééquilibrage, en silence, et du seul côté que le joueur voit.         ║
+# ║                                                                                               ║
+# ║ ⚠️ Le repli est **0,0 et pas une durée plausible**, exactement comme `_cadence_seconds` : un   ║
+# ║ zéro se remarque, un 2,15 se fond dans le décor. L'appelant doit traiter le registre muet     ║
+# ║ comme « je ne sais pas encore », pas comme « recharge en deux secondes ».                     ║
+# ║                                                                                               ║
+# ║ ⚠️⚠️ PIÈGE D'ORDONNANCEMENT — À LIRE AVANT DE BRANCHER CET ACCESSEUR SUR LE RIG.             ║
+# ║ `_apply_weapon()` est appelé depuis `_build_layers()`, donc dans `_ready()`, **bien avant**    ║
+# ║ `_on_init`. À cet instant `_rules` est VIDE et `_tick_rate` vaut encore 10 alors que le        ║
+# ║ contrat courant est à 20 Hz (§8.141.2) : un facteur DEUX, même si les règles étaient là. Le    ║
+# ║ viewmodel 2D s'en moquait (il ne consommait aucune règle) ; le rig 3D, lui, **fige la durée   ║
+# ║ dans ses clips à la construction**. Il faudra donc construire les armes APRÈS `_on_init`, ou   ║
+# ║ reconstruire les clips à l'arrivée du registre.                                               ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _reload_seconds(weapon_id: String) -> float:
+	for weapon in _rules.get("weapons", []):
+		if str(weapon.get("id", "")) == weapon_id:
+			return float(weapon.get("reload_ticks", 0)) / _tick_rate
 	return 0.0
 
 
@@ -1782,6 +2991,11 @@ func _build_choice_panel() -> void:
 	for i in range(2):
 		var btn := Button.new()
 		btn.custom_minimum_size = Vector2(190, 42)
+		# ⚠️ PAS DE FOCUS SUR CES DEUX BOUTONS-LÀ, et c'est une décision de JEU : ce panneau s'ouvre
+		# TOUT SEUL en pleine manche, pendant que le soldat marche aux FLÈCHES. Focusables, ils
+		# capteraient cette navigation — et `ui_accept` choisirait une arme sur un geste de déplacement.
+		# Ils gardent la souris et leurs touches à eux (`1`/`2`) ; ils ne prennent pas celles du soldat.
+		btn.focus_mode = Control.FOCUS_NONE
 		btn.add_theme_font_override("font", _make_font())
 		btn.add_theme_font_size_override("font_size", 16)
 		WarzoneUI.apply_ghost_button(btn)
@@ -1805,7 +3019,7 @@ func _open_choice(event: Dictionary) -> void:
 	(_choice_buttons[0] as Button).text = "1 · " + name_a
 	(_choice_buttons[1] as Button).text = "2 · " + name_b
 	_choice_panel.visible = true
-	_capture_mouse(false)
+	_restore_mouse()
 
 
 func _queue_pick(index: int) -> void:
@@ -1814,7 +3028,7 @@ func _queue_pick(index: int) -> void:
 	if index >= 0 and index < options.size():
 		_pick_queued = str(options[index])
 	_choice_panel.visible = false
-	_capture_mouse(not _match_over)
+	_restore_mouse()
 
 
 func _build_abandon_overlay() -> void:
@@ -1845,7 +3059,7 @@ func _build_abandon_overlay() -> void:
 	WarzoneUI.apply_ghost_button(cancel)
 	cancel.pressed.connect(func():
 		_abandon_overlay.visible = false
-		_capture_mouse(not _match_over))
+		_restore_mouse())
 	row.add_child(cancel)
 
 

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/probe_vue3d_meshgen.gd" id="1_pv3mg"]
+
+[node name="ProbeVue3dMeshgen" type="Node"]
+script = ExtResource("1_pv3mg")

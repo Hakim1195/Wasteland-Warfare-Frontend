@@ -18,7 +18,13 @@ extends Node
 # une fois stylisées, les images se déposent telles quelles dans
 # `frontend/assets/images/trench/` — aucune ligne de code à toucher (§7.1).
 #
-# LANCEMENT (fenêtré ou headless — le SubViewport rend dans les deux cas) :
+# ⚠️ LANCEMENT **FENÊTRÉ OBLIGATOIRE** — surtout PAS `--headless`.
+# Cette ligne a longtemps dit « fenêtré ou headless — le SubViewport rend dans les deux cas ».
+# C'est FAUX, et vérifié le 2026-08-27 : en `--headless` Godot charge le pilote de rendu
+# FACTICE, `viewport.get_texture()` rend `null`, et on récolte
+# `texture_2d_get: Parameter "t" is null` puis `Cannot call method 'save_png' on a null value`.
+# Un `SubViewport` a beau avoir sa propre cible de rendu, il n'y a aucun rasteriseur derrière.
+# (`preview_trench.gd` le disait déjà correctement de son côté.)
 #   & <godot_console> --path frontend res://tools/gen_trench_renders.tscn --quit-after 600
 # =================================================================================================
 

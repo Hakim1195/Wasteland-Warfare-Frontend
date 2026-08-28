@@ -1,0 +1,45 @@
+CAPTURES DE REFERENCE — Claude-of-Duty (cahier PROMPT_TRANCHEE_VUE3D.md §2.2quater)
+==============================================================================
+
+Deposees par Hakim le 2026-08-27, identifiees et renommees a l'ouverture.
+REFERENCE CONTRACTUELLE du style : chaque lot livre une capture de SON rendu mise
+cote a cote avec celle d'ici, et le critique du lot a l'OBLIGATION d'ouvrir les deux
+avant de rendre son verdict. « Fidele » sans comparaison visuelle est une faute.
+
+ads_reddot.png         1277x613   sha256:673f6177a5addb41
+    ADS point rouge en gros plan : corps d'optique, point cercle de pointilles, guidon visible au travers, molettes moletees, gants fauve
+
+arme_m4a1_ads.png      1922x955   sha256:f3ad20fa88c08d70
+    M4A1 en ADS : optique point rouge LARGE, flancs tres moletes, molettes laterales saillantes, rail strie, AUTO M4A1 19/210
+
+arme_mpx9_ads.png      1922x949   sha256:7ba89c2d6d789b76
+    MPX-9 en ADS : optique PLUS COMPACTE et plus lisse que le M4A1, molettes discretes, AUTO MPX-9 32/96
+
+arme_p19_hanche.png    1920x951   sha256:aa70c19006024754
+    P-19 a la hanche : AUCUNE optique, hausse en U carre, deux mains bras tendus, large contour circulaire de reticule, SEMI P-19 16/68
+
+hanche_mpx9.png        1316x610   sha256:561691b3991d01e9
+    Tir a la hanche MPX-9 : reticule 4 traits SANS point central, AUTO MPX-9 22/128
+
+hud_munitions.png       143x144   sha256:0b647e79a970d184
+    HUD munitions : 17/68, badge SEMI, code P-19, barre de segments, 2 grenades + 1 equipement
+
+hud_sante.png           215x89    sha256:079d3ffaf24646f3
+    HUD sante : HEALTH 100/100, barre segmentee en 5 blocs
+
+jeu_complet.png        1918x949   sha256:5eac0ea0ab8008b0
+    Jeu entier : minimap ZONE 07, boussole E/SE, score 4 TDM 10:00 0, HEALTH 0/100 en ROUGE, AUTO MPX-9 19/128
+
+kill_banner.png         615x717   sha256:df2f0abfbbc08d91
+    Bandeau ENEMY ELIMINATED + 100 XP dore, vu en ADS
+
+
+CE QUE CES 9 CAPTURES NE COUVRENT **PAS** — a savoir avant de s'en reclamer :
+  - le `condor` (arme de precision) : AUCUNE reference. Le cahier §2.2quinquies
+    demande de SOUMETTRE une capture a Hakim avant de le figer.
+  - l'ADVERSAIRE : aucune des 9 ne montre un soldat ennemi. Pour le lot 3D-G, la
+    seule reference est le code `src/ai/*.js` ; le rendu sera soumis a Hakim.
+  - le RECHARGEMENT et les animations : ce sont des images fixes.
+  - l'ENVIRONNEMENT : leurs captures sont une rue ensoleillee, la notre est une
+    tranchee. La comparaison vaut pour l'ARME et le HUD, pas pour la luminosite
+    absolue de la scene.

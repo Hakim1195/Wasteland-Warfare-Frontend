@@ -16,6 +16,7 @@ extends Node
 const DuelScene := preload("res://scenes/game/trench_fp.tscn")
 const DuelScript := preload("res://scripts/game/trench_fp.gd")
 const Sprites := preload("res://scripts/game/trench_sprites.gd")
+const Geo := preload("res://scripts/game/trench_geometry.gd")
 
 const RULES := {
 	"tick_rate_hz": 10, "rounds_to_win": 2, "round_ticks": 900, "positions": 5, "hp_max": 100,
@@ -40,8 +41,14 @@ const RULES := {
 	"escalation": {"frelon_hits": 4, "choice_hits": 10, "choice_options": ["chacal", "condor"],
 		"choice_window_ticks": 50},
 	"bandage": {"enabled": true, "per_round": 1, "heal": 25, "channel_ticks": 20},
-	"geometry": {"version": 1, "aim_quantum_deg": 0.1, "positions": 5, "no_mans_land": 35.0,
-		"position_spacing": 4.0, "parapet_y": 1.25, "eye_up": 1.7, "eye_down": 0.9},
+	# ⚠️ La géométrie est LUE dans le registre partagé (patron `perf_trench.gd::_rules_20hz`) —
+	# recopier une cote en dur recréerait la désynchronisation que `_check_geometry_match` traque
+	# (§8.141.6). Ce fichier l'a payé (§8.151 LOT 0) : sa v1 figée à 35 m posait la bannière rouge
+	# DESYNCHRONISATION + 1 ligne ERROR sur CHAQUE capture, alors que le client rend la table v4.
+	"geometry": {"version": Geo.TABLE_VERSION, "aim_quantum_deg": 0.1,
+		"positions": Geo.POSITIONS, "no_mans_land": Geo.NO_MANS_LAND,
+		"position_spacing": Geo.POSITION_SPACING, "parapet_y": Geo.PARAPET_Y,
+		"eye_up": Geo.EYE_UP, "eye_down": Geo.EYE_DOWN},
 }
 
 var _duel: Control = null

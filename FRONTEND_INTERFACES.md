@@ -5904,3 +5904,3376 @@ qu'un joueur lit réellement annonçait donc une capacité de moins qu'il n'en a
 2. La **jauge PP** monte plus vite sur une partie agressive, et reste bornée à `pp_max`.
 3. **Aucun flotteur fantôme** : un `0` ne doit jamais s'afficher (le garde `pp_delta != 0` tient).
 4. **Infobulle PP** et **Manuel de Guerre** : relire la règle et la présence de l'ABRI, en FR/EN/IT.
+
+---
+
+## §8.151 — LA TRANCHÉE : EXPÉRIENCE AAA — la qualité RESSENTIE (chapeau : lots 0+A+B+2bis+2ter livrés)
+
+> Bon de commande : `PROMPT_TRANCHEE_EXPERIENCE.md` (dépôt racine) — porter le **son, le poids,
+> la lumière et la fluidité** du duel au niveau du meilleur de la référence `Claude-of-Duty`
+> (copie locale `War-Of-Indipendence/Claude-of-Duty-main/`). On transpose des **RECETTES**
+> (7 couches, recul deux étages, prewarm prouvé au pixel) — **jamais du code** (Three.js ≠ Godot).
+> Six lots séquentiels 0 → A → B → C → D → E, **100 % client, zéro dépense** — et **UNE seule
+> ligne de serveur**, nommément autorisée le 2026-08-26 (`burst_gap_ticks` au paquet d'init, cf.
+> §8.151.3). Cette entrée et ses sous-numéros (§8.151.0 → .4sexies) consignent les lots **0, A et B**
+> (vagues 1-2), l'**étape 1 de la vague 2bis** (voix par ARME §3.6 + effet mitraillette §4bis.4)
+> du 2026-08-26, puis la **vague 2ter** du 2026-08-27 : le durcissement des gardes (§8.151.3 §10)
+> et le **HUD DE COMBAT au complet** — réticule par arme, hitmarker de kill, dégâts flottants,
+> tir maintenu (§4bis.1/.2/.3/.5), consignés au **§8.151.4**, puis **CINQ boucles de correction**
+> successives sur ce HUD (§8.151.4bis, .4ter, .4quater, .4quinquies et **§8.151.4sexies**).
+> 🧭 **PAR OÙ COMMENCER pour lire ce bloc : le §8.151.3bis** — page de garde écrite APRÈS les sept
+> entrées qu'elle indexe : carte des chiffres (lequel est **courant**, lesquels sont **périmés**),
+> les **DEUX leçons de méthode** de la vague, et les **SIX dettes de garde** avec leur remède, dont
+> **trois déjà soldées**. Restent à venir, après la PORTE 1 :
+> les lots **C, D, E** et le LOT F (§4ter, cadence automatique — le seul qui touche les règles).
+
+### 1. Les décisions produit qui BORNENT le chantier (Hakim, 2026-08-26)
+
+- **Recul 100 % COSMÉTIQUE** : le viewmodel et l'image encaissent, la visée envoyée au serveur est
+  **bit-identique** avec ou sans feel. Le « recul réel type CoD » est HORS PÉRIMÈTRE v1.
+- **Pas d'ADS** : viser-zoomer est de la mécanique (précision effective), pas de la présentation.
+- **Style peint conservé** : « réaliste » = réalisme **SENSORIEL**. Aucun pivot photoréaliste —
+  c'est le plafond avoué de la référence elle-même (5,05/10 à son propre A/B aveugle).
+- **Budget 0 €** : tout est numpy/procédural. Aucun appel OpenRouter/ComfyUI.
+- **Le p99 ne régresse JAMAIS** par rapport au relevé du LOT 0 (§8.151.0).
+- ⛔ **Intouchables** : sim 20 Hz, poses fixes, table `trench_angles.json` **v4**, contrat de
+  géométrie, constantes de brouillard §8.140, `Environment`/`trench_grade.gdshader` (propriété
+  exclusive du futur LOT C). Le paquet serveur est ouvert sur **UNE ligne additive et une seule**
+  (`burst_gap_ticks`, §8.151.3) — la boucle de sim, la table v4, le plancher de vol d'un tick et la
+  géométrie restent fermés.
+
+### 2. L'orchestration — séquentiel par conception, critiqué par construction
+
+La vague 1 (PARALLÈLE, fichiers propres, un seul agent autorisé à lancer Godot) a bâti les quatre
+outils : `perf_trench` v2 + baselines, l'usine audio, le module de ressorts + sa sonde (écrite,
+pas exécutée), la porte `imagediff_trench.py` — chaque livrable passé par une boucle adversariale
+build → critique → correcteur jusqu'au verdict `ok`. La vague 2 (SÉQUENTIELLE) a exécuté et
+branché : sonde ressorts, intégration audio, application du feel, ce journal — chaque dépôt ou
+édition suivi d'un réimport headless, **0 `ERROR` à chaque passe**. La vague 2bis (ajouts de
+mi-chantier) a livré son **étape 1** — les 4 voix d'armes du §3.6 et l'effet mitraillette du
+§4bis.4, détaillés au **§8.151.3** — sa boucle de critique ayant sorti 5 défauts dont un
+**demi-correctif** (le son de la rafale pulsait, ses traçantes non) et un journal périmé de 9 h.
+Son **étape 2** — le HUD de combat §4bis au complet : réticule par arme, hitmarker de kill, dégâts
+flottants, tir maintenu — est **LIVRÉE** (vague 2ter, 2026-08-27, **§8.151.4**). Sa propre boucle
+de critique a sorti 4 défauts, dont **un faux vert sur la propriété phare du lot** (le contrôle du
+réticule mesurait au centre de l'écran, où les deux arithmétiques comparées sont la MÊME formule)
+et **deux refus serveur jamais miroités** que le tir maintenu transformait en salves automatiques.
+Une **2ᵉ** boucle (§8.151.4bis) a sorti 4 défauts de plus, dont un **BLOQUANT** que 119 contrôles
+verts ne voyaient pas ; une **3ᵉ** (**§8.151.4ter**) en a sorti 3, dont une **dette de garde** sur
+la propriété phare du §4bis.1 — *à qui est ce cône ?* — que **135 contrôles verts** ne pouvaient pas
+départager, parce que **toutes les fixtures donnaient la même arme aux deux joueurs** ; une **4ᵉ**
+(**§8.151.4quater**) en a sorti 2, dont un **BLOQUANT** : le correctif « une seule liste de portes »
+de la 3ᵉ n'était fait **qu'aux deux tiers** — le **troisième** chemin d'action du même `_process`,
+la GRENADE, n'avait **aucune** porte de panneau, et **165 contrôles verts** ne passaient pas par là.
+Une **5ᵉ** (**§8.151.4quinquies**) en a sorti 1, **BLOQUANT** lui aussi : il restait un **QUATRIÈME**
+chemin d'action — le CLAVIER (pas, posture, rechargement, pansement) — grand ouvert sous les trois
+panneaux. Une **6ᵉ** (**§8.151.4sexies**) en a sorti 2, **BLOQUANTS**, et c'est la boucle la plus
+instructive de la série : le correctif de la 5ᵉ, en fermant TOUT sous les trois panneaux, **gelait le
+soldat 5,0 s en plein combat** sous le sélecteur d'arme — un panneau que le SERVEUR ouvre pendant que
+la simulation continue de tourner. **Six passes critiques, six familles de faux vert différentes**,
+sur le même lot — et deux d'entre elles portaient sur le CORRECTIF de la précédente.
+
+> ⚠️ La porte humaine est SOUVERAINE : les cinq défauts du §8.141 que seule une manche jouée a
+> sortis — et le benchmark de la référence à 94 fps pendant que son vrai jeu faisait 12-17 —
+> disent la même chose. Tout ce qui suit est de l'OUTILLAGE ; la validation est une partie jouée.
+
+### 3. Ce qui est entré dans le dépôt (lots 0+A+B, vague 2bis, vague 2ter)
+
+⚠️ Inventaire RECOMPTÉ SUR LE DISQUE le **2026-08-27** après la vague 2ter. Il l'avait déjà été le
+2026-08-26 après la vague 2bis (l'ancien annonçait 29 `.wav` et 30 contrôles : il datait d'avant
+elle — cf. §8.151.3 §8) ; il **mentait de nouveau** au dépôt du HUD de combat, où il ne portait ni
+`tools/probe_trench_hud.{gd,tscn}`, ni le réglage `auto_fire`, ni la clé `TRENCH_TUNE_AUTO_FIRE`.
+**7ᵉ écart code↔doc de la série, et le 2ᵉ d'affilée sur CETTE entrée** — cf. §8.151.4 §7.
+
+```
+NEUFS      scripts/game/trench_springs.gd            ressorts amortis + hash_noise (§8.151.2)
+           shaders/trench_flinch.gdshader            pouls rouge directionnel (overlay dédié)
+           assets/audio/sfx/trench_*.wav             48 sons d'usine — 29 (§8.151.1) + 19 de la
+                                                     vague 2bis : 4 voix d'ARMES (vipere/chacal/
+                                                     condor ×4, frelon ×6) + trench_laser_warn
+           tools/trench_audio_factory.py             l'usine (numpy offline, graines fixes)
+           tools/test_trench_audio.py                contrôles « check » de l'usine — 14/14 PASS
+           tools/baseline_trench.py                  générateur de baselines (processus séparés)
+           tools/baselines/{run1,run2}/              2×36 PNG + manifest + logs
+           tools/imagediff_trench.py                 la porte par-pixel (codes 0/1/2)
+           tools/test_imagediff_trench.py            36 auto-contrôles de la porte
+           tools/probe_trench_springs.{gd,tscn}      32 contrôles du module
+           tools/probe_trench_audio.{gd,tscn}        128 contrôles / 18 sections (audio, rafales,
+                                                     télégraphe, pool, cadence, traçantes, feel
+                                                     sous rafale, rythme annoncé) — cf. §8.151.3 §10
+           tools/probe_trench_feel_aim.{gd,tscn}     LA sonde « le feel n'écrit pas la visée »
+           tools/probe_trench_hud.{gd,tscn}          237 contrôles headless / 254 fenêtré, en
+                                                     14 sections (§8.151.4 → §8.151.4sexies) : la
+                                                     PREMIÈRE SECONDE sans état, réticule par arme
+                                                     HORS AXE, À QUI EST CE CÔNE (armes DIFFÉRENTES
+                                                     des deux côtés, 2 slots), tir maintenu (angles
+                                                     émis + panneau F10), LES PANNEAUX FERMENT AUSSI
+                                                     LA GRENADE (3ᵉ chemin d'action, souris ET
+                                                     clavier), LE CLAVIER (4ᵉ chemin) — mais PAS
+                                                     sous le sélecteur d'arme, LA SOURIS jamais
+                                                     recapturée par-dessus un panneau, dégâts
+                                                     flottants ET LEURS PIXELS, hitmarker,
+                                                     7ᵉ/8ᵉ refus
+MODIFIÉS   tools/perf_trench.gd                      v2 : percentiles + attribution + --saboter ;
+                                                     4ter : SENTINELLE DE SORTIE (survivants, drain,
+                                                     fuite de cycle) + --fuiter, et le code retour
+                                                     suit — la porte « 0 ERROR » n'était tenue par
+                                                     rien (§8.151.4ter §3)
+           tools/shot_trench_delivery.gd             fixture RULES dérivée de Geo.* (v1 → v4)
+           tools/probe_trench_grenade.gd             garde headless : plus de faux vert (§8.151.3)
+           scripts/managers/audio_manager.gd         familles de variantes (ADDITIF) ; pool 6 → 20 ;
+                                                     play_sfx_tracked/stop_sfx/sfx_length/has_sfx ;
+                                                     compteurs _sfx_plays/_sfx_last/_sfx_steals
+           scripts/game/trench_fp.gd                 whizz/bolt, roulis, FOV punch, overlay flinch ;
+                                                     2bis : voix par arme, file de crans de rafale,
+                                                     garde de traçante, cadence télégraphiée ;
+                                                     2ter : réticule par arme (`_dispersion_pixels`
+                                                     par `project_aim`), pulse posé, hitmarker de
+                                                     KILL, pool de dégâts flottants, tir maintenu
+                                                     (`_fire_hold_active`/`_step_held_fire`), 7ᵉ et
+                                                     8ᵉ refus + exclusion `fire`/`throw` du message ;
+                                                     4ter : `_tuning.visible` rejoint la garde
+                                                     d'`_input` (un clic sur un curseur F10 armait
+                                                     un vrai tir — défaut ANTÉRIEUR à la vague) ;
+                                                     4sexies : DEUX portes (`_ui_blocks_survival`
+                                                     pour le soldat, `_ui_blocks_actions` pour les
+                                                     gestes offensifs ET la souris), site unique
+                                                     `_restore_mouse()`, boutons du sélecteur en
+                                                     `FOCUS_NONE`
+           scripts/game/trench_fp_world.gd           secousse refondée sur hash_noise ; 2bis :
+                                                     notify_local_shot par PROJECTILE ; 2ter :
+                                                     `camera_fov()` exposé à l'hôte
+           scripts/game/trench_viewmodel.gd          kicks, flinch, traîne, respiration
+           scripts/game/trench_tuning.gd             4 curseurs feel + FOV punch ; ancres soldées ;
+                                                     2ter : case `auto_fire` (défaut VRAI, §1.8)
+           translations/ui_strings.csv               6 clés TRENCH_TUNE_* de ce chantier, dont
+                                                     `TRENCH_TUNE_AUTO_FIRE` (2ter) — 15 au total
+                                                     pour le panneau ; les .translation sont des
+                                                     artefacts régénérés par l'import
+           .gitignore                                + __pycache__/
+SERVEUR    backend/api/game/trench_sim.py            UNE ligne additive : burst_gap_ticks au paquet
+           (dépôt racine)                            d'init (§8.151.3 §1) + CONTRAT_RESEAU.md
+           backend/test_trench_flow.py               attendu `event_window` dérivé de la PROCHAINE
+                                                     fenêtre, `null` s'il n'y en a plus
+```
+
+---
+
+## §8.151.0 — LA TRANCHÉE (AAA) : LOT 0 — MESURER AVANT DE CHANGER
+
+### 1. `perf_trench` v2 — de la moyenne aux percentiles ATTRIBUÉS
+
+La v1 (§8.140) rendait une moyenne : elle aurait caché exactement ce qu'on cherche (leçon de la
+référence : « la médiane cache le problème »). La v2 joue une **fenêtre de jeu simulé par les
+VRAIS chemins du duel** (mouvements, tirs, grenade, scriptés) et sort du texte stable et parsable :
+`PERF|` (p50/p95/p99/pire + frame et instant du pire), `SACCADE|` (chaque frame > 33 ms avec son
+**attribution** : dernier événement notable et son âge), `EVT|` (le journal corrélé), `BUDGET|`
+(l'écart texturé/greybox conservé de la v1), `PREMIER_TIR|` (la pire frame autour du 1ᵉʳ tir).
+Contre-épreuve **rejouable** `-- --saboter` : une frame artificiellement gonflée en pleine fenêtre
+doit ressortir en pire frame ET en attribution.
+
+**LA LIGNE DE DÉPART** — celle que le LOT E devra battre et que C/D ne doivent pas dégrader :
+
+| Mesure | Valeur |
+|---|---|
+| Fenêtre | 7494 frames |
+| p50 / p95 / p99 | **1,433 / 2,190 / 2,451 ms** |
+| Pire frame | **161,586 ms** — attribution : 1ʳᵉ explosion, cache froid |
+| Saccades > 33 ms | **2**, toutes deux à cache froid (74 ms, et 161,6 ms ci-dessus) |
+| `PREMIER_TIR` | pire frame 18,6 ms à froid / 3,7 ms à chaud |
+| `BUDGET` texturé − greybox | +0,020 ms |
+
+### 2. Les baselines : 1/36 bit-identique — MESURÉ, pas corrigé
+
+Les 4 scènes `shot_trench_*` sont exécutées en **processus séparés** (leçon de reproductibilité de
+la référence : l'état fuit entre shots partagés), deux passes complètes → `tools/baselines/run1/`
+et `run2/`, 36 PNG chacune. Verdict : **1 seul PNG sur 36 est bit-identique** entre les deux
+passes. Les 35 instables sont **mesurés et leurs causes consignées** (`create_timer` cadencé sur
+l'horloge murale, etc.) — et, consigne du bon de commande, **rien n'est corrigé ici** : la
+reproductibilité est le cœur du LOT E, pas un à-côté du LOT 0.
+
+### 3. 🩸 Le faux vert de l'INSTRUMENT, tué avant d'avoir servi
+
+Le comparateur de pixels s'appuyait sur Pillow — et **Pillow ≥ 10, `getbbox(alpha_only=True)`,
+rendait « 0 px différents » sur deux images aux SHA distincts**. Un instrument qui acquitte tout
+aurait « validé » n'importe quel prewarm du LOT E. `pixel_diff` a été refondé sur **numpy,
+4 canaux**, et la porte `tools/imagediff_trench.py` (bâtie dès la vague 1 parce que toutes les
+critiques s'en servent) est stricte par construction : RGBA canonique, deltas int32, **tolérance
+affichée jamais silencieuse**, codes de sortie 0/1/2, **refus du vert vide** (deux répertoires
+vides ne « passent » pas), 36 auto-contrôles (`tools/test_imagediff_trench.py`). Le défaut Pillow
+y est documenté.
+
+Au passage : un parse error HÉRITÉ (`var clean := proj.duplicate()`) corrigé — l'agent interrompu
+d'une session antérieure n'avait rien exécuté.
+
+### 4. Le correctif delivery v1 → v4 (vague 2) — la garde de géométrie avait attrapé la FIXTURE
+
+Toutes les captures `shot_trench_delivery` de run1/run2 portaient une **bannière rouge**
+`TRENCH_GEOMETRY_MISMATCH` — « tabella v1 » contre « client v4 », rendue en italien par la locale
+machine. Ce n'était pas un défaut de la garde : c'était sa **démonstration**. La fixture `RULES` du
+harnais recopiait une géométrie v1 en dur, et `_check_geometry_match()` (§8.141.6) a fait
+exactement son travail — sur le harnais.
+
+Correctif : le bloc `geometry` du `const RULES` est **DÉRIVÉ** de `Geo.*` (`TABLE_VERSION`,
+`POSITIONS`, `NO_MANS_LAND`, `POSITION_SPACING`, `PARAPET_Y`, `EYE_UP`, `EYE_DOWN`) — recopier une
+cote en dur recréerait la désynchronisation que la garde traque. Relance en processus séparé,
+fenêtré : 0 `ERROR`, **0 `DESYNCHRONISATION`** (comptées sur le log complet), 7 `[SHOT]` produits ;
+capture relue **sans bannière** ; contre-preuve : la baseline d'AVANT la montre bien. L'écart
+attendu vs les baselines est **consigné à la porte imagediff** — il est VOULU, les baselines
+delivery seront re-figées au LOT E. Seule restait une WARNING préexistante (ancrages
+`trench_tuning.gd::_fit_to_viewport`) — consignée ici, soldée au §8.151.2.
+
+### 5. Hygiène d'orchestrateur
+
+`frontend/.gitignore` += `__pycache__/` ; `tools/__pycache__/` supprimé (les tests py laissaient
+des artefacts dans la working tree).
+
+---
+
+## §8.151.1 — LA TRANCHÉE (AAA) : LOT A — L'USINE AUDIO : 29 SONS ET LEUR INTÉGRATION
+
+### 1. `tools/trench_audio_factory.py` → 29 `.wav`, tous d'usine, tous rejouables
+
+numpy pur, offline, **graine fixe par son** (deux exécutions → hash identiques), sortie
+**44100 Hz PCM16 mono** — le mix_rate RELEVÉ sur `_finalize` d'AudioManager, pas présumé.
+Inventaire : `trench_shot_1..6` · `trench_whizz_1..4` · `trench_explosion_near_1..3` / `_far_1..3` ·
+`trench_shell_1..3` · `trench_step_1..4` · `trench_bolt` · `trench_debris` · `trench_grenade` ·
+`trench_hit` · `trench_hitmarker` · `trench_refused`.
+
+**Le tir, profil « fusil de tranchée », 7 couches** (transposition du commentaire d'en-tête de
+`weapons.js`) : corps + sub balayés **120 → 45 Hz**, saturés · crack **~1900 Hz** qui glisse ·
+couche mécanique **FORTE** (résonateurs 1250/2150/3450 Hz + retour de culasse — la signature d'une
+culasse manuelle) · écho de tranchée à **2 réflexions**. **6 variantes round-robin réellement
+distinctes** : corrélations deux-à-deux **0,51-0,83** (seuil de l'usine : < 0,98). Whizz : balayage
+**4,3-5,2 → 1,05-1,45 kHz en 68-126 ms**. Les RMS sont **calés sur les placeholders** qu'ils
+remplacent (tir −25,1 dBFS, pas −21,8 dBFS) — l'usine change le TIMBRE, pas la place dans le mix.
+Les retours d'interface (`trench_hit` / `trench_hitmarker` / `trench_refused`) sont RETENUS :
+texture, pas de refonte du rôle (§8.141.9).
+
+- 🩸 **Le repli sans-scipy plantait sur les filtres d'ordre 1** (rose/brun/AR1) — jamais vu tant
+  que scipy répondait. Complété : écart max **2,054e-15** contre le chemin scipy, hash du chemin
+  scipy inchangés.
+- ⚠️ **Le contrôle du transitoire a dû être TEMPORISÉ** (fenêtre 0-0,8 ms) : mesurée sur la pleine
+  durée, la bande d'énergie ne rougissait PAS quand on sabotait la couche transitoire. Un contrôle
+  qu'on n'a pas vu échouer sur la faute qu'il traque ne compte pas.
+
+### 2. L'intégration ADDITIVE (vague 2) — rotation, jitter, et deux règles de câblage
+
+`audio_manager.gd` gagne un registre de **FAMILLES de variantes** : `play_sfx("trench_shot")` tire
+une rotation round-robin (index persistant, **jamais deux fois la même d'affilée**) + jitter de
+`pitch_scale` **± 3 %**, sur un **RNG PROPRE** (`_variant_rng` — le RNG global n'est jamais
+consommé, le déterminisme des captures en dépend) ; le pitch est REPOSÉ à 1.0 sur les clés sans
+famille (sinon un clic de menu emprunterait le jitter du tir joué avant lui sur le même lecteur).
+Sans fichiers : repli synthé inchangé, comportement historique à l'identique.
+
+Câblage duel : **`trench_bolt` armé par le tir réel ou l'événement `fire` serveur — JAMAIS par un
+clic refusé** (§8.141.9), un seul clac par réarmement ; **`trench_whizz` sur la balle adverse
+MANQUÉE uniquement** (pas sur une touche, pas sur ma balle, pas sur une grenade — le whizz est le
+son du danger qui vient de me rater).
+
+Sonde `probe_trench_audio` (portée à 91 contrôles / 14 sections par la vague 2bis, puis à
+**128 contrôles / 18 sections** par la vague 2ter — §8.151.3 §10 ; les chiffres ci-dessous sont ceux
+du LOT A) : **30 contrôles TOUT VERT × 4 passes**, rotation éprouvée
+sur 50 tirages via le **VRAI** `play_sfx` (6/6 variantes servies, indices bornés), jitter mesuré
+min 0,97042 / max 1,02979 (bornes 0,97/1,03), clé inconnue = silence **sans effet d'état**.
+
+### 3. Le TEST DE REPLI — on retire les 58 fichiers, le jeu doit chanter quand même
+
+Retrait des 58 `trench_*.wav(.import)` vers le scratchpad → réimport 0 `ERROR` → `perf_trench`
+fenêtré joue la fenêtre ENTIÈRE aux **SYNTHÉS** : p50 1,426 · p95 2,181 · p99 2,424 ms ·
+0 saccade, strictement 0 `ERROR` (passage 2). Restauration par déplacement (octets intacts,
+`.import` d'origine donc **uid préservés**) → réimport 0 `ERROR` → p50 1,426 · p95 2,177 ·
+p99 2,400 · pire 10,835 ms · 0 saccade — cohérent avec la ligne de départ (§8.151.0), **aucune
+régression**. Non-régressions relancées : boot `main_menu` 0 `ERROR` (les sons de menu n'ont pas
+bougé), `probe_trench_aim` TOUT VERT (l'audio ne touche aucune variable de visée),
+`probe_trench_falseshot` relancée (les 6 refus, §8.141.9).
+
+> 🩸 Le passage 1 du repli portait UNE ligne de fuite à la sortie (« 1 resources still in use at
+> exit ») — PROUVÉE préexistante : identique dans le `perf_normal.log` de la vague 1, horodaté
+> AVANT toute modification de l'étape, et absente des autres runs. Flaky d'arrêt moteur, décorrélé
+> de l'absence des wav. Sans cette preuve d'antériorité, on aurait « corrigé » un fantôme.
+
+---
+
+## §8.151.2 — LA TRANCHÉE (AAA) : LOT B — RESSORTS & FEEL : tout bouge, la visée JAMAIS
+
+### 1. Le module `scripts/game/trench_springs.gd` — port de `springs.js`, avec UN amendement assumé
+
+`TrenchSpring` : oscillateur harmonique amorti piloté, **sous-échantillonné à pas max 1/360 s**
+(stable à travers une frame perdue) + **assèchement net** (valeur/vélocité sous epsilon →
+collage). `TrenchRecoilAxis` : ressort sous-amorti (**9,5 Hz, zeta 0,52**) + résidu exponentiel
+lent (**tau 0,3 s, part 0,34**) — « monte instantanément, revient sec, se pose » — kick en
+**DÉPLACEMENT**, pas en vélocité. `hash_noise(x, seed)` : bruit de valeur 1D déterministe,
+32 bits masqués, **aucun RNG global consommé**.
+
+⚖ **AMENDEMENT vs le JS, assumé : le résidu est ASSÉCHÉ sous 1e-7.** Le JS le laisse
+asymptotique — ~4 minutes de subnormaux après un kick, donc un « repos » qui n'est **jamais**
+bit-stable. Notre LOT E capture des frames de repos : sans assèchement, la porte imagediff ne
+pourrait jamais rendre 0.
+
+### 2. La sonde : 32 contrôles, chaque référence vérifiée par une RÉPLIQUE float64 indépendante
+
+Exécutée en vague 2 (headless, réimport préalable 0 `ERROR`) : **32 `[OK]`, 0 `[ROUGE]`,
+« TOUT VERT »**, en 6 blocs — 6 convergence/API · 5 dt hachés · 3 bit-stabilité · 9 forme du
+recul · 5 hash · 4 helpers. Aucune valeur de référence recopiée : chacune est recalculée par une
+réplique float64 indépendante du module.
+
+| Contrôle | Mesure |
+|---|---|
+| Collage (assèchement) | **exactement 1.0** au pas 26, t = 0,433 s (réplique d'accord) |
+| 1 pas de 33 ms vs 33 pas de 1 ms | `0.645082158120` vs `0.614712452623` — écart 0,03037, borné |
+| Ressort raide 30 Hz | borné, `0.893145576` |
+| Kick en déplacement | valeur **exactement** `1.000000000000000` ; v(1 ms) = `0.996517021514` |
+| Retour du recul | sous 50 % à t = 0,0292 s ; v(0,3 s) = `0.125051142094` ; v(2 s) = `0.000432695` (réplique `0.000433`) |
+| Repos | **zéro EXACT à 8 s** — valeur ET résidu à 0.0 (la promesse du LOT E) |
+| `hash_noise` | 6 réfs conformes à 1e-9 (dont hash(0,0) = −1.0) ; balayage borné [−0,962344892 ; +0,968004497] |
+| `approach(1, 0, 0.3, 0.3)` | `0.367879441171442` = 1/e — la définition même de tau |
+
+### 3. L'application — le feel existant CARTOGRAPHIÉ puis REMPLACÉ, jamais doublé
+
+- **`trench_viewmodel.gd`** : trois `TrenchRecoilAxis` (kick bas · latéral · micro-roulis) armés
+  par `notify_fire()` ; **flinch** = plongeon de 9 px (`TrenchSpring` 7 Hz / zeta 0,9) ; **traîne
+  de visée** = deux ressorts (yaw/pitch) — le viewmodel suit en retard, le réticule reste exact ;
+  **respiration** = dérive lente 2-3 px par `hash_noise` sur le temps de scène CUMULÉ (jamais
+  l'horloge murale — la cause n° 1 des baselines instables du §8.151.0).
+- **`trench_fp.gd`** : **roulis caméra** au tir (rotation autour de l'axe de visée — ne déplace
+  pas le centre), côté choisi par `hash_noise` sur le compteur de tirs (graine 8153, aucun RNG
+  global) ; **FOV punch +1,5° ~100 ms** (le rayon central est invariant par FOV) ; **pouls rouge
+  directionnel** à l'encaissement via un overlay DÉDIÉ (`ColorRect` + `shaders/trench_flinch.gdshader`
+  NOUVEAU, monté premier enfant du HUD) — ⛔ `trench_grade.gdshader` n'est PAS touché : propriété
+  du LOT C.
+- **`trench_fp_world.gd`** : la secousse d'explosion est REFONDÉE sur `hash_noise` (~9 cellules/s,
+  l'équivalent de l'ancien sin à 26 rad/s qu'elle remplace), en **translation de l'image ENTIÈRE**
+  (monde + réticule ensemble — la relation visée/pixel est préservée, §8.141).
+- **F10** (`trench_tuning.gd`) : 4 curseurs 0,00-2,00 (`feel_recoil` / `feel_shake` /
+  `feel_breath` / `feel_flinch`) + interrupteur `fov_punch` ; 5 clés `TRENCH_TUNE_*` FR/EN/IT dans
+  `ui_strings.csv` (CSV seul, jamais les `.translation`). La WARNING « non-equal opposite
+  anchors » consignée à l'étape delivery (racine `PRESET_FULL_RECT` + taille posée à la main) est
+  SOLDÉE : ancres ÉGALES (`PRESET_TOP_LEFT`), la taille manuelle redevient légitime.
+
+### 4. `probe_trench_feel_aim` — la preuve OCTET PAR OCTET, et son sabotage
+
+Séquence scriptée de **10 tirs, feel À FOND (×2 + FOV punch) contre feel COUPÉ (×0)** : les angles
+interceptés au point d'émission (`_fire_aim`) sont **identiques octet par octet entre la passe MAX
+et la passe COUPÉE, ET égaux aux angles scriptés** — la série hex est imprimée (tir 1 :
+`0500000021ad3341a01c8b40` dans les deux passes). Kick pic mesuré **23,1 px** à intensité max ;
+**temps de retour 0,612 s < 0,800 s** = `min(cooldown_ticks) / tick_rate` **LU dans
+`_duel._rules`** (chacal, 16 ticks / 20 Hz) — jamais recopié (§8.141). Sonde exécutée **deux
+fois** : TOUT VERT × 2, mêmes octets. **Sabotage** : une fuite simulée du feel dans `_aim_pitch`
+pendant la passe MAX → **10/10 tirs en ÉCART** — le harnais rougit bien sur la faute qu'il traque.
+`probe_trench_aim` relancée : TOUT VERT, 5/5 positions « viser le CENTRE VISIBLE touche »,
+rapports rendu/table 0,98x inchangés.
+
+### 5. Reproductibilité à l'image, et la perf après TOUT le feel
+
+Deux exécutions séparées, captures à frames FIXES — `repos_2s.png` (après 2 s de respiration
+simulée à pas fixes) et `kick_frame6.png` (6ᵉ frame après le clic) — comparées par la porte :
+**`pixels_differents=0`, `delta_max=0`, `VERDICT=OK`**, exit 0. L'assèchement et le déterminisme
+promis par le module (§1) tiennent à l'IMAGE, pas seulement au float.
+
+`PERF|frames=8004|duree_s=12.001|p50_ms=1.413|p95_ms=2.000|p99_ms=2.118|pire_ms=11.012|pire_frame=3316|pire_t_s=4.851|saccades_sup_33ms=0`
+— la fenêtre a exercé TOUT le feel (8 tirs → roulis + FOV punch + kicks, un dégât reçu → flinch,
+2 explosions → secousse). **p99 2,118 ms ≤ 2,451 ms (départ)**, p50/p95 aussi sous la ligne,
+`BUDGET|ecart_ms=0.007` dans le budget. Le feel ne coûte rien de mesurable.
+
+### 6. EN ATTENTE : PORTE 1 — playtest Hakim (A + B + **B2**)
+
+⚠️ **PÉRIMÈTRE ÉLARGI le 2026-08-27 — cette porte ne couvre plus seulement le son (LOT A) et le
+feel (LOT B).** La vague **2bis** y a ajouté les **4 voix d'armes** et l'**effet mitraillette**
+(§8.151.3) ; la vague **2ter** y a ajouté le **HUD DE COMBAT au complet** — réticule par arme,
+hitmarker de kill, dégâts flottants, **tir maintenu** — livré au §8.151.4 puis corrigé par **cinq**
+boucles de critique (§8.151.4bis → **.4sexies**), et cartographié au **§8.151.3bis**. C'est donc
+**A + B + B2** qui se jugent en une seule session, ENSEMBLE et manette en main — aucune sonde ne
+remplace cette porte (§8.140 : « la recette est la PORTE 1 » ; §8.141.1-.5 : cinq manches pour cinq
+verdicts ; §0ter du bon de commande : « **Hakim joue A+B+B2+F+G** »). Rappel du §8.141 : cinq
+défauts sortis par UNE partie alors que 333 contrôles étaient verts au même moment — et, sur ce
+bloc-ci, **222 contrôles verts** (total **headless** d'AVANT la 6ᵉ boucle) ne voyaient ni un soldat
+gelé 5 s ni un curseur disparu (§8.151.4sexies §8.1).
+
+⛔ **BLOQUEUR DE PRODUIT, PAS DE CODE : il faut une fenêtre `trench_week` PROGRAMMÉE.** Au
+§8.151.3 §9.1, `backend/api/game/events.py` / `EVENTS_CALENDAR` n'en portait **qu'une, révolue**
+(ven. 14 → lun. 17 août 2026) — file CLASSÉE de La Tranchée FERMÉE, seul l'ENTRAÎNEMENT jouable,
+donc porte inatteignable en l'état. *(État **non re-vérifié** au §8.151.3bis : cette entrée-là ne
+lance ni Godot ni backend.)* La date d'un événement est une **décision de Hakim** ; rien n'a été
+programmé d'office.
+
+**Ce que la porte NE couvre PAS encore** — et qui vient après elle :
+
+- **LOT F (§4ter, cadence automatique)** — le seul lot qui touche les **RÈGLES**. ⚠️ Avec lui, la
+  PORTE 1 cesse d'être esthétique : elle **ARBITRE UN ÉQUILIBRAGE** (TTK, chargeurs, bot). Le §0ter
+  prévoit `A+B+B2+F+G` ; ce qui est prêt **aujourd'hui**, c'est `A+B+B2`.
+- **§8.152 — l'ADS**, décision « Pas d'ADS » **RENVERSÉE le 2026-08-27** (captures de Hakim : visée
+  à l'épaule, point rouge ; la seule soustraction à `Claude-of-Duty` reste le MOUVEMENT). Réintégré
+  en **100 % optique** dans `PROMPT_TRANCHEE_VUE3D.md` §2.1bis — champ et sensibilité resserrés,
+  **`dispersion_deg` rigoureusement inchangée** : le zoom ne rend pas plus précis, il rapproche, et
+  le réticule d'optique reste calé sur la dispersion × le zoom. ⚠️ Le **§1 du chapeau §8.151 dit
+  encore « Pas d'ADS »** : ligne périmée, elle appartient au §8.152.
+
+Dettes de **PERF** consignées, à traiter au LOT E (inchangées) :
+
+- **35/36 baselines instables** (causes mesurées et consignées : horloge murale, etc.) →
+  traitement des causes PUIS re-figeage, LOT E.
+- **Saccades à cache froid 74 / 161,6 ms** (la pire attribuée à la 1ʳᵉ explosion) et
+  `PREMIER_TIR` à 18,6 ms à froid → **prewarm** pendant l'intro, LOT E — l'attribution « 1ᵉʳ
+  tir » doit disparaître du relevé final.
+
+Dettes de **GARDE** du bloc HUD : **six**, listées avec leur remède au **§8.151.3bis §4** — dont
+**trois que la relecture a trouvées DÉJÀ SOLDÉES** dans le code, et une septième (`perf_trench`
+faux vert sous `--headless`) hors périmètre du chantier.
+
+---
+
+## §8.151.3 — LA TRANCHÉE (AAA) : VAGUE 2bis — LES 4 VOIX D'ARMES ET L'EFFET MITRAILLETTE
+
+> Ajout de mi-chantier (demande Hakim du 2026-08-26 : « viseur par arme, dégâts en live, effet
+> mitraillette, tir maintenu »). Cette entrée consigne l'**étape 1** de la vague 2bis : les
+> **profils audio par ARME** (§3.6 du bon de commande) et la **présentation des RAFALES**
+> (§4bis.4). L'étape HUD proprement dite (réticule par arme, hitmarker de kill, dégâts flottants,
+> tir maintenu — §4bis.1/.2/.3/.5) reste À FAIRE.
+
+### 1. ⚠️ LA SEULE LIGNE DE SERVEUR DU CHANTIER — et pourquoi elle était inévitable
+
+`backend/api/game/trench_sim.py`, `public_rules()` : **`"burst_gap_ticks": int(w["burst_gap_ticks"])`**,
+une ligne ADDITIVE dans le paquet `trench_init`. Le registre portait la valeur depuis §8.137
+(`_fire_burst` : `launch = tick + i × burst_gap_ticks`) ; elle n'était simplement pas diffusée —
+et sans elle le client ne pouvait cadencer une rafale qu'en **recopiant 2 ticks en dur**, ce que
+le §8.137 interdit. Diffusée, elle est LUE comme les autres. `CONTRAT_RESEAU.md` §8.151 la
+documente (les deux copies au même hash). Aucune autre écriture serveur : la boucle de sim, la
+table v4, le plancher de vol d'un tick et la géométrie n'ont pas été ouverts.
+
+### 2. Les 4 voix — 19 `.wav` de plus (29 → **48**), zéro fichier supprimé
+
+`tools/trench_audio_factory.py` gagne 4 profils (patrons `pistol`/`smg`/`rifle`/`sniper` de la
+référence) + le télégraphe : `trench_shot_vipere_1..4` (sec, claquant) · `trench_shot_frelon_1..6`
+(léger et vif — **c'est la RÉPÉTITION à 100 ms qui fait la mitraille**, pas la grosseur d'un coup ;
+6 variantes parce que la rafale consomme vite le round-robin) · `trench_shot_chacal_1..4` ·
+`trench_shot_condor_1..4` (lourd, queue longue) · **`trench_laser_warn`** (bourdonnement montant du
+télégraphe). Les `trench_shot_1..6` d'origine deviennent le **repli générique** — une arme absente
+du registre de variantes retombe dessus sans une ligne d'erreur (`_shot_sfx_key`). Contrôles
+d'usine `check` par famille, graines fixes, RMS calés en relatif à la voix chacal :
+`tools/test_trench_audio.py` **14/14 PASS**, sabotages compris (corps du condor retiré → la bande
+20-150 Hz rougit ET le contrôle de calibre rougit ; hash restaurés à l'identique après).
+
+### 3. L'effet mitraillette : la rafale se présente PAR PROJECTILE
+
+Un tir à `burst > 1` (FRELON ×3, CHACAL ×2) était **agrégé** en une détonation, un kick et des
+traçantes superposées, alors que le serveur espace ses balles de `burst_gap_ticks`. Désormais
+chaque projectile a **sa** détonation (round-robin de la famille), **sa** traçante, **son** flash
+de canon et **son** cran de recul (réduit à `BURST_KICK_SCALE` 0,6 ; cumul borné par le plafond de
+roulis existant et par un punch de FOV **posé**, jamais additionné). Deux sources de cadencement,
+jamais une minuterie inventée :
+
+| Côté | Ce qui date les crans | Repli |
+|---|---|---|
+| **MIEN** (clic prédit §8.141.9) | `burst_gap_ticks` LU au registre `trench_init` | aucun (0 = tout ensemble, comportement d'avant) |
+| **ADVERSE** (événement `fire`) | les `launch_tick` **PAR PROJECTILE** de l'état arrivé dans le MÊME message | le `burst_gap_ticks` du registre |
+
+Un clic REFUSÉ ne planifie **rien** (§8.141.9). La file se vide en < 0,25 s et se pompe dans
+`_process`, y compris après la fin de match (un duel qui s'achève SUR une rafale laisse ses
+derniers crans se poser, comme le serveur laisse voler ses derniers projectiles).
+
+### 4. 🩸 LE DEMI-CORRECTIF — le son pulsait, l'image non (trouvé par la boucle de critique)
+
+Le son, la lueur de canon et le recul pulsaient bien par projectile… mais **les traçantes de toute
+la rafale apparaissaient d'un coup**, au tick du clic adverse : `_fire_burst` fait naître les
+3 balles AU MÊME TICK (`_spawn` les ajoute tout de suite) et ne diffère que leur `launch_tick`,
+si bien que l'état du tick T porte DÉJÀ la rafale entière. Sans garde, `t = clamp(négatif) = 0` :
+trois segments visibles au canon d'en face pendant 100 et 200 ms. **La victime entendait 3 coups
+étalés en voyant 3 balles dès la première frame.** Le tir MIEN était épargné par accident — la
+garde de dégagement de canon (`MUZZLE_CLEAR`) est conditionnée à `mine`.
+
+> ⚠️⚠️ **LE REMÈDE ÉVIDENT ÉTAIT UN PIÈGE, ET C'EST MESURÉ.** La correction naturelle — copier la
+> garde du télégraphe laser, `launch_tick > render_tick` — **efface TOUTES les traçantes adverses**,
+> la première comprise. Raison : `flight_ticks` vaut **1** pour les quatre armes et la sim RETIRE le
+> projectile au tick de son impact ; une balle n'existe donc que dans des états dont le tick est
+> ≤ à son `launch_tick`, alors que `render_tick` vit **un tick en arrière** du plus récent
+> (`RENDER_DELAY`). `render_tick` n'atteint JAMAIS `launch` tant que la balle est dans la liste.
+> Le laser, lui, s'en accommode parce qu'il dure 10 ticks. La référence retenue est donc le **tick
+> de l'état lu** — l'horloge qui décide vraiment du départ : la balle 1 ne bouge pas d'une frame,
+> les balles 2 et 3 se montrent aux états T+2 et T+4. Une traçante par détonation, à 100 ms
+> d'écart, comme au canon.
+
+**La sonde qui a démasqué le piège est celle qui respecte le TAMPON DE RENDU** : avec un seul état
+poussé, `_render_pair` rend `[latest, latest, 1.0]` et `render_tick` VAUT le tick de l'état — les
+deux gardes y sont **indiscernables** (le remède littéral passe cette sonde-là au vert). Les
+contrôles 13f/13g fabriquent donc le tampon à la main, deux états espacés d'un tick, cible de rendu
+à mi-chemin : sous ce régime — le seul qui existe en jeu — le remède littéral rend **0 traçante**.
+C'est la énième illustration du §8.151.8 : « une sonde qui lit juste après avoir poussé un état lit
+le PASSÉ ».
+
+### 5. Trois autres correctifs de la même boucle
+
+- **Le faux coup du CONDOR, soldé.** Le clic d'une arme télégraphiée ne produit plus RIEN de
+  balistique (ni son, ni recul, ni frame d'arme, ni traçante, ni `_fire_fx_mute`) : il arme un
+  laser, et c'est le laser qui est le retour immédiat HONNÊTE. Avant, `_fire_fx_mute` (0,45 s)
+  expirait AVANT l'événement `fire` du serveur (`laser_lead_ticks` = 0,50 s) : **un coup valait
+  DEUX détonations complètes**, recouvertes sur ~0,65 s. La règle est lue au registre
+  (`laser_lead_ticks > 0`), jamais sur un id d'arme.
+- **⏱ La cadence du CONDOR ne se repousse plus elle-même.** La sim pose `fire_ready_tick` **AU
+  CLIC**, avant la branche laser ; l'événement `fire`, lui, n'arrive qu'au tir échu. Recaler la
+  porte prédite sur la cadence ENTIÈRE à cet instant la repoussait de `laser_lead_ticks`
+  (**mesuré : 503,000 au lieu de 502,500 — exactement 0,5 s**). Tant que c'était muet, la
+  prédiction était seulement « prudente » ; depuis que `_arm_bolt` s'y branche, le **clac de
+  culasse** — dont tout le rôle est de dire « prête » sans regarder le HUD — annonçait la
+  disponibilité une demi-seconde APRÈS. Le §1.9 (« le HUD ne montre que des mécaniques réelles »)
+  vaut pour l'oreille : `_cadence_remaining_seconds` retranche le lead, **les deux barèmes lus au
+  registre**, et une arme ordinaire (`lead` 0) retrouve exactement `_cadence_seconds`.
+- **Le télégraphe dure la fenêtre de la SIM, pas celle du fichier.** Le bourdonnement était joué à
+  sa durée d'asset (0,620 s) pour annoncer une fenêtre de `laser_lead_ticks / tick_rate` (0,500 s) :
+  il survivait 120 ms au départ de la balle, et un simple réglage serveur l'aurait fait déborder de
+  370 ms. La fenêtre est désormais LUE dans l'état (`laser_fire_tick − render_tick`), le son est
+  étiré/comprimé dessus et **coupé à l'extinction du rayon** (jeton de voix). ⚠️ ADVERSE seulement :
+  mon propre laser ne me menace pas.
+- **Le pool de voix passe de 6 à 20 lecteurs.** L'échange FRELON/FRELON (3 + 3 détonations en
+  250 ms) + sifflements + culasse tenait dans 6 voix… en **écrasant** les lecteurs encore en cours.
+  Aucune vérification ne le voyait : elles étaient toutes arithmétiques (`_sfx_next % taille`), et
+  le bouclage d'un curseur ne dit RIEN d'un vol. Le manager compte donc désormais ce qu'il fait
+  (`_sfx_plays`, `_sfx_last`, **`_sfx_steals`**) et la sonde rejoue la scène EN TEMPS RÉEL.
+
+### 6. Le faux vert de `probe_trench_grenade` (fichier pré-existant, soldé à la même passe)
+
+Elle sortait **exit 0 + « TOUT VERT » en crachant 8 lignes `ERROR`** : sous `--headless`,
+`get_viewport().get_texture().get_image()` est servi par le stockage DUMMY, qui logge lui-même
+« Parameter "t" is null. », puis `save_png` partait sur un `null` — toutes ces lignes vivant HORS
+des contrôles PASS/FAIL. Or cette sonde **EST** une mesure en pixels : sans rendu elle ne mesure
+rien. Un vert obtenu sans mesure est pire qu'un rouge — il entraîne à ignorer la colonne `ERROR`.
+La garde est posée **AVANT** tout `get_image()` (tester le retour arrive trop tard : la ligne
+`ERROR` est déjà écrite) et l'absence de rendu se **DÉCLARE** : verdict « NON APPLICABLE » et code
+de sortie **2**, jamais 0 (convention de `tools/imagediff_trench.py`, qui refuse le vert vide).
+Contre-épreuve dans la même passe : **headless → 0 `ERROR`, exit 2** ; **fenêtré → TOUT VERT,
+exit 0, 0 `ERROR`, 0 `WARNING`** (décalque centre 3,3 % · bord 3,0 % · anneau +3,1 %, tolérance
+5 %). La différence est la GARDE, pas le pilote — même remède que `probe_trench_feel_aim`.
+
+### 7. Les contrôles, relancés par le correcteur
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_audio` (14 sections — **état de la vague 2bis**) | **91 `[PASS]` / 0 `[FAIL]`**, TOUT VERT × 3 passes, 0 `ERROR`, 0 `WARNING` · *portée depuis à 128 contrôles / 18 sections par la vague 2ter, §10* |
+| **Sabotage** des deux correctifs | **4 contrôles rouges** — et EXACTEMENT ceux qui les traquent (3 traçantes au lieu d'1 ; porte à 503,000) |
+| **Contre-essai du remède littéral** (`render_tick`) | **13f/13g rouges : 0 traçante rendue** sous le tampon réel — la preuve chiffrée du piège du §4 |
+| `probe_trench_aim` · `probe_trench_feel_aim` · `probe_trench_falseshot` · `probe_trench_springs` | TOUT VERT, 0 `ERROR`, 0 `WARNING` |
+| `tools/test_trench_audio.py` | 14/14 PASS (sabotages inclus) |
+| Porte `imagediff_trench.py` (2 exécutions fenêtrées de `probe_trench_feel_aim`) | `pixels_differents=0`, `delta_max=0`, **`VERDICT=OK`** — la vague est **pixel-neutre** sur les frames de référence |
+| Boot `main_menu` + `--import` | **0 `ERROR`** |
+| Suite trench BACKEND (la ligne serveur oblige) | **300 ✅ / 0 ❌** : sim 153 · flow 90 · bot 27 · angles 20 · window_open 10 (+ `test_companies` 94 ✅ en collatéral) |
+
+> ⚠️ **PERF : relevé NON COMPARABLE en absolu à la ligne de départ §8.151.0**, et c'est dit plutôt
+> que maquillé. Le harnais rend aujourd'hui `frames=1741 | p50=6,896 | p95=6,942 | p99=6,964 ms`
+> là où la vague 2 lisait 8004 frames à p99 2,118 ms : la machine plafonne le processus à ~145 fps
+> (un **éditeur Godot est ouvert en parallèle**, PID 11776). Ce qui EST mesurable et qui a été
+> mesuré : le **A/B dans la même minute**, correctifs posés contre correctifs neutralisés →
+> `p99 6,954-6,964` contre `p99 6,960-6,966`, `frames=1741` des deux côtés. **Le coût des
+> correctifs est nul**, et la ligne de départ devra être relevée à nouveau sur machine au repos
+> avant la porte perf du LOT E.
+
+### 8. 🩸 Le journal mentait — 6ᵉ écart code↔doc de la série
+
+Avant ce correctif, **cette même entrée §8.151 affirmait que « la vague 2bis reste planifiée »**
+alors que tout son code était sur le disque depuis ~9 h 30 (`FRONTEND_INTERFACES.md` horodaté
+11:43, `trench_fp.gd` 21:18). Ses inventaires étaient faux dans la même proportion (29 `.wav`
+annoncés pour **48** sur le disque, 30 contrôles annoncés pour **91**). Les deux copies avaient le
+même hash : la règle de synchronisation était tenue, c'est le CONTENU qui était périmé — et un
+lecteur appliquant la règle maison « quand les docs se contredisent, seul le CODE tranche »
+n'avait même pas d'indice qu'il fallait trancher. C'est le 6ᵉ écart code↔doc de la série
+(§8.145, §8.147, §8.149…). Le journal se tient **à chaque dépôt**, pas à la clôture.
+
+### 9. ⚙ EN ATTENTE DE HAKIM — deux décisions, une porte
+
+1. **⚙ PROGRAMMER UNE FENÊTRE `trench_week`** (`backend/api/game/events.py`, `EVENTS_CALENDAR`).
+   Le calendrier n'en porte **qu'une, révolue** (ven. 14 → lun. 17 août 2026). Conséquence de
+   PRODUIT, pas de code : **la file classée de La Tranchée est FERMÉE**, seul l'ENTRAÎNEMENT est
+   jouable — donc la **PORTE 1** du chantier (« Hakim joue pendant `trench_week` ») n'est pas
+   atteignable en l'état. Rien n'a été programmé d'office : la date d'un événement est une décision
+   de Hakim, et le §9 du bon de commande n'autorise pas cette écriture serveur.
+   *(Le TEST, lui, était en tort et il est corrigé : `test_trench_flow` dérivait son attendu de la
+   DERNIÈRE fenêtre connue, fût-elle passée, et se comparait donc à du passé. L'endpoint disait
+   VRAI — son contrat prévoit `event_window: null` quand plus rien n'est programmé. 90 ✅ / 0 ❌.)*
+2. ~~**⚙ Le reste du §4bis**~~ — **LIVRÉ le 2026-08-27, cf. §8.151.4** : réticule par arme
+   (`dispersion_deg` LU, ⛔ aucun bloom progressif), hitmarker de kill, dégâts flottants sur
+   touches CONFIRMÉES, **tir maintenu** (actif par défaut, interrupteur F10).
+3. **PORTE 1 (humaine)** : le son par arme et l'effet mitraillette se jugent manette en main. Aucune
+   des 128 vérifications ne remplace une manche jouée (§8.141 : cinq défauts sortis par une partie,
+   333 contrôles verts au même moment).
+
+---
+
+### 10. VAGUE 2ter — LE DURCISSEMENT DES GARDES (aucune ligne de JEU touchée)
+
+> ⚠️ **Cette vague ne corrige pas le jeu : elle corrige ce qui le SURVEILLE.** Le code de production
+> `scripts/game/trench_fp.gd` sort de la vague **octet pour octet identique** à son entrée
+> (`SHA256 2D961083…4FB061A7`, relevé avant et après) ; tout le travail est dans
+> `tools/probe_trench_audio.gd`. La sonde passe de **91 contrôles / 14 sections** (2bis) à
+> **128 contrôles / 18 sections** — 1 → 15, plus **9bis**, **9ter** et **9quater**.
+
+#### 10.1 🩸 Le défaut de fond : une garde qui ne pouvait pas distinguer une LECTURE d'une RECOPIE
+
+L'échéance d'un cran de rafale vaut `ticks / tick_rate` : **trois facteurs**. Les fixtures de la
+sonde les recopiaient **tous les trois du barème de PRODUCTION** — `burst_gap_ticks: 2`,
+`launch_tick` espacés de 2 ticks, `tick_rate_hz: 20`. Conséquence : un chiffre écrit en dur dans le
+code de jeu produisait **exactement les mêmes attendus** qu'une vraie lecture du registre et des
+`launch_tick` serveur. La sonde ne pouvait pas les distinguer — c'est la signature de la **garde
+apprise par cœur** : verte sur ce qu'on lui a montré, aveugle sur le reste.
+
+Mesuré par les boucles de critique, sabotages exécutés dans le vrai harnais (`--import` + exécution
+complète), la sonde restant **entièrement VERTE** à chaque fois :
+
+| Sabotage du code de JEU | Verdict AVANT durcissement |
+|---|---|
+| `gap = 2.0` en dur (`_local_fire_feedback`) | **VERT** — `EXIT=0 PASS=91 FAIL=0` |
+| `launch_tick` serveur ignorés, minuterie 0,1 s | **VERT** — `EXIT=0 PASS=91 FAIL=0` |
+| `… / 20.0` en dur, chemin adverse | **VERT** — `EXIT=0 PASS=114 FAIL=0` |
+| `… / 20.0` en dur, chemin local | **VERT** — `EXIT=0 PASS=114 FAIL=0` |
+| `_tick_rate = 10.0` (le client cesse de lire le rythme annoncé) | **VERT** — `EXIT=0 PASS=114 FAIL=0` |
+| les six `"tick_rate_hz": 20` des fixtures changés en 7 | **VERT** — `EXIT=0 PASS=114 FAIL=0` : champ **décoratif** |
+
+#### 10.2 Premier tour — deux facteurs sortis de la production, et l'amplitude du feel enfin mesurée
+
+`PROBE_GAP_TICKS = 5` (production : 2) et `PROBE_LAUNCH_OFFSETS = [0, 3, 7]` (production : 0/2/4,
+**volontairement irréguliers** pour qu'une minuterie « au bon pas » se trahisse aussi). Section
+**15** neuve : l'atténuation du cran suiveur est **MESURÉE** (`_cam_roll.value` / `_fov_punch.value`
+par le VRAI chemin), comparée **au premier cran** — aucune constante relue — et le roulis livré à la
+caméra est intercepté par un **mouchard `FeelSpy`** (un `Control` substitué par duck-typing) parce
+que le monde re-borne chez lui : lire l'état du monde aurait masqué la disparition du plafond de
+l'hôte. Le plafond comparé est celui du **cahier** (±0,3°), jamais `ROLL_CAP_DEG` — qu'un sabotage
+lèverait avec l'attendu.
+
+#### 10.3 Second tour — LE TROISIÈME FACTEUR : le rythme que le serveur ANNONCE
+
+Le tour précédent avait laissé le **diviseur** à sa valeur de production, et pire : la sonde
+**s'écrivait elle-même** `duel._tick_rate = 20.0` sans jamais passer par `_on_init` (l.472 de
+`trench_fp.gd`, **seul site** où le client lit `tick_rate_hz`), puis dérivait ses attendus de ce
+champ **qu'elle contrôlait** — l'anti-patron que son propre pavé condamne pour `ROLL_CAP_DEG`.
+Remède en trois pièces indissociables :
+
+1. **le rythme annoncé est hors production** : `PROBE_TICK_RATE_HZ = 8` — ni les 20 Hz de la sim, ni
+   le repli 10 Hz de `_on_init`, ni un « deux fois plus lent » qui retomberait sur 10 ;
+2. **il entre par `_on_init`**, comme un vrai paquet : le helper `_init_duel()` remplace les SIX
+   `duel._rules = {…}` et contrôle, à chaque fixture, que le client a bien **LU** le champ. La sonde
+   n'écrit plus jamais `_tick_rate` (grep : aucune écriture dans le fichier) ;
+3. **les attendus dérivent du littéral de la fixture**, jamais de `duel._tick_rate`.
+
+Et parce qu'un rythme unique **s'apprend par cœur** (`_tick_rate = 8.0` en dur satisferait la garde),
+la section **9quater** re-annonce un **SECOND rythme** (13 Hz) avec le MÊME registre d'armes et
+vérifie que les crans SUIVENT : les mêmes 5 ticks valent **0,625 s à 8 Hz** et **0,385 s à 13 Hz**,
+les mêmes `launch_tick` **+0,375/+0,875 s** contre **+0,231/+0,538 s**. Le dernier contrôle ne relit
+aucun littéral : il compare **deux amplitudes mesurées**, dont le rapport vaut 13/8 — et **1,000
+pour n'importe quel diviseur constant**.
+
+**Tout le barème de fixture sort de la production** (`PROBE_WEAPONS`) : cadences 7/13/9/29 ticks
+(production 18/24/16/50), dispersions 0,11/0,42/0,22/0,07 (0,30/0,85/0,45/0,0), chargeurs 6/17/11/3
+(8/24/20/4), télégraphe 3 ticks (10). Les deux attendus **écrits en dur** sur le barème de
+production — `pred_fire_ready = 10.9` (= 10,0 + 18/20) et `600.9` — sont devenus des dérivations. Une
+cadence recopiée en dur dans `_local_fire_feedback`, le défaut **BLOQUANT** du §1.9 du bon de
+commande, ne peut plus s'y cacher. Le **CHACAL** (rafale ×2) est enfin exercé, section **9ter** :
+jusqu'ici toutes les fixtures de rafale passaient par le FRELON (×3) et le cas `rounds == 2` comme le
+repli `rounds <= 1` n'étaient couverts par **rien**.
+
+#### 10.4 Les 12 sabotages rejoués — la garde rougit sur chacun
+
+Chaque cas : sauvegarde → sabotage → `--import` (EXIT=0, 0 `ERROR`) → **exécution complète** →
+restauration → **hash vérifié**. Ligne verte de référence : `EXIT=0 PASS=128 FAIL=0 ERROR=0`.
+
+| # | Sabotage (fichier) | SHA256 saboté (8 car.) | Verdict |
+|---|---|---|---|
+| A | `gap = 2.0` en dur, chemin LOCAL (`trench_fp.gd`) | `012F536C` | 🔴 `EXIT=1` **118/10** |
+| A2 | `gap = 2.0` en dur, repli registre ADVERSE | `A28BF997` | 🔴 `EXIT=1` **127/1** |
+| B | `launch_tick` ignorés → minuterie 0,1 s | `F64EB27A` | 🔴 `EXIT=1` **121/7** |
+| C1 | `delays.sort()` → ordre inversé | `7CE456F9` | 🔴 `EXIT=1` **126/2** |
+| C2 | `… / 20.0` en dur, chemin ADVERSE | `CB0FEB74` | 🔴 `EXIT=1` **121/7** |
+| C2b | `… / 20.0` en dur, chemin LOCAL | `99DEE740` | 🔴 `EXIT=1` **117/11** |
+| E | `_tick_rate = 10.0` (rythme annoncé ignoré) | `390B2659` | 🔴 `EXIT=1` **98/30** |
+| G | `_tick_rate = 8.0` (le rythme de la fixture **appris par cœur**) | `9D9D069E` | 🔴 `EXIT=1` **124/4** |
+| H | repli registre adverse divisé par `20.0` | `4FEC79E9` | 🔴 `EXIT=1` **127/1** |
+| I | `BURST_KICK_SCALE := 1.0` (atténuation §4bis.4 **supprimée**) | `299A6554` | 🔴 `EXIT=1` **126/2** |
+| J | `ROLL_CAP_DEG := 3.0` (plafond du cahier levé) | `F5E9F58D` | 🔴 `EXIT=1` **125/3** |
+| K | la **fixture** annonce 7 Hz (`probe_trench_audio.gd`) | `D6199359` | 🔴 `EXIT=1` **95/33** |
+
+Les SHA de C1, C2, C2b et E sont **identiques à ceux relevés par la boucle de critique** quand ces
+mêmes sabotages laissaient la sonde verte : à l'octet près le même sabotage, verdict inversé. **G**
+et **K** sont neufs et visent le durcissement lui-même : G prouve qu'un diviseur calé sur la fixture
+ne passe plus (c'est la section 9quater qui le voit, elle seule) ; **K prouve que `tick_rate_hz`
+n'est plus décoratif** — changer le champ ANNONCÉ, sans rien toucher d'autre, fait rougir 33
+contrôles.
+
+#### 10.5 Ce qui a été relancé, et ce que la vague N'A PAS touché
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_audio` (18 sections) | **128 `[PASS]` / 0 `[FAIL]`**, TOUT VERT × 3 passes, `EXIT=0`, 0 `ERROR`, 0 `WARNING` |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` — *le réticule ne ment toujours pas* |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `--import` du client | `EXIT=0`, **0 `ERROR`** |
+| `trench_fp.gd` avant / après la vague | **même SHA256** — aucune ligne de jeu modifiée |
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, tout `backend/`. **Perf** : la
+ligne de départ (`p50=1,433 · p95=2,190 · p99=2,451`) n'est pas re-mesurée ici et n'a pas à l'être —
+le code exécuté en jeu est inchangé au bit près ; une sonde qui ne tourne pas en partie ne coûte rien
+à la frame.
+
+> 🩸 **La leçon, en une phrase, pour la prochaine garde** : une fixture qui parle le barème de
+> production ne peut pas distinguer une lecture d'une recopie — et le facteur qu'on oublie de sortir
+> de la production est **exactement** celui par lequel le défaut reviendra. Ici il en restait UN sur
+> trois après un premier durcissement, et il a fallu une seconde boucle de critique pour le voir.
+
+---
+
+## §8.151.3bis — LA TRANCHÉE (AAA) : HUD DE COMBAT, DURCISSEMENT DES GARDES ET DETTES ASSUMÉES
+
+> **2026-08-27 — PAGE DE GARDE du bloc HUD : écrite APRÈS les sept entrées qu'elle indexe, placée
+> AVANT elles.** Elle ne re-raconte rien. Le détail vit au **§8.151.3 §10** (durcissement de la
+> sonde audio, aucune ligne de JEU touchée) et aux **§8.151.4 → §8.151.4sexies** — les **six
+> entrées** du bloc HUD, c'est-à-dire la livraison PUIS ses **cinq** boucles de correction. Ce
+> qu'elle apporte et qu'aucune des sept n'apporte : la **carte des chiffres** (lequel est courant,
+> lesquels sont périmés et pourquoi), les **DEUX leçons de méthode** de la vague — celles qui
+> coûtent le plus cher à redécouvrir — et les **SIX DETTES** de famille « garde » en liste
+> explicite, chacune avec **ce qu'il faudrait pour la solder**.
+>
+> ⚠️ **Trois de ces six étaient DÉJÀ SOLDÉES dans le code** au moment d'écrire ces lignes, alors que
+> deux entrées les reportent encore « telles quelles » : **9ᵉ écart code↔doc de la série**, traité
+> au §4.
+>
+> **Aucune ligne de code touchée par cette entrée** — journal seul, 2 exemplaires, hash identique.
+> **Aucun contrôle relancé ici** : tous les chiffres cités sont ceux des entrées de détail, et rien
+> n'est ajouté qui n'y figure pas.
+>
+> **LIGNE VERTE COURANTE (§8.151.4sexies)** : `probe_trench_hud` → `EXIT=0 PASS=237 FAIL=0 ERROR=0
+> WARNING=0` **headless**, **14 sections**, TOUT VERT × **3 passes** ; `PASS=254` **fenêtré** (les
+> sections **3bis**, **5** et les **2 contrôles de PLATEFORME** de la 2quater ne comptent que sous
+> pilote réel). `probe_trench_audio` → **128 contrôles / 18 sections**, TOUT VERT.
+
+### 1. Les cinq promesses du bloc, et où chacune est écrite
+
+| Promesse | Bon de commande | Consignée à | Ce qui la tient |
+|---|---|---|---|
+| **Réticule par ARME** | §4bis.1 | §8.151.4 §1, .4bis, **.4ter** | `_dispersion_pixels()` lit `dispersion_deg` du paquet `trench_init` — **jamais recopié** — et le projette par `_world.project_aim` sur les deux bords `yaw ± d`, la MÊME fonction que la visée. ⛔ Aucun bloom progressif (décision §1.9) : le pulse de tir est **POSÉ**, pas cumulé |
+| **Hitmarker de KILL** | §4bis.2 | §8.151.4 | croix blanche/or sur touche confirmée, **ROUGE** sur coup fatal ; éteinte par le TEMPS (`_decay`), et c'est la **peinture** qui est mesurée, pas la variable |
+| **Dégâts flottants** | §4bis.3 | §8.151.4, **.4quater** | pool préalloué, étiquettes uniques, or/rouge, origine sur la silhouette validée par un **oracle caméra**, montée pilotée par le temps de scène, extinction à 0,6 s |
+| **TIR MAINTENU, par DÉFAUT** | §4bis.5 (décision §1.8) | §8.151.4, **.4bis §3**, **.4ter §2** | maintenir le clic enchaîne ; interrupteur F10 ; les **refus serveur** sont miroités au lieu d'être transformés en salves automatiques ; le maintien a désormais la **MÊME liste de portes** que le clic |
+| **Porte F10 sur la visée de GRENADE** | correctif | **§8.151.4quater §1** | `_update_grenade_aim` était le **3ᵉ** chemin d'action issu de `_process` et **n'avait aucune porte de panneau** : F10 ouvert, un clic DROIT sur un curseur de réglage armait la visée et le relâchement **lançait une vraie grenade** |
+
+> ⚠️ **`dispersion_deg` EST UN DEMI-ANGLE, et le réticule le sait.** Vérifié en lecture seule dans
+> `backend/api/game/trench_sim.py` (l.1210-1218) : `yaw += (rng.random() * 2.0 - 1.0) * dispersion`,
+> même chose sur le tangage — la balle part **dans `[−d, +d]`**, donc le cône TOTAL vaut `2 × d`.
+> Côté client, `_dispersion_pixels()` projette `yaw ± d` et prend la **demi-distance** : la croix
+> montre le demi-cône, c'est-à-dire exactement ce que la balle peut faire **d'un côté**. Quiconque
+> lira `dispersion_deg` comme une largeur totale peindra un réticule **deux fois trop grand** — et
+> le §8.152 (ADS optique) devra le relire à son tour, puisqu'il promet cette valeur **inchangée**.
+
+### 2. La carte des chiffres — six boucles, UN seul chiffre courant
+
+`probe_trench_hud` a été rouverte à chaque boucle. Un agent qui compare deux totaux doit pouvoir
+distinguer « la sonde a **grandi** » de « la sonde a **régressé** » : voici la suite complète.
+
+| Étape | Défauts sortis | `PASS` headless | `PASS` fenêtré | Sections |
+|---|---|---|---|---|
+| §8.151.4 (livraison) | 4 — dont un **faux vert sur la propriété PHARE** | 84 | — | 8 |
+| §8.151.4bis (2ᵉ) | 4 — dont un **BLOQUANT** que 119 verts ne voyaient pas | 135 | 141 | 9 |
+| §8.151.4ter (3ᵉ) | 3 — dont *« à qui est ce cône ? »*, indécidable à 135 verts | 165 | 171 | 10 |
+| §8.151.4quater (4ᵉ) | 2 — dont la **grenade sans porte** | 191 | 206 | 12 |
+| §8.151.4quinquies (5ᵉ) | 1 — **BLOQUANT** : un **4ᵉ** chemin sans porte | 222 | 237 | 13 |
+| **§8.151.4sexies (6ᵉ)** | 2 — **BLOQUANTS** : soldat gelé 5 s · souris recapturée | **237** | **254** | **14** |
+
+**16 défauts en six boucles**, et le total de la sonde a presque **triplé** (84 → 237). ⚠️ Le piège
+de lecture : `237` est un total **headless** au §8.151.4sexies et un total **fenêtré** au
+§8.151.4quinquies. Toujours lire la colonne, jamais le nombre seul.
+
+> 🩸 **Et le piège a mordu la page qui l'énonce, le jour même où elle l'énonçait.** Les §8.151.2 §6
+> et §8.151.3bis §5 ont d'abord écrit « **237** contrôles verts ne voyaient ni le soldat gelé 5 s ni
+> le curseur disparu », en renvoyant au §8.151.4sexies — **§8.1** nommément pour l'un des deux,
+> l'entrée **sans item** pour l'autre — qui dit **222**. `222` est le total d'**AVANT** le correctif,
+> le seul qui puisse être aveugle aux deux défauts ; `237` est celui d'**APRÈS**, et il contient
+> justement les contrôles bâtis pour les attraper (section 2quater, (d) de la 2ter). Corrigé aux deux
+> endroits le **2026-08-27**, l'item exact ajouté au passage sur celui qui n'en portait pas. **Un
+> nombre recopié sans sa colonne finit par affirmer l'inverse de ce qu'il mesure** — et ici il
+> l'affirmait dans la page dont c'est l'unique raison d'être.
+>
+> ⚠️ **Base probatoire, à assumer** : l'état d'**AVANT** n'est vérifiable **nulle part dans le
+> dépôt** — `git show HEAD:FRONTEND_INTERFACES.md | grep -c '8\.151'` rend **0**, tout le §8.151 est
+> encore dans la working tree. La seule pièce sur la **forme** des deux renvois est le rapport de la
+> boucle qui les a corrigés ; le **222 / 237**, lui, se vérifie ici même, à la colonne du tableau
+> ci-dessus. D'où « l'un des deux » plutôt que deux noms : *on ne durcit pas une citation qu'on ne
+> peut pas rouvrir.*
+
+Sur `probe_trench_audio`, la vague 2ter a fait passer la sonde de **91 contrôles / 14 sections** à
+**128 / 18** — 1 → 15, plus **9bis**, **9ter**, **9quater** — et **12 sabotages** la font rougir
+(§8.151.3 §10.4), le code de production ressortant **au hash d'entrée** (`scripts/game/trench_fp.gd`,
+`SHA256 2D961083…4FB061A7` relevé avant ET après : une vague qui ne corrige que ce qui SURVEILLE
+doit pouvoir le prouver à l'octet).
+
+> ⚠️ **LE CHIFFRE JUSTE EST `91 → 128`, PAS `91 → 114`.** `114` est le total d'une **ÉTAPE
+> INTERMÉDIAIRE** : il apparaît au tableau §10.1 comme le score que les sabotages laissaient encore
+> **VERT** après le premier tour de durcissement — c'est la mesure de ce qui **manquait toujours**,
+> pas celle du résultat. S'arrêter à 114, c'est s'arrêter au tour où le **troisième facteur** (le
+> rythme annoncé par le serveur) n'était pas encore sorti de la production.
+
+### 3. ⚠️ LES DEUX LEÇONS DE MÉTHODE — à ne PAS redécouvrir
+
+#### 3.1 🩸 UNE SONDE DONT LES FIXTURES PARLENT LE BARÈME DE PRODUCTION NE PROUVE RIEN
+
+Le fait, mesuré et pas supposé : sur `probe_trench_audio`, **deux sabotages du code de JEU** — `gap =
+2.0` écrit en dur dans `_local_fire_feedback`, puis les `launch_tick` du serveur **ignorés** au
+profit d'une minuterie à 0,1 s — laissaient la sonde **entièrement VERTE**, `EXIT=0 PASS=91 FAIL=0`
+(§8.151.3 §10.1). Le registre n'était **plus lu du tout** et **91 contrôles** affirmaient le
+contraire.
+
+La cause est arithmétique, pas morale. L'échéance d'un cran de rafale vaut `ticks / tick_rate` :
+**trois facteurs**. Les fixtures les recopiaient **tous les trois** de la production
+(`burst_gap_ticks: 2`, `launch_tick` espacés de 2 ticks, `tick_rate_hz: 20`). Une **recopie** produit
+alors *exactement* les mêmes attendus qu'une **lecture** : la sonde ne peut pas, par construction,
+les distinguer. C'est la signature de la **garde apprise par cœur** — verte sur ce qu'on lui a
+montré, aveugle sur tout le reste.
+
+Le remède tient en deux pièces, et elles ne valent qu'**ensemble** :
+
+1. **DES VALEURS INVENTÉES, ET IRRÉGULIÈRES.** `PROBE_GAP_TICKS = 5` (production : **2**) ;
+   `PROBE_LAUNCH_OFFSETS = [0, 3, 7]` (production : 0/2/4) — irréguliers **exprès**, pour qu'une
+   minuterie « au bon pas » se trahisse elle aussi ; `PROBE_TICK_RATE_HZ = 8`, ni les 20 Hz de la
+   sim, ni le repli 10 Hz de `_on_init`, ni un « deux fois plus lent » qui **retomberait** sur 10 ;
+   tout le barème de fixture hors production (cadences 7/13/9/29 contre 18/24/16/50, dispersions
+   0,11/0,42/0,22/0,07 contre 0,30/0,85/0,45/0,0, chargeurs 6/17/11/3 contre 8/24/20/4). Et parce
+   qu'un rythme **unique s'apprend par cœur** (`_tick_rate = 8.0` en dur satisferait la garde), la
+   section 9quater en annonce un **SECOND** (13 Hz) : le dernier contrôle ne relit alors **aucun
+   littéral**, il compare **deux amplitudes mesurées** dont le rapport vaut 13/8 — et **1,000 pour
+   n'importe quel diviseur constant**.
+2. **CHAQUE CRITIQUE INVENTE SON PROPRE SABOTAGE.** Rejouer la liste du bâtisseur ne teste que ce
+   que le bâtisseur avait déjà en tête ; c'est en inventant les siens que la boucle a sorti le
+   **troisième** facteur, celui que le premier durcissement avait laissé à sa valeur de production.
+   Bilan : **12 sabotages** font rougir la sonde durcie, dont **quatre** (C1, C2, C2b, E) sont **à
+   l'octet près** ceux qui la laissaient verte auparavant — même `SHA256` saboté, verdict inversé.
+   Deux (**G**, **K**) visent le durcissement lui-même, et **K** — la fixture annonce 7 Hz, rien
+   d'autre ne bouge — fait rougir **33** contrôles : la preuve que `tick_rate_hz` a cessé d'être
+   **décoratif**.
+
+> 🩸 **En une phrase** : le facteur qu'on oublie de sortir de la production est **exactement** celui
+> par lequel le défaut reviendra. Ici il en restait UN sur trois après un premier durcissement.
+
+#### 3.2 ⚠️ LA RÈGLE DE CONVERGENCE (§0ter du bon de commande) — CLASSER EST OBLIGATOIRE
+
+Ajoutée à `PROMPT_TRANCHEE_EXPERIENCE.md` §0ter le **2026-08-27**, et pour une raison précise :
+**DEUX vagues s'étaient arrêtées au plafond de tours** (2bis étape rafales, 2ter étape HUD) sur des
+verdicts qui **écrivaient eux-mêmes** que le code livré était juste. Les critiques de ce chantier
+sont bons — **trop bons pour un critère binaire** : chaque correction d'une garde en révèle une
+autre, et la boucle peut ne **jamais** converger pendant que le JEU, lui, FONCTIONNE.
+
+Tout critique et tout correcteur DOIT donc ranger chaque défaut dans l'une de ces deux familles, et
+le **dire explicitement** :
+
+| Famille | Ce que c'est | Ce qu'on en fait |
+|---|---|---|
+| **DÉFAUT DE FONCTIONNEMENT** | le jeu se comporte MAL **aujourd'hui** : un mensonge réellement affiché, un effet qui ne part pas, une valeur fausse, une régression mesurée | **TOUJOURS bloquant.** On ne livre pas, on corrige — quel que soit le nombre de tours déjà consommés |
+| **DÉFAUT DE GARDE** | le comportement d'aujourd'hui est **CORRECT**, mais rien n'empêcherait une régression FUTURE (« si on supprimait cet appel, la sonde resterait verte ») | **Sérieux, non bloquant** pour une porte de playtest. Au plafond de tours : on **LIVRE** et on **CONSIGNE** la garde manquante comme dette explicite |
+
+Les deux erreurs de classement, et la seconde est la pire :
+
+- classer « **bloquant** » un défaut dont on écrit soi-même que le code est juste → c'est une
+  **garde**, pas un fonctionnement ;
+- ⛔ requalifier en « **garde** » un mensonge que le joueur **verrait à l'écran** → interdit.
+
+La question qui tranche, en cas de doute réel : *« Hakim, manette en main, verrait-il la différence
+**aujourd'hui** ? »* — si oui, c'est du fonctionnement.
+
+**Ce que la règle a produit, concrètement, sur ce bloc** : les six boucles ont sorti **16 défauts**.
+Ceux classés FONCTIONNEMENT ont bloqué et ont été corrigés — le sélecteur d'arme qui gelait le
+soldat **5,0 s** en plein combat, la souris recapturée par-dessus un panneau encore à l'écran, la
+grenade sans porte de panneau, le cône de dispersion lu au **mauvais slot**. Les six ci-dessous,
+classés GARDE, ont été **livrés et consignés** au lieu de retenir la vague entière. C'est la seule
+raison pour laquelle ce bloc atteint la PORTE 1.
+
+### 4. LES SIX DETTES DE GARDE — état RE-VÉRIFIÉ et remède
+
+> 🩸 **AVANT LA LISTE : TROIS DE CES SIX SONT DÉJÀ SOLDÉES DANS LE CODE.** Les §8.151.4quinquies
+> **§7.5** et §8.151.4sexies §8.5 les reportent « **telles quelles** » ; la relecture des fichiers,
+> faite pour écrire cette page, montre que les dettes **2, 3 et 4** ont été refermées **par les
+> boucles elles-mêmes** sans que personne ne raye la ligne. C'est le **9ᵉ écart code↔doc de la
+> série** (le 8ᵉ était l'inventaire du §3, §8.151.4sexies §7), et il a **deux faces** : la dette
+> reportée alors qu'elle est soldée, ET — pour la n° 2 — la **correction qui l'a soldée et qui n'est
+> décrite dans aucune entrée** (`_reticle_paint_list` n'apparaît dans ce fichier qu'au §4
+> ci-dessous). Même leçon que toujours : *le journal se périme d'abord là où personne ne relit* —
+> ici, dans la rubrique qui sert précisément à ne rien oublier. **Une dette reportée sans être
+> re-vérifiée cesse d'être une dette : elle devient du bruit qui masquera la vraie.**
+>
+> ⚠️ **Ce constat est une RELECTURE DE CODE, pas une exécution** : cette entrée ne lance ni Godot ni
+> sonde. Les trois requalifications ci-dessous sont donc à **confirmer par un sabotage** avant d'être
+> rayées pour de bon — c'est la leçon §3.1 appliquée à cette page-ci.
+
+| # | Dette (telle que reportée) | État re-vérifié | Famille |
+|---|---|---|---|
+| **1** | rien ne prouve que les CHIFFRES DE DÉGÂTS sont **PEINTS** | 🟠 **partiellement soldée** — refermée en **fenêtré**, ouverte sous `--headless` | garde |
+| **2** | l'écartement du réticule mesuré par une fonction à **appelant unique** | ✅ **SOLDÉE** — à requalifier en limite de plateforme | — |
+| **3** | la **POSITION** du réticule n'a aucune garde | ✅ **SOLDÉE** — section **1ter** | — |
+| **4** | le **hitmarker** peut rester allumé indéfiniment | ✅ **SOLDÉE** — éteint par le TEMPS, mesuré sur la peinture | — |
+| **5** | `_check_warn_window` satisfiable par une fenêtre **trop courte** | 🔴 **OUVERTE** | garde |
+| **6** | `dispersion_deg` / `mag_size` / `reload_ticks` des fixtures **lus par aucun contrôle** | 🔴 **OUVERTE** | garde |
+
+**DETTE 1 — les chiffres de dégâts PEINTS, sous `--headless`.** 🟠 *C'est LA pièce centrale de la
+demande de Hakim (« les dégâts en live »), et — des trois qui restent ouvertes — la seule qui touche
+une promesse PHARE du lot.* Ce qui est mesuré aujourd'hui : le pool préalloué, la taille posée, l'unicité des
+étiquettes, la couleur or/rouge, l'origine sur la silhouette validée par un **oracle caméra**, la
+montée pilotée par le temps de scène, l'extinction à 0,6 s — toute la **mécanique**. Ce qui a été
+ajouté depuis le report initial : la section 3 lit désormais `visible` **et l'alpha** du nœud, et la
+section **3bis** compte les **PIXELS**. Ce qui reste ouvert : la 3bis ne compte **que sous pilote
+réel**, donc un chiffre parfaitement calculé et **jamais peint** franchirait encore une passe
+`--headless`.
+**Pour la solder** — deux voies, la première étant la plus courte et le patron existant déjà dans le
+dépôt : (a) faire **refuser de verdir** la sonde quand la section pixel n'a pas pu tourner, comme
+`probe_trench_grenade` le fait déjà (`EXIT=2` **NON APPLICABLE** sous pilote muet, §8.151.3) — plus
+personne ne peut alors présenter un « tout vert » headless comme une preuve de peinture ; (b) la
+correction **structurelle** appliquée au réticule : ce que le peintre soumet devient une **VALEUR**
+(`_reticle_paint_list()` en est le modèle) et un **AUDIT DE SOURCE** prouve que le peintre ne fait
+que la rejouer — le patron est écrit à `tools/probe_trench_hud.gd` l.843-858, sabotage compris.
+
+**DETTE 2 — l'écartement du réticule mesuré par une fonction à appelant unique.** ✅ **SOLDÉE** — et
+soldée par une correction que **ce journal ne décrit NULLE PART** : `_reticle_paint_list` n'apparaît
+dans `FRONTEND_INTERFACES.md` qu'ici, alors qu'elle porte son propre pavé 🩸🩸 dans le code et son
+audit dans la sonde. Le remède existe, la dette est restée écrite : les deux moitiés du même écart.
+Re-vérifié en lecture : `_reticle_spread_px()`
+(`scripts/game/trench_fp.gd` l.2630) n'a plus qu'**un** appelant, `_reticle_paint_list()` (l.2540) ;
+`_draw_reticle()` (l.2576) ne fait plus que **rejouer** cette liste à travers `_paint_command` ;
+`_reticle.draw.connect(_draw_reticle)` (l.2353) la relie au dessin ; et `tools/probe_trench_hud.gd`
+l.843-858 **audite la source** de `_draw_reticle` — puis **sabote cette source dans la sonde
+même** pour prouver que l'audit rougit. La sonde ne lit plus `_reticle_spread_px()` : elle lit la
+**LISTE**.
+**Rien à solder — à REQUALIFIER.** Ce qui subsiste n'est pas une dette mais une **limite de
+plateforme**, écrite noir sur blanc au pavé l.2497-2515 de `trench_fp.gd` : *aucun harnais ne peut
+relire ce qu'un `CanvasItem` a peint* — sous `--headless` le rendu est un pilote muet, et Godot
+n'expose de toute façon aucune relecture des primitives soumises. C'est **par construction**, pas
+par paresse de la sonde ; la parade est structurelle (que le pinceau ne **décide** de rien) et elle
+est déjà en place.
+
+**DETTE 3 — la POSITION du réticule (« la croix est LÀ OÙ EST LA VISÉE »).** ✅ **SOLDÉE**. La
+section **1ter** existe — `_section_reticle_position`, `tools/probe_trench_hud.gd` l.684 : elle pose
+`aim_follow = 0` (le seul régime où « au centre » et « à la visée » se **distinguent**), mesure à
+**+yaw ET −yaw**, et exige deux propriétés qu'une croix clouée au centre ne peut pas satisfaire —
+que le déport **VAILLE `focale × tan(lacet)`** et qu'il soit **SYMÉTRIQUE**. L'attendu est une
+**distance**, jamais une abscisse signée : la convention « lacet positif = écran vers la gauche » est
+un fait de géométrie qu'une garde n'a pas le droit de recopier pour se donner raison. La section
+**0** garde en plus la fenêtre d'**avant-état** (jusqu'à `CONNECT_TIMEOUT_S = 20 s` en duel classé),
+où la croix restait clouée en `(0, 0)` pendant que la caméra, elle, suivait la souris.
+**Rien à solder — à RAYER de la liste.**
+
+**DETTE 4 — le hitmarker allumé indéfiniment.** ✅ **SOLDÉE**, et c'est le cas d'école de la sonde
+qui mesure **ce qu'elle a posé elle-même**. Le défaut réel : `_clear_damage()` remettait
+`_hitmarker = 0.0` **à la main**, si bien que supprimer la décroissance de production
+(`_hitmarker = maxf(0, _hitmarker - delta)` dans `_decay`) laissait la croix de touche allumée **pour
+toujours** après la première touche — le mensonge de HUD le plus direct qui soit — et la sonde
+restait à `84 PASS / 0 FAIL`. Corrigé : `_clear_damage()` (`tools/probe_trench_hud.gd` l.2483) passe
+**par `_decay`**, le chemin
+de production, et la section hitmarker mesure **trois temps sur la PEINTURE**, pas sur la variable —
+**ALLUMÉ** (4 diagonales peintes), **À MI-VIE** (encore peintes **et PÂLIES** : sans ce point,
+« il s'éteint » serait vrai d'un marqueur qui ne s'allume jamais), **ÉTEINT PAR LE TEMPS** (0
+diagonale, la croix de visée toujours là — rien d'autre n'a disparu).
+**Rien à solder — à RAYER de la liste.**
+
+**DETTE 5 — `_check_warn_window` satisfiable par une fenêtre TROP COURTE.** 🔴 **OUVERTE**, et le
+diagnostic est exact au caractère près. Re-vérifié à `tools/probe_trench_audio.gd` l.282-290, le
+verdict est :
+
+```gdscript
+played <= window_s + 1e-3 and (bounded or absf(played - window_s) < 1e-3)
+```
+
+Dès que `bounded` est vrai — le pitch bute sur `SFX_PITCH_MIN`/`SFX_PITCH_MAX` du manager — la
+**seconde moitié de la conjonction est annulée** et il ne reste qu'un **plafond**. Un bourdonnement
+de télégraphe CONDOR **deux fois trop court** passe donc au vert, alors qu'une alerte qui ne tient
+pas la fenêtre de danger est exactement le mensonge que ce contrôle existe pour interdire.
+**Pour la solder** : un **PLANCHER** à côté du plafond dans la branche bornée (`played >= window_s ×
+ratio`, le ratio **dérivé de la borne réellement appliquée** par le manager, jamais écrit en dur) ;
+**plus** au moins une fixture dont le pitch **NE bute PAS**, où l'égalité doit donc tenir ; **plus**
+le sabotage qui divise `warn_len` par deux et **doit** faire rougir. Sans ce dernier, le plancher
+serait à son tour une garde que rien ne garde — la leçon §3.1 appliquée à sa propre correction.
+
+**DETTE 6 — `dispersion_deg` / `mag_size` / `reload_ticks` des fixtures : hors production, mais lus
+par AUCUN contrôle.** 🔴 **OUVERTE**. Re-vérifié à `tools/probe_trench_audio.gd` l.130-139 : les
+quatre fixtures portent bien des valeurs **inventées** (dispersions 0,11/0,42/0,22/0,07 contre
+0,30/0,85/0,45/0,0 en production ; chargeurs 6/17/11/3 contre 8/24/20/4 ; `reload_ticks`
+13/21/19/27) — et **aucun contrôle de cette sonde ne les lit**. Le durcissement les met à l'abri
+d'une **RECOPIE** (plus personne ne peut faire coïncider un chiffre en dur avec l'attendu) ; il ne
+les **GARDE** pas : un chemin audio qui dépendrait du chargeur ou du rechargement n'a rien qui le
+surveille ici.
+**Pour la solder** — l'une ou l'autre, et le choix est une décision, pas un détail : soit un contrôle
+qui les **EXERCE** (culasse à vide / fin de rechargement dérivés de `mag_size` et `reload_ticks` **de
+la fixture**, jamais du registre), soit — s'il s'avère qu'aucun son ne dépend d'eux — les **RETIRER
+des fixtures** et le dire. *Une fixture qui porte un champ que rien ne lit est la promesse d'une
+garde qui n'existe pas.*
+⚠️ Nuance qui compte : `dispersion_deg` **EST** exercé — mais par une **AUTRE** sonde
+(`probe_trench_hud`, sections 1 et 1bis, avec trois dispersions inventées `essai_*` et une
+**SENTINELLE** par arme). Pour lui, la dette ne porte que sur `probe_trench_audio`.
+
+> **⚙ Une SEPTIÈME dette existe, hors de cette liste et hors périmètre du chantier** : la porte
+> `perf_trench` est un **faux vert sous `--headless`** — `DisplayServer.window_set_vsync_mode()` y
+> est un no-op **silencieux**, le harnais imprime lui-même `vsync : 1` (l.129) et **aucun** contrôle
+> ne rougit. Consignée au §8.151.4quinquies §7.4 et §8.151.4sexies §8.4, remède suggéré compris
+> (faire **ROUGIR** quand `window_get_vsync_mode() != 0`). `tools/perf_trench.gd` reste **interdit
+> d'édition** par la consigne. *(Ce renvoi a dit « §4 » — la section des **5 sabotages**, qui ne
+> parle pas une seule fois de `perf_trench` — jusqu'au **2026-08-27** : la dette 7 vit au **§7,
+> item 4**, même forme que son renvoi jumeau.)*
+
+### 5. Ce que cette page ne remplace pas
+
+**La PORTE 1.** Le réticule par arme, le hitmarker, les dégâts flottants et le tir maintenu se
+jugent **manette en main**, et rien de ce qui précède ne s'y substitue : **222 contrôles verts**
+(total **headless** d'AVANT la 6ᵉ boucle — cf. la colonne du §2) ne voyaient ni le soldat gelé
+5,0 s sous le sélecteur, ni le curseur disparu derrière un panneau (**§8.151.4sexies §8.1**). Le
+périmètre élargi de la porte — **A + B + B2**, ce qui reste hors d'elle (LOT F, §8.152/ADS) et son
+bloqueur de PRODUIT (aucune fenêtre `trench_week` programmée) sont au **§8.151.2 §6**, mis à jour
+le même jour que cette entrée.
+
+**Perf** : *(non mesuré ici — cette entrée ne touche aucune ligne de code et ne lance pas Godot. Le
+DERNIER relevé du bloc HUD vit au **§8.151.4quater** : 2 exécutions fenêtrées, `EXIT=0` ·
+`VERDICT=PROPRE` · `budget=OK` · 0 `ERROR` · 0 « leaked », `p99 = 2,074 / 2,101 ms` — **sous la ligne
+de départ du §8.151.0** (2,451), `p50 = 1,420 / 1,428` contre 1,433 au départ, **0 saccade**. Les
+deux boucles suivantes (.4quinquies, .4sexies) n'en ont pas relevé.)* ⚠️ Et ce relevé n'est valable
+que **fenêtré** : la porte `perf_trench` est un faux vert sous `--headless` (7ᵉ dette, ci-dessus).
+
+---
+
+## §8.151.4 — LA TRANCHÉE (AAA) : VAGUE 2ter — LE HUD DE COMBAT (§4bis.1/.2/.3/.5)
+
+> Étape 2 de la vague 2bis, exécutée le **2026-08-27** en séquentiel : **réticule par ARME**,
+> **hitmarker de KILL**, **dégâts flottants** et **TIR MAINTENU**. 100 % client, zéro dépense,
+> **aucune ligne de serveur** (celle du §8.151.3 reste la seule du chantier). Sonde neuve
+> `tools/probe_trench_hud.{gd,tscn}` : **84 contrôles à cette étape**. Boucle bâtisseur → critique
+> → correcteur ; la critique a sorti **4 défauts**, dont un faux vert sur la propriété PHARE du lot.
+> ⚠️ **CHIFFRES DATÉS — la ligne verte COURANTE vit au §8.151.4ter** (`PASS=165` headless,
+> `PASS=171` fenêtré, 10 sections ; le §8.151.4bis, intermédiaire, disait `135`/`141`/9 sections).
+> Tout ce qui suit décrit l'état du **2026-08-27 au matin** ; une
+> seconde boucle de critique a rouvert la sonde le même jour et l'a fait grandir. Ne pas
+> « restaurer » les 84.
+
+### 1. Le réticule ne ment pas — et pour le prouver, il faut sortir du centre de l'écran
+
+`_dispersion_pixels()` convertit le cône `dispersion_deg` de l'arme courante — **LU** dans
+`trench_init.rules.weapons`, jamais recopié — en écartement de croix, **par la projection de la
+VISÉE** (`_world.project_aim` sur les deux bords `yaw ± d`, demi-distance). Le §4bis.1 l'exige mot
+pour mot, et c'est la leçon de la table v1/v4 (§8.141.6, une partie entière perdue) : deux
+arithmétiques pour une même grandeur finissent toujours par se contredire. Le repli — l'ancienne
+trigonométrie `f·tan(d)` — ne sert qu'aux harnais sans scène 3D.
+
+> 🩸🩸 **ET LA GARDE NE GARDAIT RIEN. Les « 0,000 px d'écart sur les 8 armes » n'étaient pas une
+> concordance de deux chemins : c'était une IDENTITÉ ALGÉBRIQUE.** La sonde mesurait tout à la
+> visée centrée (0, 0). Or `aim_follow` valant 1 par défaut, la caméra REGARDE la visée : les deux
+> bords du cône sont symétriques autour de l'axe optique et la demi-distance projetée vaut
+> `f·tan(d)` — au chiffre près la formule de repli. **Mesuré** : la branche `project_aim` de
+> `_dispersion_pixels()` purement SUPPRIMÉE (les 5 lignes), la sonde restait `EXIT=0`,
+> **58 PASS / 0 FAIL, TOUT VERT**. Le sabotage était invisible sur la propriété phare du lot.
+
+Les deux chemins ne divergent que **hors axe**, c'est-à-dire dès que `aim_follow` < 1 — une valeur
+LÉGALE du curseur F10 (plage 0..1). La section **1bis** pose donc `aim_follow = 0` (tête fixe),
+vise à `0,35 · 0,70 · 1,00 ×` le débattement RÉEL (`_yaw_limit`, dérivé de la géométrie — aucun
+angle en dur) et compare à `f·(tan(a+d) − tan(a−d))/2`, la vraie demi-largeur d'un cône vu de côté.
+Trois dispersions INVENTÉES (0,17° / 0,63° / 1,21°, ids `essai_*`) : aucun chiffre de production ne
+peut y coïncider. **Résultat : concordance à 0,001 px près sur les 9 mesures**, là où le repli se
+trompe de 0,46 px (cône étroit, faible angle) à **68,80 px** (cône large, débattement max).
+
+| `essai_c` (1,21°), hors axe | mesuré | attendu (projection) | repli trigo | écart |
+|---|---|---|---|---|
+| 21,2° | 25,204 px | 25,204 px | 21,910 px | +3,29 px |
+| 42,4° | 40,165 px | 40,165 px | 21,910 px | +18,26 px |
+| 60,5° (débattement max) | 90,706 px | 90,706 px | 21,910 px | **+68,80 px** |
+
+Chaque arme porte en plus une **SENTINELLE** : au moins un des angles testés doit mettre les deux
+arithmétiques en désaccord d'au moins `2 × tolérance`. Un contrôle dont l'attendu **coïncide** avec
+ce que rendrait le sabotage n'est pas un contrôle — c'est exactement ce qui s'était produit au
+centre. La sonde le dit plutôt que de le maquiller : à 0,17° vu de 21°, l'écart ne vaut que
+0,46 px, **sous la tolérance** ; ce point-là ne porte pas, et le grand angle tranche. Un dernier
+contrôle à `aim_follow = 0,5` prouve que l'écartement suit le **CURSEUR** et pas un cas particulier
+« tête fixe » : à mi-suivi, l'angle hors axe vaut la moitié du lacet.
+
+Le reste du §4bis.1 : **pulse POSÉ** au tir (`set_value`, jamais cumulé — 3 coups de FRELON ouvrent
+exactement autant qu'un seul, ⛔ **aucun bloom**, décision §1.9), éteint **avant** la cadence la
+plus courte du registre ; **croix de PRÉCISION** (traits fins) dérivée de `dispersion_deg <= 0`,
+jamais de l'id « condor » — le jour où le registre donne 0° à une autre arme, elle en hérite.
+
+### 2. 🩸🩸 LES SIX REFUS EN ÉTAIENT DEUX DE MOINS — et le tir maintenu les rendait routiniers
+
+`_fire_refusal()` est le miroir de `trench_sim.step`. Il énumérait **six** refus… tous lus dans le
+bloc de tir de la sim. Les deux manquants n'y sont pas : ce sont des **sorties anticipées** que la
+relecture du bloc de tir ne peut pas voir.
+
+- **7ᵉ refus — LA PHASE.** `trench_sim.step` sort par un `return` dès `PHASE_OVER`, et pendant
+  `PHASE_INTERMISSION` — le bandeau de 3 s (`intermission_ticks` = 60) qui précède **chaque**
+  manche, la première comprise — il ne traite que le bookkeeping et `pick_weapon`. Tout `fire` de
+  ces fenêtres est **JETÉ**. **Mesuré sur le fichier livré** : état `phase: "intermission"`, gâchette
+  tenue 180 frames (3,00 s) → **4 messages `fire` émis** et **4 retours d'arme locaux COMPLETS**
+  joués (détonation, traçante, cran de recul, frame d'arme) pour des balles qui n'ont jamais existé.
+- **8ᵉ refus — LA GRENADE.** La branche de lancer finit par
+  `continue  # lancer ce tick = pas de tir ce tick (un soldat n'a que deux mains)` : le `fire` du
+  MÊME message est écarté sans un mot. `_process` écrivait `payload["fire"]` **et**
+  `payload["throw"]` sans exclusion, et `_step_held_fire` s'exécute juste APRÈS
+  `_update_grenade_aim` — gâchette tenue, toute grenade relâchée tombait dans la même fenêtre de
+  coalescence de 105 ms.
+
+> ⚠️ **CE N'EST PAS UN DÉFAUT DU TIR MAINTENU : C'EST UN DÉFAUT QUE LE TIR MAINTENU AUTOMATISE.**
+> Les deux classes préexistaient pour le clic isolé. Le §4bis.5 étant **actif par défaut**
+> (décision §1.8), le clic malheureux occasionnel est devenu une **salve à la cadence de l'arme**,
+> à chaque transition de manche et avant la première. C'est le « faux coup » du §8.141.9 rentré par
+> la porte de derrière.
+
+**Le remède, côté phase**, teste « la manche tourne », **jamais le nom d'une phase** : une phase
+inconnue — ou ajoutée demain côté serveur — est traitée comme un refus, et un état sans champ
+`phase` garde l'ancien comportement. La sonde le vérifie avec une phase INVENTÉE (`entracte`) : un
+miroir écrit `== "intermission"` serait vert sur le vrai cas et faux sur celui-là.
+
+**Le remède, côté grenade**, tient en deux pièces indissociables, et la seconde traite l'ORDRE
+INVERSE que le refus ne peut pas voir (clic d'abord, grenade relâchée ensuite, ou budget anti-flood
+épuisé qui fait patienter un tir déjà armé) :
+
+| Pièce | Ce qu'elle fait | Pourquoi ce sens de priorité |
+|---|---|---|
+| 8ᵉ refus (`_fire_refusal`) | aucun tir ne s'ARME tant qu'un lancer attend | rien n'est présenté au joueur |
+| `elif` à la charge utile | un message ne porte JAMAIS les deux champs | le tir a déjà été **présenté** (`_local_fire_feedback` au clic) ; le lancer, lui, n'a rien joué localement — la grenade ne se voit qu'à l'événement serveur |
+| purge CONDITIONNELLE | `_throw_queued` n'est vidé que s'il est **parti** | vider inconditionnellement, c'était **avaler un geste du joueur** en silence |
+
+L'attente est bornée à **UN message** : `urgent` fait repartir le lancer dès la frame suivante,
+pendant laquelle le 8ᵉ refus interdit tout nouveau tir. Aucun des deux gestes n'est perdu, aucun
+des deux ne ment.
+
+### 3. Dégâts flottants et hitmarker — rien ne s'allume sans le serveur
+
+Pool de **12 `Label` préalloués**, taille POSÉE à la construction (⚠️ 8ᵉ récidive du `size (0,0)`
+interdite), aucun `Label.new` par la suite : 40 touches d'affilée laissent le pool à 12. Le chiffre
+est celui de l'**ÉVÉNEMENT** (`damage`), OR sur une touche ordinaire, **ROUGE** sur le coup fatal
+(`hp` de l'événement tombé à 0) ; l'échelle du hitmarker est rapportée au `hp_max` **du REGISTRE**
+(on le passe à 200, elle rétrécit). Une rafale de FRELON qui place 3 balles = **3 chiffres**,
+décalés les uns des autres pour la lisibilité.
+
+> ⚠️ **LE CONTRÔLE QUI ATTRAPE LA TRICHE NATURELLE : TIRER N'EST PAS TOUCHER.** Faire naître le
+> chiffre au clic « puisqu'on sait qu'on a tiré » serait le mensonge exact que le §1.9 interdit :
+> le client sait qu'il a tiré, il ne sait NI s'il a touché NI combien (table angulaire, posture,
+> pansement : tout est serveur). Un tir **accepté** par la prédiction ne produit donc ni chiffre ni
+> hitmarker ; les dégâts SUBIS et les tirs REFUSÉS n'en produisent pas davantage.
+
+> 🩸 **L'INVARIANT DU POOL a démasqué un vrai défaut pendant le lot.** La première écriture prenait
+> `_damage_pool[_damage_live.size()]` comme étiquette libre : dès qu'un chiffre du MILIEU expirait,
+> l'index retombait sur une étiquette ENCORE EN VOL, et deux entrées vivantes partageaient un
+> `Label` — l'expiration de la première éteignait le chiffre de la seconde en plein écran. **Aucun
+> compte total ne le voyait** : il faut vérifier l'**UNICITÉ** (et `libres + en vol == pool`),
+> expirations entrelacées comprises.
+
+### 4. Le tir maintenu (§4bis.5) — mécaniquement neutre par construction
+
+`_fire_hold_active()` LIT la plateforme (souris, manette) ; `_step_held_fire()` DÉCIDE. La
+séparation rend la décision **jouable par une sonde**, alors que l'état d'un bouton physique ne
+l'est pas — et une règle de cadence qu'aucune garde ne peut rejouer est une règle qu'on croit sur
+parole. Chaque frame tenue repasse par la prédiction des refus : le rythme obtenu est exactement
+`cooldown_ticks` du registre, celui qu'un cliqueur rapide obtenait déjà, et le budget anti-flood de
+9 msg/s n'est jamais dépensé pour un tir que la sim jetterait. Le juge de la sonde est **calculé à
+part**, sur deux cadences INVENTÉES (9 et 37 ticks) : un compte qui suivrait une constante ferait
+rougir l'une des deux.
+
+- **Le son de refus n'appartient qu'au geste VOLONTAIRE** : un clic qui tombe pendant la cadence
+  claque (§8.141.9) ; un MAINTIEN n'est pas une demande répétée mais CONTINUE — la claquer 7 fois
+  par seconde en serait la caricature.
+- **« Chargeur vide » est le seul refus qui PRODUISE quelque chose côté serveur** (il déclenche le
+  rechargement) : le maintien l'envoie **UNE** fois (verrou `_hold_empty_latch`), pas 120.
+- **Interrupteur F10** `auto_fire` (défaut **VRAI**, décision §1.8), clé `TRENCH_TUNE_AUTO_FIRE`
+  dans `ui_strings.csv`. Coupé : un maintien n'enchaîne plus rien, **le clic simple tire toujours**.
+
+### 5. Les 8 sabotages — la garde rougit sur chacun
+
+Chaque cas : sauvegarde → sabotage → `--import` (`EXIT=0`, 0 `ERROR`) → **exécution complète** →
+restauration → **hash re-vérifié**. Ligne verte de référence **de cette étape** :
+`EXIT=0 PASS=84 FAIL=0 ERROR=0` — ⚠️ **périmée** : la ligne courante est `PASS=165` (headless) /
+`PASS=171` (fenêtré), cf. **§8.151.4ter** (le §8.151.4bis, intermédiaire, disait `135`/`141`). Les
+verdicts `75/9`, `82/2`… ci-dessous sont ceux du 2026-08-27 au matin ; le §8.151.4bis rejoue les
+MÊMES huit sabotages sur la sonde élargie, et le §8.151.4ter les rejoue **tous** sur la sonde finale.
+
+| # | Sabotage | SHA256 saboté | Verdict |
+|---|---|---|---|
+| **v** | branche `project_aim` de `_dispersion_pixels()` **SUPPRIMÉE** (le sabotage du critique, mot pour mot) | `75C8B63A` | 🔴 `EXIT=1` **75/9** *(laissait **58/0 TOUT VERT** avant durcissement)* |
+| v2 | `project_aim` appelée mais `_aim_yaw` **oublié** (cône toujours mesuré au centre) | `8CB7A787` | 🔴 `EXIT=1` **76/8** |
+| P1 | 7ᵉ refus supprimé (la phase n'est plus regardée) | `B14C753A` | 🔴 `EXIT=1` **82/2** — *« 4 messages », « 4 retours d'arme »* |
+| P2 | 7ᵉ refus **appris par cœur** (`== "intermission"`) | `65D692DC` | 🔴 `EXIT=1` **83/1** |
+| G1 | 8ᵉ refus supprimé | `2E99586F` | 🔴 `EXIT=1` **81/3** |
+| G2 | exclusion mutuelle levée (`throw` + `fire` dans le même message) | `3EC64DC2` | 🔴 `EXIT=1` **82/2** |
+| G3 | purge **inconditionnelle** de `_throw_queued` (le lancer différé avalé) | `E5241502` | 🔴 `EXIT=1` **82/2** |
+| S1 | **la SONDE elle-même** revient mesurer au centre (`OFFAXIS_SHARES = [0, 0, 0]`) | `9BA101B1` | 🔴 `EXIT=1` **81/3** |
+
+**S1 est le contrôle du contrôle** : les trois sentinelles rougissent avec « 0 angle porteur sur 3,
+divergence max 0,000 px ». La garde du réticule garde désormais **sa propre pertinence** — c'est
+elle qui refuse de rendre un vert obtenu là où les deux formules sont la même.
+
+### 6. Ce qui a été relancé
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_hud` (8 sections **à cette étape**) | **84 `[PASS]` / 0 `[FAIL]`**, TOUT VERT × 3 passes, `EXIT=0`, 0 `ERROR`, 0 `WARNING` — ⚠️ chiffre PÉRIMÉ, voir **§8.151.4ter** (**165** headless / **171** fenêtré, 10 sections) |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` — *le réticule ne ment toujours pas* |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_audio` (18 sections) | **128 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| Porte `imagediff_trench.py` — 2 exécutions fenêtrées de `probe_trench_feel_aim` | `pixels_differents=0`, `delta_max=0`, **`VERDICT=OK`** |
+| Porte `imagediff_trench.py` — **livré contre correctifs NEUTRALISÉS** | `pixels_differents=0`, **`VERDICT=OK`** : les correctifs de JEU sont **pixel-neutres** |
+| `--import` · boot `main_menu` · boot `trench_fp` | `EXIT=0`, **0 `ERROR`** chacun |
+| `perf_trench` (fenêtré, machine au repos, aucun éditeur ouvert) | `frames=8050 · p50=1,413 · p95=1,891 · p99=2,048 ms · 0 saccade` — **sous la ligne de départ** du §8.151.0 (1,433 / 2,190 / 2,451) |
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, **tout `backend/`** (le HUD ne
+demande aucune ligne de serveur : `dispersion_deg` et `hp_max` étaient déjà diffusés).
+
+### 7. 🩸 Le journal mentait encore — 7ᵉ écart code↔doc, et le 2ᵉ d'affilée sur cette entrée
+
+Au dépôt du HUD, le chapeau §8.151 et son §2 affirmaient toujours que « le reste du §4bis
+(réticule par arme, hitmarker de kill, dégâts flottants, tir maintenu) […] viendra après la
+PORTE 1 » et « reste à bâtir » — les quatre étaient sur le disque et verts. L'inventaire du §3 ne
+portait ni `tools/probe_trench_hud.{gd,tscn}`, ni le réglage `auto_fire`, ni la clé
+`TRENCH_TUNE_AUTO_FIRE`. Les deux exemplaires étaient au **même hash** : la règle de synchronisation
+était tenue, c'est le CONTENU qui était faux — un lecteur appliquant « quand les docs se
+contredisent, seul le CODE tranche » n'avait même pas d'indice qu'il fallait trancher.
+
+C'est la **répétition exacte** du §8.151.3 §8, dont la leçon était écrite noir sur blanc :
+*« le journal se tient à chaque dépôt, pas à la clôture »*. Et un périmètre de fichiers qui ne
+contient pas le journal n'est pas une excuse — **le journal fait partie du dépôt**.
+
+### 8. ⚙ EN ATTENTE DE HAKIM
+
+1. **PORTE 1 (humaine)** : le réticule par arme, les dégâts flottants et le tir maintenu se jugent
+   manette en main. Aucun des **165** contrôles (§8.151.4ter ; **135** à cette étape-ci) ne remplace
+   une manche jouée (§8.141 : cinq défauts
+   sortis par une partie, 333 contrôles verts au même moment). ⚠️ Rappel du §8.151.3 §9 : la
+   fenêtre `trench_week` du calendrier est **révolue**, seul l'ENTRAÎNEMENT est jouable.
+2. **⚙ `auto_fire` par défaut** : posé à VRAI par la décision §1.8, « à re-juger à la Porte 1 ».
+3. **⚙ `CONTRAT_RESEAU.md`** : la règle serveur « un soldat n'a que deux mains » (un `throw` accepté
+   écarte le `fire` du même message) n'y est **pas documentée**. Elle est désormais miroitée côté
+   client ; l'écrire au contrat éviterait qu'un futur client la redécouvre en jeu.
+
+---
+
+## §8.151.4bis — LA TRANCHÉE (AAA) : CORRECTIFS DU HUD DE COMBAT (2ᵉ boucle de critique)
+
+> **2026-08-27**, même journée, VAGUE 2ter. Une seconde passe critique sur le HUD livré au
+> §8.151.4 a sorti **4 défauts** — dont un **BLOQUANT** que 119 contrôles verts ne voyaient pas.
+> 100 % client, zéro dépense, **aucune ligne de serveur**. Fichiers touchés :
+> `scripts/game/trench_fp.gd`, `tools/probe_trench_hud.gd`, ce journal (2 exemplaires).
+>
+> ⚠️ **CHIFFRES DATÉS (2026-08-27, matin) — la ligne verte COURANTE vit au §8.151.4ter**
+> (`PASS=165` headless, `PASS=171` fenêtré, **10 sections**). Ce qui suit reste vrai *de cette
+> étape-là* : `probe_trench_hud` → `EXIT=0 PASS=135 FAIL=0 ERROR=0` **headless**, `PASS=141`
+> **fenêtré** (la section 5 « LES PIXELS » ne compte que sous pilote réel), **9 sections** :
+> 0, 1, 1bis, 1ter, 1quater, 2, 3, 4, 5.
+
+### 1. 🩸🩸 LE DÉFAUT BLOQUANT — le viseur cloué dans le coin, jusqu'à VINGT SECONDES
+
+`_refresh_view()` sortait par `if latest.is_empty(): return` **avant** le bloc qui posait la croix,
+et `_build_reticle()` ne posait **aucune** position : tant qu'aucun `trench_state` n'était arrivé,
+`_reticle.position` valait `(0, 0)` — le coin haut-gauche. Pendant ce temps `_process` appelait
+`_world.set_aim()` sans condition : **la caméra suivait la souris, la croix non**. Le joueur
+regardait autour de lui avec un viseur figé dans l'angle de son écran.
+
+**Et la fenêtre n'est pas une frame.** `backend/api/game/../sockets/trench_runner.py` :
+`CONNECT_TIMEOUT_S = 20.0`, la boucle d'attente des humains précède `create_initial_state`, et
+`_init_payload` envoie `"state": None` tant que `rt.state is None`. **Le premier connecté d'un duel
+classé voyait donc le coin de son écran jusqu'à vingt secondes.**
+
+Deux corrections, et les deux sont gardées :
+1. `_place_reticle()` — extrait, appelé **AVANT** la garde d'état, à chaque frame. La position de
+   la croix est la projection de la VISÉE, une grandeur purement **locale** : elle n'a jamais eu de
+   raison de dépendre du serveur.
+2. `_build_reticle()` pose la croix au **centre du viewport** dès la construction (`get_viewport_rect()`
+   et non `size` : les ancres du duel ne sont pas encore résolues — 8ᵉ récidive de §8.140.3 évitée).
+
+**Pourquoi 119 contrôles ne le voyaient pas** : *toutes* les sections poussaient un état avant de
+mesurer — `_section_reticle_position` dès sa troisième ligne. Elles mesuraient un HUD **déjà
+initialisé**. D'où la **section 0**, qui doit rester la première et dont la sentinelle exige
+**registre ET tampon vides**.
+
+### 2. 🩸 « DISPERSION INCONNUE » ÉTAIT RENDUE COMME « DISPERSION NULLE »
+
+`_dispersion_degrees()` rendait `0.0` dès que l'arme courante était absente de `_rules.weapons` —
+`_rules` vide compris — et `_reticle_is_precise()` testait `<= 0.0`. Le doute était donc rendu par
+l'interprétation **la plus flatteuse** : la **croix de PRÉCISION**, c'est-à-dire la promesse propre
+au CONDOR (« ce coup part exactement là »), peinte pour une **VIPÈRE à 0,30°**. Mesuré : `11,90 /
+1,00 / 1,00` (précision) au lieu de `7,00 / 2,00 / 1,50` (ordinaire). C'est mot pour mot ce que la
+décision **§1.9** interdit — « le HUD ne montre que des mécaniques RÉELLES ».
+
+Correctif : `const DISPERSION_UNKNOWN := -1.0`, un sentinelle **négatif** qu'aucun `dispersion_deg`
+légal ne peut prendre. `_dispersion_pixels()` le traite comme le zéro (rien à projeter) ;
+`_reticle_is_precise()` le sépare du zéro et rend **la croix ORDINAIRE**. On promet moins que la
+sim ne donne, jamais l'inverse.
+
+### 3. 🩸 LA PROPRIÉTÉ PHARE DU §4bis.5 N'AVAIT AUCUNE GARDE
+
+« Le tir maintenu ne modifie pas les angles émis, seulement leur CADENCE d'émission » : le contrat
+le dit, la production le faisait (`_queue_fire()` pose `_fire_aim` à chaque tir accepté) — et
+**rien ne le gardait**. La section 2 ne déplaçait jamais la visée entre deux crans tenus, et
+`probe_trench_feel_aim` — la seule sonde qui compare les octets de `_fire_aim` — tire exclusivement
+par `_queue_fire()`, **jamais** par `_step_held_fire`. Un gel de visée **confiné au chemin du
+maintien** passait donc toute la batterie.
+
+Ajouté : **section 2 (h)**. Gâchette tenue 5 s, la visée bouge à **chaque frame** (deux sinusoïdes
+de périodes incommensurables), et chaque cran doit émettre la visée **de son instant, octet pour
+octet**. Deux sentinelles : au moins 3 crans, et la visée a **vraiment bougé** entre chacun — sans
+quoi « la visée émise est la visée courante » serait satisfait par une visée immobile.
+
+### 4. La ligne verte du journal était fausse en cinq endroits (les deux exemplaires)
+
+`84` au lieu de `119` (et « 4 sections » au lieu de 8). Ce n'est pas une coquille : un agent qui
+compare `135` à `84` ne peut plus distinguer « la sonde a grandi » de « la sonde a été amputée », et
+pourrait *restaurer* les 84. Les cinq occurrences sont désormais **datées** et renvoient ici.
+
+### 5. Les 14 sabotages — la garde rougit sur chacun
+
+Chaque cas : référence posée → sabotage par motif **exact** (échec bruyant si le motif n'apparaît
+pas une seule fois) → `--import` (`EXIT=0`, 0 `ERROR`) → **exécution complète** → restauration →
+**hash re-vérifié identique**.
+
+| # | Sabotage | Verdict `probe_trench_hud` | `probe_trench_feel_aim` |
+|---|---|---|---|
+| **N1b** | pose de construction du réticule **supprimée** | 🔴 `EXIT=1` **133/2** — *« centre peint (40,0, 40,0), à 56,6 px du coin »* | vert |
+| **N1c** | `_place_reticle()` remis **DERRIÈRE** la garde d'état (le défaut, mot pour mot) | 🔴 `EXIT=1` **132/3** — *« écart (−920,0, −500,0) px »* | vert |
+| **N2** | `_dispersion_degrees()` rend `0.0` quand l'arme est inconnue (le défaut) | 🔴 `EXIT=1` **132/3** — *« peint 11,90/1,00/1,00 »* | vert |
+| **N3** | **la SONDE** : un état poussé au tout début de la section 0 | 🔴 `EXIT=1` **133/2** — *« _buffer 1 état »* | vert |
+| **C4** | `_fire_aim` gelé pour **TOUS** les tirs (sabotage 4 du critique) | 🔴 `EXIT=1` **134/1** *(restait **119/0** avant)* | 🔴 `EXIT=1` |
+| **C5** | `_fire_aim` gelé **UNIQUEMENT dans le maintien** (sabotage 5 du critique) | 🔴 `EXIT=1` **134/1** *(restait **119/0** avant)* | vert — *et c'est le point* |
+| v | branche `project_aim` de `_dispersion_pixels()` supprimée | 🔴 `EXIT=1` **126/9** | vert |
+| v2 | `project_aim` appelée mais `_aim_yaw` oublié | 🔴 `EXIT=1` **127/8** | vert |
+| P1 | 7ᵉ refus supprimé | 🔴 `EXIT=1` **133/2** | vert |
+| P2 | 7ᵉ refus appris par cœur (`== "intermission"`) | 🔴 `EXIT=1` **134/1** | vert |
+| G1 | 8ᵉ refus supprimé | 🔴 `EXIT=1` **132/3** | vert |
+| G2 | exclusion mutuelle levée (`throw` + `fire` même message) | 🔴 `EXIT=1` **133/2** | vert |
+| G3 | purge inconditionnelle de `_throw_queued` | 🔴 `EXIT=1` **133/2** | vert |
+| S1 | **la SONDE** revient mesurer au centre (`OFFAXIS_SHARES = [0, 0, 0]`) | 🔴 `EXIT=1` **132/3** | vert |
+
+**C5 est le sabotage qui justifie tout le §3** : `probe_trench_feel_aim` reste **VERTE** dessus —
+un gel confiné au maintien lui est invisible par construction. Seule la section 2 (h) le voit.
+
+**N1b a démasqué une garde molle au passage** : le contrôle « la croix n'est pas dans le coin »
+comparait à `OFFAXIS_MIN_DIVERGENCE` (1,5 px). Or un réticule cloué à `(0, 0)` peint son centre à
+`(40, 40)` — la moitié de sa boîte — donc à **56,6 px** du coin : le contrôle restait **VERT sur le
+défaut exact qu'il prétendait garder**. Seuil refondé sur **le quart de la diagonale d'écran**
+(550,7 px). Mesuré avant/après : `133/2` au lieu de `134/1`.
+
+### 6. Ce qui a été relancé
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_hud` **headless** (9 sections) | **135 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` — ⚠️ chiffre de CETTE étape, périmé : voir §8.151.4ter (**165**, 10 sections) |
+| `probe_trench_hud` **fenêtré** (section 5 « LES PIXELS » active) | **141 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` — ⚠️ périmé : **171** au §8.151.4ter |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT** (5/0 · 5/0), `EXIT=0` — *le réticule ne ment toujours pas* |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT** (4/0 · 32/0), `EXIT=0` |
+| `probe_trench_audio` (18 sections) | **128 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| Porte `imagediff_trench.py` — 2 exécutions fenêtrées de `probe_trench_feel_aim` | `pixels_differents=0`, `delta_max=0`, **`VERDICT=OK`** |
+| `--import` · boot `main_menu` · boot `trench_fp` (`--quit-after`) | `EXIT=0`, **0 `ERROR`** chacun |
+| `perf_trench` (fenêtré) | 3 exécutions : `p99 = 2,760` (passe **À FROID**) puis **2,195** et **2,198 ms** — sous la ligne de départ du §8.151.0 (2,451). `p50 = 1,478 / 1,454 / 1,464`, **0 saccade** |
+
+⚠️ **Le premier `perf_trench` est dit tel quel** : 2,760 ms de p99 au passage à froid (compilation
+de shaders, cache de fichiers). Les deux suivants tiennent 2,19 ms. Le maquiller en ne gardant que
+le meilleur chiffre serait exactement le genre de vert qu'on passe son temps à démasquer ici.
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, **tout `backend/`** (lu en
+seule lecture pour dater la fenêtre des 20 s).
+
+### 7. ⚙ EN ATTENTE DE HAKIM
+
+1. **PORTE 1 (humaine)** — inchangée : le HUD se juge manette en main.
+2. **⚙ `probe_trench_feel_aim` ne couvre pas le chemin du maintien.** La section 2 (h) referme le
+   trou côté HUD, mais la sonde de référence de « le feel n'écrit pas la visée » tire toujours
+   exclusivement par `_queue_fire()`. Elle est **hors du périmètre de cette étape** ; y ajouter une
+   séquence tenue serait le geste propre.
+3. **⚙ La fenêtre d'attente des 20 s reste vide de tout retour joueur.** Le viseur est réparé, mais
+   l'écran ne dit toujours pas « on attend l'adversaire ». C'est un point de PRODUIT, pas un défaut
+   de HUD — à trancher par Hakim.
+
+---
+
+## §8.151.4ter — LA TRANCHÉE (AAA) : CORRECTIFS DU HUD DE COMBAT (3ᵉ boucle de critique)
+
+> **2026-08-27**, même journée, VAGUE 2ter. Une **troisième** passe critique sur le HUD a sorti
+> **3 défauts** : une **DETTE DE GARDE majeure** (la propriété phare du §4bis.1 n'était gardée par
+> rien — le sabotage restait **TOUT VERT** sur 135 contrôles), un **défaut de fonctionnement mineur
+> ANTÉRIEUR à la vague**, et une **porte de perf qui n'était tenue par rien**. 100 % client, zéro
+> dépense, **aucune ligne de serveur**. Fichiers touchés : `scripts/game/trench_fp.gd`,
+> `tools/probe_trench_hud.gd`, `tools/perf_trench.gd`, ce journal (2 exemplaires).
+>
+> ⚠️ **CHIFFRES DATÉS (2026-08-27) — la ligne verte COURANTE vit au §8.151.4quater**
+> (`PASS=191` headless, `PASS=206` fenêtré, **12 sections**). Ce qui suit reste vrai *de cette
+> étape-là* : `probe_trench_hud` → `EXIT=0 PASS=165 FAIL=0 ERROR=0` **headless**, `PASS=171`
+> **fenêtré** (la section 5 « LES PIXELS » ne compte que sous pilote réel). **10 sections** : 0, 1,
+> 1bis, **1quinquies**, 1ter, 1quater, 2, 3, 4, 5.
+> Et `perf_trench` rend désormais **`VERDICT|budget=OK|sortie=PROPRE`** avec `EXIT=0` — c'est cette
+> ligne-là, et plus le seul code retour, qui dit que la mesure s'est terminée proprement.
+
+### 1. 🩸🩸 LE DÉFAUT MAJEUR — « À QUI EST CE CÔNE ? », gardé par RIEN
+
+La propriété phare du §4bis.1 — *le réticule peint la dispersion de MON arme* — n'avait **aucune
+garde capable de la départager**. Cause : **toutes** les fixtures de la sonde donnaient **la même
+arme aux DEUX joueurs** (`_push_phase` posait `weapon_id` sur le slot 1 *et* le slot 2 ;
+`_push_enemy` posait « frelon » des deux côtés). « Mon cône » et « son cône » étaient donc
+littéralement **le même nombre** dans chaque mesure.
+
+**MESURÉ** : `_dispersion_degrees()` passé de `_player_of(_latest(), _my_slot)` à
+`_player_of(_latest(), 3 - _my_slot)` — **un seul signe** — laissait la sonde `EXIT=0`,
+**135 PASS / 0 FAIL, TOUT VERT**, quand les onze autres sabotages de la même session rougissaient
+tous. Le code de production était JUSTE : c'était une **dette de garde**, pas un défaut visible.
+
+**Et ce n'est pas théorique** : côté serveur l'escalade est **PAR TIREUR**
+(`trench_sim.py::_credit_hit` promeut le FRELON au seuil de touches, `_apply_pick` donne le
+chacal/condor du choix). Les deux joueurs portent donc **régulièrement** des armes différentes en
+partie. Sous la régression, un joueur au FRELON (0,85°) se serait vu peindre la croix de
+**PRÉCISION du CONDOR** — « ce coup part exactement là » — c'est-à-dire mot pour mot le mensonge que
+la décision **§1.9** a été écrite pour tuer.
+
+C'est **la leçon de l'étape précédente remontée d'un cran** : les fixtures n'étaient plus les
+VALEURS de production (le double faussé s'en charge depuis §8.151.4), mais elles restaient une
+**CONFIGURATION que la production ne rencontre jamais**.
+
+Trois corrections, et les trois sont gardées :
+1. **`_push_pair(mienne, sienne)`** — une fixture où je choisis MON arme *et* la sienne, y compris
+   le couple où c'est **LUI** qui porte le cône nul.
+2. **Section 1quinquies « À QUI EST CE CÔNE »** — 4 couples × **2 slots** (un
+   `_player_of(_latest(), 1)` écrit en dur serait vert au slot 1 et faux au slot 2, c'est-à-dire une
+   partie sur deux), chacun mesuré sur **l'ÉCARTEMENT** *et* sur **la FORME** de la croix. Cônes du
+   double faussé (0,17° / 1,21° / 0,00°), attendu par l'arithmétique indépendante : **le mien
+   9,078 px, le sien 27,910 px** — 18,8 px d'écart, aucune ambiguïté possible.
+3. **Toutes les autres poussées sont devenues DISSYMÉTRIQUES** (`_other_weapon` : la première arme
+   du registre installé qui ne soit pas la mienne, **aucun id en dur**). Conséquence mesurée : le
+   sabotage ne rougit plus seulement dans la section neuve, il rougit **partout** — `130/35`.
+
+⚠️ **Et la fixture porte sa PROPRE sentinelle** : chaque couple relit l'état poussé et exige d'y
+voir **deux armes distinctes**. Sans elle, le jour où quelqu'un resymétriserait la fabrique, les
+16 contrôles redeviendraient verts **pour la pire des raisons**. Sabotage `S-FIXTURE` (les deux
+lignes reçoivent la même arme) : **157/8** — les huit sentinelles de fixture, et elles seules.
+
+### 2. 🩸 UN CLIC PENDANT QUE F10 EST OUVERT ARMAIT UN VRAI TIR
+
+Le chemin du **MAINTIEN** fermait correctement le panneau de réglage (`_step_held_fire`, dont le
+commentaire l'écrivait noir sur blanc : *« un glissé de curseur sur un réglage ne doit pas vider un
+chargeur »*) — mais la garde d'`_input` s'arrêtait à `_match_over / _abandon / _choice`, et
+`_queue_fire()` partait. **Le raisonnement était juste, il n'avait été appliqué qu'à UN des deux
+chemins.**
+
+Conséquence, manette en main, en ENTRAÎNEMENT : ouvrir F10, cliquer un curseur → détonation,
+traçante, cran de recul, une munition consommée. **MESURÉ** : panneau posé visible, état `playing`,
+cadence échue → `_input(clic gauche)` rendait `_fire_queued = true` / `_shot_count = 1`, là où
+`_step_held_fire(true)` sur le MÊME état rendait `false` / `0`.
+
+⚠️ **ANTÉRIEUR À CETTE VAGUE** — `git show HEAD:scripts/game/trench_fp.gd` porte la même liste de
+portes, mot pour mot. Ce n'est ni un mensonge de HUD ni une désynchro (le tir était légitime et
+accepté), et F10 ne s'ouvre qu'en entraînement : **mineur**, et corrigé d'une ligne.
+
+Correctif : `_tuning.visible` rejoint la garde d'`_input`. ⚠️ **Aucun effet sur la visée** : la
+branche de mouvement de souris est déjà inerte quand le panneau est ouvert (`_capture_mouse(false)`
+relâche le curseur, `mouse_mode != CAPTURED`). Seule la porte du TIR change.
+
+**Garde : section 2 (i)**, et elle mesure **les DEUX chemins séparément** — c'est l'ASYMÉTRIE qui
+était le défaut, une garde qui n'en lirait qu'un laisserait l'autre dériver. Encadrée d'une
+sentinelle (panneau fermé → ce clic-là tire) et d'une contre-épreuve (panneau refermé → il repart),
+sans quoi les deux contrôles seraient verts sur un client qui ne tirerait plus jamais. Les compteurs
+sont **remis à plat entre les deux chemins** : sans ça, le contrôle du maintien héritait de ce que
+le clic venait de poser, rougissait sur le défaut du clic et restait muet sur le sien.
+
+### 3. 🩸 `perf_trench` : la porte « 0 ERROR » n'était tenue par RIEN — et il y avait bien une fuite
+
+Trois exécutions sur six se terminaient par `ERROR: 1 resources still in use at exit`
+(+ `WARNING: 2 ObjectDB instances were leaked at exit`) et rendaient malgré tout **`EXIT=0`**.
+
+⚠️ **CE QU'UN SCRIPT GODOT NE PEUT PAS FAIRE, DIT PLUTÔT QUE MAQUILLÉ** : cette ERROR est émise par
+le moteur **APRÈS `quit()`**, pendant `ResourceCache::clear()` / `ObjectDB::cleanup()`. Aucun code
+GDScript ne tourne encore à cet instant et le moteur n'expose aucun crochet de relecture de ses
+propres erreurs hors éditeur. On ne peut donc pas « lire l'ERROR » — on peut **exiger que le
+processus soit QUIESCENT avant de quitter**, et rougir sinon.
+
+**SENTINELLE DE SORTIE**, trois volets, et le code retour SUIT (`EXIT != 0` dès que le budget **ou**
+la sentinelle rougit) :
+1. **Zéro survivant** — un `WeakRef` par nœud construit (`_release()` remplace tous les
+   `queue_free()` directs) ; le compte de nœuds et d'orphelins doit revenir à la référence prise
+   **avant** la première construction ;
+2. **Le DRAIN** — on ne quitte plus une frame après le dernier `queue_free()` : les suppressions
+   sont différées et les RID partent vers le thread de rendu. On avance jusqu'à ce que les
+   compteurs **ne bougent plus** 30 frames d'affilée (plafond dur, sinon `JAMAIS_STABLE` et rouge) ;
+3. **La FUITE DE CYCLE** — trois montages/démontages identiques du monde texturé ; le premier
+   absorbe les allocations de première fois, les deux suivants doivent rendre des compteurs qui **ne
+   grossissent pas**. Comparer un cycle à lui-même **immunise contre le plancher du
+   `ResourceCache`** (une texture chargée qui reste cachée n'est pas une fuite).
+
+**🩸 ET LA SENTINELLE A MORDU À SA PREMIÈRE EXÉCUTION**, sur un défaut que 8 passes consécutives
+n'avaient pas su reproduire ce matin-là. `--verbose` a fini par le NOMMER :
+
+```
+Leaked instance: AudioStreamPlaybackWAV:… - Reference count: 1
+Leaked instance: AudioStreamWAV:… - Reference count: 1
+Resource still in use: res://assets/audio/music/menu_ambient.wav (AudioStreamWAV)
+```
+
+Le mécanisme est exact et sans mystère : **`trench_fp.gd::_exit_tree()` rend la radio du QG en
+sortant** (`AudioManager.start_menu_ambient()`, symétrique de `start_battle_ambient` — le bon
+comportement pour le JEU, qui retourne aux menus). Le harnais, lui, ne retourne nulle part : il
+libère le duel et quitte, **laissant une musique en cours de lecture**. Une lecture vivante tient
+son flux, le flux tient son fichier. **Rien à corriger dans le jeu** — c'est au harnais d'éteindre
+ce qu'il a allumé (`stop_ambient` + `stop_arena_ambience` + `stop_hub_ambience` avant le verdict).
+Le taux de 3/6 s'explique de lui-même : c'était une course d'arrêt, et `--verbose` (plus lent) la
+faisait disparaître.
+
+**🩸 ET LA SENTINELLE A COMMENCÉ PAR SE TROMPER TOUTE SEULE**, ce qui est dit ici plutôt que
+maquillé : le premier relevé donnait `objets = 1765 / 1766 / 1767`, trois cycles « croissants » qui
+n'avaient **rien** fuité. Un `WeakRef` **est un objet** : la sentinelle comptait sa propre
+comptabilité. Le compte est désormais **net de `_watched.size()`**. Un faux positif de cette famille
+aurait discrédité la garde entière au premier usage.
+
+### 4. Les 18 sabotages — la garde rougit sur chacun
+
+Chaque cas, rejoué **sur le fichier final** : référence `SHA256` → sabotage par motif **exact**
+(échec bruyant si le motif n'apparaît pas **exactement une fois** — deux cas ont d'ailleurs été
+refusés à la première écriture, `2 occurrences` et `0 occurrence`) → `--import` (`EXIT=0`, 0
+`ERROR`) → **exécution complète** → restauration → **`SHA256` re-vérifié identique**.
+
+| # | Sabotage | `probe_trench_hud` | `probe_trench_feel_aim` |
+|---|---|---|---|
+| **C-CONE** | `_dispersion_degrees()` lit `3 - _my_slot` (le défaut §1) | 🔴 `EXIT=1` **130/35** — *(restait **135/0 TOUT VERT** avant)* | vert — *et c'est le point* |
+| **S-FIXTURE** | **la SONDE** : `_push_pair` redonne la même arme aux deux | 🔴 `EXIT=1` **157/8** — les 8 sentinelles de fixture | — |
+| **C-F10** | garde d'`_input` sans `_tuning.visible` (le défaut §2) | 🔴 `EXIT=1` **164/1** — *le CLIC* | — |
+| **C-F10b** | garde de `_step_held_fire` sans `_tuning.visible` | 🔴 `EXIT=1` **164/1** — *le MAINTIEN* | — |
+| N1b | pose de construction du réticule supprimée | 🔴 `EXIT=1` **163/2** | vert |
+| N1c | `_place_reticle()` remis DERRIÈRE la garde d'état | 🔴 `EXIT=1` **162/3** | vert |
+| N2 | `_dispersion_degrees()` rend `0.0` quand l'arme est inconnue | 🔴 `EXIT=1` **162/3** | vert |
+| N3 | **la SONDE** : un état poussé au début de la section 0 | 🔴 `EXIT=1` **163/2** | — |
+| C4 | `_fire_aim` gelé pour **TOUS** les tirs | 🔴 `EXIT=1` **164/1** | 🔴 `EXIT=1` |
+| C5 | `_fire_aim` gelé **UNIQUEMENT dans le maintien** | 🔴 `EXIT=1` **164/1** | vert — *le §8.151.4bis §3 tient toujours* |
+| v | branche `project_aim` de `_dispersion_pixels()` supprimée | 🔴 `EXIT=1` **156/9** | vert |
+| v2 | `project_aim` appelée mais `_aim_yaw` oublié | 🔴 `EXIT=1` **157/8** | vert |
+| P1 | 7ᵉ refus supprimé | 🔴 `EXIT=1` **163/2** | vert |
+| P2 | 7ᵉ refus appris par cœur (`== "intermission"`) | 🔴 `EXIT=1` **164/1** | vert |
+| G1 | 8ᵉ refus supprimé | 🔴 `EXIT=1` **162/3** | vert |
+| G2 | exclusion mutuelle levée (`throw` + `fire` même message) | 🔴 `EXIT=1` **163/2** | vert |
+| G3 | purge inconditionnelle de `_throw_queued` | 🔴 `EXIT=1` **163/2** | vert |
+| S1 | **la SONDE** revient mesurer au centre (`OFFAXIS_SHARES = [0, 0, 0]`) | 🔴 `EXIT=1` **162/3** | vert |
+| **`--fuiter`** | **`perf_trench`** : les nœuds construits sont détachés, jamais libérés | 🔴 `EXIT=1` · `survivants=6` · `orphelins=995` · `drain=JAMAIS_STABLE` · `cycle_croissant=OUI` · **`VERDICT=SALE`** | — |
+
+⚠️ **`--fuiter` rend ses nœuds APRÈS le verdict**, et c'est délibéré : la sentinelle a déjà tranché
+sur des `WeakRef` vivants, le code retour est posé. Laisser au moteur un millier de nœuds orphelins
+porteurs de RID ne prouve rien de plus — **mesuré, ça fait tomber le processus en `0xC0000005`
+pendant l'arrêt**, et un code retour de PLANTAGE n'est pas le code retour d'un REFUS. On veut lire
+« la garde a dit non », pas « le harnais s'est écrasé ».
+
+### 5. Ce qui a été relancé
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_hud` **headless** (10 sections) | **165 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR`, 0 `WARNING` — ⚠️ chiffre de CETTE étape, périmé : voir §8.151.4quater (**191**, 12 sections) |
+| `probe_trench_hud` **fenêtré** (section 5 « LES PIXELS » active) | **171 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` — ⚠️ périmé : **206** au §8.151.4quater |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT** (5/0 · 5/0), `EXIT=0` — *le réticule ne ment toujours pas* |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT** (4/0 · 32/0), `EXIT=0` |
+| `probe_trench_audio` (18 sections) | **128 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_grenade` **headless** | `EXIT=2` **NON APPLICABLE** — *la garde du §8.151.3 : elle mesure des pixels, elle refuse de verdir sous pilote muet* |
+| Porte `imagediff_trench.py` — 2 exécutions fenêtrées de `probe_trench_feel_aim` | `pixels_differents=0`, `delta_max=0`, **`VERDICT=OK`** |
+| `--import` · boot `main_menu` · boot `trench_fp` (`--quit-after`) | `EXIT=0`, **0 `ERROR`** chacun |
+| `perf_trench` (fenêtré) | **5 exécutions, 5 fois `EXIT=0` · `VERDICT=PROPRE` · 0 `ERROR` · 0 « leaked »** — là où 3 sur 6 fuyaient avant. `p99 = 2,088 / 2,094 / 2,116 / 2,116 / 2,134 ms`, **sous la ligne de départ** du §8.151.0 (2,451) ; `p50 = 1,413-1,433` (départ 1,433), `p95 = 1,916-2,019` (départ 2,190), **0 saccade** sur les cinq |
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, **tout `backend/`** (lu en
+lecture seule pour dater l'escalade par tireur), et `audio_manager.gd` (la sentinelle l'APPELLE,
+elle ne le modifie pas).
+
+### 6. La ligne verte du journal, re-datée (les deux exemplaires)
+
+`135` / `141` deviennent des chiffres **du 2026-08-27 au matin** et renvoient ici. C'est la
+répétition de la leçon du §8.151.4bis §4 : un agent qui compare `165` à `135` doit pouvoir
+distinguer « la sonde a grandi » de « la sonde a été amputée ».
+
+### 7. ⚙ EN ATTENTE DE HAKIM
+
+1. **PORTE 1 (humaine)** — inchangée : le HUD se juge manette en main. Aucun des **165** contrôles
+   ne remplace une manche jouée (§8.141 : cinq défauts sortis par une partie, 333 contrôles verts au
+   même moment).
+2. **⚙ `probe_trench_feel_aim` ne couvre toujours pas le chemin du maintien** (report du
+   §8.151.4bis §7.2). La section 2 (h) referme le trou côté HUD ; y ajouter une séquence tenue reste
+   le geste propre, et reste hors périmètre.
+3. **⚙ Le clavier reste actif pendant que F10 est ouvert.** Seule la porte du TIR a été refermée —
+   `R` (rechargement), `S`/`CTRL`/`↑`/`↓` (posture) et `2` (pansement) sont traités **avant** la
+   garde, donc pendant le panneau. C'est le comportement d'AVANT sur les trois panneaux
+   (`_abandon`, `_choice`, F10), il est **hors du défaut signalé**, et le corriger changerait le
+   ressenti de trois écrans : à trancher par Hakim plutôt que décidé en passant.
+4. **⚙ La fenêtre d'attente des 20 s reste vide de tout retour joueur** (report du §8.151.4bis
+   §7.3) — point de PRODUIT, pas défaut de HUD.
+
+---
+
+## §8.151.4quater — LA TRANCHÉE (AAA) : CORRECTIFS DU HUD DE COMBAT (4ᵉ boucle de critique)
+
+> **2026-08-27**, même journée, VAGUE 2ter. Une **quatrième** passe critique a sorti **2 défauts** :
+> un **BLOQUANT de fonctionnement** — le correctif « le clic et le maintien ont désormais la MÊME
+> liste de portes » (§8.151.4ter §2) n'était fait qu'**aux deux tiers**, un **TROISIÈME chemin
+> d'action** issu du même `_process` n'ayant **aucune** porte de panneau : la GRENADE — et une
+> **dette de garde majeure** : rien, dans 165 contrôles, n'exigeait que les chiffres de dégâts
+> soient **PEINTS**. 100 % client, zéro dépense, **aucune ligne de serveur** (celle du §8.151.3
+> reste la seule du chantier). Fichiers touchés : `scripts/game/trench_fp.gd`,
+> `tools/probe_trench_hud.gd`, ce journal (2 exemplaires).
+>
+> ⚠️ **CHIFFRES DATÉS (2026-08-27) — la ligne verte COURANTE vit au §8.151.4quinquies** (`222`
+> headless / `237` fenêtré, **13 sections**). `191` / `206` sont les chiffres de CETTE étape-ci.
+>
+> **Ligne verte de cette étape :** `probe_trench_hud` → `EXIT=0 PASS=191 FAIL=0 ERROR=0`
+> **headless**, `PASS=206` **fenêtré** (les sections **3bis** et **5** ne comptent que sous pilote
+> réel). **12 sections** : 0, 1, 1bis, 1quinquies, 1ter, 1quater, 2, **2bis**, 3, **3bis**, 4, 5.
+
+### 1. 🩸🩸 LE DÉFAUT BLOQUANT — LA GRENADE N'AVAIT AUCUNE PORTE DE PANNEAU
+
+`_process` lance **trois** chemins d'action : `_input` (le clic), `_step_held_fire` (le maintien) et
+`_update_grenade_aim` — appelé **juste avant** le maintien. Le §8.151.4ter a refermé l'asymétrie
+entre les deux premiers **en recopiant la liste** dans le second. Le troisième ne testait NI
+`_tuning.visible`, NI `_abandon_overlay.visible`, NI `_choice_panel.visible` — rien que la posture et
+le stock. Et comme il **SONDE la plateforme** (`Input.is_mouse_button_pressed(RIGHT)`,
+`Input.is_key_pressed(G)`) au lieu d'attendre un événement, le relâchement du curseur
+(`_capture_mouse(false)`) ne le protégeait pas davantage.
+
+Conséquence, manette en main :
+
+- **ENTRAÎNEMENT** — F10 ouvert, un clic **DROIT** sur un curseur de réglage **armait la visée**
+  (décalque au sol + viewmodel en pose de lancer) et le relâchement **LANÇAIT une vraie grenade** ;
+- **DUEL CLASSÉ** — ÉCHAP ouvre l'abandon : un clic droit ou un `G` tenu lançait une grenade pendant
+  que la boîte « abandonner ? » était à l'écran ;
+- **DUEL CLASSÉ** — le panneau de **CHOIX D'ARME** s'ouvre **TOUT SEUL** à 10 touches, en plein
+  combat, et relâche la souris : même résultat.
+
+**Et le coût n'est pas un chargeur qui se recharge.** Registre serveur, lu en lecture seule :
+`stock_start = 2`, `stock_max = 3`, `regen_ticks = 300` (15 s), `damage_max = 40`. C'est **la moitié
+du stock** et une explosion dans l'arène, pour un geste que le joueur n'a pas voulu.
+
+**MESURÉ** : bouton droit pressé → `_update_grenade_aim(1/60)` → relâché → `_update_grenade_aim(1/60)`,
+sous **chacun** des trois panneaux → `vise = true`, `lance = true`, charge `{"target_x": 8.3}`. Et la
+sonde restait **165 PASS / 0 FAIL / EXIT=0** pendant toute la mesure : **aucun** des 165 contrôles ne
+passait par là. La contre-épreuve du chemin de TIR sur le MÊME état rougissait, elle (164/1).
+
+⚠️ **ANTÉRIEUR À CETTE VAGUE** — ce n'est pas une régression du HUD de combat ; c'est un comportement
+FAUX que Hakim aurait vu au premier ÉCHAP.
+
+**Le correctif n'est pas une TROISIÈME copie.** Recopier la liste une fois de plus, c'est programmer
+la quatrième divergence. Elle vit désormais à **un seul endroit** — `_ui_blocks_actions()` — et les
+trois chemins l'**appellent**. Deux conséquences mesurées : le sabotage qui ampute la liste (`C-F10`)
+rougit maintenant **sur les trois chemins à la fois** (**186/5**), et les sabotages qui coupent **un
+seul** appel rougissent **chacun sur son chemin** (**190/1**, **190/1**, **180/11**).
+
+**Et la grenade en cours est RANGÉE, pas mise en pause** : un panneau qui s'ouvre pendant la visée
+(le choix d'arme — personne ne l'appelle, il arrive) déclenche `_cancel_grenade()` — décalque éteint,
+pose abandonnée, verrou `_grenade_cancelled` posé. Geler la visée pour la rendre à la fermeture
+relâcherait, des secondes plus tard, un lancer que le joueur ne vise plus ; et **annuler ne coûte
+rien** (aucune grenade consommée, `_throw_queued` reste vide).
+
+**Garde : section 2bis**, **22 contrôles**. Les trois panneaux sont ouverts par leur **chemin de
+production** (`_tuning.toggle()`, `_input(ÉCHAP)`, l'événement serveur `weapon_choice`) — poser
+`.visible = true` à la main mesurerait un panneau que le jeu n'ouvre pas comme ça. Et elle ne lit pas
+qu'un drapeau : `_aiming_grenade` est un état interne ; ce que le joueur **voit** est le décalque au
+sol et la pose de lancer, ce qu'il **paie** est la charge utile mise en file — les trois sont mesurés
+ensemble. Encadrée d'une **sentinelle** (panneaux fermés → le geste arme ET lance) et d'une
+**contre-épreuve** (refermés → il repart, souris **et** clavier).
+
+⚠️ **LE CLAVIER EST GARDÉ LUI AUSSI, et `_input` ne pouvait rien pour lui** : `G` tenu est lu par
+`Input.is_key_pressed` depuis `_process`, sans jamais passer par un événement. Vérifié sous
+`--headless` : le masque de boutons **et** l'état clavier du singleton `Input` répondent tous les deux
+à `parse_input_event` — la sonde pousse donc un vrai état de plateforme, jamais un booléen passé à une
+méthode.
+
+### 2. 🩸 RIEN NE PROUVAIT QUE LES CHIFFRES DE DÉGÂTS SOIENT PEINTS
+
+C'est la pièce centrale du §4bis.3 — la demande littérale de Hakim, « **les dégâts en live** » — et la
+sonde n'en mesurait que la **MÉCANIQUE** : pool préalloué, taille posée, unicité des étiquettes,
+couleur or/rouge, origine sur la silhouette validée par un oracle caméra, montée pilotée par le temps
+de scène, extinction à 0,6 s. Elle ne lisait **jamais `node.visible` dans le sens positif** : la
+section 3 (a) ne vérifiait que « AUCUN événement → aucune étiquette visible ». Et la section 5 « LES
+PIXELS » ne pouvait pas rattraper le coup **par construction** : sa première instruction **MASQUE**
+tous les enfants du HUD sauf `_reticle`.
+
+**MESURÉ** (sabotage `X8`) : `node.visible = true` → `false` dans `_spawn_damage_number` laissait
+**165/0 headless ET 171/0 fenêtré — TOUT VERT**, sur un écran où plus aucun chiffre n'apparaissait. Le
+code de production, lui, était **JUSTE** (mesuré au pixel : 223 pixels `COL_GOLD` dans la boîte de
+l'étiquette) : c'était une **dette de garde**, pas un mensonge affiché.
+
+C'est la **leçon du §8.151.4ter déplacée d'un cran** : là, le *pinceau décidait et la sonde récitait* ;
+ici, la sonde mesurait un **ÉTAT que rien n'obligeait à devenir une IMAGE**. Et c'est l'**asymétrie
+entre les deux ajouts du §4bis** qui signait le trou — le réticule, lui, était gardé de ce côté-là
+(sabotage `X7`).
+
+Deux moitiés, et les deux sont nécessaires :
+
+1. **Côté ÉTAT (section 3, comptée dans les DEUX modes)** — une touche confirmée rend l'étiquette
+   **VISIBLE**, d'**alpha non nul**, et le `_hud` qui la porte est lui-même visible ; puis, après
+   ~0,6 s, l'étiquette est **REDEVENUE invisible** — sans quoi rendre l'étiquette au pool **sans
+   l'éteindre** laisserait un chiffre figé sur la silhouette (sabotage `X8b`).
+2. **Côté IMAGE (section 3bis, NEUVE, pilote réel seulement)** — on relit les **pixels**, **avant** le
+   masquage de la section 5, et on compte ceux de la couleur du chiffre **dans la boîte du nœud** :
+   couleur lue dans `duel`, boîte lue sur le nœud, échelle **déduite** de l'image, aucune constante
+   recopiée. Deux cas — **OR** (touche ordinaire) et **ROUGE** (coup fatal).
+   Trois sentinelles la rendent porteuse : la boîte est **dans l'image** et **hors du réticule** (les
+   pixels comptés sont ceux du CHIFFRE, pas ceux du hitmarker) ; **avant** l'événement la boîte est
+   **vide de cette couleur** ; **après** ~0,6 s elle l'est **de nouveau**.
+   Relevé : `OR` **174 px** (fond 0) · `ROUGE` **300 px** (fond 0).
+
+⚠️ Sous `--headless` la section 3bis **le dit** au lieu de compter des contrôles vides (règle de
+`probe_trench_grenade`, §8.151.3) : le total headless reste stable et ces **9** contrôles s'ajoutent
+quand la sonde est relancée **fenêtrée**.
+
+### 3. Les 26 sabotages — la garde rougit sur chacun
+
+Chaque cas, rejoué **sur le fichier final** : référence `SHA256` → sabotage par motif **exact** (échec
+bruyant si le motif n'apparaît pas **exactement une fois**) → `--import` (`EXIT=0`, 0 `ERROR`) →
+**exécution complète** → restauration → **`SHA256` re-vérifié identique**. **25 restaurations sur 25
+vérifiées identiques**, aucun motif refusé.
+
+| # | Sabotage | `probe_trench_hud` headless | fenêtré |
+|---|---|---|---|
+| **C-P3** | `_update_grenade_aim` sans porte de panneau — **LE défaut §1** | 🔴 `EXIT=1` **180/11** — *restait **165/0 TOUT VERT*** | 🔴 **195/11** |
+| **X8** | `node.visible = true` retiré de `_spawn_damage_number` — **LE défaut §2** | 🔴 `EXIT=1` **190/1** — *restait **165/0 TOUT VERT*** | 🔴 **203/3** |
+| **C-F10** | la liste PARTAGÉE amputée de `_tuning.visible` | 🔴 `EXIT=1` **186/5** — *les trois chemins à la fois* | — |
+| **C-P1** | `_input` n'appelle plus la liste | 🔴 `EXIT=1` **190/1** — *le CLIC* | — |
+| **C-P2** | `_step_held_fire` n'appelle plus la liste | 🔴 `EXIT=1` **190/1** — *le MAINTIEN* | — |
+| **G-CANCEL** | le panneau ne RANGE plus la visée en cours | 🔴 `EXIT=1` **188/3** | — |
+| **G-LOCK** | le verrou d'annulation n'est plus posé à l'ouverture | 🔴 `EXIT=1` **189/2** | — |
+| **X8b** | le chiffre expiré n'est plus éteint (« chiffre éternel ») | 🔴 `EXIT=1` **190/1** | 🔴 **205/1** |
+| **X7** | `_reticle.visible = false` après `_hud.add_child` | 🔴 `EXIT=1` **190/1** | 🔴 **199/7** |
+| C-CONE | `_dispersion_degrees()` lit `3 - _my_slot` | 🔴 `EXIT=1` **156/35** | — |
+| S-FIXTURE | **la SONDE** : `_push_pair` redonne la même arme aux deux | 🔴 `EXIT=1` **183/8** | — |
+| N1b | pose de construction du réticule supprimée | 🔴 `EXIT=1` **189/2** | — |
+| N1c | `_place_reticle()` remis DERRIÈRE la garde d'état | 🔴 `EXIT=1` **188/3** | — |
+| N2 | `_dispersion_degrees()` rend `0.0` quand l'arme est inconnue | 🔴 `EXIT=1` **188/3** | — |
+| N3 | **la SONDE** : un état poussé au début de la section 0 | 🔴 `EXIT=1` **189/2** | — |
+| C4 | `_fire_aim` gelé pour **TOUS** les tirs | 🔴 `EXIT=1` **190/1** | — |
+| C5 | `_fire_aim` gelé **UNIQUEMENT dans le maintien** | 🔴 `EXIT=1` **190/1** | — |
+| v | branche `project_aim` de `_dispersion_pixels()` supprimée | 🔴 `EXIT=1` **182/9** | — |
+| v2 | `project_aim` appelée mais `_aim_yaw` oublié | 🔴 `EXIT=1` **183/8** | — |
+| P1 | 7ᵉ refus supprimé | 🔴 `EXIT=1` **189/2** | — |
+| P2 | 7ᵉ refus appris par cœur (`== "intermission"`) | 🔴 `EXIT=1` **190/1** | — |
+| G1 | 8ᵉ refus supprimé | 🔴 `EXIT=1` **188/3** | — |
+| G2 | exclusion mutuelle levée (`throw` + `fire` même message) | 🔴 `EXIT=1` **189/2** | — |
+| G3 | purge inconditionnelle de `_throw_queued` | 🔴 `EXIT=1` **189/2** | — |
+| S1 | **la SONDE** revient mesurer au centre (`OFFAXIS_SHARES = [0, 0, 0]`) | 🔴 `EXIT=1` **188/3** | — |
+| **`--fuiter`** | **`perf_trench`** : les nœuds construits sont détachés, jamais libérés | 🔴 `EXIT=1` · `survivants=6` · `orphelins=995` · `drain=JAMAIS_STABLE` · `cycle_croissant=OUI` · **`VERDICT=SALE`** | — |
+
+⚠️ **LES DEUX PREMIÈRES LIGNES SONT LE SUJET DE CETTE ÉTAPE** : ce sont les deux seules qui, avant
+elle, laissaient la batterie **intégralement verte** — 165 headless *et* 171 fenêtré. Les 24 autres
+rougissaient déjà et rougissent toujours : la sonde a **grandi**, elle n'a rien perdu.
+
+### 4. Ce qui a été relancé
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_hud` **headless** (12 sections) | **191 `[PASS]` / 0 `[FAIL]`**, TOUT VERT × **3 passes**, `EXIT=0`, 0 `ERROR`, 0 `WARNING` |
+| `probe_trench_hud` **fenêtré** (sections 3bis + 5 actives) | **206 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT** (5/0 · 5/0), `EXIT=0` — *le réticule ne ment toujours pas* |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT** (4/0 · 32/0), `EXIT=0` |
+| `probe_trench_audio` (18 sections) | **128 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_grenade` **headless** | `EXIT=2` **NON APPLICABLE** — *la garde du §8.151.3 : elle mesure des pixels, elle refuse de verdir sous pilote muet* |
+| Porte `imagediff_trench.py` — 2 exécutions fenêtrées de `probe_trench_feel_aim` | `repos_2s.png` et `kick_frame6.png` **IDENTIQUES**, `pixels_differents=0`, `delta_max=0`, **`VERDICT=OK`** |
+| `--import` · boot `main_menu` · boot `trench_fp` (`--quit-after`) | `EXIT=0`, **0 `ERROR`** chacun |
+| `perf_trench` (fenêtré) | 2 exécutions, 2 fois `EXIT=0` · **`VERDICT=PROPRE`** · `budget=OK` · 0 `ERROR` · 0 « leaked ». `p99 = 2,074 / 2,101 ms` — **sous la ligne de départ** du §8.151.0 (2,451) ; `p50 = 1,420 / 1,428` (départ 1,433), `p95 = 1,921 / 1,944` (départ 2,190), **0 saccade** sur les deux |
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, **tout `backend/`** (lu en lecture
+seule pour dater le registre de la grenade), `audio_manager.gd` et `tools/perf_trench.gd`.
+
+### 5. La ligne verte du journal, re-datée (les deux exemplaires)
+
+`165` / `171` deviennent des chiffres **du 2026-08-27** et renvoient ici, comme `135` / `141` avant
+eux. Même raison qu'au §8.151.4ter §6 : un agent qui compare `191` à `165` doit pouvoir distinguer
+« la sonde a grandi » de « la sonde a été amputée ». Le décompte des sections suit (10 → **12**), et
+l'inventaire du §3 aussi.
+
+### 6. ⚙ EN ATTENTE DE HAKIM
+
+1. **PORTE 1 (humaine)** — inchangée : le HUD se juge manette en main. Aucun des **191** contrôles ne
+   remplace une manche jouée (§8.141 : cinq défauts sortis par une partie, 333 contrôles verts au même
+   moment). ⚠️ Cette étape-ci en est la démonstration : le défaut BLOQUANT est un geste de **manette**
+   que 165 contrôles verts ne touchaient pas.
+2. **⚙ `probe_trench_feel_aim` ne couvre toujours pas le chemin du maintien** (report du §8.151.4bis
+   §7.2, puis §8.151.4ter §7.2). La section 2 (h) referme le trou côté HUD ; y ajouter une séquence
+   tenue reste le geste propre, et reste hors périmètre.
+3. ~~**⚙ Le clavier reste actif pendant que les panneaux sont ouverts**~~ — ✅ **SOLDÉ au
+   §8.151.4quinquies**, et requalifié en **défaut de FONCTIONNEMENT bloquant** : il y avait un
+   **QUATRIÈME** chemin (`_gather_move_dir()`, qui sonde la plateforme depuis `_process` comme la
+   grenade) que ce report ne mentionnait même pas, et le pansement est une ressource **dépensée**
+   par un geste jamais voulu. Texte d'origine : « Seules les portes des TROIS chemins d'ACTION sont
+   refermées (tir au clic, tir maintenu, grenade) — `R`, `S`/`CTRL`/`↑`/`↓` et `2` sont traités
+   **avant** la garde d'`_input`, donc pendant le panneau. […] à trancher par Hakim plutôt que
+   décidé en passant. »
+4. **⚙ La fenêtre d'attente des 20 s reste vide de tout retour joueur** (report du §8.151.4bis §7.3)
+   — point de PRODUIT, pas défaut de HUD.
+5. **⚙ Le §1 de ce chapeau dit encore « Pas d'ADS »**, alors que la décision a été **renversée le
+   2026-08-27** (`PROMPT_TRANCHEE_EXPERIENCE.md` §1.2 : l'ADS est réintégré, sous forme 100 % optique,
+   dans le chantier **§8.152**). Signalé plutôt que corrigé en passant : la ligne appartient au lot
+   §8.152, pas à cette boucle-ci.
+
+---
+
+## §8.151.4quinquies — LA TRANCHÉE (AAA) : LE 4ᵉ CHEMIN D'ACTION (5ᵉ boucle de critique)
+
+> **2026-08-27**, même journée, VAGUE 2ter. Une **cinquième** passe critique a sorti **1 défaut**,
+> **BLOQUANT, de fonctionnement** : le correctif « une seule liste de portes » s'était arrêté aux
+> gestes **OFFENSIFS**. Il existait un **QUATRIÈME chemin d'action** — le CLAVIER — grand ouvert
+> pendant que les trois panneaux sont à l'écran. 100 % client, zéro dépense, **aucune ligne de
+> serveur**. Fichiers touchés : `scripts/game/trench_fp.gd`, `tools/probe_trench_hud.gd`, ce journal
+> (2 exemplaires).
+>
+> ⚠️ **CHIFFRES DATÉS (2026-08-27) — la ligne verte COURANTE vit au §8.151.4sexies** (`237`
+> headless / `254` fenêtré, **14 sections**). Ceux-ci sont ceux de CETTE étape :
+> `probe_trench_hud` → `EXIT=0 PASS=222 FAIL=0 ERROR=0 WARNING=0` **headless**, `PASS=237`
+> **fenêtré** (les sections **3bis** et **5** ne comptent que sous pilote réel). **13 sections** :
+> 0, 1, 1bis, 1quinquies, 1ter, 1quater, 2, 2bis, **2ter**, 3, 3bis, 4, 5.
+
+### 1. 🩸🩸 LE DÉFAUT BLOQUANT — LE SOLDAT MARCHAIT PENDANT QUE LE JOUEUR RÉGLAIT UN CURSEUR
+
+Le §8.151.4quater a refermé **trois** chemins : le clic (`_input`), le maintien (`_step_held_fire`)
+et la grenade (`_update_grenade_aim`). Ce sont les trois qui **TIRENT** ou **LANCENT**. Restait tout
+ce que le soldat fait d'autre, et c'était **le même motif, à l'identique** :
+
+- **`_gather_move_dir()`** — appelé par `_process`, il **SONDE la plateforme**
+  (`Input.is_key_pressed(KEY_LEFT/RIGHT/A/D/Q)`) au lieu d'attendre un événement. C'est **exactement**
+  ce qui rendait la grenade insensible au relâchement du curseur : la garde d'`_input` ne pouvait
+  rien pour lui, et `_capture_mouse(false)` pas davantage. **Aucune** porte de panneau.
+- **le bloc de touches d'`_input`** — traité **AU-DESSUS** de la garde : `R` → `_reload_queued`,
+  `S`/`CTRL`/`↑`/`↓` → `_stance_toggle`, `2` → `_item_queued = "bandage"`.
+
+Les quatre atteignaient le serveur dans la charge coalescée **sans aucune condition de panneau**
+(`payload["move"]` / `["stance"]` / `["reload"]` / `["item"]`).
+
+Conséquence, manette en main : **les trois panneaux relâchent la souris**. Le joueur ne pouvait plus
+viser — mais son soldat **marchait, s'accroupissait, rechargeait et se soignait**. Pire : les
+`HSlider` du panneau F10 et les boutons des trois panneaux se pilotent **AUX FLÈCHES** (navigation de
+focus Godot). **Régler un curseur faisait littéralement faire des pas au soldat.** Et le pansement
+est une ressource **rare** (1 par manche) : `2` la dépensait sur un geste jamais voulu.
+
+**MESURÉ, panneau F10 ouvert** : `pos 2 → 1` à la flèche DROITE, `posture = down` à la flèche BAS,
+`reload` et `item` **VRAIMENT partis** dans une charge passée à `NetworkManager.send_trench_input`.
+Et la sonde restait **191 PASS / 0 FAIL / EXIT=0** pendant toute la mesure. La démonstration tient en
+deux lignes **sous le MÊME panneau** : la GRENADE était bien fermée (le correctif du §8.151.4quater
+marche), le DÉPLACEMENT ne l'était pas.
+
+⚠️ **ANTÉRIEUR À CETTE VAGUE**, comme le précédent : ce n'est pas une régression du HUD de combat.
+
+### 2. Le remède : **une porte PAR ACTION**, jamais une porte globale
+
+Une garde posée en tête d'`_input` aurait fermé le défaut **et la sortie avec** : ÉCHAP, F10, F1 et
+F3 doivent continuer de répondre **pour FERMER les panneaux**, et `1`/`2` doivent continuer de
+**CHOISIR L'ARME** tant que le panneau de choix est à l'écran — ce sont **SES** touches. Le bloc de
+touches est donc **coupé en deux** par la garde partagée `_ui_blocks_actions()` :
+
+1. **au-dessus** — ce qui pilote les PANNEAUX (ÉCHAP, `G` d'annulation, F1, F3, F10, `1`/`2` du
+   panneau de choix) ;
+2. **la garde** — la même liste que les trois autres chemins, toujours à un seul endroit ;
+3. **en dessous** — ce qui agit sur le SOLDAT (`S`/`CTRL`/`↑`/`↓`, `R`, `2` pansement).
+
+`_gather_move_dir()`, lui, rend **`0`** quand la garde ferme. Zéro et non « on ignore » : la valeur
+rendue alimente **à la fois** la prédiction locale **et** le champ `move` du message. Les tenir d'un
+seul geste est la seule façon de ne pas voir le client diverger du serveur d'un pas à chaque appui.
+
+**⚠️ ET LA SONDE A SORTI UN DÉFAUT DU CORRECTIF LUI-MÊME**, qui n'aurait pas survécu à une partie :
+`_queue_pick()` **referme le panneau séance tenante**, donc la garde, atteinte une ligne plus bas, ne
+bloquait **plus rien** — la même frappe `2` choisissait l'arme **ET** dépensait un pansement
+(`arme = « condor »` + `file objet = « bandage »`). Le `return` du bloc 1 n'est pas décoratif : une
+touche = un geste.
+
+### 3. La garde : **section 2ter**, 31 contrôles
+
+Elle ne lit pas des drapeaux de plus :
+
+- le **déplacement** est mesuré par la POSITION PRÉDITE (ce que le joueur voit bouger) **et** par le
+  champ `move` de la charge **RÉELLE** — le bandeau F3 est rempli par `_log_input(payload)` à
+  l'intérieur même du bloc d'envoi, avec la charge passée à `send_trench_input` ;
+- le **rechargement** et le **pansement** sont mesurés **ARMÉS puis CONSOMMÉS** : les drapeaux ne
+  sont vidés qu'**APRÈS** l'envoi, une consommation prouve donc que la charge les portait ;
+- les trois panneaux sont ouverts par leur **chemin de production** (`_tuning.toggle()`,
+  `_input(ÉCHAP)`, l'événement serveur `weapon_choice`) ;
+- le PAS passe par un **vrai état de plateforme** (`Input.parse_input_event`), parce que
+  `_gather_move_dir()` sonde la plateforme et qu'un booléen passé à une méthode mesurerait un chemin
+  que le jeu n'emprunte pas.
+
+Encadrée d'une **sentinelle** (panneaux fermés → les quatre gestes répondent, et le bandeau F3 a bien
+été **rafraîchi** — sinon tout ce qui suit serait une lecture périmée), d'une **contre-épreuve**
+(refermés, les quatre repartent) et d'une sous-section **(e) SORTIE** qui exige qu'ÉCHAP, F10, F1 et
+F3 répondent **encore** sous un panneau ouvert.
+
+⚠️ **DEUX PIÈGES DE MESURE RENCONTRÉS ET REFERMÉS**, tous deux consignés dans la sonde :
+
+1. **le faux vert par SATURATION du `clampi`** — mesuré collé à la borne, un pas qui PART se lit
+   « pos 0 → 0 » et fait conclure à une porte là où il n'y a qu'un mur. **Recentrage avant chaque
+   pas**, et les sentinelles attrapent ce vert-là.
+2. **le panneau de choix se referme TOUT SEUL** — contrairement à la section 2bis (qui n'appelle que
+   `_update_grenade_aim`), la 2ter fait tourner de **VRAIS `_process`**, donc `_refresh_view`, qui
+   referme le panneau dès que l'état ne porte plus d'échéance (`choice_deadline_tick = 0`). Sans la
+   fixture `_push_choice_deadline`, les quatre contrôles mesuraient un panneau **FERMÉ** en croyant
+   le tenir ouvert.
+
+Et une leçon de **rangement d'état** : cette section fait faire de VRAIS pas ; remettre `_pred_pos`
+sans rejouer `set_pose` laissait la **CAMÉRA** une position plus loin. La section 3 (h) rougissait
+alors de **352,7 px** — un espacement d'arène au pixel près — et la secousse de la même section, tirée
+d'une explosion posée à la position 2 alors que la caméra était en 1, ne franchissait plus le seuil.
+
+### 4. Les 5 sabotages — la garde rougit sur chacun
+
+Protocole inchangé : référence `SHA256` → sabotage par motif **exact** (échec bruyant si le motif
+n'apparaît pas **exactement une fois**) → `--import` (`EXIT=0`, 0 `ERROR`) → **exécution complète** →
+restauration → `SHA256` **re-vérifié identique**. **5 restaurations sur 5 vérifiées identiques**
+(`65EBED16…D90F9836` de bout en bout), aucun motif refusé.
+
+| # | Sabotage | `probe_trench_hud` headless |
+|---|---|---|
+| **C-P4a** | `_gather_move_dir()` sans porte de panneau — **LE défaut §1** | 🔴 `EXIT=1` **219/3** — *restait **191/0 TOUT VERT*** |
+| **C-P4b** | `R` retraité **AU-DESSUS** de la garde (le comportement d'avant) | 🔴 `EXIT=1` **219/3** |
+| **C-P4c** | **LA PORTE GLOBALE** en tête d'`_input` — le correctif naïf qui ENFERME le joueur | 🔴 `EXIT=1` **201/21** |
+| **C-P4d** | la frappe `2` du panneau de choix ne s'arrête plus (arme **+** pansement) | 🔴 `EXIT=1` **221/1** |
+| **C-F10** | la liste PARTAGÉE amputée de `_tuning.visible` | 🔴 `EXIT=1` **213/9** — *les **QUATRE** chemins à la fois (5 fails au §8.151.4quater)* |
+
+⚠️ **C-P4c EST LE PLUS INSTRUCTIF DES CINQ** : c'est le correctif qu'on écrit spontanément, et il
+rougit sur **21** contrôles. Sans la sous-section (e), il serait passé pour une bonne réponse.
+
+### 5. Ce qui a été relancé
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_hud` **headless** (13 sections) | **222 `[PASS]` / 0 `[FAIL]`**, TOUT VERT × **3 passes**, `EXIT=0`, 0 `ERROR`, 0 `WARNING` |
+| `probe_trench_hud` **fenêtré** (sections 3bis + 5 actives) | **237 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_audio` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_grenade` **headless** | `EXIT=2` **NON APPLICABLE** — *la garde du §8.151.3 : elle mesure des pixels, elle refuse de verdir sous pilote muet* |
+| `--import` · boot `main_menu` · boot `trench_fp` (`--quit-after`) | `EXIT=0`, **0 `ERROR`** chacun |
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, **tout `backend/`**,
+`tools/perf_trench.gd`, et les **dettes de famille « garde »** listées ci-dessous.
+
+### 6. La ligne verte du journal, re-datée (les deux exemplaires)
+
+`191` / `206` deviennent des chiffres **du 2026-08-27** et renvoient ici, comme `165` / `171` et
+`135` / `141` avant eux. Un agent qui compare `222` à `191` doit pouvoir distinguer « la sonde a
+grandi » de « la sonde a été amputée ». Le décompte des sections suit (12 → **13**).
+
+### 7. ⚙ EN ATTENTE DE HAKIM
+
+1. **PORTE 1 (humaine)** — inchangée : le HUD se juge manette en main. Aucun des **222** contrôles ne
+   remplace une manche jouée. ⚠️ Cette étape-ci le redit : le défaut BLOQUANT est un geste de
+   **clavier** que 191 contrôles verts ne touchaient pas.
+2. **⚙ `probe_trench_feel_aim` ne couvre toujours pas le chemin du maintien** (report du §8.151.4bis
+   §7.2, puis §8.151.4ter §7.2, puis §8.151.4quater §6.2).
+3. **⚙ DETTE 1 — rien ne prouve, SOUS `--headless`, que les CHIFFRES DE DÉGÂTS soient PEINTS** : la
+   section 3 lit désormais `visible` et l'alpha, la 3bis compte les pixels — mais **seulement en
+   fenêtré**. Famille « garde », hors périmètre de cette boucle-ci.
+4. **⚙ DETTE 7 — la porte `perf_trench` est un FAUX VERT sous `--headless`, et le journal se trompe
+   de cause.** `perf_trench.gd` l.122 appelle `DisplayServer.window_set_vsync_mode(VSYNC_DISABLED)` et
+   l'en-tête l.11 promet « vsync COUPÉE avant le premier chiffre » ; sous `--headless` l'appel est un
+   **no-op SILENCIEUX**, le harnais **imprime lui-même la preuve** (`vsync : 1`, l.129) et **aucun**
+   contrôle ne rougit. Les chiffres headless sont donc dénués de sens (`1741 frames / 12,005 s =
+   145,0 fps pile`, étalement p50→p99 de 0,056 ms = signature d'un **cadencement**). **ET les
+   l.6410-6412 de ce journal les imputent à « un éditeur Godot ouvert en parallèle, PID 11776 »** —
+   écart code↔doc : la cause est `--headless`, pas la charge machine (chiffres reproduits À
+   L'IDENTIQUE par la boucle de critique, seule session Godot en cours). Remède suggéré : faire
+   **ROUGIR** le harnais quand `window_get_vsync_mode() != 0`. `tools/perf_trench.gd` est **hors
+   périmètre** de cette boucle (consigne : ne pas y toucher).
+5. **⚙ DETTES 2, 3, 4, 5, 6** (famille « garde », reportées telles quelles) — l'écartement du réticule
+   mesuré via une fonction à appelant unique ; la POSITION du réticule sans garde au sens strict ; le
+   hitmarker éteint par la sonde plutôt que par le temps ; `_check_warn_window` (sonde audio)
+   satisfiable par une fenêtre trop courte ; `dispersion_deg`/`mag_size`/`reload_ticks` des fixtures
+   mis à l'abri d'une recopie mais **pas gardés**.
+6. **⚙ La fenêtre d'attente des 20 s reste vide de tout retour joueur** — point de PRODUIT.
+7. **⚙ Le §1 du chapeau §8.151 dit encore « Pas d'ADS »** — la ligne appartient au lot §8.152.
+
+---
+
+## §8.151.4sexies — LA TRANCHÉE (AAA) : LE SÉLECTEUR D'ARME NE GÈLE PLUS LE SOLDAT (6ᵉ boucle)
+
+> **2026-08-27**, même journée, VAGUE 2ter. Une **sixième** passe critique a sorti **2 défauts**,
+> **tous deux BLOQUANTS et de FONCTIONNEMENT** — et tous deux tiennent au correctif précédent :
+> l'un en est né (la porte partagée **gelait le soldat 5,0 s en plein combat**), l'autre existait
+> avant mais il l'**aggravait** (refermer un panneau **recapturait la souris par-dessus un autre
+> panneau encore à l'écran**). 100 % client, zéro dépense, **aucune ligne de serveur**. Fichiers
+> touchés : `scripts/game/trench_fp.gd`, `tools/probe_trench_hud.gd`, ce journal (2 exemplaires).
+>
+> **LIGNE VERTE COURANTE — c'est CELLE-CI qu'il faut comparer, pas les 222 du §8.151.4quinquies :**
+> `probe_trench_hud` → `EXIT=0 PASS=237 FAIL=0 ERROR=0 WARNING=0` **headless**, `PASS=254`
+> **fenêtré** (les sections **3bis**, **5** et les **2 contrôles de PLATEFORME** de la 2quater ne
+> comptent que sous pilote réel). **14 sections** : 0, 1, 1bis, 1quinquies, 1ter, 1quater, 2, 2bis,
+> 2ter, **2quater**, 3, 3bis, 4, 5.
+
+### 1. 🩸🩸 DÉFAUT N°1 — LE CORRECTIF GELAIT LE SOLDAT PENDANT 5 SECONDES DE COMBAT RÉEL
+
+Le §8.151.4quinquies a étendu la porte partagée `_ui_blocks_actions()` — **`_choice_panel` compris**
+— à **tout** ce que fait le soldat : déplacement (`_gather_move_dir`), posture, rechargement,
+pansement, grenade. Le raisonnement valait pour F10 et pour la boîte d'abandon ; il ne valait **pas**
+pour le panneau de **CHOIX D'ARME**, et la différence est mesurable dans le serveur :
+
+| Ce que le sélecteur d'arme n'est pas | Vérifié dans `backend/api/game/trench_sim.py` |
+|---|---|
+| ce n'est pas le JOUEUR qui l'ouvre | `_credit_hit` l.1239 : `shooter.choice_deadline_tick = tick + ESCALATION["choice_window_ticks"]` — posé sur le **TIREUR SEUL**, au 10ᵉ coup au but (`choice_hits` l.313) |
+| ce n'est pas une fraction de seconde | `choice_window_ticks = 100` (l.315) à `TICK_RATE_HZ = 20` (l.94) = **5,0 s** ; `_begin_round` l.1275-1276 **ré-échéance** un choix resté ouvert au coup d'envoi |
+| ce n'est pas une pause | la section 2 de `step` (l.~872-925) applique `stance`, `move`, `reload` et `item` **sans aucune condition** sur `choice_deadline_tick` — seul `pick_weapon` (l.900) la regarde. L'adversaire, lui, joue normalement |
+
+Manette en main : Hakim place son 10ᵉ coup au but, le sélecteur s'affiche, et pendant qu'il lit
+« CHACAL ou CONDOR » son soldat **ne marche plus, ne s'accroupit plus** (la posture est LE bouton de
+panique du jeu), **ne recharge plus, ne se soigne plus** — sous le feu. Le client **REFUSAIT des
+entrées que le serveur, lui, honore** : une désynchronisation intention-joueur / simulation, soit
+exactement la famille de défaut qui a coûté la partie du §8.141.
+
+⚠️ **CE QUI ÉTAIT DÉJÀ FERMÉ SOUS CE PANNEAU AVANT LA VAGUE — et le reste** : le TIR et la VISÉE.
+Ce qui était NEUF et nuisible, c'est la perte du **pas**, de l'**accroupissement**, du
+**rechargement** et du **pansement**.
+
+### 2. Le remède : **DEUX portes**, une seule liste écrite, et leur différence tient en un panneau
+
+```gdscript
+func _ui_blocks_survival() -> bool:      # pas · posture · rechargement · pansement
+	return _match_over or _abandon_overlay.visible or (_tuning != null and _tuning.visible)
+
+func _ui_blocks_actions() -> bool:       # clic · maintien · visée de grenade — et la SOURIS
+	return _ui_blocks_survival() or _choice_panel.visible
+```
+
+- **`_ui_blocks_survival()`** ferme sous les panneaux que **le joueur** ouvre : leurs `HSlider` et
+  leurs boutons se pilotent **AUX FLÈCHES** (navigation de focus Godot), régler un curseur ferait
+  marcher le soldat. Le sélecteur n'y est plus.
+- **`_ui_blocks_actions()`** garde les trois gestes **OFFENSIFS**. Le sélecteur y reste, et ce
+  n'est pas une exception : ces trois-là ont besoin de **la souris**, que les trois panneaux
+  relâchent — sous le sélecteur, lacet et site sont **gelés** (`_input` n'écoute la souris que
+  CAPTURÉE), donc le décalque de grenade promettrait un point que le joueur ne peut plus corriger.
+  C'est aussi, mot pour mot, « **un panneau tient l'écran** » : d'où son second usage, la souris.
+- **L'AUTRE MOITIÉ DU REMÈDE** : les deux boutons du sélecteur passent en **`FOCUS_NONE`**. Sans
+  ça, marcher aux flèches pendant qu'il est à l'écran déplacerait son focus, et `ui_accept`
+  choisirait une arme sur un geste de **déplacement**. Ils gardent la souris et **leurs** touches
+  (`1`/`2`) ; ils ne prennent plus celles du soldat. C'est ce qui retire au déplacement **toute**
+  raison d'être gâté là.
+
+Le bloc de touches d'`_input` est donc coupé **au bon endroit** : ce qui pilote les PANNEAUX répond
+toujours (ÉCHAP, F1, F3, F10, `1`/`2` du sélecteur), ce qui agit sur le SOLDAT passe **au-dessus**
+de la porte offensive, sous la sienne, et ne restent en dessous que la VISÉE et le TIR.
+
+### 3. 🩸 DÉFAUT N°2 — REFERMER UN PANNEAU RECAPTURAIT LA SOURIS PAR-DESSUS UN AUTRE
+
+`_capture_mouse()` était un **poseur nu**, et ses cinq appelants raisonnaient chacun sur **LEUR**
+seul panneau (`not _tuning.visible`, `not _abandon_overlay.visible`, `not _match_over`). Chemin le
+plus court, avec le réflexe le plus naturel qui soit, en ENTRAÎNEMENT :
+
+1. **F10** ouvre les réglages → souris rendue au joueur ;
+2. **ÉCHAP** (le réflexe pour fermer un panneau de réglages) ouvre en fait « abandonner ? » ;
+3. **ÉCHAP** à nouveau la referme et appelait `_capture_mouse(not _abandon_overlay.visible)` =
+   **CAPTURE VRAIE**, alors que `_tuning.visible` était toujours vrai.
+
+À l'écran : le panneau de réglages est là, **le curseur a disparu**, plus un seul réglage cliquable
+— et, depuis le correctif précédent, le soldat était gelé par-dessus le marché. Même classe en duel
+CLASSÉ : le sélecteur s'ouvre tout seul, ÉCHAP + ÉCHAP recapturait par-dessus lui et ses deux
+boutons devenaient inatteignables à la souris ; `_queue_pick` faisait la même chose à l'envers,
+par-dessus un F10 encore ouvert.
+
+**Le remède, dans la doctrine de source unique** : un **seul site de décision**, appelé par tout ce
+qui ouvre ou ferme un panneau —
+
+```gdscript
+func _restore_mouse() -> void:
+	_capture_mouse(not _ui_blocks_actions())     # « qui tient l'écran ? » n'a qu'UNE réponse
+```
+
+Les **six** sites de fermeture/ouverture y passent (`weapon_chosen`, ÉCHAP, F10, échéance de choix
+expirée, `_open_choice`, `_queue_pick`, bouton ANNULER de l'abandon) ; ne restent en
+`_capture_mouse` **nu** que les inconditionnels : entrée en duel, sortie d'arbre, écran de fin,
+retour au hub.
+
+### 4. La garde : **section 2quater** neuve (12 contrôles headless + 2 fenêtrés) et **(d) de la 2ter RETOURNÉE**
+
+⚠️⚠️ **ET IL A FALLU MESURER AUTRE CHOSE QUE `Input.mouse_mode`, PARCE QU'IL MENT SOUS `--headless`.**
+Mesuré, pilote muet : `Input.mouse_mode = MOUSE_MODE_CAPTURED` puis relecture → **`0` (VISIBLE)**,
+toujours. Une section qui lirait la plateforme serait donc **VERTE** sur « la souris reste au
+joueur » quoi qu'il arrive, et **ROUGE** sur « elle revient au duel » quoi qu'il arrive. La
+production garde donc sa **DÉCISION** à côté de l'appel (`_mouse_captured`, posé par
+`_capture_mouse` lui-même) : la sonde la lit sous pilote muet, et **deux contrôles de PLATEFORME**,
+en fenêtré, **recollent** cette décision à `Input.mouse_mode` (mesuré : `mode=0` panneau ouvert,
+`mode=2` écran libre). L'état ET son image — jamais l'un sans l'autre.
+
+Tout passe par les **chemins de production** : la touche F10, la touche ÉCHAP, l'événement serveur
+`weapon_choice`, le bouton du sélecteur (`_queue_pick`). Poser `.visible` à la main n'appellerait
+aucun site de fermeture, c'est-à-dire précisément ce qui est en cause.
+
+La **section 2ter (d)** exige maintenant l'**INVERSE** de ce qu'elle figeait : sous le sélecteur, le
+pas, la posture et le rechargement **RÉPONDENT** (position prédite **et** champ `move` de la charge
+RÉELLE, rechargement **armé puis consommé**) — pendant que la porte OFFENSIVE, elle, **ferme** (le
+clic n'arme aucun tir, avec sa contre-épreuve : panneau refermé, le même clic repart). Deux portes,
+deux mesures : c'est leur **DIFFÉRENCE** qui est le sujet, pas l'une des deux. Un contrôle de plus
+tient le `FOCUS_NONE` des deux boutons.
+
+### 5. Les 5 sabotages — la garde rougit sur chacun
+
+Protocole inchangé : référence `SHA256` → sabotage par motif **exact** (échec bruyant si le motif
+n'apparaît pas **exactement une fois**) → `--import` (`EXIT=0`, 0 `ERROR`) → **exécution complète**
+→ restauration → `SHA256` **re-vérifié identique**. **5 restaurations sur 5 vérifiées identiques**
+(`F6AF60D9…781878A8` de bout en bout, batterie rejouée sur le fichier FINAL), aucun motif refusé.
+
+| # | Sabotage | `probe_trench_hud` headless |
+|---|---|---|
+| **C-SEL** | le SÉLECTEUR remis dans la porte de **SURVIE** — **LE défaut §1** | 🔴 `EXIT=1` **234/3** |
+| **C-OFF** | le SÉLECTEUR retiré de la porte **OFFENSIVE** — la sur-correction naïve | 🔴 `EXIT=1` **230/7** — *grenade, clic **et** souris à la fois* |
+| **C-GREN** | la porte de panneau retirée de la **visée de grenade** (défaut du §8.151.4quater) | 🔴 `EXIT=1` **226/11** |
+| **C-SOURIS** | `_restore_mouse()` ne nie de nouveau **qu'UN drapeau** — **LE défaut §3** | 🔴 `EXIT=1` **232/5** |
+| **C-FOCUS** | les deux boutons du sélecteur **redeviennent focalisables** | 🔴 `EXIT=1` **236/1** |
+
+⚠️ **C-OFF EST LE PLUS INSTRUCTIF** : c'est la « symétrie » qu'on écrit spontanément après avoir lu
+le §1 (« puisque le sélecteur sort d'une porte, qu'il sorte des deux »). Il rougit sur **7**
+contrôles, dont les deux de la souris — la preuve que les deux portes ne sont pas interchangeables.
+
+### 6. Ce qui a été relancé
+
+| Contrôle | Verdict |
+|---|---|
+| `probe_trench_hud` **headless** (14 sections) | **237 `[PASS]` / 0 `[FAIL]`**, TOUT VERT × **3 passes**, `EXIT=0`, 0 `ERROR`, 0 `WARNING` |
+| `probe_trench_hud` **fenêtré** (3bis + 5 + les 2 contrôles de plateforme) | **254 `[PASS]` / 0 `[FAIL]`**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_aim` · `probe_trench_feel_aim` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_falseshot` · `probe_trench_springs` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_audio` | **TOUT VERT**, `EXIT=0`, 0 `ERROR` |
+| `probe_trench_grenade` **headless** | `EXIT=2` **NON APPLICABLE** — *la garde du §8.151.3 : elle mesure des pixels, elle refuse de verdir sous pilote muet* |
+| `--import` · boot `main_menu` · boot `trench_fp` (`--quit-after 30`) | `EXIT=0`, **0 `ERROR`** chacun |
+
+**Non touché, à dessein** : la table v4, la géométrie, les constantes de brouillard §8.140, le
+`trench_grade.gdshader`, l'`Environment` de `trench_fp_world.tscn`, **tout `backend/`** (lu, jamais
+écrit — les trois lignes citées au §1 ont été **re-vérifiées par grep**), `tools/perf_trench.gd`, et
+les **dettes de famille « garde »** reportées ci-dessous.
+
+### 7. 8ᵉ écart code↔doc de la série : l'inventaire du §3 datait de deux boucles
+
+L'entrée « `tools/probe_trench_hud.{gd,tscn}` » annonçait encore **191 contrôles / 206 fenêtré / 12
+sections (§8.151.4 → §8.151.4quater)** : le §8.151.4quinquies avait mis à jour son propre chapeau
+mais **pas** l'inventaire. Corrigé ici (**237 / 254 / 14 sections**), et le §2 du chapeau porte
+désormais les **six** boucles de critique au lieu de quatre. C'est la même leçon que le §8.151.4 §7,
+le §8.151.3 §8 et le §8.146 : **le journal se périme d'abord là où personne ne relit**.
+
+### 8. ⚙ EN ATTENTE DE HAKIM
+
+1. **PORTE 1 (humaine)** — inchangée, et cette boucle-ci la redit plus fort que les précédentes :
+   les **deux** défauts se voient **manette en main en une manche** (un soldat qui ne répond plus
+   pendant 5 s ; un curseur qui disparaît) et **222 contrôles verts** ne les voyaient pas.
+2. **⚙ `probe_trench_feel_aim` ne couvre toujours pas le chemin du maintien** (report du
+   §8.151.4bis §7.2, puis .4ter, .4quater, .4quinquies).
+3. **⚙ DETTE 1 — rien ne prouve, SOUS `--headless`, que les CHIFFRES DE DÉGÂTS soient PEINTS**
+   (famille « garde », reportée telle quelle).
+4. **⚙ DETTE 7 — la porte `perf_trench` est un FAUX VERT sous `--headless`** :
+   `DisplayServer.window_set_vsync_mode()` y est un **no-op silencieux**, le harnais imprime
+   lui-même `vsync : 1` (l.129) et **aucun** contrôle ne rougit, alors que l'en-tête l.26 déclare le
+   lancement fenêtré **obligatoire**. Remède suggéré : faire **ROUGIR** le harnais quand
+   `window_get_vsync_mode() != 0`. `tools/perf_trench.gd` est **hors périmètre** (consigne).
+5. **⚙ DETTES 2, 3, 4, 5, 6** (famille « garde », reportées telles quelles) — dont, sur
+   `probe_trench_audio` : `_check_warn_window` **satisfiable par une fenêtre trop courte** dès que
+   le pitch est **borné** (`bounded` annule la seconde moitié de la conjonction — un bourdonnement
+   de télégraphe CONDOR deux fois trop court passerait au vert), et `mag_size` / `reload_ticks` des
+   fixtures d'armes **mis à l'abri d'une recopie mais lus par AUCUN contrôle**.
+6. **⚙ La fenêtre d'attente des 20 s reste vide de tout retour joueur** — point de PRODUIT.
+7. **⚙ Le §1 du chapeau §8.151 dit encore « Pas d'ADS »** — la ligne appartient au lot §8.152.
+
+---
+
+## §8.152 — LA TRANCHÉE : VUE 3D COMPLÈTE (chapeau — portage de `Claude-of-Duty`)
+
+Cahier : `PROMPT_TRANCHEE_VUE3D.md`. Décision de Hakim du 2026-08-27 : **porter tout le code
+procédural** de `War-Of-Indipendence/Claude-of-Duty-main/` (armes, mains, rig, adversaire animé)
+plutôt que passer par le pipeline d'assets 3D du projet. **Il n'y a AUCUN asset à récupérer chez
+eux** — vérifié : `find` sur `.glb/.gltf/.fbx/.obj/.hdr` rend zéro fichier, tout est calculé au
+chargement. Volume : **~14 000 lignes JS → GDScript**, sur 11 lots.
+
+Ce chantier ABROGE le pivot sprites §8.138 (viewmodel 2D peint + ennemi billboard) et **annule le
+lot G du §8.151**. Il ne touche NI au serveur, NI aux règles, NI aux cotes de silhouette.
+
+| Lot | Fichier | État |
+|---|---|---|
+| **3D-0 SOCLE** | `trench_mathx.gd`, `trench_meshgen.gd` | ✅ livré (§8.152.0) |
+| **3D-A PIÈCES** | `trench_wparts.gd` | ✅ livré (§8.152.2) |
+| **3D-B ARMES** | `trench_weapons3d.gd` | ✅ livré (§8.152.3) |
+| **3D-B2 OPTIQUE** | dans `trench_wparts.gd` | ✅ livré (§8.152.2) |
+| **3D-C MATÉRIAUX** | `trench_wmaterials.gd` | ✅ livré (§8.152.1) |
+| 3D-D MAINS | `trench_hands.gd` | à faire |
+| 3D-E CLIPS | `trench_wclips.gd` | à faire |
+| 3D-F RIG (le cœur) | `trench_viewmodel3d.gd` | à faire |
+| 3D-F2 ADS | dans le rig | à faire |
+| 3D-G PERSO | `trench_soldier3d.gd` | à faire |
+| 3D-H INTÉGRATION / 3D-I HUD | `trench_fp.gd`, `trench_fp_world.gd` | à faire |
+
+---
+
+## §8.152.0 — VUE 3D : LOT 3D-0 — LE SOCLE (maths du rig + fonderie de géométrie)
+
+**Deux fichiers NEUFS**, sans aucun consommateur pour l'instant : ils se prouvent seuls.
+
+| Fichier | Porte | Contenu |
+|---|---|---|
+| `scripts/game/trench_mathx.gd` | `src/weapons/mathx.js` (230 l.) + `src/core/rng.js` (108 l.) | `smootherstep`, 4 easings, `damp` (forme TAUX), `wrap_pi`, `MathxSpring`, `MathxSpring3`, `Noise1`, `TrenchRng` (xoshiro128) |
+| `scripts/game/trench_meshgen.gd` | `src/weapons/geometry.js` (447 l.) | `MeshData`, `box`/`blob`, `lathe_z`, `tube_z`, `rod_z`, `dome`, `extrude` (avec trous), `round_rect`, `ring`, `screw`, `knurl_band`, `serrations`, `picatinny`, `mlok_slot`, `Assembly` |
+
+Sonde : `tools/probe_vue3d_meshgen.tscn` — **40 contrôles, tous verts, et 6 sabotages sur 6 la font
+rougir** (hash de restauration vérifié après chaque sabotage).
+
+```
+& <godot_console> --headless --path frontend res://tools/probe_vue3d_meshgen.tscn
+```
+
+### Décisions d'architecture
+
+1. **`trench_mathx.gd` ne double PAS `trench_springs.gd`.** Ce sont deux fichiers DIFFÉRENTS chez la
+   référence (`weapons/mathx.js` vs `player/springs.js`), pour deux clients différents : le RIG du
+   viewmodel d'un côté, le FEEL du joueur de l'autre. Le nouveau fichier **préload** l'ancien et ne
+   re-porte rien de ce qu'il tient déjà.
+   ⚠️ **Il y a donc DEUX classes de ressort, et c'est voulu** : `TrenchSpring` intègre en explicite
+   sous-échantillonné (1/360 s), `MathxSpring` en **implicite** inconditionnellement stable. Les ~20
+   couches de `viewmodel.js` ont toutes leurs constantes réglées contre la courbe de l'implicite —
+   changer d'intégrateur en gardant les nombres, c'est garder la partition en changeant d'instrument.
+   Règle d'emploi : ce que `viewmodel.js` anime → `MathxSpring` ; ce que `springs.js` anime →
+   `TrenchSpring`.
+2. **`Assembly` range par matériau** et porte des **ancres nommées** (bouche, axe de visée, prises de
+   main, pièces mobiles) : sans elles, chaque consommateur re-devinerait des coordonnées en dur.
+3. **`src/render/` et `src/materials/` NE SONT PAS portés** (cahier §3) : Godot fournit HDR, tonemap,
+   bloom, ombres en cascade, GTAO, PBR. Le lot 3D-C utilisera des `StandardMaterial3D`.
+
+### ⚠️ SEPT PIÈGES RENCONTRÉS — dont quatre auraient produit un FAUX VERT
+
+1. **Le sens de parcours des triangles est INVERSÉ entre three.js et Godot** (trigo vs **horaire**).
+   Recopier l'ordre des indices produit un maillage retourné, invisible en `CULL_DISABLED`. Parade en
+   deux verrous : (a) aucune primitive n'écrit d'indices, tout passe par `_tri`/`_quad` qui
+   **orientent d'après la normale analytique** ; (b) la sonde mesure le **VOLUME SIGNÉ** — un contrôle
+   qui ne peut PAS être satisfait par construction, et qui attrape un maillage globalement retourné.
+2. **🩸 LA SONDE A AFFICHÉ « TOUT VERT » ALORS QU'AUCUN CONTRÔLE N'AVAIT TOURNÉ.** Les deux modules ne
+   compilaient pas ; Godot a journalisé une `SCRIPT ERROR` par section, sauté les huit sections, et
+   `_fails` est resté vide — donc vert. Parade : la sonde **compte les contrôles JOUÉS** et exige le
+   total exact (`CHECKS_ATTENDUS`).
+3. **🩸 `--import` N'A PAS VU CES ERREURS DE COMPILATION.** Zéro ligne signalée sur deux scripts qui ne
+   s'analysaient pas : l'import n'analyse que ce qu'il charge. **Ne jamais conclure « 0 ERROR » d'un
+   `--import` seul** — seul le lancement RÉEL de la scène les sort.
+4. **🩸 `--quit-after` rend un code de sortie 0 même quand le script n'a jamais chargé.** Le lanceur ne
+   doit pas juger sur le code de retour mais **exiger la ligne de verdict** dans la sortie.
+5. **🩸 « La fonction rend 32 triangles » n'était pas une preuve qu'elle triangule.** La face percée
+   passait par un « trou de serrure » donné à `Geometry2D.triangulate_polygon` : le bon NOMBRE de
+   triangles (n−2), mais **488 mm² d'aire pour 460 réels — +6 % de chevauchement**, et 40 arêtes de
+   bord. Balayage de la largeur de fente de 0 à 1e-4 m : l'erreur reste bloquée entre +6,1 % et
+   +7,6 % — le découpeur d'oreilles du moteur ne sait pas traiter un polygone qui se touche lui-même.
+   **Remplacé par une COUTURE des deux boucles** (`_emit_ring_cap`) : exactement `n_ext + n_trou`
+   triangles, aucun chevauchement, sommets EXACTEMENT sur les boucles donc raccord étanche par
+   construction. Limite assumée : un seul trou (les 8 appels ajourés de la référence sont tous dans
+   ce cas), et `push_warning` au-delà.
+6. **Une classe interne GDScript ne peut PAS appeler une statique de son script englobant**
+   (`Parse Error: Function "..." not found in base self.`, Godot 4.7 — vérifié dans le moteur). Elle
+   atteint en revanche les statiques d'une classe interne **sœur**. D'où `merge` / `weld_data` /
+   `transform_from_dict` portées par `MeshData`, et une façade au niveau du script.
+   ⚠️ Vaut aussi pour les **constantes** : `WELD_QUANTUM` a dû descendre dans `MeshData`.
+7. **`PackedVector3Array` stocke des float 32 bits**, et **GDScript ne supporte pas `%e`** dans son
+   formatage de chaînes. Deux contrôles rougissaient sur une géométrie juste : une tolérance de 1e-9
+   est plus serrée que la précision du support (les volumes sont désormais affichés en **mm³**).
+
+### Défauts de FONCTIONNEMENT trouvés par la sonde (pas des dettes — des bugs corrigés)
+
+- **Les normales des trous étaient doublement inversées** : trou stocké en horaire (déjà un
+  demi-tour) PUIS re-nié par un drapeau `flip`. Sa paroi regardait DANS la matière. Mesure : une
+  plaque percée de **3845 mm³ contre 3504 mm³ pour la plaque PLEINE** — le trou AJOUTAIT de la
+  matière. Le drapeau a été **supprimé**, pas corrigé : l'invariant « le contour est trigo, le trou
+  est horaire, donc **la matière est toujours à gauche** » rend le cas particulier inutile.
+- **Off-by-one dans le pont du trou de serrure** : `range(bi, …)` re-poussait `outer[bi]` juste après
+  l'avoir poussé → arête de longueur nulle. (Code depuis retiré au profit de la couture.)
+- **La couture cousait les deux boucles en sens de rotation OPPOSÉS** (contour trigo, trou horaire) →
+  elle partait en vrille : capot de 3426 mm³ au lieu de 2760, 26 arêtes de bord. Les deux boucles sont
+  désormais remises dans le même sens **localement dans `_emit_ring_cap`**, sans toucher à celles que
+  les parois utilisent — les deux besoins sont contradictoires et chacun garde le sien.
+- **Le biseau d'extrusion passait par `Geometry2D.offset_polygon`** (Clipper), qui rend un contour
+  dont le NOMBRE de sommets diffère de l'entrée : plus de correspondance 1:1, donc des FENTES dans la
+  couronne. Remplacé par un **offset par sommet (onglet)** — ce que fait `ExtrudeGeometry` d'ailleurs.
+- **Deux contrôles de la sonde étaient eux-mêmes faux** et ont été refaits :
+  - `D4-3` comptait 17 encoches pour 9 dents — il comptait des POINTS et prenait le vide entre les
+    deux arêtes de biseau d'une même dent (4,7 mm) pour une encoche (5,35 mm). Refait en **union
+    d'intervalles d'OCCUPATION** : 9 segments, crête occupée à 47 % du rail.
+  - `S7` exigeait une dérivée seconde sous 1e-3 sur `smootherstep` — or une différence finie en h ne
+    mesure pas f″(0) mais f″(~h) ≈ 60h = 0,06. Le contrôle est devenu **DISCRIMINANT** : notre 5ᵉ
+    ordre sous 0,5 **ET** le `smoothstep` natif de Godot au-dessus de 5 (mesuré : 0,0598 vs 5,988).
+
+### ⚠️ Deux contrôles ajoutés APRÈS la passe de sabotage (ils manquaient, et le sabotage l'a dit)
+
+- **Sabotage « retirer un masque `& MASK32` » passait au VERT.** `R1` ne comparait que deux RNG
+  sabotés DE LA MÊME FAÇON (forcément d'accord) et ne regardait que la SORTIE, restée masquée ;
+  l'ÉTAT interne, lui, débordait. **« Deux exécutions sont d'accord » ne prouve rien sur la justesse,
+  seulement sur le déterminisme.** Ajout de `R6`/`R7` : les 8 premiers tirages et une somme de
+  contrôle sur 1000 tirages comparés à une **réplique écrite HORS MOTEUR**, plus une borne sur l'état.
+- **Sabotage « retirer l'assèchement » passait au VERT** parce qu'il était testé sur un ressort RAIDE
+  (12 Hz) : son dénominateur implicite vaut ~5,1, la vélocité tombe dans les dénormaux puis à zéro
+  toute seule en ~450 pas. Le repos exact était atteint SANS assèchement. `S2` utilise désormais un
+  ressort **SOUPLE** (2 Hz, 2 s), dont la queue vaut encore ~1e-20 : seul l'assèchement la tue.
+
+### Budget de triangles (baseline — descriptif, pas normatif)
+
+`box(seg=1)`=44 · `box(seg=3)`=204 · `lathe_z`=80 · `tube_z`=336 · `rod_z`=200 · `dome`=240 ·
+`extrude`=124 · `ring`=320 · `screw`=168 · `knurl_band`=480 · `serrations`=352 · `picatinny`=440 ·
+`mlok_slot`=248. Banc complet : **3 440 triangles**.
+
+---
+
+## §8.152.1 — VUE 3D : LOT 3D-C — LES MATÉRIAUX D'ARME et L'USURE D'ARÊTE
+
+**Un fichier NEUF** : `scripts/game/trench_wmaterials.gd`, ADAPTATION (et non portage) de
+`src/weapons/materials.js` (1 215 l.). Le cahier §3 l'impose : « ⛔ ne PAS porter leurs shaders
+GLSL, utiliser `StandardMaterial3D` ». Leur fichier est à 80 % du pilotage d'une bibliothèque de
+surfaces procédurales que Godot remplace par son propre PBR. **On porte le RAISONNEMENT, on jette
+la plomberie.**
+
+Sonde : `tools/probe_vue3d_materials.tscn` — **25 contrôles verts, 5 sabotages sur 5 la font
+rougir**. Le lot 3D-0 reste vert (40/40) après les modifications apportées à `trench_meshgen.gd`.
+
+### La décision qui porte tout : TROIS CLASSES, séparées par la TEINTE
+
+Leur commentaire est catégorique et c'est la seule chose à ne surtout pas « harmoniser » : **la
+teinte est le seul indice de séparation qui survit à une pièce large de 40 px** en tir à la hanche.
+
+| Classe | Clés | Nature |
+|---|---|---|
+| **1** | `alu`, `alu_fine` | aluminium anodisé dur — diélectrique mat quasi noir, **FROID** |
+| **2** | `polymer`, `polymer_tan`, `rubber`, `glove*`, `sleeve` | polymère/cuir moulé — diélectrique, **CHAUD** |
+| **3** | `steel`, `steel_soot`, `steel_bright`, `steel_black`, `brass`, `copper` | `metallic = 1` → **pas d'albédo du tout**, la couleur EST le F0 |
+
+⚠️ **L'anodisation n'est PAS du métal nu** : c'est un revêtement d'oxyde. Lui donner une surface
+« métal brossé » la fait lire comme du **chrome poli** — « the single biggest mistake available on
+a gun ». D'où `metallic = 0` sur toute la classe 1, verrouillé par la sonde (M3).
+Exception documentée : `steel_soot` est à `metallic = 0,12` — la suie est une poudre **diélectrique**
+posée SUR la phosphatation, le métal ne fait que transparaître.
+
+Séparation mesurée : froideur de l'alu **+0,101**, chaleur du tan **+0,268**, écart total **0,369**.
+Laiton R−B **0,617** contre acier **0,018** — une douille éjectée ne se confond pas avec la culasse.
+
+### ⭐ L'usure d'arête SANS un seul shader
+
+La règle n°3 de leur fichier : l'usure des chanfreins est « **the single most important cue that a
+gun has been used** ». Sans elle, l'arme lit comme un jouet quelle que soit la finesse du maillage.
+Ils la cuisent dans des masques de courbure GPU ; le cahier nous interdit leur pipeline. Solution :
+
+1. `MeshData.bake_curvature()` (dans `trench_meshgen.gd`) calcule la **convexité** de chaque sommet
+   et la range dans sa COULEUR DE SOMMET. ⚠️ La couleur ne porte pas une couleur : elle porte un
+   **masque**. Le voisinage se calcule **par POSITION et non par indice** — la soudure duplique
+   volontairement les sommets d'arête franche, et par indice chaque facette serait une île isolée.
+2. `trench_wmaterials.apply_wear_mask()` traduit le masque en couleurs de sommet, et `get_worn()`
+   rend un matériau qui les lit.
+
+**L'ASTUCE, à comprendre avant de la modifier** : une couleur de sommet ne sait que MULTIPLIER,
+donc que FONCER — impossible d'aller vers une arête plus CLAIRE. On fait donc l'inverse du réflexe :
+`albedo_color` porte la couleur d'**USURE** (la plus claire), et la couleur de sommet vaut
+`base / usure` sur un méplat (elle FONCE vers la base) et 1 sur une arête. Tout reste dans [0, 1],
+aucun shader n'est écrit.
+
+Mesure sur une boîte chanfreinée : masque **0,128 sur les méplats · 0,374 sur les arêtes · 0,611 sur
+les coins**, et **0,240 dans l'âme concave d'un tube** (l'usure n'entre pas dans le canon).
+
+⚠️ **CE QU'ON PERD, ET IL FAUT LE SAVOIR** : la couleur de sommet ne module que l'ALBÉDO.
+`wear_roughness` et `wear_metallic` sont dans le registre mais **ne sont pas appliqués** — il
+faudrait un shader. Sur un diélectrique c'est une vraie perte (une arête usée est aussi plus lisse) ;
+sur un **métal** c'est presque sans conséquence, puisqu'à `metallic = 1` l'albédo EST le F0 —
+éclaircir l'albédo des arêtes éclaircit bel et bien leur reflet. **Dette consignée.**
+
+### ⚠️ CINQ PIÈGES, dont trois défauts réels que la sonde a attrapés
+
+1. **`specular` N'EXISTE PAS sur `BaseMaterial3D` en Godot 4** — c'est **`metallic_specular`**.
+   Et le moteur ne lève pas d'erreur : la table de remap Godot 3.x avale la propriété avec un
+   simple WARNING, **la valeur n'est jamais appliquée** et le matériau garde son 0,5 par défaut.
+   Un `cavity` censé n'avoir aucun lobe spéculaire en aurait donc gardé un, silencieusement.
+   (Nom confirmé dans le moteur par `get_property_list`, pas deviné.)
+2. **Les `wearColor` de la référence sont à lire comme des valeurs LINÉAIRES, pas comme du sRGB.**
+   Reconvertis depuis le sRGB, ils tombent **sous** l'albédo de base de 8 entrées sur 15 (acier
+   phosphaté, laiton, cuivre, les trois gants) : l'arête usée serait plus **sombre** que le méplat —
+   l'inverse exact de « bare bright metal on the chamfers » — et l'astuce ci-dessus **écrêterait la
+   valeur en silence**. Le contrôle M5 verrouille désormais ce sens.
+3. **🩸 LE MASQUE D'USURE ÉTAIT INUTILISABLE : 1,0 PARTOUT (min = max).** Cause : le lot 3D-0 avait
+   « amélioré » la topologie de `box()` en la minimisant à 6 quads. Or **une face à 4 sommets a ses
+   4 sommets sur la bordure du chanfrein**, donc tous convexes : le masque n'a nulle part où
+   redescendre, il est interpolé à sa valeur de bord sur toute la face, et l'arme entière
+   s'éclaircit uniformément au lieu de voir ses arêtes briller.
+   C'est **exactement pour cette raison que `RoundedBoxGeometry` de three.js est un cube SUBDIVISÉ**
+   et non 6 quads. Correctif : subdivision des faces, **adaptative à la taille de la pièce** (une
+   carcasse de 4 cm en reçoit 3, une nervure de 1,4 mm en reçoit 1 et retrouve son coût d'origine).
+4. **🩸 La subdivision a cassé l'étanchéité : 96 arêtes de bord.** Les faces étaient subdivisées, les
+   chanfreins non → jonctions en T le long de chaque arête commune. Le contrôle D1b du lot 3D-0 l'a
+   vu immédiatement. Le pas est désormais calculé **une fois pour la boîte entière** et passé aux
+   faces ET à l'axe des chanfreins.
+5. **Le gain du masque était 12, il fallait 2,5.** Sur une boîte chanfreinée la convexité d'un
+   sommet d'arête vaut déjà ~0,38 : ×12 = 4,6, donc écrêtée à 1 partout. Un contrôle qui ne
+   regardait que « le masque existe-t-il » serait resté vert.
+
+### Ce que Godot donne, et ce qu'il n'a pas
+
+**Gratuit ici, coûteux chez eux** : `metallic_specular = 0` annule le Fresnel de `cavity` — ils ont
+dû changer de CLASSE de matériau (`MeshPhysicalMaterial`) pour l'obtenir, parce que
+`MeshStandardMaterial` « hard-codes F0 = 0.04 ». Sans ça, chaque gravure et chaque évent s'allume en
+incidence rasante et peint « un croissant clair en travers du bas de la lunette ».
+
+**Absent de Godot, donc APPROXIMÉ** (écarts assumés, listés dans l'en-tête du fichier et nulle part
+ailleurs) : `iridescence` du traitement antireflet → `clearcoat` ; `sheen` rasant magenta de
+l'optique → `rim` + `rim_tint` ; `anisotropy` du brossage → laissé à zéro (il exige un `TANGENT`
+cohérent que nos maillages fusionnés n'ont pas).
+
+### ⛔ CE QUI N'EST PAS VALIDÉ, ET NE PEUT PAS L'ÊTRE AUJOURD'HUI
+
+**L'APPARENCE.** Les albédos sont les valeurs linéaires de la référence, calées sur **son**
+exposition, **son** tonemap et **son** intensité d'environnement. Reprises telles quelles dans
+Godot, elles peuvent rendre une arme presque noire. Deux boutons de recalibration existent
+(`ALBEDO_GAIN` pour les diélectriques, `ENV_OCCLUSION = 0,24` pour l'environnement du SubViewport),
+et **un seul suffit** à tout remonter sans toucher aux rapports entre familles.
+
+⚠️ Le cahier §2.2quater tranche la ressemblance **PAR CAPTURES**, et les **9 captures de référence
+ne sont toujours pas déposées** dans `frontend/assets/reference/claude_of_duty/`. Tant qu'elles
+manquent, **personne — agent ou humain — n'est en position de dire « c'est fidèle »**. La sonde le
+dit explicitement dans son en-tête et ne prétend rien juger de l'apparence : elle ne vérifie que ce
+qui se mesure sans image (registre complet, classes séparées, arithmétique de l'usure valide,
+masque de courbure discriminant).
+
+⚠️ **`ENV_OCCLUSION` est un CONTRAT, pas une application** : Godot n'a pas d'`envMapIntensity` par
+matériau. C'est l'`Environment` du `SubViewport` du viewmodel qui doit le porter — **au lot 3D-H**.
+
+---
+
+## §8.152.2 — VUE 3D : LOT 3D-A + 3D-B2 — LE VOCABULAIRE DE PIÈCES D'ARMES
+
+**Un fichier NEUF** : `scripts/game/trench_wparts.gd`, port de `src/weapons/parts.js` (2 072 l.) —
+**26 fonctions**, de la goupille traversante au viseur point rouge complet. Le lot **3D-B2**
+(l'optique) est inclus, comme le cahier §3 le prévoit.
+
+Sonde : `tools/probe_vue3d_wparts.tscn` — **17 contrôles verts, 7 sabotages sur 7 la font rougir**.
+Les lots 3D-0 (40/40) et 3D-C (25/25) restent verts.
+
+**⭐ LES 9 CAPTURES DE RÉFÉRENCE SONT ARRIVÉES** (déposées par Hakim le 2026-08-27, identifiées et
+renommées, `MANIFESTE.txt` + `.gdignore` dans `assets/reference/claude_of_duty/`). Le verdict visuel
+est donc redevenu possible, et ce lot est le premier à en bénéficier.
+
+### Outillage nouveau : le banc de rendu
+
+`tools/shot_vue3d_parts.gd` — photographie les pièces sur fond neutre en lumière rasante. C'est
+l'appareil photo de tout le chantier : le cahier §5 exige « des captures des 4 armes lues et
+jugées », et le §2.2quater impose de mettre chaque rendu **à côté** de sa référence.
+
+⚠️ **LANCEMENT FENÊTRÉ OBLIGATOIRE.** En `--headless` Godot charge le pilote de rendu FACTICE :
+`viewport.get_texture()` rend `null` et on récolte `texture_2d_get: Parameter "t" is null`. Un
+`SubViewport` a beau avoir sa propre cible de rendu, il n'y a aucun rasteriseur derrière.
+🩸 **L'en-tête de `gen_trench_renders.gd` affirmait le contraire depuis §8.137** (« fenêtré ou
+headless — le SubViewport rend dans les deux cas »). Corrigé dans les deux outils.
+
+### ⭐ CALIBRATION DES MATÉRIAUX — mesurée contre la capture, pas réglée à l'œil
+
+Le lot 3D-C prévenait que les albédos de la référence, calés sur SON exposition, pouvaient rendre
+« une arme presque noire ». C'est arrivé, et la mesure le chiffre :
+
+| | médiane de luminance |
+|---|---|
+| **Référence** `arme_m4a1_ads.png`, corps de l'optique (3 zones) | **15 · 34 · 61** |
+| Référence, moleture des flancs | 9 · 44 |
+| Référence, mur ensoleillé du fond | 139 |
+| Notre rendu, `ALBEDO_GAIN = 1` | **2,1** — écrasé au noir, aucune forme lisible |
+| Notre rendu, `ALBEDO_GAIN = 3` | **25,0** ← retenu |
+| Notre rendu, gains 6 / 10 / 16 / 24 | 66 · 117 · 171 · 210 (l'arme devient grise) |
+
+**L'arme de la référence est un objet franchement sombre** — entre le quart et le dixième de son
+fond. ⚠️ Mon premier échantillonnage disait « corps à 114 et pied à 190 » : mes rectangles
+attrapaient **le mur ensoleillé derrière l'optique**. Il a fallu recadrer l'image avec une grille et
+désigner les zones à l'œil pour mesurer la bonne chose. *Une mesure sur une région qu'on n'a pas
+identifiée ne mesure pas ce qu'on croit.*
+
+⚠️ **Ce n'est PAS un accord au pixel** : leur scène est une rue en plein soleil, notre banc a son
+propre éclairage, et la lumière définitive de la tranchée appartient au **lot C du §8.151**. Le
+réglage garantit que l'arme LIT comme un objet sombre à forme lisible. À revérifier sous la lumière
+de la tranchée — c'est pour ça que c'est UN SEUL nombre.
+
+### Ce que la sonde verrouille : les défauts que la référence avait MESURÉS puis corrigés
+
+Chacun a coûté une passe de critique chez eux, chacun est invisible à la lecture, chacun se
+re-briserait au premier « nettoyage » de constantes.
+
+| Contrôle | Le défaut qu'il empêche de revenir |
+|---|---|
+| **R1** fond d'encoche en `cavity` | « a rail read as a **ladder of flat near-white bars** instead of a row of cavities — the single loudest artefact on the whole weapon » |
+| **O1** le montage n'entre jamais dans l'alésage | en ADS, « a lit grey slab cut clean across the **bottom third** of the sight picture » |
+| **O2** l'alésage s'ÉVASE vers l'objectif | le « **drainpipe** » : image utile à 34 % du boîtier au lieu de 69 % |
+| **O3** l'arrière de l'optique est en CAOUTCHOUC | « l'**anneau crème** » : à 89° d'incidence une surface d'alu s'allume quoi qu'on fasse au matériau |
+| **U1** les deux bouts de la carcasse sont FERMÉS | sinon on voit la culasse et la cartouche « floating in a black pipe » |
+| **M1** la cartouche du chargeur est couchée le long de l'arme | sinon elle « **lances straight out through the mag's flank** » |
+| **G2** toute clé de matériau existe dans le registre 3D-C | une faute de frappe ne se verrait qu'à l'écran, en magenta, très loin de sa cause |
+
+### ⚠️ TROIS CONTRÔLES DE LA SONDE ÉTAIENT FAUX — et deux étaient VERTS pour la mauvaise raison
+
+1. **U1 rougissait sur une géométrie JUSTE.** Ma fenêtre de mesure arrière était prise à 4 mm de la
+   boîte englobante — or l'assistance de fermeture dépasse de **13 mm derrière** la carcasse : la
+   fenêtre ne voyait qu'elle (rayon 11 mm), jamais le fond du tube. **Une boîte englobante n'est pas
+   une cote** ; pour mesurer une pièce, on la cherche là où on l'a POSÉE.
+2. **🩸 O2 était VERT sous sabotage.** Le seau `optic_tube` contient aussi la **doublure du
+   pare-soleil**, montée sur la cloche (1,23 rTube) devant l'objectif : ma fenêtre mesurait ELLE, et
+   jamais l'alésage. Rendre l'alésage droit ne changeait donc rien au contrôle.
+   2ᵉ tentative : fenêtres resserrées — mais le piège à lumière n'a de sommets **qu'à deux cotes Z
+   exactes** (profil de 4 points sur 2 valeurs de z), et les fenêtres tombaient entre les deux.
+   3ᵉ et bonne version : viser les deux cotes exactes et prendre le rayon **MINIMAL** — le
+   pare-soleil chevauche la cote avant mais il est plus LARGE, le minimum l'écarte par construction.
+3. **La sonde PLANTAIT sous le sabotage n°1** au lieu de dégrader : R2 lisait un seau que le sabotage
+   faisait disparaître. Une sonde qui meurt juste après avoir produit son signal le perd.
+
+### Pièges de portage signalés par la cartographie des armes
+
+- **`cartridge()` rend `{brass, bullet}` et les trois armes n'ajoutent QUE `brass`** pour la
+  cartouche chambrée — `bullet` est jeté. Un portage naïf greffe une ogive parasite dans la carcasse.
+- **Le levier d'armement du M4A1 est en `alu`, pas en `steel_bright`** : mesuré chez eux à
+  « L=170-184, une plaque crème de 30 × 15 px » — c'était l'un des « untextured white blocks ».
+- **Les organes de visée de secours sont en `polymer`, pas en acier** : mesurés à L=188-192, « the
+  brightest objects on the front half of the weapon ». Ce sont des MÉTAUX : `specularIntensity` n'y
+  peut rien, seul un changement de classe les calme.
+- ⚠️ **Un commentaire de `rifle.js` décrit encore le rail supérieur SCINDÉ autour de la main**, alors
+  que le code ne pose plus qu'un `addRail` continu. **Le code fait foi**, comme toujours.
+
+### Divergences assumées
+
+`bevelSegments` et `curveSegments` sont acceptés mais **ignorés** par notre `extrude` (couronne de
+biseau unique). Sur des biseaux de 0,7 à 3,5 mm vus à 40 cm, l'écart est sous le pixel. À rouvrir si
+une capture le réclame.
+
+### Budget de triangles (baseline)
+
+Optique complète **12 584** · garde-main 9 796 · carcasse haute 3 844 · chargeur 3 832 · crosse
+2 980 · poignée 2 480 · carcasse basse 2 056 · glissière P-19 1 904 · rail + hausse 1 856 · canon
+1 436. **Banc complet : 50 564 triangles** pour 22 pièces.
+
+### ⛔ CE QUI N'EST PAS ENCORE JUGÉ
+
+La comparaison côte à côte de l'optique est **bonne en silhouette et en cotes**, mais deux écarts
+restent ouverts et se trancheront sur les lots suivants :
+- **notre banc a une dominante FROIDE** (sa lumière d'appoint est bleutée) : la teinte définitive se
+  jugera sous la lumière de la tranchée, pas sur ce banc ;
+- **la moleture paraît plus grossière** que dans la capture — mais notre vue est un gros plan et la
+  leur est à distance d'ADS. Les valeurs sont celles de la référence (`26 dents, profondeur
+  0,32 mm`) ; à re-juger **à cadrage équivalent** avant de toucher quoi que ce soit.
+
+---
+
+## §8.152.3 — VUE 3D : LOT 3D-B — LES QUATRE ARMES ASSEMBLÉES
+
+**Un fichier NEUF** : `scripts/game/trench_weapons3d.gd`, port de `src/weapons/models/{pistol,smg,rifle}.js`
+(1 114 l.) et de la **moitié VUE** de `src/weapons/defs.js`.
+
+Sonde : `tools/probe_vue3d_weapons.tscn` — **15 contrôles verts, 6 sabotages sur 6 la font rougir**.
+
+| Notre id | Leur arme | Identité de visée (§2.2quinquies) | Triangles |
+|---|---|---|---|
+| `vipere` | pistol / P-19 | ⭐ **AUCUNE optique** — guidon + hausse en U | 14 312 |
+| `frelon` | smg / MPX-9 | point rouge **compact** | 37 796 |
+| `chacal` | rifle / M4A1 | point rouge **large**, flancs très moletés | 45 580 |
+| `condor` | ⚙ **extrapolé** du fusil | optique **à grossissement**, canon long | 48 940 |
+
+### ⚠️⚠️ LA DÉCISION D'ARCHITECTURE DU LOT : LA FRONTIÈRE VUE / RÈGLES
+
+`defs.js` mélange **deux natures de nombres** dans un même objet :
+
+- des valeurs de **VUE** — poses de hanche et de sprint, dégagement d'œil, champ de vision,
+  amplitude du balancement, FORME du recul. Elles décrivent ce que l'ŒIL VOIT.
+- des valeurs de **RÈGLE** — `rpm`, `damage`, `magSize`, `reserve`, `spreadHip/Ads`, `penetration`,
+  `maxRange`, `reloadTac`… Elles décrivent ce que le JEU FAIT.
+
+**Seule la première moitié est portée.** Le cahier §0 est catégorique : « la vue change, les règles
+JAMAIS ». Chez nous `dispersion_deg`, `mag_size` et `reload_ticks` sont **lus du serveur à
+l'exécution**. Recopier leurs `magSize: 30` créerait une **seconde source de vérité** qui divergerait
+au premier rééquilibrage — en silence, et du seul côté que le joueur voit. C'est exactement la
+famille de défauts que le §8.148 a mis une session à débusquer.
+
+Le contrôle **D1** de la sonde verrouille cette frontière : il porte une liste d'INTERDITS écrite à
+la main (38 noms de champs, dans les deux conventions de nommage) et rougit si l'un d'eux réapparaît
+dans le registre de vue. C'est un contrôle qu'on ne peut pas satisfaire par inadvertance.
+
+### 🩸 LA FUITE ARCHITECTURALE DE LA RÉFÉRENCE, À NE PAS REPRODUIRE
+
+La cartographie de `viewmodel.js` a mis au jour un point qu'aucune lecture rapide n'aurait donné :
+**chez eux, le viewmodel est PROPRIÉTAIRE de `adsT`, et la DISPERSION la lit.**
+
+```
+weapons/index.js:223  get adsProgress() { return this.viewmodel?.adsT ?? 0; }
+weapons/index.js:662  let base = lerp(def.spreadHip, def.spreadAds, this.adsProgress);
+weapons/index.js:596  this._spread = ... * (1 + this.adsProgress);
+```
+
+Leur `viewmodel.js` n'écrit lui-même **rien** dans la visée — il est techniquement propre. Mais
+l'architecture est **inversée par rapport à la nôtre** : la précision dépend d'une variable qui vit
+dans le rig. ⚠️ **Au lot 3D-F, `adsT` devra être calculé et détenu par le système d'arme, poussé
+dans le rig comme une ENTRÉE (à côté de `s.ads`), et le rig ne devra exposer AUCUN accesseur que la
+dispersion pourrait consommer.** C'est la condition pour que l'invariant §8.141.6 tienne.
+
+### Ce que la sonde verrouille d'autre
+
+- **W3 — cohérence du repère** : bouche en −Z devant la chambre, axe de visée AU-DESSUS de l'âme.
+  Un signe inversé retournerait l'arme dans la main et rien d'autre ne l'attraperait.
+- **W4 — l'identité de visée** : `vipere` ne doit porter AUCUN seau d'optique tubulaire. Lui greffer
+  un point rouge l'aplatirait sur les trois autres armes, alors que c'est précisément « ce qui les
+  différencie à l'œil » (§2.2quinquies).
+- **W5 — les pièces mobiles sont des assemblages DISTINCTS** du corps et les unes des autres.
+  ⚠️ Première version trop faible : elle ne vérifiait que « le chargeur n'est pas vide », et le
+  sabotage `magazine = body` la laissait VERTE — l'assemblage était bien non vide, puisque c'était
+  le corps entier. **La séparation se vérifie par l'IDENTITÉ, pas par le remplissage.**
+- **W6 — aucune cartouche parasite** : la cartographie a signalé que `cartridge()` rend
+  `{brass, bullet}` et que les trois armes n'ajoutent **que** `brass` pour la chambrée. Un portage
+  naïf greffe une ogive qui traverse la carcasse.
+- **R1 — le recul CABRE** : un signe inversé ferait piquer l'arme au tir. Invisible dans le code,
+  évident manette en main.
+
+### Trois choix de matériaux que la référence a MESURÉS, et qu'il aurait été naturel de rater
+
+1. **Le levier d'armement du M4A1 est en `alu`, pas en `steel_bright`** : « An AR charging handle is
+   a black-anodised ALUMINIUM extrusion, not bright steel. Measured as `steel_bright` it was a
+   **30 × 15 px cream plate at L=170-184** on the receiver flank — one of the "untextured white
+   blocks". »
+2. **Les organes de visée de secours sont en `polymer`, pas en acier** : mesurés à **L=188-192**,
+   « the brightest objects on the front half of the weapon ». Ce sont des MÉTAUX : à `metallic = 1`
+   l'albédo est replié dans le F0, et le baisser deux fois ne les a déplacés que d'un cinquième de
+   diaphragme. Seul un changement de CLASSE les calme.
+3. **La hausse de secours est rejetée vers l'avant** (z −0,112 au lieu de +0,038) : repliée, elle se
+   trouvait à **75 mm de l'œil** en ADS — « closer than any other part of the weapon, closer than
+   the optic itself ». Mesuré au lancer de rayon. La déplacer la met à 224 mm, « a NINTH of the
+   screen area ».
+
+### ⚠️ Un commentaire de la référence qui MENT
+
+Le pavé de `rifle.js` décrit encore le rail supérieur **scindé** autour de la main de soutien, alors
+que le code ne pose plus qu'un `addRail` continu (la main empoigne désormais SOUS le garde-main, et
+la scission ne laissait plus qu'un vide de 138 mm au milieu du pont, pour rien). **Le code fait
+foi** — comme le §8.131 l'avait déjà établi pour nos propres documents.
+
+### ⚙ Le `condor` — extrapolé, et à soumettre
+
+Aucune des 9 captures ne le montre : c'est notre arme, pas la leur. Bâti sur le fusil, avec canon
+rallongé (−0,585 au lieu de −0,44), tube d'optique plus fin et deux fois plus long (0,098 contre
+0,052), pare-soleil profond, chargeur court à 5 cartouches, compensateur au lieu du frein. Tout ce
+qui le concerne porte la marque `⚙ EXTRAPOLÉ`. **Le cahier §2.2quinquies impose d'en soumettre une
+capture à Hakim avant de le figer.**
+
+---
+
+## §8.152.4 — VUE 3D : LOT 3D-D — LES MAINS, LES BRAS ET LE SOLVEUR DE CONTACT
+
+**Un fichier NEUF** : `scripts/game/trench_hands.gd`, port de `src/weapons/hands.js` (1 163 l.).
+
+Sonde : `tools/probe_vue3d_hands.tscn` — **20 contrôles verts, 10 sabotages sur 10 conformes**
+(9 font rougir la sonde, le 10ᵉ reste vert **et c'est documenté** : voir plus bas).
+
+Contenu : gant, manches, 4 doigts × 3 phalanges + pouce à 2 phalanges, 6 poses de main, IK de bras
+analytique à deux os, détente pilotée, solveur de contact sur cylindre.
+
+### Une amélioration DÉLIBÉRÉE sur la référence
+
+`FINGER_SEG = 20` au lieu de leurs 12. Le cahier §2.2bis B demande de faire mieux que le défaut
+qu'ils avouent eux-mêmes (« blocky finger slabs »), et c'est le seul endroit du lot où l'on dépense
+des triangles à dessein.
+
+### 🩸🩸 LE « DÉFAUT OUVERT » DU LOT — ⚠️ RÉSOLU DEPUIS, VOIR §8.152.5
+
+> **⚠️ NE PAS LIRE CETTE SECTION SANS LA SUIVANTE.** Elle a été écrite avant que la VRAIE
+> géométrie d'arme soit branchée sur le solveur. Sur la vraie prise, les quatre pulpes se posent
+> à **+0,4 / +0,5 / +0,6 / +0,5 mm** — exactement le chiffre que la référence revendique — et
+> **rien ne s'enfonce**. L'enfoncement décrit ci-dessous était un artefact de la pose d'essai
+> inventée. La section est conservée telle quelle parce que la table et les trois remèdes
+> mesurés restent vrais *pour cette pose*, et parce que la leçon de méthode vaut d'être gardée :
+> **un défaut mesuré sur une entrée inventée n'est pas un défaut du code.** Détail en §8.152.5.
+
+
+Le solveur de contact de la référence, **porté fidèlement**, enfonce la pulpe du **majeur** et de
+l'**annulaire** *dans* le garde-main sur presque toute la plage de serrage. Balayage du jeu
+main ↔ surface, pire enfoncement des quatre doigts (négatif = sous la surface) :
+
+| jeu (mm) | 4 | 6 | 8 | 10 | 11 | 12 | 13 | 14 | 16 | 18 | 20 | 24 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pire (mm) | −9,5 | −8,5 | −6,9 | −5,2 | −4,4 | −3,5 | −2,6 | −1,8 | **0,0** | −0,4 | −1,8 | −3,4 |
+
+Leur propre tolérance est **1,5 mm** (`g < -0.0015` dans leur coût). Elle n'est tenue qu'entre
+15 et 19 mm environ. Or leur point de conception documenté est « a 47 mm handguard gripped
+**14 mm** off the surface » — où l'on mesure déjà −1,8 mm, **hors de leur propre tolérance**.
+
+**⛔ Pourquoi ce n'est pas corrigé ici.** Trois remèdes ont été construits et mesurés : descente par
+coordonnées sur le coût complet, poids d'enfouissement ×8 puis ×80, réparation partant du résultat
+séquentiel. **Aucun n'est uniformément meilleur.** Ils redressent 16→24 mm mais *calent* à 10-14 mm,
+et sous 8 mm ils échangent 7 mm de contact de pulpe contre **14 mm de phalange enfouie** — un défaut
+PIRE, puisqu'il se voit. Livrer une réécriture qu'on ne peut pas montrer meilleure, c'est troquer un
+défaut connu et chiffré contre un défaut inconnu.
+
+Le contrôle **F1d** verrouille donc la table ci-dessus comme **garde-fou de non-régression** : il ne
+prétend pas que c'est bien, il rougit si ça empire de plus de 0,2 mm à l'un des 12 jeux.
+
+**⚠️⚠️ ACTION OBLIGATOIRE AU LOT 3D-F** : c'est l'arme qui placera la main (leur `gripL` est dérivé
+du nœud garde-main). **Mesurer le jeu réellement produit et le placer dans 15-19 mm**, ou reprendre
+le solveur avec la vraie géométrie sous les yeux. Ne pas figer une pose de main sans relire la table.
+
+### 🩸 CINQ FAUX VERTS DÉMASQUÉS DANS CETTE SEULE SESSION
+
+1. **Le vert accidentel par point unique.** F1b ne testait qu'**un seul** jeu, 16 mm, choisi sans y
+   penser — le SEUL de la table qui soit propre. *Un point de mesure unique dans un phénomène non
+   monotone ne mesure rien : il tire au sort.*
+2. **Le contrôle satisfait par l'échec.** Première version de F2 : l'angle horaire du contact du
+   pouce autour de l'axe du tube. Elle rougissait sur un pouce **parfait** (0,47 mm) et verdissait
+   sur un pouce resté **à 20 mm en l'air** — parce qu'un contact qui n'a pas lieu a quand même une
+   direction. *Un contrôle qu'un échec satisfait est pire que pas de contrôle.*
+3. **La prémisse anatomique fausse.** Deuxième version de F2 : « la racine du pouce est plus dorsale
+   que celle des doigts ». Mesuré : c'est l'**inverse** (−9,0 mm contre −6,0 mm). La mesure a tranché
+   en une exécution ce que deux raisonnements avaient manqué.
+4. **Trois contrôles aveugles au même défaut.** C1, C1b et F2 regardent toutes un scalaire, et toutes
+   restaient VERTES quand on retirait le miroir du **Z** de la base du pouce. D'où **C1c**, qui
+   compare les 5 bouts dans les 6 poses : `droit == (−x, y, z)` du gauche.
+5. **Le seuil plus serré que le support.** A1 comparait `quaternion == q` au bit près ; `Node3D`
+   stocke une base et **reconstruit** le quaternion à la lecture. Il rougissait sur un solveur juste.
+   Même famille que le float 32 bits du lot 3D-0.
+
+### ⚠️ LA CHIRALITÉ DES ROTATIONS — le piège que le maillage miroir ne couvre pas
+
+La référence retourne la main d'un seul geste : `handInner.scale.x = -1` **sur le nœud**. Le miroir
+traverse alors tout le sous-arbre — positions ET rotations — gratuitement. Nous cuisons le miroir
+dans le **maillage** (une échelle négative sur un `Node3D` Godot retourne les faces et ne se relit
+pas fidèlement), ce qui laisse la hiérarchie d'articulations à notre charge.
+
+Sous un miroir en X : une rotation autour de **X est PRÉSERVÉE**, une rotation autour de **Y ou Z
+change de SIGNE**. Toutes les flexions de doigt et de pouce sont des rotations en X pures. **La base
+du pouce est la SEULE rotation à trois composantes du rig** — et donc le seul endroit où l'oubli se
+paie. 🩸 Mesuré : sans le facteur, le bout du pouce tombait à −16,8 mm (il franchit l'axe : la prise
+en C) à gauche, mais à **−90,8 mm** à droite. Les deux pouces partaient dans la **même direction
+absolue** : le droit ne serrait rien, il pointait dans le vide. Aucun contrôle de position de racine
+ne l'attrape, puisque les racines, elles, **sont** miroir.
+
+### Le pouce : le seul écart assumé au solveur de la référence
+
+Elle enchaîne deux ajustements **gloutons**, chacun visant l'origine de l'articulation suivante — un
+substitut, pas la quantité qui compte. Mesuré, même arme, même tube de 27,1 mm :
+
+| pose de main | séquentiel (réf.) | descente conjointe |
+|---|---|---|
+| approche oblique | **20,2 mm** | **0,47 mm** |
+| approche franche | 0,48 mm | 0,48 mm |
+
+⚠️ La lecture honnête n'est **pas** « leur solveur est cassé » : sur une approche franche les deux
+donnent le même résultat, et leurs poses à eux sont dérivées du garde-main réel, donc franches.
+Elle est : **le glouton est FRAGILE, la descente ne l'est pas.** Contre-épreuve : un balayage
+exhaustif 49×49 des deux flexions à la même base trouve 0,5 mm — la descente atteint l'optimum.
+
+### ⚠️ Un sabotage qui reste VERT, et pourquoi c'est JUSTE
+
+Retirer la pénalité d'enfouissement du pouce ne change **rien** sur les 12 jeux mesurés : sur cette
+géométrie, le pouce ne cherche jamais à traverser. La garde existe parce que la référence l'a, mais
+**la sonde ne peut pas prétendre la protéger** — aucun sabotage ne la rend observable. Le sabotage
+est donc classé « vert attendu, garde non exercée » plutôt que retiré ou maquillé en rouge.
+
+### ⚠️ Ce que la section F s'INTERDIT d'affirmer
+
+La pose de main d'essai est **inventée**. Deux poses plausibles écrites de bonne foi donnent 5,3 mm
+et 18,6 mm sur le même code, sans qu'une ligne change. Un seuil absolu mesurerait donc la pose autant
+que le solveur, et le seul moyen de le faire passer serait de **régler la pose jusqu'à ce que le
+chiffre plaise** — ajuster le test sur la réponse. Le seul seuil absolu autorisé est **F1c**, et
+seulement parce que l'optimum a été mesuré *indépendamment du solveur* : une force brute à 5 degrés
+de liberté atteint 0,0 mm sur cette géométrie exacte.
+
+---
+
+## §8.152.5 — VUE 3D : LA PRISE RÉELLE, ET LA RÉSOLUTION DU DÉFAUT OUVERT DU LOT 3D-D
+
+**Une sonde NEUVE** : `tools/probe_vue3d_grips.tscn` — **5 contrôles verts, 5 sabotages sur 5**.
+Elle branche le solveur de contact du lot 3D-D sur la **vraie** géométrie d'arme du lot 3D-B, en
+lisant `gripL` et `handguard` du modèle exactement comme leur `_fitSupportHand` les lit.
+
+### ⭐ LE VERDICT
+
+| arme | jointures ↔ surface | contacts de pulpe (mm) | pouce |
+|---|---|---|---|
+| `vipere` | *aucun nœud `handguard`* — comme chez eux | — | — |
+| `frelon` | *aucun nœud `handguard`* — comme chez eux | — | — |
+| `chacal` | **8,6 mm** | **+0,4 · +0,5 · +0,6 · +0,5** | +1,2 |
+| `condor` | **8,6 mm** | **+0,4 · +0,5 · +0,6 · +0,5** | +1,2 |
+
+Leur chiffre de référence : « the four fingertips landed **0.4-0.7 mm** off the handguard — a real
+grip ». **Nous sommes dessus, au dixième de millimètre près, et rien ne s'enfonce.**
+
+### 🩸 LA LEÇON : UN DÉFAUT MESURÉ SUR UNE ENTRÉE INVENTÉE N'EST PAS UN DÉFAUT DU CODE
+
+Le §8.152.4 a passé une session à chiffrer, à trois remèdes près, un enfoncement de 1 à 9 mm — sur
+une pose de main **que j'avais écrite moi-même**. La sonde le disait pourtant, en toutes lettres :
+« la pose d'essai est INVENTÉE, le lot 3D-F fournira les vraies ». La conclusion honnête aurait dû
+être *« on ne peut pas encore savoir »*, et elle l'était. Ce qui a manqué, c'est de remarquer que la
+vraie géométrie était **déjà là**, dans `trench_weapons3d.gd`, depuis le lot 3D-B. La question était
+répondable tout de suite ; elle attendait juste qu'on branche les deux moitiés.
+
+⚠️ Corollaire à garder pour les lots suivants : **quand une sonde dit « je ne peux pas trancher,
+il me manque X », il faut chercher si X existe déjà** avant de bâtir une garde de non-régression
+autour de l'ignorance.
+
+### 🩸 DEUX MESURES FAUSSES, TROUVÉES PAR LA SONDE ELLE-MÊME
+
+1. **Le jeu mesuré au POIGNET : 72,9 mm.** De quoi conclure « la main flotte à 7 cm de l'arme ».
+   C'était la mauvaise grandeur : la référence est explicite, « `pos = contact - 0.098 * finger`
+   (**targets are WRISTS**) ». Le poignet est à 98 mm derrière les jointures **par construction**.
+   Mesuré à la ligne des jointures : **8,6 mm**, contre les 6,5 mm de leur point de conception.
+2. **`frelon` n'a pas de garde-main — et c'est JUSTE.** Vérifié dans `smg.js` : leur PM n'a pas non
+   plus de nœud `handguard`, et leur `_fitSupportHand` sort donc sur `!hg` avant même le test
+   `id === 'pistol'`. La main d'appui du PM tient la **poignée verticale**. Le portage est fidèle ;
+   c'est le message de la sonde qui était faux (il parlait de prise « en coupe » pour les deux).
+
+### ⚠️ CE QUE LA RÉFÉRENCE ASSUME, ET QU'IL NE FAUT PAS « CORRIGER »
+
+« A 16 mm half-palm at 6.5 mm of standoff **interpenetrates the tube by ~9 mm at the heel**, which
+is what a glove does when it is squeezing something. » Le déplacement de 14,5 → 6,5 mm est mesuré et
+délibéré : à 14,5 mm les pulpes touchaient déjà (0,4-0,7 mm) mais « the PALM stood **29 mm clear**
+of it », c'est-à-dire une main posée *à côté* de l'arme avec du jour derrière — « they float beside
+it with a visible gap ». **Une interpénétration n'est donc pas un défaut en soi ici** : c'en est une
+sur les pulpes, c'est une décision sur la paume.
+
+### 🩸 UN CONTRÔLE QUI NE POUVAIT PAS ÉCHOUER
+
+G3 vérifiait que le repère de main est orthonormé… en le relisant depuis le quaternion. Or
+`Basis.get_rotation_quaternion()` **orthonormalise lui-même** : la base relue l'est toujours, quelle
+qu'ait été l'entrée. Le sabotage qui supprime le Gram-Schmidt de `hand_basis` la laissait **VERTE**.
+Elle mesurait la conversion de Godot, pas notre code. Réécrit en deux égalités falsifiables : le −Z
+de la main **est** la direction des doigts écrite au modèle, le +Y **est** la composante de `back`
+orthogonale à cet axe.
+
+### Le repère de main est passé en PRODUCTION
+
+`hand_basis()` (port de `handBasis`, `viewmodel.js:88`) vit désormais dans `trench_hands.gd`, pas
+dans la sonde : **une sonde qui contient la logique qu'elle contrôle ne contrôle qu'elle-même**, et
+aucun sabotage n'y aurait de sens. Il est algorithmiquement identique à `Arm._aim_bone`, et les deux
+restent séparés à dessein — l'un oriente un OS de la chaîne d'IK, l'autre construit une CIBLE depuis
+deux directions d'auteur. Les fusionner ferait dépendre l'IK d'un repli choisi pour un nœud de
+données. Six lignes de doublon contre un couplage qui aurait duré tout le chantier.
+
+### ⚠️ Piège de format retrouvé
+
+`%e` n'existe pas dans le formatage GDScript : la chaîne est rendue **BRUTE**, sans erreur visible.
+Deux messages de sonde étaient concernés (le G3 ci-dessus et le A1 du lot 3D-D) — ils rougissaient
+correctement mais ne disaient plus rien. Tout est repassé en millimètres avec `%f`.
+
+---
+
+## §8.152.6 — VUE 3D : LOT 3D-E — LES CLIPS (recharge, inspection, sortie, rangement)
+
+**Un fichier NEUF** : `scripts/game/trench_wclips.gd`, port de `src/weapons/clips.js` (318 l.).
+Sonde : `tools/probe_vue3d_clips.tscn` — **7 contrôles verts, 8 sabotages sur 8**.
+
+Cinq clips par arme : `reload_tac`, `reload_empty`, `inspect`, `draw`, `holster`. Quatre pistes de
+clés (`weapon` additif · `lhand` cible de poignet en espace arme · `parts` pièces mobiles ·
+`events`), échantillonnées dans un tampon préalloué — trois fonctions spécialisées, **aucune
+`Callable` par image** (leur `sample()` en alloue trois à chaque appel, ~180/s, alors que son propre
+commentaire revendique « preallocated »).
+
+### ⚠️⚠️ LA FRONTIÈRE VUE / RÈGLES — le lot 3D-E est LE PREMIER DU CHANTIER À LA TOUCHER
+
+`clips.js:141-142` lit `def.reloadTac ?? 2.15` et `def.reloadEmpty ?? 2.85` : **deux durées de
+rechargement autoritaires, avec des défauts.** Chez nous elles vivent au serveur (`reload_ticks` =
+30/40/44/50 à 20 Hz → 1,50/2,00/2,20/2,50 s, diffusé par `public_rules`, et c'est le serveur qui
+remplit le chargeur à l'échéance).
+
+🩸 **Le danger n'est pas la lecture, ce sont les DÉFAUTS.** Recopié tel quel, `?? 2.15` donnerait
+2,15 s d'animation pour une VIPÈRE que le serveur recharge en 1,50 s : la main reviendrait au
+garde-main **0,65 s après** que le joueur a été autorisé à tirer. C'est le patron exact du §8.148.
+⇒ `reload_seconds` est un **argument d'appel, sans défaut**. Le contrôle **E4** le vérifie sur trois
+durées et sur les quatre armes.
+
+Trois autres inversions de la référence, refusées et documentées :
+
+1. **Le serveur n'a qu'UN rechargement.** Leur ratio 2,1/2,9 *est* une valeur de règle — il dit
+   « recharger à sec coûte 38 % de plus », ce que notre serveur contredit. On porte les deux clips
+   (le « à sec » contient le réarmement) **calés sur la même durée** ; le choix se fait sur les
+   munitions lues de l'état.
+2. **Chez eux, une clé d'animation crédite les munitions** (`index.js:445`, l'événement `magin`
+   appelle `_completeReload()` qui mute `s.mag` et `s.reserve`). ⛔ Nos événements sont du SON et du
+   VISUEL, rien d'autre.
+3. **`holsterTime` est un délai de changement d'arme chez eux** (le changement n'a lieu qu'à
+   l'événement `end`). Notre serveur change l'arme **instantanément** : attendre leur `end` ferait
+   tirer le serveur avec la nouvelle arme pendant que le client afficherait encore l'ancienne, avec
+   sa dispersion et son réticule. `draw` et `holster` sont **purement décoratifs**.
+
+### 🩸 LE DÉFAUT STRUCTUREL DE LA RÉFÉRENCE : `t: 1` AU LIEU DE `t: 1 * durée`
+
+**13 clés terminales** portent `t: 1` en dur alors que toutes les autres s'écrivent `X * durée` — et
+l'échantillonnage se fait en **secondes**. Les tableaux ne sont donc pas triés, et leur recherche de
+segment suppose qu'ils le sont. Mesuré en exécutant leur code :
+
+| clip | ce qui se passe réellement |
+|---|---|
+| `draw` (0,62 s) | n'atteint **jamais** la pose de base : 0,91° de tangage restant, annulé d'un coup à l'arrêt → un **claquement à chaque sortie d'arme** |
+| `holster` (0,4 s) | ne parcourt que **70 %** de sa course : l'arme ne sort jamais du cadre |
+| `reload_tac` | la piste `weapon` saute à zéro d'un coup à 78 % ; la main **téléporte de 26 cm en une image** ; 14 % du clip est du temps mort |
+| `inspect` | la main d'appui **gèle** sur les 45 % restants |
+
+⛔ Un port fidèle échouerait la porte du cahier §5 (« la recharge se joue en entier et REVIENT à la
+pose de base »). On écrit donc `1.0 * d` partout.
+
+### ⚠️ E1 ET E2 NE VOIENT PAS LA MÊME CHOSE — mesuré par sabotage
+
+Remettre `t: 1` sur la clé terminale d'un **rechargement** (2,2 s) laisse **E1 VERTE** : la clé hors
+d'ordre est simplement *dépassée* par la recherche de segment, et la valeur finale reste juste. Seule
+**E2** (« les pistes sont triées ») l'attrape. Sur la **sortie d'arme** (0,62 s), la clé à t=1 est
+au-delà de la fin : l'échantillonnage s'arrête en chemin et E1 rougit.
+⇒ **E1 mesure l'effet, E2 mesure la cause, et aucune ne remplace l'autre.** Les deux sabotages sont
+gardés séparément pour que cette distinction reste démontrée et non affirmée.
+
+### 🩸 LE CHARGEUR QUI CLIGNOTE
+
+Leur ligne 90 : `magVisible = (…) > 0.5 || w < 0.5`. Le `|| w < 0.5` force la visibilité sur la
+**première moitié de tout segment**, y compris un segment dont les deux bornes disent « caché ».
+Mesuré sur `reloadTac` (2,1 s) : visible → **caché 43 ms** → visible 336 ms → caché 336 ms → visible.
+Et l'événement `magdrop` fait apparaître le chargeur jeté **exactement quand celui de la main
+redevient visible** : deux chargeurs à l'écran pendant 0,34 s. On échantillonne en **escalier**.
+
+### ⚠️ DIVERGENCE E — un effet de bord qui ne pouvait apparaître qu'APRÈS la correction de `t: 1`
+
+Le dernier segment de `reload_empty` — la main qui lâche le levier d'armement et revient au
+garde-main — **ne jouait jamais** chez eux. Son rythme n'a donc jamais été éprouvé, ni par eux, ni
+par leur critique. Une fois la clé remise à l'échelle, il joue, et il est deux fois trop rapide.
+
+Pointes de déplacement de la main d'appui, mm par image à 60 Hz (rechargement de 2,20 s) :
+
+| arme | tactique | à sec | inspection | sortie | rangement |
+|---|---|---|---|---|---|
+| vipere | 29,8 | 42,8 | 2,6 | 20,4 | 19,5 |
+| frelon | 41,0 | 49,3 | 2,4 | 16,7 | 17,3 |
+| chacal | 44,0 | **60,3** | 2,1 | 14,1 | 14,8 |
+| condor | 35,4 | 55,1 | 2,0 | 11,3 | 12,0 |
+
+Cause structurelle : le retour du rechargement **tactique** dispose de 0,14·d pour une course
+courte, celui du rechargement **à sec** de 0,07·d pour une course plus longue — parce que la phase
+de réarmement a été tassée contre une clé terminale qui n'avait pas d'importance. Le remède
+n'invente aucun geste : il applique au rechargement à sec la vitesse de retour que le fichier s'est
+lui-même donnée dans son autre rechargement, en recomprimant la phase de réarmement de
+[0,82 ; 0,93] à **[0,82 ; 0,87]** par **une transformation affine unique et visible** (`_rearm()`),
+appliquée à tout ce qui compose la phase — clés de main, clés de levier, et les deux événements. Le
+source garde donc les nombres de la référence, lisibles.
+→ mesuré : 83,2 → 60,3 mm/image sur le `chacal`.
+
+⚠️ **Premier essai FAUX** : la fenêtre visée était [0,78 ; 0,87], donc le **début** du réarmement
+était avancé. La pointe est passée de 83 à **121 mm** — le maximum avait simplement changé de place,
+de la sortie vers l'**approche** du levier, à qui il ne restait plus que 0,03·d. *Un seuil global ne
+dit pas OÙ est le défaut* : sans la trace de l'instant de la pointe (`t=1,67 s`), la correction
+serait repartie dans le décor.
+
+### 🩸 UN SEUIL TIRÉ D'UN ÉCHANTILLON DE TROIS POINTS CONDAMNE LE QUATRIÈME
+
+Premier jet d'E7 : seuil unique à 60 mm/image, calé sur les pointes que j'avais sous les yeux. Il a
+rougi sur l'**approche du levier** du `chacal` — 60,3 mm, une valeur que la référence lui a toujours
+donnée et que je n'avais pas encore isolée. E7 sépare donc désormais deux natures de défaut :
+
+- **téléportation** : seuil tiré de la **physique**, pas de mon échantillon — une main humaine rapide
+  plafonne vers 7 m/s, soit ~117 mm/image à 60 Hz ; au-delà de **120 mm** ce n'est plus un geste,
+  c'est une coupure (le défaut de la référence en faisait **260**) ;
+- **dérive** : garde-fou de non-régression sur la table ci-dessus, ±5 mm.
+
+### ⚠️ Ce qui n'est PAS porté, et pourquoi
+
+Les canaux `bolt` et `slide` sont **morts chez eux**, démontré : `res.parts.slide` est échantillonné
+et lu nulle part ; et `boltOff = max(stroke, boltHold, clipBolt * boltHold)` avec `clipBolt ≤ 1`
+(l'`ease:'back'` le fait descendre à −0,07, jamais monter au-dessus de 1) est **toujours dominé par
+`boltHold`**. Recopier leurs 26 littéraux en croyant qu'ils pilotent quelque chose serait du bruit.
+L'INTENTION — culasse verrouillée en arrière à sec — est réelle et se porte ailleurs : **le lot 3D-F
+la pilotera depuis l'état SERVEUR**, et l'événement `boltrelease` est l'instant où elle se referme.
+
+### ⚠️ Deux pièges de sémantique retenus au portage
+
+- **`lhand.weight` est une mécanique morte mais STRUCTURANTE.** Aucune clé ne porte de poids, donc
+  il vaut 1 pendant 100 % de tout clip — y compris `draw`, `holster` et `inspect`. Conséquence à ne
+  pas « simplifier » : pendant ces trois clips aussi, la pose ajustée par arme (le `clamp:<arme>` du
+  lot 3D-D) est **suspendue** au profit de `wrap`.
+- **`finger` et `back` sont LERPÉS par composante, pas slerpés.** La norme se creuse au milieu du
+  segment ; `hand_basis` renormalise ensuite. Ce n'est pas la géodésique — **ne pas « corriger » en
+  `slerp`**, ça changerait la sensation.
+
+---
+
+## §8.152.7 — VUE 3D : LOT 3D-F — LE RIG DU VIEWMODEL (et la couche ADS du 3D-F2)
+
+**Un fichier NEUF** : `scripts/game/trench_viewmodel3d.gd`, port de `src/weapons/viewmodel.js`
+(1 088 l.). Sonde : `tools/probe_vue3d_rig.tscn` — **8 contrôles verts, 8 sabotages sur 8**.
+
+La pile de couches additives sur une pose de base, dans l'ordre de la référence : `base` (hanche /
+ADS / sprint / arme basse) · `sway` (6 canaux de bruit à fréquences incommensurables + respiration)
+· `bob` · `lag` (la traîne) · `recoil` + `settle` · saut/atterrissage · `clip` (lot 3D-E).
+
+### ⚠️⚠️⚠️ L'INVARIANT §8.141.6 — la raison d'être de la moitié des choix de ce fichier
+
+🩸 **Leur architecture est inversée par rapport à la nôtre**, et la cartographie l'a établi :
+
+```
+weapons/index.js:223   get adsProgress() { return this.viewmodel?.adsT ?? 0; }
+weapons/index.js:662   let base = lerp(def.spreadHip, def.spreadAds, this.adsProgress);
+weapons/index.js:596   this._spread = ... * (1 + this.adsProgress);
+```
+
+Leur `viewmodel.js` n'écrit lui-même **rien** dans la visée — il est techniquement propre. Mais **la
+précision dépend d'une variable qui vit dans le rig.** Une image ratée, un `dt` aberrant, un clip
+qui force `wantAds = 0`, et la dispersion bouge.
+
+Chez nous `_ads_t` est une **ENTRÉE**, poussée par le système d'arme dans `update(dt, s)`. Il est
+privé, **sans accesseur**, et le contrôle **V2** l'interroge par introspection du script.
+⚠️ **Un `grep` de texte n'aurait rien prouvé** : ce fichier PARLE d'`adsT`, de `spread` et de
+`dispersion` à longueur de pavé (leçon §8.145 — le grep compte les commentaires). Seule
+l'introspection dit ce qui est réellement ATTEIGNABLE.
+🩸 Premier jet de V2 : il inspectait `get_method_list()`, donc **les 254 méthodes de `Node3D`**, et
+sa contre-face « plus de 8 méthodes publiques » était satisfaite sans rien prouver. Corrigé en
+`get_script().get_script_method_list()` : **12 méthodes**, celles du rig.
+
+Les six sondes du §8.141/§8.151 (`probe_trench_aim`, `probe_trench_feel_aim`,
+`probe_trench_falseshot`, `probe_trench_springs`, `probe_trench_audio`, `probe_trench_hud`) restent
+**TOUT VERT**. ⚠️ Honnêteté sur la portée : elles exercent encore le viewmodel 2D — tant que le lot
+3D-H n'a pas rebranché, leur vert prouve l'absence de dégât collatéral, pas l'invariant. **C'est V2
+qui prouve l'invariant, et il est démontré par sabotage.**
+
+### ⚠️⚠️ LE RÉTICULE COLLIMATÉ N'EST PAS PORTÉ — décision, pas oubli
+
+Leur `_updateReticle` dessine un point rouge sur l'axe optique en espace caméra, avec vignettage :
+un vrai collimateur. **Chez eux c'est honnête** — leur `boreDir` est le −Z du groupe d'arme, ce
+groupe est un enfant du rig sans transform propre, donc le point marque exactement l'axe du canon,
+et leurs balles partent de cet axe.
+
+⛔ **Chez nous, non.** Nos balles ne partent pas du viewmodel : le serveur les tire depuis les angles
+de visée, et l'invariant ci-dessus dit que le rig n'y touche jamais. Un point accroché au rig
+suivrait le balancement, le recul et la traîne **alors que le tir ne les suit pas**. Ce serait un
+mensonge de présentation — exactement la famille de défauts démasquée au §8.151 (le réticule kické
+de 10 px sans le monde, la secousse de l'ŒIL à 7 px de désaccord).
+⚠️ **À soumettre à Hakim au lot 3D-I** : si l'on veut la sensation du point rouge, la seule voie
+honnête est que le **MONDE** bouge avec l'arme, pas que le point bouge sans le monde.
+
+### ⚠️ L'ORDRE D'EULER — le même piège qu'au lot 3D-D, et il ne se voit dans aucun booléen
+
+Leur composition finale est `_e.set(rx, ry, rz, 'XYZ')` : la matrice est Rx·Ry·Rz. **Godot compose
+`Node3D.rotation` et `Basis.from_euler` en YXZ par défaut.** Sur la pose de hanche l'écart est
+minuscule ; sur `sprint_rot` (−0,40 ; 0,60 ; 0,20) les deux ordres donnent **13,5° d'écart**.
+Toutes les recompositions passent donc par `_quat_xyz()`.
+
+Le contrôle **V4** a deux faces, parce qu'une seule ne prouverait rien : (a) les deux ordres
+diffèrent réellement sur cette pose — sinon le contrôle dormirait sur une géométrie où l'ordre est
+indifférent ; (b) le rig est du bon côté.
+🩸 **Premier jet FAUX** : seuil absolu à 0,5° d'écart avec la pose XYZ. Il rougissait sur un rig
+JUSTE, parce que **le balancement ne s'annule jamais** — c'est son objet même (« idle never visibly
+loops »), et il est amplifié ×1,5 au sprint : 0,87° d'écart permanent. La grandeur qui a un sens est
+RELATIVE à l'écart entre les deux candidats : mesuré, le rig est à **6 % de cet écart** du XYZ.
+
+### 🩸 L'ASSÈCHEMENT DES MÉLANGES — quatre couches ne revenaient pas à zéro
+
+Le cahier §5 exige « chaque couche s'annule au repos (bit-stabilité pour les captures) ». Les
+RESSORTS portaient déjà l'assèchement ajouté au lot 3D-0 (deux seuils sous lesquels valeur et
+vélocité collent NET), mais **`Mathx.damp` est une décroissance exponentielle** : elle s'approche de
+la cible sans jamais l'atteindre.
+
+Mesuré : après **six secondes** de repos, la couche `trigger` est encore vivante — à une valeur qui
+s'affiche « 0.0 » et qui n'est pas zéro. Quatre mélanges sont dans ce cas (`trigger`, `sprint`,
+`low_ready`, et les deux vitesses angulaires). Aucun ne se voit à l'œil ; ils ne se voient que dans
+un contrôle qui exige le zéro **bit à bit**. D'où `_damp_sec()`, même patron que `MathxSpring`.
+
+⚠️ Et V1 **nomme la couche fautive** : un booléen global dirait « ça bouge » sans dire quoi.
+`residus()` rend les neuf couches séparément, ce qui est aussi ce qui a permis de trouver le défaut.
+
+### ⚠️ `Arm` attend des CLÉS de matériau, pas des objets
+
+Le lot 3D-D pose ses maillages **sans matériau** et tague chacun par `set_meta("mat_key", …)`. C'est
+délibéré : le faire dépendre de la bibliothèque du lot 3D-C aurait couplé la géométrie des mains au
+registre de matériaux. C'est donc **au rig** d'habiller l'arbre au montage (`_habiller`). Passer des
+objets `StandardMaterial3D` produit `Trying to assign value of type 'Object' to a variable of type
+'String'` — une erreur qui n'empêche ni la construction ni le rendu, seulement les matériaux.
+
+### Ce que ce lot livre du 3D-F2, et ce qui reste
+
+| Exigence §3D-F2 | État |
+|---|---|
+| montée à l'œil, pose ADS **résolue** et non écrite | ✅ contrôle **V3** : le point de visée tombe sur l'axe au dégagement d'œil, **< 1 mm sur les 4 armes** |
+| resserrement du **champ** | ✅ `view_fov()` — rendu plutôt qu'écrit dans une caméra, pour que le rig n'acquière pas un effet de bord de plus |
+| **dispersion INCHANGÉE** | ✅ contrôle **V2**, prouvé par sabotage |
+| resserrement de la **sensibilité** | ⏳ vit dans l'entrée joueur (`trench_fp.gd`) — **lot 3D-H** |
+| bascule / maintien réglable | ⏳ écran de réglages — **lot 3D-H** |
+
+### Les autres contrôles
+
+- **V5 déterminisme** : deux rigs nourris de la même séquence (recul compris, donc de l'aléa) sont
+  bit à bit identiques. Graine FIXE `0x8152F16`, ⛔ jamais `randf()` global.
+- **V6 mains soudées** : sur 200 images agitées (recul, balayage, entrée en visée), les deux mains
+  restent à **0,000000 mm** de leurs prises.
+- **V7 la traîne** : amplitude 0,255 rad, **signe conforme**, et retour au repos exact. Vérifier le
+  signe et pas seulement l'amplitude est ce qui empêche du bruit de satisfaire le contrôle.
+- **V8 les pièces mobiles** : la culasse est au repos, cyclée par le tir (52,1 mm sur 62,0 de
+  course), revenue exactement, et **verrouillée en arrière par `s.empty`** — c'est-à-dire par
+  l'ÉTAT SERVEUR. Le lot 3D-E avait démontré que le canal `bolt` de leurs clips est mort ; c'est
+  ici que l'INTENTION est portée, du bon côté de la frontière. ⚠️ Le contrôle utilise un rig NEUF
+  pour la troisième face, sinon un reste de cycle du coup précédent le ferait passer pour la
+  mauvaise raison.
+- ⛔ `cycle_time` est une **CADENCE**, donc une règle : leur `_updateParts` lit `60 / w.def.rpm`.
+  Chez nous elle traverse la frontière comme **entrée**, jamais comme champ de vue.
+
+---
+
+## §8.152.8 — VUE 3D : LOT 3D-G, ÉTAGE 0 — LA BOÎTE À BORNES DU SOLDAT ANIMÉ
+
+**Un fichier NEUF** : `scripts/game/trench_soldier_bounds.gd`.
+Sonde : `tools/probe_vue3d_silhouette.tscn` — **6 contrôles verts, 6 sabotages sur 6**, dont celui
+que le cahier §5 nomme explicitement (« sabotage à 10 cm »).
+
+### ⚠️ POURQUOI CE FICHIER EST ÉCRIT **AVANT** LE MOINDRE OS
+
+⛔ Verrou du projet : « la silhouette de collision et les règles ne changent **jamais** ; la vue
+s'adapte à la boîte ». Le soldat de la référence n'a **aucune** borne de ce genre — et il n'en a pas
+besoin : son squelette vit dans un monde volumétrique où les balles touchent des capsules replacées
+sur les os à chaque image. Chez nous la cible est une **plaque plane à Z constant**, dont la fenêtre
+angulaire est figée dans une table checksumée côté serveur. Tout ce que la vue déplace au-delà de
+cette plaque est un **mensonge** : le joueur vise ce qu'il voit et touche ce que le serveur sait.
+
+Écrite après les clips, cette garde aurait obligé à revenir sur chaque amplitude — **et une
+amplitude qu'on oublie de reprendre ne se voit pas.**
+
+### Les sept débordements de la référence — dont DEUX chiffres du brief étaient FAUX
+
+Chiffres obtenus en **exécutant** leur code (balayage de 149 184 poses), pas en relisant un
+commentaire :
+
+| source | amplitude | bornée chez eux ? |
+|---|---|---|
+| `_aimIk` | ±0,58 m en Z | angle oui (**1,25 rad cumulés**), position NON |
+| `vault` | +0,66 m | NON — et la racine ajoute +0,42 m par-dessus |
+| `hurtIdle` | +0,40 m | NON |
+| `crouchIdle` | −0,37 m | NON |
+| `suppressAdd` | +0,27 m | NON |
+| `hitAdd('head')` | −0,23 m | enveloppe oui, position NON |
+| **`hipOff` cumulé** | **−0,514 m** | ⛔ **aucune borne** — cinq couches y écrivent sans se voir |
+| IK de pied | −0,32 m | ✅ oui — mais elle **s'ajoute** au `hipOff` : −0,83 m au total |
+
+🩸 **Deux affirmations du brief étaient fausses, et la vérification les a corrigées** :
+
+1. `_aimIk` était annoncé « +52 cm vers l'avant ». Mesuré : **−57,9 cm en ARRIÈRE** (cible haute),
+   +43,5 avant / −43,5 bas (cible au sol). *Le danger était réel, le chiffre ne l'était pas.*
+2. `hitAdd('head')` était annoncé −25 cm. Mesuré : **−17,3 cm** à force 1, −22,5 au plafond réel
+   (1,4). L'enveloppe `exp(−7.5t)·min(1,22t)` **culmine à 0,7109**, pas à 1 : le −25 supposait une
+   enveloppe qui n'existe pas.
+
+Et deux affirmations de plus, ailleurs :
+- « leur modèle est 1,86× plus étroit » → le ratio honnête est **1,725×**. Le 1,86 s'obtient en
+  comparant notre demi-largeur (0,44) au seul côté +X du modèle (0,235) — or **le modèle est
+  asymétrique** (`x ∈ [−0,275 ; +0,235]`, arme et deux mains en X négatif).
+- « le casque atteint 1,810 m » → **juste au millimètre** (1,8106) **mais incomplet** : la variante
+  `breacher` porte `scale: 1.025`, ce qui la porte à **1,8553 m** — 55 mm de dépassement, pas 11.
+
+### ⭐⭐ LE BUDGET DE PROFONDEUR EST **DÉRIVÉ**, PAS INVENTÉ
+
+C'est la borne qui n'existe pas du tout chez eux, et la plus subtile. Notre silhouette est une
+plaque : un morceau de corps avancé de ΔZ est vu **plus gros**, alors que la fenêtre de touche du
+serveur n'a pas bougé. C'est le défaut du billboard §8.141.7, désactivé à dessein.
+
+L'unité de tolérance n'est pas choisie : c'est **`AIM_QUANTUM_DEG = 0,1°`**, le quantum de visée du
+projet. On exige que le désaccord reste **sous un quantum**, c'est-à-dire sous ce que le serveur
+sait distinguer. À la distance d'engagement la plus courte (**10,00 m**, du plan des soldats proches
+à celui des adverses) :
+
+```
+atan(0,44 / (10 − ΔZ)) − atan(0,44 / 10) ≤ 0,1°   ⇒   ΔZ ≤ 0,3823 m
+```
+
+⚠️ Le contrôle **S3 refait la dérivation** au lieu de comparer à 0,382 : si `NO_MANS_LAND` rebouge —
+il est déjà passé de **35 → 12 → 9 m** sur deux verdicts de partie réelle — le budget suit tout seul
+et le contrôle reste juste. Mesuré, ce budget attrape **quatre** poses : `vault`, les deux `aimIk`
+et **`hurtIdle`** (+0,398), que la lecture seule n'aurait pas signalée.
+
+⚠️ Et le commentaire de dérivation a menti avant d'être corrigé : il annonçait « 9,5 m ⇒ ~0,35 m »,
+oubliant le recul du tireur lui-même. **Le code, lui, passait par les accesseurs et donnait 10,00 m
+depuis le début.** Chiffres relus à l'exécution.
+
+### Les autres bornes
+
+- **Vertical / latéral** : bornes DURES, lues dans `trench_geometry.gd` et jamais recopiées.
+  Le sabotage n°5 (`const HAUT_DEBOUT := 1.85` en dur) est celui qui compte : c'est le patron du
+  §8.148, une seconde source de vérité qui divergerait au premier réglage, en silence.
+- **Hanche** : chez nous l'accroupi n'est pas une amplitude d'animation, c'est
+  `SILHOUETTE_TOP_DOWN = 1,05`, une entrée de la table angulaire serveur. Le débattement disponible
+  est donc **exactement 0,75 m**, et rien ne monte (une hanche qui monterait ferait dépasser le
+  sommet du casque — le côté que personne ne pense à tester).
+- **Flexion rachidienne** : un plafond (28°) **et une rampe** (220 °/s, soit 11° par tick à 20 Hz).
+  Le plafond seul ne suffit pas : leur `_aimIk` répartit 1,25 rad = **71,6° sur une SEULE image**,
+  et vérifié, ça ne s'accumule pas d'image en image — donc « en une seule image » est exact, et
+  c'est précisément le risque. Une cible qui téléporte fait sauter la tête de 58 cm **sans rampe**.
+- **Regard** : cône dur nuque+tête en ABSOLU (±70° / ±35°). Leur `_lookAt` n'a **aucune** limite
+  articulaire — son seul plafond est un pas par image, et mesuré, la tête se pose derrière l'épaule
+  **et y reste**.
+
+### 🩸 Une table d'essai est du code comme un autre
+
+Le contrôle S4 a rougi sur une borne **juste** : j'attendais que le cumul mesuré chez eux (−0,514 m)
+soit écrêté à −0,75, alors qu'il **tient** dans le budget et doit passer intact. C'était l'attente
+qui était fausse. Le commentaire de la ligne disait d'ailleurs « passe, il tient dans le budget » —
+juste à côté du chiffre qui disait le contraire.
+
+---
+
+## §8.152.9 — VUE 3D : LOT 3D-G — LE SOLDAT ADVERSE ANIMÉ
+
+**Quatre fichiers NEUFS** : `trench_soldier_rig.gd` (25 os) · `trench_soldier_clips.gd` (13 poses) ·
+`trench_soldier_anim.gd` (l'animateur) · et `trench_soldier_bounds.gd` (l'étage 0, §8.152.8).
+Sonde : `tools/probe_vue3d_soldier.tscn` — **6 contrôles verts, 6 sabotages sur 6**, dont un
+balayage de **4 032 poses**
+(6 clips × 7 régions de touche × 2 suppressions × 3 poids de visée × 16 pas) où **les bornes mordent
+sur 2 556 poses** et où **rien ne sort de la fenêtre de tir du serveur**.
+
+### ⛔ CE QUI N'EST PAS PORTÉ — la coupure vue / règles
+
+Chez eux, `agent.js` est **une seule classe** qui contient le maillage, l'animateur, les points de
+vie, la perception, la précision et la cadence. Il n'y a pas de frontière du tout.
+
+| Non porté | Pourquoi |
+|---|---|
+| `_updateMuzzle()` | **L'ANIMATION DÉCIDE DE LA TRAJECTOIRE DES BALLES** : `muzzleWorld` est recalculé depuis `bones[iHandR].matrixWorld` *après les quatre IK*, puis part dans `fireBullet()`. **Bouger un os change où va la balle.** |
+| `syncHitboxes()` | Les 7 capsules de dégâts sont replacées sur les os **à chaque image**. Notre hitbox est la boîte du serveur, figée dans une table checksumée. |
+| Le LOD de rendu | Un test **purement graphique** fait sauter 2 images sur 3 de l'évaluation de pose. Mesuré : un ennemi hors champ à 4,3 m/s **tire depuis un point vieux de 3 images, 21 cm derrière lui** — et ces balles blessent. Leur commentaire affirme pourtant « only the parts that can exclusively affect pixels are skipped ». |
+| `vault` | La timeline d'un clip **déplace le corps physique** de +0,42 m. Et il n'y a rien à franchir dans une tranchée. |
+| Tremblé de visée et dispersion | Trois `rng.gauss()` par balle tirés **dans la boucle de rendu**, lissage indexé sur `time.elapsed` : **la précision de leur IA dépend de la fréquence d'images du client**. |
+
+### ⭐⭐ LE DÉFAUT LE PLUS GRAVE TROUVÉ PAR CE LOT : L'ACCROUPI QUI DÉPASSE
+
+`SILHOUETTE_TOP_DOWN = 1,05` signifie **« accroupi, JAMAIS exposé »** — un invariant gardé par
+`crouched_is_covered()` *et par un test de sabotage côté backend*. Or leur `crouchIdle` ne descend
+la tête qu'à **1,428 m**. Le balayage a sorti **1 344 poses où le TORSE pointe à 1,117 et 1,156 m**
+au-dessus du plafond.
+
+⛔ Ce n'est pas un détail d'apparence : un torse rendu à 1,156 m donne à **voir, et à tirer**, une
+cible que la règle déclare couverte. Le joueur viserait un homme et le serveur ne compterait rien.
+C'est le pire des deux mensonges possibles.
+
+Correctif : `_asseoir_dans_la_boite()` **déplace la RACINE**, il ne déforme pas le geste. Écraser
+les articulations jusqu'à ce que ça rentre donnerait une posture accordéon ; abaisser le modèle
+entier garde l'animation intacte et la met là où la règle la place. Les pieds passent sous le sol —
+sans conséquence : le bas du corps est derrière le parapet, et s'accroupir dans une tranchée c'est
+précisément s'enfoncer sous le parapet. ⚠️ Le déplacement ne fait que **descendre**, jamais monter.
+
+### 🩸 TROIS FORMULATIONS DU MÊME CONTRÔLE, ET SEULE LA TROISIÈME MESURE QUELQUE CHOSE
+
+C'est le fil de ce lot, et il vaut d'être gardé en entier.
+
+1. **Un budget de profondeur scalaire, appliqué uniformément.** Faux : ce budget est dérivé pour un
+   point **au bord** de la silhouette, là où un ΔZ produit la plus grande erreur. Près de l'axe, le
+   même ΔZ ne déplace presque rien. **La pose de REPOS elle-même « violait » le budget**, parce que
+   le soldat tient son fusil devant lui (+0,434 m).
+2. **L'erreur angulaire par point, plafonnée à un quantum.** Mieux — mais ça mesure encore un
+   *déplacement*, pas un *mensonge*. La main de soutien produit **0,102°**, 2 % au-dessus du quantum,
+   quand la demi-fenêtre de tir fait **2,5°** et la fenêtre verticale **3,7°**. Ce déplacement ne peut
+   faire rater aucun tir.
+3. **La bonne question est celle du §8.141.8** — verdict de partie réelle : « il faut que sa
+   silhouette soit attaquable EN ENTIER ». Donc : **tout ce que le joueur VOIT de l'ennemi doit
+   tomber dans la fenêtre que le serveur sait toucher.** Vérifiable exactement, en degrés, dans
+   l'unité que le serveur manipule.
+
+Ce qui prouve que la troisième mesure **discrimine** : `aimIk` **ne ment pas**. Reculé de 58 cm, il
+est vu 0,54° au-dessus de l'œil pour une fenêtre qui monte à 0,67° — il paraît plus petit, il reste
+touchable. `vault`, lui, sort par le haut. Une mesure qui condamne les deux ne mesure pas.
+
+### ⚠️ LE BORD BAS NE PEUT PAS MENTIR — et c'est démontrable
+
+La géométrie le disait déjà : « `SILHOUETTE_BOTTOM` = bas du torse (sous le parapet — **c'est LUI
+qui coupe**, pas cette valeur) ». Vérifié en degrés depuis l'œil :
+
+- sommet du parapet adverse (y = 1,25) à z = 8,4 m → tangage **−2,897°**
+- bas de la fenêtre serveur (y = 1,15) à z = 9,5 m → tangage **−3,148°**
+
+Le parapet occulte donc **plus haut** que la fenêtre ne coupe : ce qui apparaît sous −2,897° est
+caché dans l'image, fenêtre ou pas. C'est ce qui a fait rougir 1 431 poses sur la main de soutien,
+vue à −3,258° contre un bord à −3,248° : **1,7 mm à 10 m, derrière des sacs de sable.**
+⚠️ **L'écart inverse existe et il est réel** : entre −2,897° et −3,148° le serveur accepte des
+touches sur une bande que le joueur ne voit pas. C'est le moins grave des deux (on touche plus qu'on
+ne voit), il est **antérieur à ce lot**, et il appartient à la table angulaire. Signalé, pas corrigé.
+
+### 🩸 DEUX DÉFAUTS DE CADENCE, INVISIBLES CHEZ EUX
+
+1. **Repliement de spectre.** `recoilAdd` contient `sin(92·t)` = **14,64 Hz**. Échantillonné à 20 Hz
+   (notre simulation), Nyquist est à 10 : la fréquence se replie à **5,36 Hz, en sens inverse**.
+2. **Pic d'enveloppe dépendant de la machine.** `hitAdd` culmine analytiquement à **0,711 124** à
+   t = 1/22 s, mais le pic *échantillonné* vaut 0,687 à 60 Hz, 0,607 à 30 Hz — et **0,701 à 90 Hz
+   contre 0,687 à 120 Hz** : ce n'est même pas monotone. Chez eux, la violence d'une réaction au
+   coup dépend du PC.
+
+✅ **Le second est résolu** : les coups uniques sont ancrés sur un compteur **entier** de pas et
+joués sur une grille qui contient son point final — le pic joué est le même sur toutes les
+machines, ce qui rend l'imagediff possible.
+
+⛔ **Le premier ne l'est PAS, et le pavé du fichier le disait à tort.** Le remède complet est une
+horloge à deux étages (ancrage entier des débuts, évaluation au temps de RENDU à l'intérieur du
+pas), qui remonterait Nyquist à 30 Hz. **Le second étage n'est pas implémenté** : l'appelant
+avance d'un pas entier par appel, donc `sin(92·t)` reste replié et la micro-oscillation du recul
+ondule à contretemps. Faible amplitude, jamais isolée à l'œil — *ce n'est pas une raison de
+l'écrire comme résolue*. ⚠️ **À reprendre au lot 3D-H**, où la fréquence de rendu est connue.
+
+### 🩸 LES COUPS UNIQUES ÉTAIENT TRONQUÉS — et il a fallu trois remèdes pour trouver le bon
+
+`turnStep` dure 0,42 s, soit **8,4 pas** à 20 Hz. Le dernier échantillon joué laisse l'enveloppe à
+**0,149 — 15 % de son pic** — et la minuterie efface le reste d'un coup : **1,8° à la cuisse et
+5,1° au genou en une image**. Même famille sur `recoilAdd` (clip muet à 0,26 s, minuterie vivante
+jusqu'à 0,30) et sur `hitAdd`, dont leur propre code porte **trois durées contradictoires** (garde
+0,50 · commentaire 0,45 · minuterie 0,55).
+
+| remède | résultat |
+|---|---|
+| 1. rampe de fermeture en **fraction de durée** (`(1−t01)/0,20`) | atteint zéro à `t01 = 1`… **mais aucun tick n'y tombe**. Réduit, pas supprimé. |
+| 2. la même rampe en **pas**, fermant sur les 2 derniers | le pas d'avant valait la moitié d'une pose de 36° : **18° de saut**, *pire que le défaut*. Multiplier une grande pose par une rampe courte ne fait que **déplacer** la marche. |
+| 3. ⭐ changer la **GRILLE** | durée arrondie au pas entier supérieur et `t01 = i / n` : le dernier échantillon tombe **exactement sur 1**, où l'enveloppe du clip vaut zéro d'elle-même. |
+
+Le bon remède ne touche à **aucune amplitude** : le clip se termine parce qu'on le joue jusqu'au
+bout. Prix payé : `turnStep` passe de 0,42 à 0,45 s — du décor, aucune règle n'en dépend, et c'est
+ce qu'impose une simulation à pas fixe.
+Mesuré après : résidu au dernier pas = **0,0 %** (pas tournant) · **1,7 %** (recul) · **3,4 %**
+(réaction au coup), contre les 15 % d'origine.
+
+### 🩸 LE MÊME CONTRÔLE REFORMULÉ TROIS FOIS — et les deux premières mesuraient autre chose
+
+1. **« le plus grand saut sur toute la durée < 6° ».** Rougissait à **28,9°** — mais c'était la
+   **MONTÉE** : l'enveloppe de `hitAdd` atteint son plein en 45 ms, moins d'un pas de simulation.
+   Une réaction au coup **doit** claquer (577 °/s, la moitié de ce qu'une nuque encaisse sous
+   impact). *Un contrôle qui mélange l'attaque et l'expiration condamne l'intention en même temps
+   que le défaut.*
+2. **« le plus grand saut sur la QUEUE < 2° ».** Meilleur — mais il mesurait encore la **raideur**
+   du mouvement, pas la troncature. `turn_step` est un `sin(πt)` : sa pente est maximale à la fin
+   *par construction*, et à 20 Hz sa dernière descente vaut 11,6° au genou **même quand le clip se
+   referme parfaitement**. Un pied qui se repose va vite ; ce n'est pas un défaut.
+   ⚠️ Et sa fenêtre de queue était **fixe** (`i ≥ 10`) alors que les trois coups n'ont pas la même
+   durée : deux d'entre eux **expiraient avant que la fenêtre ne commence**.
+3. ⭐ **« le clip est-il FINI quand on l'arrête ? »** — le résidu du dernier échantillon comparé au
+   **pic du même clip**. Sous 5 %, il ne restait rien à jouer. C'est exactement le défaut d'origine
+   (15 %), et ça ne dit rien de la vitesse du geste, qui n'est pas l'affaire de ce contrôle.
+
+⚠️ Et le **sabotage** correspondant a dû l'être aussi : rejouer le temps en secondes brutes laissait
+la sonde verte, parce que `turn_step` **clampe lui-même son argument** (`sin(π·min(1,t))`) et se
+refermait quand même. *Un sabotage peut être neutralisé par une garde du code saboté.* Le sabotage
+retenu fait rater son point final à la grille (`n + 1`), ce qui reproduit la nature exacte du défaut.
+
+### ⚠️ QUATRE CHIFFRES DU BRIEF ÉTAIENT FAUX — la vérification par exécution les a corrigés
+
+| annoncé | mesuré |
+|---|---|
+| `_aimIk` « +52 cm vers l'avant » | **−57,9 cm en ARRIÈRE** (cible haute) · le danger, lui, était réel |
+| `hitAdd('head')` −25 cm | **−17,3 cm** à force 1, −22,5 au plafond réel (l'enveloppe culmine à 0,711, pas à 1) |
+| « modèle 1,86× plus étroit » | **1,725×** — le 1,86 compare notre demi-largeur au seul côté +X d'un modèle **asymétrique** |
+| casque à 1,8106 m | juste, **mais incomplet** : la variante `breacher` (`scale: 1.025`) monte à **1,8559 m**, soit 56 mm de dépassement |
+| `hipOff` cumulé −0,47 m | **−0,514 m** (le brief oubliait `hitAdd('legR', k=1.4)`) |
+
+Le portage a aussi relevé une **seconde constante morte** non annoncée (`HAND = 0.095`, une seule
+occurrence, dont la valeur est **retapée en littéral** dans `alongBore`), et que leur propre capsule
+physique est à `1.78 × scale` quand le casque rendu monte à 1,8106 — **3 cm d'écart chez eux**,
+exactement la classe de défaut que ce lot corrige chez nous.
+
+### 🩸 GODOT MET LES TRANSFORMS GLOBAUX À JOUR **PARESSEUSEMENT**
+
+Juste après l'écriture des quaternions, `global_position` est encore celui de l'image précédente.
+La mesure d'assise était donc en retard d'un pas et corrigeait une pose qui n'existait plus : le
+balayage est passé de 1 344 à **782** violations — « mieux », c'est-à-dire **encore faux**, ce qui
+est le pire des états pour une garde. On compose la chaîne soi-même, comme `trench_hands.gd` le fait
+pour ses doigts : aucune dépendance à l'arbre, aucun retard, et ça marche même hors scène.
+
+### 🩸 UNE PASSE DE SABOTAGE TUÉE EN VOL LAISSE DU CODE SABOTÉ
+
+Une passe coupée par le délai de deux minutes du harnais a laissé `trench_viewmodel3d.gd` avec sa
+couche `trigger` **désassèchée**. Ma vérification d'alors n'avait regardé qu'**une ligne**
+(`_bolt_hold`) et l'avait déclaré intact. **Vérifier une ligne ne vérifie pas un fichier.**
+D'où `scratchpad/sabgarde.py` : une copie pristine est déposée avant la première modification et
+restaurée automatiquement au démarrage suivant si elle traîne encore.
+
+### Le maillage du soldat — vérifié, mais pas encore assemblé
+
+`scripts/game/trench_soldier_parts.gd` (1 107 l.) : le corps calculé, entièrement bâti sur les
+primitives de `trench_meshgen.gd`, sans un seul fichier de modèle. Mesuré à l'exécution :
+
+| variante | triangles | sommet du casque | demi-largeur |
+|---|---|---|---|
+| vanguard | 3 780 | **1,8000 m** | 0,264 m |
+| irregular | 3 744 | **1,8000 m** | 0,263 m |
+| breacher | 3 840 | **1,8000 m** | 0,266 m |
+
+`self_check()` : **0 anomalie**. Budget de 6 000 triangles tenu à 64 %, demi-largeur à 60 % de la
+borne de 0,44. ⛔ **Les trois variantes ont EXACTEMENT la même hauteur** : chez eux le `breacher`
+porte `scale: 1.025` qui ferait dépasser son casque de 56 mm hors de notre boîte. `bulk` n'agit que
+sur des rayons latéraux.
+
+⚠️ **Ce qui reste à faire pour clore le lot 3D-G** : `trench_soldier3d.gd`, le nœud qui accroche ces
+pièces aux 25 os de l'animateur. Les quatre modules existent et sont vérifiés séparément ; **rien ne
+les assemble encore**, et tant que ce n'est pas fait le second volet du lot 3D-H (remplacer le
+sprite d'adversaire) reste bloqué.
+
+⚠️ **Un constat remonté par le portage du maillage, à traiter ailleurs** : `Assembly.add_mirrored`
+(`trench_meshgen.gd:1372`) ne négate que `x` et `sx`. Le miroir d'une base est `M·R·M`, donc
+**`(rx, −ry, −rz)`** — c'est la même leçon d'ordre d'Euler que la base du pouce au lot 3D-D. La
+fonction n'a **aucun appelant** aujourd'hui, donc rien n'est cassé ; mais le premier qui lui
+passerait un `ry` obtiendrait une pièce du bon côté et tournée du mauvais, **en silence**.
+
+⚠️ **Une observation d'exécution non expliquée** : une première tentative de vérification du
+maillage a fait tourner Godot plusieurs minutes sans rendre la main (19 s de CPU, processus arrêté à
+la main). Les exécutions suivantes, avec les mêmes fonctions appelées correctement, rendent en
+**moins de 100 ms**. Je n'ai pas reproduit le blocage et je ne lui attribue **aucune cause** — c'est
+noté parce qu'un blocage non expliqué qu'on oublie revient toujours au pire moment.
