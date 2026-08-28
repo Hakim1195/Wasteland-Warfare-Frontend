@@ -30,6 +30,7 @@ const Blockout := preload("res://scripts/game/trench_blockout.gd")
 const Geo := preload("res://scripts/game/trench_geometry.gd")
 const Tuning := preload("res://scripts/game/trench_tuning.gd")
 const World := preload("res://scripts/game/trench_fp_world.gd")
+const Sprites := preload("res://scripts/game/trench_sprites.gd")
 
 var _checks := 0
 var _fails: Array = []
@@ -250,6 +251,160 @@ func _ready() -> void:
 	_ok("accroupi, l'oeil passe SOUS l'arete du parapet (l'abri se VOIT)",
 		Geo.EYE_DOWN < Geo.PARAPET_Y,
 		"oeil %.2f m, arete %.2f m" % [Geo.EYE_DOWN, Geo.PARAPET_Y])
+
+	# ╔═ 🎒 LES SACS DE SABLE (§8.153) — deux faits, et le premier est une REGLE ══════════════════╗
+	# ║ 1. AUCUN sac au-dessus de `PARAPET_Y`. La hauteur du parapet ne decide pas de ce que JE   ║
+	# ║    vois (mon oeil est a 1,70) : elle decide de ce que l ADVERSAIRE peut me toucher, et le  ║
+	# ║    serveur la lit dans la table. Un sac qui depasse me ferait croire couvert la ou la      ║
+	# ║    regle me dit expose. On mesure la geometrie RENDUE, pas l intention du generateur.      ║
+	# ║ 2. Le VOLUME SIGNE du maillage est POSITIF. ⚠️ Seul controle d orientation qu on ne puisse ║
+	# ║    pas satisfaire par construction : le sens de parcours des triangles est inverse entre   ║
+	# ║    three.js et Godot, et une face retournee ne se voit qu au RENDU. Il a d ailleurs        ║
+	# ║    attrape la premiere version du jour meme (volume −5,45 m3).                             ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	var sacs := blockout.cover_root.get_node_or_null("NearParapetSacs") as MeshInstance3D
+	_ok("les sacs de sable sont batis, en UNE seule surface (pas 50 appels de dessin)",
+		sacs != null and sacs.mesh != null and sacs.mesh.get_surface_count() == 1
+		and (sacs.mesh as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() > 0)
+	if sacs != null and sacs.mesh != null:
+		var pts: PackedVector3Array = (sacs.mesh as ArrayMesh).surface_get_arrays(0)[
+			Mesh.ARRAY_VERTEX]
+		var haut := -INF
+		var volume := 0.0
+		for i in pts.size():
+			haut = maxf(haut, (sacs.global_transform * pts[i]).y)
+		# 🩸 IL FAUT PASSER PAR LES INDICES. Premiere version : elle lisait les sommets par TRIPLETS,
+		# ce qui ne vaut que sur un maillage non indexe. Le jour ou les sacs ont partage leurs
+		# sommets (pour arrondir leurs normales), le meme calcul a rendu −0,36 m3 sur une geometrie
+		# parfaitement saine. ⚠️ Une sonde qui suppose une TOPOLOGIE mesure autre chose que ce
+		# qu elle croit des que la topologie change — et elle rougit en accusant le code.
+		var idx: PackedInt32Array = (sacs.mesh as ArrayMesh).surface_get_arrays(0)[
+			Mesh.ARRAY_INDEX]
+		var k := 0
+		if idx.size() >= 3:
+			while k + 2 < idx.size():
+				volume += (pts[idx[k]] as Vector3).cross(pts[idx[k + 1]]).dot(
+					pts[idx[k + 2]]) / 6.0
+				k += 3
+		else:
+			while k + 2 < pts.size():
+				volume += (pts[k] as Vector3).cross(pts[k + 1]).dot(pts[k + 2]) / 6.0
+				k += 3
+		_ok("AUCUN sac ne depasse le parapet (sinon je me croirais couvert la ou je suis expose)",
+			haut <= Geo.PARAPET_Y + 0.001,
+			"sommet le plus haut %.4f m, parapet %.4f m" % [haut, Geo.PARAPET_Y])
+		_ok("les faces des sacs sont orientees vers l EXTERIEUR (volume signe positif)",
+			volume > 0.0, "volume signe %.4f m3" % volume)
+
+	# ╔═ 🎞 LA FOULEE ET LA RESPIRATION (§8.153) — un seul axe, et il ne remonte jamais ══════════╗
+	# ║ Verdict de Hakim : « fluidifier les frames de l adversaire ». Toute la fluidite se joue    ║
+	# ║ dans le TEMPS, sur un seul axe VERS LE BAS : tout mouvement lateral ou vers le haut        ║
+	# ║ elargirait la silhouette RENDUE au-dela de la fenetre que le serveur resout — la famille   ║
+	# ║ de defaut du §8.141.7 (« impossible de toucher le soldat »), en plus discret donc en plus  ║
+	# ║ dangereux. C est CE controle-la qui l interdit, pas un commentaire.                        ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	duel._world._reduced_motion = false
+	duel._world._enemy_dip = 0.0
+	duel._world._enemy_stride = 0.0
+	var pire_haut := -INF
+	var creux: Array[float] = []
+	for i in range(120):
+		creux.append(float(duel._world._enfoncement()))
+		pire_haut = maxf(pire_haut, -float(duel._world._enfoncement()))
+		duel._world._animer_foulee(1.0 / 120.0)
+	_ok("l enfoncement ne REMONTE jamais (sinon la silhouette depasserait sa fenetre de tir)",
+		pire_haut <= 0.0, "point le plus haut %+.5f m" % pire_haut)
+	var bosses := 0
+	for i in range(1, creux.size() - 1):
+		if creux[i] > creux[i - 1] and creux[i] >= creux[i + 1] and creux[i] > 0.01:
+			bosses += 1
+	_ok("une foulee enfonce DEUX fois (talon puis transfert du poids, pas un sautillement)",
+		bosses == 2, "%d creux" % bosses)
+	_ok("la foulee se TERMINE (elle ne devient pas une marche continue)",
+		duel._world._enemy_stride < 0.0, "horloge %.3f" % duel._world._enemy_stride)
+	var au_repos: float = float(duel._world._enfoncement())
+	_ok("au repos il RESPIRE encore, et sous le centimetre",
+		au_repos > 0.0 and au_repos <= World.ENEMY_BREATH_DIP + 1e-6,
+		"%.4f m (plafond %.4f)" % [au_repos, World.ENEMY_BREATH_DIP])
+	duel._world._reduced_motion = true
+	_ok("mouvement reduit : plus aucun enfoncement (c est du SPECTACLE, pas de l information)",
+		is_equal_approx(float(duel._world._enfoncement()), 0.0))
+	duel._world._reduced_motion = false
+	var trace := duel._world._enemy.get_node_or_null("PaintedSoldierFade") as Sprite3D
+	_ok("la trainee de frame existe, et elle est SOUS le sprite (ordre explicite)",
+		trace != null
+		and trace.render_priority < duel._world._enemy_sprite.render_priority)
+
+	# ╔═ 📏 LARGEUR RENDUE DE CHAQUE FRAME CONTRE LA FENETRE DE TIR (§8.153) — PUBLIEE ═══════════╗
+	# ║ Le §8.141.8 a pose `SILHOUETTE_HALF_WIDTH` sur la demi-largeur EXACTE de `enemy_aim.png`  ║
+	# ║ — de CETTE frame-la, et d elle seule. Mesure du §8.153 sur toutes les autres :            ║
+	# ║   aim 0,4367 (la reference)  ·  idle 0,4939 (+12,3 %)  ·  throw 0,4988  ·  hit 0,7004     ║
+	# ║ ⚠️ MAIS le debord est une EXTREMITE, pas le torse : sur `idle` c est le FUSIL tenu en      ║
+	# ║ diagonale, sur `hit` ce sont les bras projetes. Qu une extremite sorte de la hitbox est la ║
+	# ║ convention de tout FPS — ce n est PAS le defaut du §8.141.7, qui etait une erreur de       ║
+	# ║ PROJECTION (un billboard montrant sa largeur pleine sous tout angle).                     ║
+	# ║ ⛔ VERIFIE PAR L EXPERIENCE : des variantes « bras rentres » ont ete generees et MESUREES  ║
+	# ║ (idle 0,3114) — DEUX FOIS PLUS LOIN de la fenetre que les originales, dans l autre sens,  ║
+	# ║ ce qui ferait toucher 13 cm a cote de l homme. Elles n ont PAS ete deposees.               ║
+	# ║ Ce controle PUBLIE donc, il ne juge pas. C est l usine qui refuse une frame trop large,    ║
+	# ║ parce que la-bas le refus est ACTIONNABLE (on regenere) ; ici, un rouge permanent sur des  ║
+	# ║ images livrees et validees n apprendrait plus rien a personne.                             ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	var fenetre: float = Geo.SILHOUETTE_HALF_WIDTH
+	var mesurees := 0
+	print("     PUBLIE : demi-largeur RENDUE par frame, fenetre = %.4f m" % fenetre)
+	for etat: String in ["idle", "aim", "aim_rise", "fire", "throw", "hit"]:
+		if not Sprites.has_frame(etat):
+			print("       %-9s ABSENTE" % etat)
+			continue
+		var tex: Texture2D = Sprites.enemy_texture(etat)
+		var ps: float = Sprites.pixel_size_for(etat, tex.get_height())
+		var demi: float = float(tex.get_width()) * ps * 0.5
+		mesurees += 1
+		print("       %-9s %.4f m  (%+.1f %% de la fenetre)"
+			% [etat, demi, (demi / fenetre - 1.0) * 100.0])
+	# ⚠️ LE SEUL MEMBRE DUR : que la mesure ait bien eu lieu. Un « publie » qui ne publie rien
+	# est le plus discret des faux verts — il occupe la place d un controle sans en etre un.
+	_ok("les six frames de silhouette sont MESUREES contre la fenetre de tir",
+		mesurees == 6, "%d frame(s) mesuree(s) sur 6" % mesurees)
+
+	# ╔═ 🎞 LA MACHINE A FRAMES INSERE-T-ELLE VRAIMENT LES IMAGES DE PASSAGE ? (§8.153) ══════════╗
+	# ║ Deux images payees et deposees ne servent a rien si la machine ne les joue jamais. Et le   ║
+	# ║ defaut serait MUET : le soldat garderait exactement le comportement d avant.               ║
+	# ║ ⚠️ On eprouve la BASCULE, dans les DEUX SENS. Une machine qui reagirait a l ETAT « il vise »║
+	# ║ au lieu du CHANGEMENT reinsererait la pose intermediaire a chaque image, et le soldat      ║
+	# ║ resterait bloque a mi-chemin — un defaut que le sens « montee » seul ne verrait pas.       ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
+	var w = duel._world
+	w._enemy_dead = false
+	w._enemy_aiming = false
+	w._enemy_aiming_prev = false
+	w._enemy_frame_left = 0.0
+	w._advance_enemy_frames(0.016)
+	_ok("au repos, la machine se pose sur `idle`", w.enemy_frame() == "idle",
+		"frame = %s" % w.enemy_frame())
+	w._enemy_aiming = true
+	w._advance_enemy_frames(0.016)
+	_ok("il EPAULE : la machine insere l image de passage `aim_rise`",
+		w.enemy_frame() == Sprites.ENEMY_AIM_RISE, "frame = %s" % w.enemy_frame())
+	w._advance_enemy_frames(0.016)
+	_ok("… et elle NE LA REINSERE PAS a l image suivante (c est la bascule, pas l etat)",
+		w.enemy_frame() == Sprites.ENEMY_AIM_RISE and w._enemy_frame_left > 0.0)
+	w._advance_enemy_frames(Sprites.frame_duration(Sprites.ENEMY_AIM_RISE) + 0.02)
+	_ok("le passage expire et rend la main a la VISEE", w.enemy_frame() == "aim",
+		"frame = %s" % w.enemy_frame())
+	w._enemy_aiming = false
+	w._advance_enemy_frames(0.016)
+	_ok("il BAISSE son arme : la MEME image de passage sert dans l autre sens",
+		w.enemy_frame() == Sprites.ENEMY_AIM_RISE, "frame = %s" % w.enemy_frame())
+	w._advance_enemy_frames(Sprites.frame_duration(Sprites.ENEMY_AIM_RISE) + 0.02)
+	_ok("… et elle rend la main au REPOS, pas a la visee", w.enemy_frame() == "idle",
+		"frame = %s" % w.enemy_frame())
+	w.notify_enemy_fire(2)
+	_ok("l adversaire TIRE : son corps joue enfin une image de tir",
+		w.enemy_frame() == Sprites.ENEMY_FIRE, "frame = %s" % w.enemy_frame())
+	w._enemy_frame_left = 0.0
+	w._advance_enemy_frames(0.016)
 
 	# ⚠️⚠️ NEUTRALITE DE JEU DES ACCESSOIRES. Le serveur tranche sur sa table angulaire, qui ne
 	# connait que le parapet : un barbele qui masquerait la silhouette adverse serait un changement
@@ -588,7 +743,28 @@ func _ready() -> void:
 	# vérifie que le contrôle correspondant AURAIT échoué.
 	print("\n  --- contre-epreuve (chaque ligne doit dire OUI) ---")
 	var caught := 0
-	var expected := 9
+	var expected := 11   # ⚠️ a relever avec chaque nouvelle famille de controles
+
+	# SABOTAGE : la machine « oublie » la bascule de visee — l image de passage n arrive jamais.
+	world._enemy_aiming = false
+	world._enemy_aiming_prev = false
+	world._enemy_frame_left = 0.0
+	world._advance_enemy_frames(0.016)
+	world._enemy_aiming = true
+	world._enemy_aiming_prev = true          # SABOTAGE : la bascule est effacee avant d etre vue
+	world._advance_enemy_frames(0.016)
+	if world.enemy_frame() != Sprites.ENEMY_AIM_RISE:
+		caught += 1
+		print("  OUI  une bascule de visee sans image de passage serait vue")
+	world._enemy_aiming = false
+	world._enemy_aiming_prev = false
+
+	# SABOTAGE : la foulee se met a SOULEVER le soldat — le mensonge de silhouette du §8.141.7.
+	world._enemy_dip = -0.05
+	if -float(world._enfoncement()) > 0.0:
+		caught += 1
+		print("  OUI  une foulee qui SOULEVE le soldat serait vue")
+	world._enemy_dip = 0.0
 
 	var real_w: float = haze_nodes[0].size.x
 	haze_nodes[0].size = Vector2.ZERO                      # SABOTAGE : nappe à taille nulle

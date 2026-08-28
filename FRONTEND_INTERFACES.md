@@ -9425,3 +9425,733 @@ qui s'éteindrait avant la balle mentirait sur la fin du danger).
 
 La cadence, le télégraphe, la dispersion, la table angulaire. Hakim accepte la latence **entre** les
 tirs (« ça reste un sniper ») ; ce qui n'était pas acceptable, c'était d'en **perdre**.
+
+---
+
+## §8.152.12 — LOT 3D-I : LE POINT ROUGE DANS LE VERRE (option C, arbitrée par Hakim)
+
+Fichiers touchés : `scripts/game/trench_fp.gd`, `scripts/game/trench_viewmodel3d_host.gd`.
+Sonde : `tools/probe_trench_reddot.tscn` — **6 contrôles verts, 5 sabotages sur 5**.
+Capture : `04b_visee_point_rouge_apres.png`.
+
+### Ce que l'option C dit, et pourquoi elle a été retenue
+
+En visée, le cœur du réticule **grossit** (1,50 → 2,60 px) et **vire au rouge** ; les quatre traits
+de dispersion **restent**, raccourcis (7,00 → 2,45 px) et estompés (α 1,00 → 0,34).
+
+⛔ **Les traits ne disparaissent pas, et c'est TOUT le sujet.** Un point seul serait plus joli et
+plus « AAA », mais il affirmerait une précision ponctuelle alors que la balle part dans un **cône**
+que le serveur calcule. Le sabotage n°1 (`arm *= lerpf(1.0, 0.0, vise)`) est exactement ce
+mensonge-là, et le contrôle R2 le refuse. Le point dit **où on vise**, les traits disent **ce que la
+règle promet** — les deux sont vrais en même temps, ce qui est la seule raison de les garder.
+
+### ⛔ L'INVARIANT §8.141.6, gardé par le contrôle R5
+
+La rampe de visée du HUD (`_ads_hud`) est **locale à `trench_fp.gd`** et cadencée par `move_toward`
+dans `_step_feel`. Elle ne lit **pas** `_ads_t` du rig, alors que la valeur y existe et serait plus
+courte à écrire.
+
+⚠️ **C'est délibéré : `_ads_t` est précisément la variable que la dispersion de la référence
+consomme** (leur `adsProgress`). Si le HUD s'y branchait, il ouvrirait un chemin entre la vue et le
+calcul de tir — le jour où quelqu'un factoriserait « la visée », le viewmodel se mettrait à décider
+de la précision. R5 audite donc **deux choses** : que `_dispersion_degrees()` ne mentionne pas la
+rampe dans sa **source**, et que sa **valeur** est bit-identique visée levée ou baissée (1,100000).
+Le sabotage n°4 n'ajoute qu'une ligne morte (`var _fuite := _ads_hud`) : la sonde rougit quand même.
+
+### ⚠️ DEUX ROUGES DISTINCTS, ET IL FALLAIT QUE CE SOIT DEUX
+
+`COL_RETICLE_DOT` (`#FF2A10`) n'est **pas** `COL_DANGER` (`#D6453F`). Le réticule se teinte déjà en
+rouge quand le tir est **refusé** ; si le point de visée avait pris la même teinte, viser aurait eu
+l'air d'un refus permanent. R4 vérifie les deux faits : un refus **garde la main** sur la couleur
+même en visée, **et** les deux rouges sont séparables.
+
+### 🩸 UNE CROYANCE FAUSSE QUE J'AI PORTÉE JUSQU'À LA VÉRIFICATION
+
+J'ai écrit et cru que « la vipère n'a pas d'optique, par conception ». **C'est faux** :
+`trench_weapons3d.gd:366` lui monte un **reflex**. Les **quatre** armes portent un `opticGlass`.
+
+Conséquence honnête à consigner : le contrôle R3 (« sans verre, aucun point rouge ») garde une
+**branche qu'aucune arme livrée n'emprunte aujourd'hui**. Il n'est pas faux — la sonde fait varier
+le drapeau sur une doublure d'hôte, donc il éprouve bien quelque chose — mais **il ne protège pas
+une arme, il protège une règle** : le point vient du MODÈLE (`nodes.has("opticGlass")`), jamais
+d'une liste d'identifiants. Le jour où une arme sans verre arrive, elle sera juste sans rien avoir
+à changer. ⚠️ Un contrôle vert sur un cas qui n'existe pas encore doit être annoncé comme tel,
+sinon il se lit comme une preuve qu'il n'est pas.
+
+### 🩸 LE BANC DE LIVRAISON MENTAIT SUR L'ARME DEPUIS LA BASCULE 3D
+
+Trouvé en voulant capturer le point rouge : `shot_trench_delivery.gd` coupe `_process` du duel pour
+figer la scène — ce qui est **juste**, une capture doit être reproductible. Mais depuis §8.152.10,
+c'est `_process` qui **pousse l'état au rig** (`pousser_etat`). Toutes les planches tournaient donc
+sur un état **VIDE** : la vue 3D rendait sa pose neutre, identique d'une planche à l'autre.
+
+Le banc ne mentait pas sur le décor — il mentait sur **l'arme**, et il l'aurait fait en silence
+pour chaque capture future. ⚠️ **Couper `_process` pour figer une scène cesse d'être anodin le jour
+où `_process` devient le canal d'alimentation d'une vue.** Corrigé dans `_wait()`, qui pousse
+désormais l'**état réel** (`_rig_state()`) à chaque frame — donc pour les six planches à la fois,
+pas seulement la nouvelle. La visée à l'œil, en particulier, était **invisible** avant ce correctif :
+l'arme restait à la hanche sur une capture censée montrer le contraire.
+
+### Ce que la capture montre
+
+L'arme monte à l'œil, le champ se resserre, la lunette vient se centrer sur l'axe de la caméra, et
+le point rouge tombe **au pixel du réticule** — parce que l'axe du canon passe déjà par la caméra
+(contrôle V3, < 1 mm sur les quatre armes) et que le réticule est déjà posé là où part la balle.
+⛔ Ce n'est **pas** le réticule collimaté de la référence, qui n'a pas été porté : le leur est
+accroché au RIG et suivrait un balancement que le tir ne suit pas. Celui-ci est accroché à la
+**vérité serveur**.
+
+### ⛔ Ce qui n'a PAS été touché
+
+La dispersion, la cadence, le télégraphe, la table angulaire. La visée change **la vue**, jamais la
+règle : viser ne rend pas plus précis, et R5 est là pour que ça reste vrai.
+
+---
+
+## §8.152.13 — LOT 3D-G (2ᵉ moitié) : L'ASSEMBLEUR DU SOLDAT
+
+Fichier NEUF : `scripts/game/trench_soldier3d.gd`. Sonde : `tools/probe_vue3d_soldat_monte.tscn`
+— **7 contrôles verts, 6 sabotages sur 6**.
+
+Les cinq modules du soldat (rig, parts, clips, anim, bounds) étaient éprouvés **séparément** depuis
+le lot 3D-G. Il manquait leur JONCTION : `parts` rend un maillage fusionné **par matériau**, sans
+la moindre notion d'os. Ce fichier pèse chaque sommet sur les 25 os et laisse un `Skeleton3D`
+déformer.
+
+### 🩸🩸 LA PREMIÈRE VERSION A ÉTÉ JETÉE, ET C'EST LA MESURE QUI L'A TUÉE
+
+Elle accrochait chaque **triangle entier** à un seul os : pas de poids, pas de squelette, une
+`MeshInstance3D` par couple (os, matériau), et l'arbre de scène qui compose. L'argument était
+écrit noir sur blanc en tête de fichier, et il n'était pas paresseux : cet ennemi est vu de l'autre
+côté de la tranchée, une centaine de pixels de haut, et `parts` a **déjà tranché la même question
+dans l'autre sens** — « PAS DE POUCE, PAS DE DOIGTS : on ne maille pas ce qui tient sous le seuil ».
+
+Mesure : **115,33 mm de déchirure au genou en course, soit 9,0 pixels à 12 m.** Le cuissard et le
+tibia s'écartaient franchement à chaque foulée — un trou, pas une imperfection.
+
+⚠️ **La leçon n'est pas « le découpage rigide est mauvais ».** C'est que **le seuil de visibilité
+ne se raisonne pas, il se mesure** : le même raisonnement était JUSTE pour le pouce et FAUX pour le
+genou, et rien dans le raisonnement ne permettait de savoir lequel des deux on tenait. Un pouce ne
+bouge pas de 11 cm ; un genou, si.
+
+La pesée supprime le trou et, accessoirement, **8 surfaces de rendu au lieu de 47**.
+
+### ⭐ LA PONDÉRATION : DEUX OS AU PLUS, ET SEULEMENT À TRAVERS UNE ARTICULATION
+
+Chaque sommet prend les deux segments de peau les plus proches, et **ne mélange que si les deux os
+sont parent/enfant**. Sans cette condition, une pondération par distance pure fait baver : à
+l'entrejambe les deux cuisses se touchent, et la cuisse droite se mettrait à suivre la jambe
+gauche — un maillage qui « respire » quand l'autre jambe bouge, plus laid que la déchirure qu'on
+supprimait.
+
+⚠️ **Le découpage se fait par RÉGION d'abord.** Première idée, jetée : « l'os dont le segment est le
+plus proche ». Le segment de clavicule court de x = ±0,038 à ±0,172 à y ≈ 1,41 : **il traverse la
+coque du torse**, dont le haut serait donc parti avec le bras. Le remède ne demande aucune
+heuristique — `parts` construit déjà le corps par régions (`add_casque`, `add_torse`, …), on
+rappelle ces fonctions une par une et chaque région ne choisit que parmi SES os. C'est la structure
+du module qui donne l'information.
+Prix de l'astuce : cette liste d'appels **double** celle de `Parts.build()`. Une région ajoutée
+là-bas et pas ici ferait perdre une pièce **en silence** — d'où le contrôle de somme S1, à
+l'égalité EXACTE : le nombre de triangles est le seul témoin qui ne peut pas mentir.
+
+### 🩸 UN DÉFAUT MAJUSCULE ET ENTIÈREMENT IMAGINAIRE — il était dans la MESURE
+
+Premier balayage de silhouette : **335 mm de dépassement du plafond accroupi**, c'est-à-dire un
+ennemi visible que la règle déclare couvert. Le pire mensonge possible… et il n'existait pas.
+Ma fonction de composition des transformations partait de `Transform3D.IDENTITY` pour l'os racine,
+et jetait donc `root.position.y` — précisément la correction que `_asseoir_dans_la_boite()` y
+écrit. 19 667 violations → **545** en corrigeant la mesure.
+⚠️ **Une chaîne de transformations qui « oublie » sa racine ne se trompe pas un peu** : elle se
+trompe exactement de la correction que la racine portait — et c'est toujours la plus intéressante,
+sinon personne n'aurait pris la peine de l'y mettre.
+
+### ⭐ CE QUI RESTAIT APRÈS, LUI, ÉTAIT VRAI : +9 À +15 mm DE CASQUE HORS DE LA BOÎTE
+
+L'`Animator` n'a pas le maillage : il **estime** le sommet rendu à « le plus haut des os +
+10,6 mm », l'écart mesuré au repos entre `HeadTop` et l'apex du casque. Cette estimation n'est
+juste **qu'au repos** — dès que la nuque s'incline, l'apex quitte la verticale de `HeadTop`.
+
+Neuf millimètres, c'est peu. Sauf que `SILHOUETTE_TOP_DOWN` veut dire « accroupi, **JAMAIS**
+exposé » et qu'un test de sabotage backend garde cet invariant : un casque qui dépasse est une
+cible que le joueur voit et que le serveur déclare couverte.
+⛔ On ne retouche pas l'estimation de l'`Animator` : on ajoute une **seconde assise, exacte**, là
+où le maillage est connu. Deux nœuds, deux écritures, aucune ambiguïté sur qui écrit quoi — au
+contraire d'un correctif qui irait retoucher `root.position.y` par-dessus son propriétaire.
+Résultat : **0 violation**, et la marge accroupie passe de **+15 mm à −3 mm**.
+
+### 🩸 « IL DOIT EXISTER UN OPTIMUM » — le raisonnement était juste et sans intérêt
+
+La netteté du mélange (`w1 = d2^N / (d1^N + d2^N)`) se raisonne très bien : N petit étale
+l'influence du genou jusqu'à la hanche, N grand redonne une frontière franche. Balayage sur
+N = 1,5 · 2 · 3 · 4 · 6 · 10 · 20 :
+
+| N | 1,5 | 2 | 3 | 4 | 6 | 10 | 20 |
+|---|---|---|---|---|---|---|---|
+| pire écrasement | 53,1 | **52,8** | 56,7 | 59,1 | 59,1 | 60,0 | 75,7 mm |
+
+**Plat sur une décade.** L'optimum vaut 11 % de mieux que le pire. ⚠️ **La netteté n'est pas le
+levier** : ce qui gouverne l'affaissement d'une articulation, c'est le nombre d'anneaux de maillage
+qui la traversent, et le budget de `parts` (3 780 triangles pour un corps entier) en donne **un
+seul** au genou. On retient 2,0 parce que c'est le minimum MESURÉ, pas parce qu'on l'a déduit.
+
+### ⚠️⚠️ UN CONTRÔLE REFORMULÉ — et il faut dire pourquoi, sinon c'est une cible déplacée
+
+Le contrôle S6 disait d'abord « la déformation reste sous le pixel ». Il a fait rougir le découpage
+rigide à 115,33 mm, et c'était **juste** : la surface s'OUVRAIT. Après la pesée, le même contrôle
+mesure 52,8 mm et reste rouge.
+
+⛔ **52,8 mm de déformation n'est pas 115,3 mm de trou.** Le premier est un affaissement lisse
+(le « papier de bonbon » du mélange linéaire, que tout moteur a) ; le second était une ouverture à
+travers laquelle on voyait le décor. Le seuil du pixel avait été posé pour un TROU. Et le balayage
+ci-dessus le prouve : **aucun réglage de pondération ne fera passer ce chiffre sous le pixel** —
+seuls des anneaux de maillage en plus le feraient.
+
+S6 éprouve donc désormais ce que la PESÉE peut réellement rater, avec un premier membre **binaire
+et sans seuil** (aucun sommet ne se partage entre deux os non articulés — on ne peut pas le
+desserrer sans le supprimer) ; **et la déformation est PUBLIÉE à chaque passage, sans être jugée** :
+
+> **DÉFORMATION PUBLIÉE : 52,8 mm = 4,1 px à 12 m** (138 arêtes > 25 %), pire cas au bassin en
+> pleine foulée.
+
+❓ **ARBITRAGE POUR HAKIM.** Descendre ce chiffre demande des anneaux de maillage en plus aux
+articulations, donc de rouvrir le budget de `parts` (3 780 tri, plafond 6 000). Ce n'est pas une
+décision de ce lot. En l'état, le corps ne s'ouvre jamais ; il s'affaisse un peu au genou et à la
+hanche pendant la course.
+
+### 🩸 UN SEUIL QUI MESURAIT LA MAUVAISE CHOSE, ATTRAPÉ AVANT DE SERVIR
+
+La première version du contrôle de bavure regardait **tout** os de poids > 0,001. L'apex du casque
+dépasse de 11 mm le bout du segment `Head`, se retrouve pesé à **0,18 %** sur `Neck` — et le
+contrôle annonçait « bavure de 259 mm ». Un levier réel de **0,5 mm** présenté comme un quart de
+mètre. ⚠️ Un poids minuscule sur un os lointain n'est pas une bavure : c'est la queue normale de
+n'importe quelle pondération continue. La bavure ne se mesure que sur l'os **dominant**.
+
+### Ce que la sonde couvre, et ce qu'elle ne couvre pas
+
+`probe_vue3d_soldat_monte` : somme des triangles (S1), feuilles vides et 18 os articulés chargés
+(S2), **corps au repos identique à `parts` à l'échelle du rig** (S3 — l'écart mesuré est de
+1,2 × 10⁻⁷ m sur 4 131 sommets), sommet du casque sur le plafond serveur au millième (S4), **la
+CHAIR — pas seulement les os — dans la fenêtre serveur sur les six clips** (S5), la pesée (S6), le
+coût de rendu (S7).
+
+⛔ Ce fichier ne DÉCIDE rien : ni boîte serveur, ni table angulaire, ni cadence. La pose reste la
+propriété exclusive de l'`Animator` ; le `Skeleton3D` n'en est qu'un miroir, et `_miroiter()` est
+le seul endroit qui écrit dedans.
+
+### ⚠️ CE QUE LA PASSE DE SABOTAGE A APPRIS SUR LA SONDE ELLE-MÊME
+
+Le sabotage « les feuilles se mettent à posséder un segment de peau » visait le **premier** membre
+de S2 (« aucune feuille ne porte de chair »). Il a bien fait rougir S2 — mais par le **second**
+(`articulés muets ["Hips"]`), parce que déplacer la possession du parent vers l enfant prive la
+racine `Hips` de tout segment.
+
+🩸 En cherchant pourquoi, on apprend que **le premier membre de S2 est presque vrai par
+construction** : aucune liste de `REGIONS` ne nomme de feuille, sauf `accessoires` dont la liste
+est vide — et les pochettes de ceinturon ne s approchent ni du sommet du casque, ni des doigts, ni
+des orteils. Ce membre garde donc une liste de régions FUTURE qui nommerait une feuille ; il ne
+prouve rien sur celle d aujourd hui.
+⚠️ On le dit plutôt que de laisser un vert se lire comme une propriété démontrée. C est le second
+membre qui mord, et c est lui qui interdit le pire des faux verts : **un soldat sans aucun
+maillage satisferait « aucune feuille ne porte » à la perfection.**
+
+---
+
+## §8.152.14 — LOT 3D-H (fin) : LE SOLDAT 3D REMPLACE LE SPRITE PEINT
+
+Fichiers touchés : `scripts/game/trench_fp_world.gd`, `scripts/game/trench_fp.gd`,
+`scripts/game/trench_soldier3d.gd`. Sonde : `probe_vue3d_soldat_monte` — **8 contrôles verts, 7 sabotages sur 7**. Le sprite peint n'est **pas** supprimé : il reste en second rang.
+
+### ⭐ LE CORRECTIF DU §8.141.7 EST PRÉSERVÉ PAR CONSTRUCTION — c'est la raison principale du lot
+
+Le billboard avait été retiré sur verdict de partie réelle (« quand je vise à droite ou à gauche,
+impossible de toucher le soldat »), avec une mesure : la silhouette RENDUE faisait **2,10×** la
+fenêtre de tir serveur vue du bord. La cause était géométrique — la table angulaire décrit une
+silhouette PLANE dont la largeur apparente décroît en `cos θ`, alors qu'un billboard présente
+toujours sa largeur pleine. Le sprite avait donc été FIXÉ dans le plan de la table.
+
+Un corps 3D n'a pas ce problème, et pour la même raison qu'un homme réel : il rétrécit tout seul.
+Ce n'est pas un espoir — le contrôle S5 le mesure **sur la chair, pas sur les os** : 0 violation de
+la fenêtre serveur sur 120 poses des six clips.
+
+⛔ **Et il fait demi-tour.** Le modèle regarde vers +Z (l'axe de visée de son rig) ; posé en
+`far_soldier_z()`, il doit faire face à MA tranchée. Sans le demi-tour on tirerait sur un homme de
+dos qui vise le no man's land, et **rien dans l'image ne dirait que c'est faux**.
+
+### TROIS REPRÉSENTATIONS, UNE SEULE VISIBLE
+
+3D pesé > sprite peint > primitives. L'ordre est explicite en **un seul endroit** (`_build_enemy`).
+⚠️ Un `visible` calculé à deux endroits finit toujours par en afficher deux à la fois — et deux
+soldats superposés se lisent comme un seul soldat un peu épais, donc personne ne s'en aperçoit.
+
+### ⛔ LA MACHINE À FRAMES N'A PAS ÉTÉ DUPLIQUÉE
+
+La priorité « mort > transitoire en cours > ambiant » du §8.138 est une machine d'ÉTAT éprouvée,
+pas un détail de peinture. Le soldat 3D la **lit** (`_frames_tournent()`) au lieu d'en avoir une
+seconde. Deux machines pour un même adversaire divergeraient le jour où l'une gagne un cas que
+l'autre ignore — et le désaccord ne se verrait que sur une mort, c'est-à-dire une fois par partie
+et sans témoin.
+
+### 🩸 UN FONDU QUI AURAIT EFFACÉ L'ARME DU JOUEUR
+
+`WMat.get_material()` rend une instance **mise en cache, partagée** : c'est le même objet
+`StandardMaterial3D` que le viewmodel emploie pour l'arme du joueur. Or l'ennemi doit s'effacer en
+fondu (§5.2, jamais de pop sec) et blanchir quand il encaisse — deux écritures dans `albedo_color`
+et `emission`. Sans duplication, **l'arme du joueur se serait effacée avec l'ennemi**, et le défaut
+n'aurait eu aucun rapport visible avec sa cause.
+⚠️ Deuxième piège du même fondu : sans `TRANSPARENCY_ALPHA`, écrire `albedo_color.a` ne fait
+**rien** — le soldat serait apparu d'un coup, muet.
+⚠️ Troisième : les matériaux de l'ARME en font partie. Les oublier donnerait le pire des fondus —
+le corps s'efface et le fusil reste, opaque, suspendu là où l'homme était.
+
+### La teinte de faction ne vit plus sur toute l'image
+
+Sur le sprite (aplat gris neutre), la teinte se mélangeait à TOUT. Sur un corps à huit habillages,
+la même recette peindrait le casque, les boucles et **la peau** en couleur de faction. On ne teinte
+donc que la TOILE D'UNIFORME — littéralement l'endroit où une faction met sa couleur.
+❓ L'étendre au gilet est un arbitrage ouvert.
+
+### Le pas reste un PAS, pas un glissé
+
+Le §8.141 avait délibérément remplacé l'interpolation continue de l'adversaire par des poses
+discrètes (« un adversaire qui glisse se lit *rapide* ; un soldat qui pose ses pas se lit *lent* »,
+et la position serveur est un ENTIER). On ne repasse donc pas en marche continue : un pas serveur
+déclenche **une foulée de 0,42 s**, puis la main revient à l'ambiant. ⚠️ Ce n'est pas un réglage de
+goût — c'est la durée qui évite qu'une foulée déborde sur la suivante aux ~2,2 pas/s du bot, ce qui
+recréerait exactement le glissé qu'on avait retiré. Le mouvement réduit la coupe, comme la
+poussière et l'affaissement ; l'INFORMATION (position, son) n'est jamais amputée.
+
+### ⭐ L'ARME EST DANS SES MAINS, ET AUCUNE COORDONNÉE N'EST INVENTÉE
+
+Un soldat 3D sans fusil aurait été une **régression** visible : le sprite peint montrait « un homme
+au casque, l'arme à l'épaule ». Les deux ancres existaient déjà — le rig pose l'os `HandR` SUR
+`GRIP_R` (`{"name": "HandR", "derived": "GRIP_R"}`), et chaque arme expose son nœud `gripR`. Le
+pavé du rig l'annonçait : « c'est par ces deux ancres que le lot 3D-F posera l'arme — **jamais** par
+des coordonnées recopiées ».
+⛔ `BoneAttachment3D`, pas l'arbre de l'`Animator` : depuis la pesée du §8.152.13, c'est le
+`Skeleton3D` qui rend et l'arbre de `Node3D` est invisible. Une arme accrochée là-bas n'apparaîtrait
+tout simplement pas — sans erreur, sans avertissement, sans rien.
+
+### 🩸🩸 UNE MESURE A CHANGÉ MA DÉCISION, PUIS UNE VÉRIFICATION L'A CHANGÉE EN RETOUR
+
+Poignée sur l'os → **le museau tombe à 82,9 mm de la ligne de visée du rig**. Cause : le rig
+suppose la poignée 95 mm sous l'axe du canon (`GRIP_R_DROP`), les armes réelles annoncent 33 à
+62 mm. **Les deux ancres ne peuvent pas être satisfaites ensemble**, il faut choisir qui porte
+l'écart.
+
+J'ai d'abord basculé sur le canon, au motif que « l'ennemi doit tirer là où il regarde ». ⚠️ **C'était
+faux, et il a suffi de le vérifier** : `_muzzle_origin()` rend `(position_x, EYE_UP,
+far_soldier_z)` — le tir adverse part de l'**ŒIL**, jamais du fusil. **Rien ne lit la ligne de visée
+du soldat.** Et les deux poses donnent exactement la même DIRECTION de canon : elles ne diffèrent
+que d'une translation parallèle.
+
+L'écart ne pouvait donc jamais devenir un mensonge sur la ligne de tir — il ne restait qu'un
+arbitrage d'IMAGE. Et là, « le fusil flotte 8 cm au-dessus du poing » se voit, tandis que « le canon
+est 8 cm sous une ligne interne que personne ne dessine » ne se voit pas. **La main gagne.**
+⚠️ La leçon : *avant d'arbitrer entre deux ancres, chercher qui LIT chacune.* J'avais attribué à la
+ligne de visée du rig une autorité qu'aucun appelant ne lui donne.
+
+Le contrôle S8 porte donc **deux membres durs et indépendants** — la poignée dans l'os (ce que le
+joueur voit) et l'axe sur `BORE_DIR` (une erreur d'angle qu'aucune translation ne rattrape) — et
+publie le décalage parallèle sans le juger :
+
+> poignée à **0,0000 mm** de l'os · axe à **0,0000°** de `BORE_DIR` · **PUBLIÉ : canon à 82,9 mm
+> sous la ligne du rig**, sur les quatre armes.
+
+❓ **ARBITRAGE.** Re-dériver `GRIP_R_DROP` depuis les armes réelles réconcilierait les deux ancres,
+mais cela déplace l'os `HandR` et donc **toutes les poses de bras** du soldat.
+
+### ⚠️ CE QUI MANQUE, ET QU'ON NE REMPLACE PAS PAR UN À-PEU-PRÈS
+
+- **Aucun clip de MORT** dans la bibliothèque portée (`CLIPS_LOCOMOTION` s'arrête à `hurtIdle`). La
+  mort est portée par `hurtIdle` + l'enfoncement derrière le parapet que `_render_enemy` applique
+  déjà. Lacune nommée, pas geste inventé. ❓ Un clip de chute est un ajout possible.
+- **`throw` n'a pas de geste** : la bibliothèque ne contient pas de jet de grenade. Un corps qui
+  ferait *autre chose* que ce que l'événement annonce serait pire que sobre.
+
+### ⛔ Aucun champ ajouté au protocole
+
+`aiming`, `dead` et maintenant `weapon` sont tous **lus dans l'état déjà reçu** — comme au §8.138.
+
+### Régression : 22 sondes rejouées, tout vert
+
+Les 10 sondes TRANCHÉE et les 12 sondes VUE 3D repassent, zéro erreur de script. `probe_trench_hud`
+rend **237 PASS / 0 FAIL**.
+
+### 🩸 UNE SONDE ROUGE QUE PERSONNE NE POUVAIT VOIR — et ce n'est pas ce lot qui l'a cassée
+
+En rejouant la régression **en fenêtre**, `probe_trench_grenade` sort **ROUGE** : le décalque de
+grenade mesure 961 px au centre et 1 650 px au bord, pour 519 px théoriques (**+85 %** et
+**+218 %**).
+
+⚠️ **Ce rouge est ANTÉRIEUR.** Vérifié, et il a fallu deux essais pour le savoir :
+1. j'ai supposé que le corps 3D, qui RESPIRE entre les deux captures de la mesure par différence,
+   entrait dans la boîte de différence. J'ai masqué l'adversaire — **chiffres identiques**. La
+   raison est bête : `_render_enemy` réécrit `visible` à chaque image, mon masquage ne tenait pas ;
+2. j'ai donc débranché le soldat 3D à la construction. **961 / 1 650 / 962 : bit-identiques.**
+   Le lot n'y est pour rien.
+
+⛔ **CE QUI EST GRAVE, C'EST QU'ON NE LE VOYAIT PAS.** Cette sonde s'auto-déclare `NON APPLICABLE`
+sous `--headless` (correctif du §8.151-2bis, et c'était juste : sans rendu elle ne mesure rien) —
+mais la suite de régression tourne EN HEADLESS. Elle sortait donc du lot par abstention, à chaque
+passage, sans jamais rougir ni verdir. **Un « non applicable » systématique est un faux vert lent.**
+❓ **À arbitrer** : soit le décalque est réellement 1,85× trop grand — auquel cas le joueur voit une
+zone de souffle plus large que la règle et c'est un mensonge d'image —, soit c'est la théorie de la
+sonde qui projette au mauvais plan. Les deux sont plausibles et **aucune n'a été tranchée ici** :
+c'est hors du périmètre de ce chantier, et le dire vaut mieux que le corriger à l'aveugle.
+
+---
+
+## §8.152.15 — VERDICT DE PARTIE : LE SOLDAT 3D ADVERSE EST RETIRÉ
+
+Verdict de Hakim, manette en main : « le soldat adversaire était mieux avant. L'expérience de jeu
+est largement mieux sur le reste, même le point rouge c'est pas mal et la fluidité est mieux. »
+
+`scripts/game/trench_fp_world.gd` est **restauré à l'identique** de son état d'avant le §8.152.14 :
+le sprite peint du §8.138 redevient l'adversaire. Le champ `weapon` ajouté au view-model d'ennemi
+dans `trench_fp.gd` est retiré avec lui — il n'avait plus de lecteur.
+
+### ⚠️ CE QUI EST RETIRÉ EST LE **CÂBLAGE**, PAS LE TRAVAIL
+
+`scripts/game/trench_soldier3d.gd` reste, avec sa sonde `probe_vue3d_soldat_monte`
+(**8 contrôles, 7 sabotages sur 7**) et le §8.152.13. ⛔ Et il ne **pourrit pas** : sa sonde
+l'éprouve **en propre**, sans passer par le jeu. C'est la seule raison pour laquelle on peut le
+garder sans mentir — un module dont le seul test passait par un appelant qu'on vient de débrancher
+serait devenu du code non couvert le jour même.
+Le rebrancher est un travail d'une soixantaine de lignes, entièrement décrit au §8.152.14.
+
+### ⚠️ POURQUOI UNE RESTAURATION ET PAS UN DRAPEAU
+
+Un `const SOLDAT_3D := false` aurait été plus court. Mais `trench_fp_world.gd` est le deuxième
+fichier le plus chargé du projet, et le §8.152.14 y a laissé **onze sites** (préséance d'affichage,
+machine à frames, teinte, pas, tir, encaissement, montage d'arme, fondu). Garder onze branches
+mortes dans ce fichier-là coûte plus cher, à chaque lecture future, que soixante lignes à réécrire
+si Hakim change d'avis.
+⚠️ Vérifié AVANT la restauration, et c'est ce qui la rendait sûre : `git diff -U0` sur ce fichier ne
+montrait **que** des hunks du soldat 3D — trois lignes de `visible` et deux gardes remplacées, rien
+d'autre. Une restauration sans cette vérification aurait emporté du travail antérieur en silence.
+
+### Ce qui est EXPRESSÉMENT conservé
+
+Le point rouge en visée (§8.152.12), le tampon de tir et le rayon prédit (§8.152.11), le viewmodel
+3D du joueur (§8.152.10) et tout ce qui précède. Hakim les valide nommément.
+Régression après retour arrière : `probe_trench_hud` **237 PASS / 0 FAIL**, `probe_trench_reddot`,
+`probe_trench_aim` et `probe_vue3d_soldat_monte` verts, **0 erreur de script** à l'import.
+
+---
+
+## §8.153 — LE HEAD SHOT, LA TRANCHÉE HABITÉE, ET L'ADVERSAIRE QUI RESPIRE
+
+Commande de Hakim, après partie : remettre le sprite adverse (fait au §8.152.15), **introduire une
+notion de head shot** avec dégâts majorés de **+50 %** et un effet à la CoD, **fluidifier**
+l'animation de l'adversaire, et **améliorer le style de la tranchée**.
+
+Sondes : `backend/test_trench_headshot.py` (**24 ✅**), `probe_trench_hud` (**247 PASS / 0 FAIL**,
++10), `test_trench_ambient` (**86 contrôles, 10 sabotages sur 10**).
+Passe de sabotage du head shot : **10 sur 10**, serveur et client mêlés.
+
+---
+
+### 🎯 A. LE HEAD SHOT — un RAFFINEMENT, jamais une seconde décision
+
+⛔ **Les dégâts sont une règle SERVEUR.** Un head shot décidé côté client donnerait deux vérités
+pour un même tir. Tout est donc résolu dans `trench_sim.py`, et le client ne fait que **lire un
+drapeau**.
+
+**La contrainte du chantier : la table angulaire ne bouge pas.** Elle est respectée au sens fort —
+la tête est une **sous-borne à l'intérieur d'une fenêtre inchangée** :
+
+1. `contains()` tranche touche/rate, **exactement comme avant** ;
+2. `is_headshot()` ne lit que *où* dans la fenêtre, et ne peut donc rien faire porter.
+
+> **Preuve, pas promesse** : les quatre bornes des **25 fenêtres sont identiques au byte près**
+> après régénération (`0 borne modifiée`), et le contrôle H1 balaye **401 sites** de −3,39° à
+> +1,07° en comparant le verdict de la simulation à `contains()` appelé seul : **0 écart**.
+
+⚠️ **L'ORDRE DES DEUX TESTS EST LE FOND DU SUJET, et il est ÉPROUVÉ.** « Le site dépasse le
+menton » est vrai **jusqu'au zénith** : `is_headshot()` appelée seule rend `True` pour une balle
+passée trois mètres au-dessus de la silhouette. Le contrôle H5 le vérifie explicitement plutôt que
+de le confier à un commentaire — et le sabotage n°1 (faire décider la touche par la tête) fait
+rougir H1 immédiatement.
+
+#### La zone : une cote anatomique, pas un curseur
+
+`HEAD_HEIGHT = 0,25 m` — un menton-sommet du crâne humain. Ce n'est pas un réglage d'équilibrage,
+et c'est délibéré : un chiffre choisi « parce que ça fait bien » aurait dérivé à chaque plainte,
+une cote physique se défend seule.
+
+> ⚠️ **PUBLIÉ : la tête occupe 41,3 % de la bande exposée**, sur les 25 fenêtres, uniformément.
+> **C'est énorme, et c'est la géométrie qui le veut** : au-dessus d'un parapet, un homme ne montre
+> que sa tête et ses épaules. Ce n'est pas un cadeau au tireur — c'est ce qu'il voit.
+
+⭐ **Viser le CENTRE de la silhouette reste un tir au CORPS.** Le centre de la fenêtre est à 50 %,
+le menton à 58,7 % : il faut viser **haut**, pas viser juste. C'est ce qui rend le head shot
+méritant, et c'est vérifié (H2).
+
+Dégâts : `vipere 12→18` · `frelon 5→7` · `chacal 8→12` · `condor 30→45` (troncature entière, comme
+tout ce module). ⛔ **Une grenade n'a jamais de tête** : le souffle ne vise personne.
+⚙ **Le multiplicateur est le SEUL levier** (`TRENCH_RULES["headshot_multiplier"]`). Si 41 % de
+majoration pèse trop, c'est CE nombre qu'on baisse — jamais la géométrie du crâne.
+
+#### 🚨 ACTION HUMAINE REQUISE : la table passe en v5
+
+`TABLE_VERSION 4 → 5`. Les quatre bornes n'ont pas bougé, mais **le backend déployé doit être mis à
+jour** : un serveur resté en v4 ne connaîtrait pas la tête, et les deux camps ne verraient pas les
+mêmes dégâts. Le repli de `trench_angles.py` est **volontairement neutre** (tête VIDE, aucun head
+shot) plutôt que permissif — un serveur mal déployé ne distribuera jamais de dégâts majorés en
+silence. Et la bannière de désynchronisation s'allumera, ce à quoi elle sert.
+
+---
+
+### 🔊 B. L'EFFET CoD — et les deux contraintes qui l'ont dessiné
+
+- **La croix modifie les QUATRE mêmes diagonales**, elle n'en ajoute pas. ⚠️ `_decode_cross` de
+  `probe_trench_hud` classe toute ligne hors-axe en « marque » et en exige exactement quatre :
+  une cinquième forme ferait rougir quatre contrôles existants. Et c'est aussi la bonne lecture —
+  un joueur ne compte pas des branches au milieu d'un duel.
+- **La couleur était contrainte, pas choisie** : l'or dit déjà « touche », le rouge dit déjà
+  « mort », et le rouge vif du point de visée (§8.152.12) occupe le même centre d'écran. Il restait
+  le **blanc froid**, qui a le mérite de se lire « plus net ».
+- **Priorité MORT > TÊTE > TOUCHE** : un head shot fatal reste ROUGE. La mort est l'information la
+  plus importante, et le contrôle l'exige.
+- **Le son REMPLACE le hitmarker, il ne s'y ajoute pas.** C'est la convention CoD (un seul
+  « ding », plus sec) et ça garde le budget de voix : `audio_manager.gd` le pose à 17 sur 20.
+  `trench_headshot` monte d'une **quinte** au-dessus du hitmarker (1900 → 2850 Hz) — un intervalle
+  que l'oreille sépare instantanément dans le bruit d'une détonation — et RACCOURCIT (0,05 →
+  0,035 s), parce que plus court se lit comme plus net.
+
+⛔ **Le client ne remultiplie rien.** Le montant arrive déjà majoré ; le drapeau ne sert qu'à le
+DIRE. Le sabotage n°7 (remultiplier côté client) fait rougir la sonde.
+
+---
+
+### 🎒 C. LA TRANCHÉE — trois leviers, dont un seul était disponible
+
+La tranchée entière est **34 boîtes alignées sur les axes** ; le parapet est *une* boîte de
+33,6 × 1,25 × 0,6 m.
+⚠️ **Le projet rend en GL Compatibility** : SSAO, SSIL, SDFGI, brouillard volumétrique et
+profondeur de champ y sont **silencieusement inertes**. Les activer n'aurait rien produit et aurait
+coûté des heures de réglage d'un effet inexistant. Restaient trois leviers :
+
+1. **🩸 LES MIPMAPS ÉTAIENT DÉSACTIVÉS** sur les quatre textures. Le sol lointain est tuilé toutes
+   les **14 m sur un cadre de 340 m** : sans mipmap, chaque pixel échantillonne une texture des
+   dizaines de fois trop fine, et le résultat **moire** dès que la caméra tourne. Le défaut de
+   netteté le plus visible de toute la scène, corrigé par un booléen.
+2. **Les cartes de NORMALES** (`tools/gen_trench_normals.py`), dérivées de l'albédo.
+   ⚠️ **Ce que la méthode est, et ce qu'elle n'est pas** : elle suppose « sombre = creux ». C'est
+   **faux en général** et **juste pour ces quatre matières** — sur du jute, de la boue, des planches
+   et de la terre, l'ombre EST la crevasse. Gradient calculé **en enroulement** (`np.roll`), sans
+   quoi chaque couture de tuile aurait porté une arête fantôme — un quadrillage régulier sur tout le
+   sol, pile là où on cherchait du réalisme. Pentes mesurées : **7,4° à 9,0° de moyenne, jusqu'à
+   39°**. Un fichier de normales plat est parfaitement valide et n'éclaire rien : on publie le
+   chiffre.
+3. **La rugosité n'est plus uniforme.** Elle valait 0,95 pour tout, ce qui revenait à dire que la
+   boue d'une tranchée de la Grande Guerre est aussi sèche que la toile d'un sac. Boue et
+   caillebotis passent à 0,80/0,78 — **une tranchée est un endroit mouillé**, et c'est la seule
+   différence de matière que ce moteur sache exprimer.
+
+#### 🩸 LE VOLUME SIGNÉ A ATTRAPÉ CE QUE LE RAISONNEMENT AVAIT MANQUÉ
+
+Les sacs de sable sont bâtis en **un seul `ArrayMesh`** (110 `MeshInstance3D` auraient coûté 110
+appels de dessin pour 12 triangles pièce). J'ai dérivé l'ordre des sommets **à la main, face par
+face**, et j'étais sûr de mon coup. Mesure : **volume signé −5,45 m³**. Godot parcourt ses faces
+avant dans le sens **horaire** là où three.js les parcourt en trigonométrique, et une face
+retournée ne se voit **qu'au rendu**.
+⚠️ Compter les triangles n'aurait rien prouvé. Le volume signé est le seul contrôle d'orientation
+qu'on ne puisse pas satisfaire par construction, et il a tranché en un essai.
+
+#### ⛔ TROIS INTERDITS SUR LES SACS, ET CHACUN COÛTERAIT UNE PARTIE
+
+- **aucun sac au-dessus de `PARAPET_Y`** : la hauteur du parapet ne décide pas de ce que JE vois
+  (mon œil est à 1,70) mais de ce que l'**adversaire** peut me toucher, et le serveur la lit dans
+  la table. Contrôlé sur la géométrie **rendue** : sommet le plus haut **1,2500 m** contre un
+  plafond de 1,2500 ;
+- **rien sur le parapet ADVERSE** : c'est son arête proche qui coupe le bas de la silhouette. Le
+  moindre sac qui déborderait vers moi occulterait **plus que la règle**. Il ne gagne donc que sa
+  carte de normales — de l'ombre, jamais de la matière ;
+- **la crête reste droite**, et ce n'est pas un oubli : la casser demanderait de monter ou de
+  descendre des sacs, et les deux mentent.
+
+#### 🩸 UN DÉFAUT QUE SEULE LA POSE ACCROUPIE MONTRAIT
+
+Première version : deux rangées de sacs débordant de 11 cm vers la tranchée. Accroupi, l'œil est à
+y = 0,90 et z = −0,5 : les sacs se retrouvaient **à 39 cm du nez**, une seule de leurs faces
+couvrant 60 % de la largeur d'écran. La vue accroupie est devenue un empilement de facettes
+géantes — **franchement pire que le mur lisse d'avant**.
+⚠️ Invisible debout, la seule pose que je regardais. **Une modification de décor se juge sur toutes
+les poses du banc, pas sur la plus flatteuse.** Une seule rangée, sur la crête, et 5 cm de débord.
+
+#### ⚠️ ET UNE IMPRESSION FAUSSE, CORRIGÉE PAR LA MESURE
+
+La vue accroupie m'a paru **surexposée** après coup. Mesuré, avant contre après :
+**moyenne 71,7 → 71,5 · médiane 53,8 → 53,6 · p95 200,1 → 200,2 · pixels brûlés 0,03 % → 0,01 %.**
+L'exposition est **identique** ; la texture est simplement devenue nette. La calibration de
+`COVER_TINT` du §8.140 tient. J'allais corriger un défaut qui n'existait pas.
+
+---
+
+### 🎞 D. L'ADVERSAIRE — la fluidité est dans le TEMPS, parce qu'elle ne peut pas être dans l'espace
+
+Le soldat n'a que **six images peintes**, dont deux seulement sont des états permanents (`idle`,
+`aim`) : entre les deux, un changement **sec**. Pendant ce temps sa position **glisse en continu**.
+C'est ce désaccord qui se lit « il flotte ».
+
+⛔ **CE QU'ON NE POUVAIT PAS FAIRE, ET POURQUOI.** L'animation évidente — un balancement latéral,
+un roulis — est **interdite** : depuis le §8.141.8, `SILHOUETTE_HALF_WIDTH` vaut **exactement** la
+demi-largeur du sprite peint. Un simple roulis de 3° élargirait la silhouette rendue de **2,9 cm
+au-delà de sa fenêtre de tir** : la famille de défaut du §8.141.7 (« impossible de toucher le
+soldat »), en plus petit et donc en plus dangereux.
+⭐ **Le mouvement vers le BAS, lui, est honnête** : il rend la cible plus PETITE que sa fenêtre,
+jamais plus grande. C'est déjà le principe de `_enemy_dip`, et c'est le seul axe qu'on s'autorise.
+Un contrôle l'interdit maintenant explicitement, avec un sabotage qui le fait rougir.
+
+Livré :
+- **une foulée à DEUX creux** (talon, puis transfert du poids) sur 0,42 s. Un seul creux se lit
+  comme un sautillement ; deux se lisent comme une marche. Le détail fait tout le travail et ne
+  coûte qu'un sinus ;
+- **une respiration** de 4,2 s (14/min, un homme au repos mais tendu), 8 mm, vers le bas ;
+- **une traînée de frame** de 0,10 s : la pose qu'on vient de quitter s'efface **sous** la nouvelle.
+  ⚠️ Pas un fondu croisé : deux silhouettes à mi-alpha donneraient un homme à deux têtes pendant un
+  dixième de seconde. La pose courante est toujours **franche**.
+
+❓ **CE QUI N'A PAS ÉTÉ FAIT, ET POURQUOI.** De **vraies nouvelles poses peintes** demandent
+`tools/trench_asset_factory.py` — donc ComfyUI (local, **pas lancé** : 127.0.0.1:8188 ne répond
+pas) ou OpenRouter (payant). Les six frames actuelles ont été produites en img2img depuis une
+référence unique, et ajouter un état demande d'étendre `SOLDIER_STATE_PROMPTS`. **C'est un
+arbitrage de budget, pas une décision de ce lot.**
+
+---
+
+### 🩸 DEUX BÉVUES DE MÉTHODE, DE MOI, LE MÊME JOUR
+
+1. **Un remplacement aveugle** (`world._` → `duel._world._`) a touché **54 lignes** d'une autre
+   fonction du banc, qui avait sa propre variable `world`. Restauré depuis `HEAD` et réappliqué
+   chirurgicalement. ⚠️ Un `replace` sans ancre est une modification dont on ne connaît pas la
+   portée — et le fichier compilait quand même.
+2. **Un harnais de sabotage qui lisait le SYMPTÔME au lieu du VERDICT.** Il ne cherchait que les
+   lignes « ❌ » : deux sabotages qui faisaient **planter** le test (donc n'imprimaient aucun ❌) ont
+   été comptés **VERTS**. ⚠️ Un tel harnais laisse passer exactement les sabotages les plus
+   violents, ceux qui cassent tout avant d'avoir pu échouer proprement. Corrigé : le **code de
+   sortie** fait partie du verdict. Score réel : 7/10 → **10/10**.
+
+---
+
+### Régression
+
+Backend : `test_trench_sim` 153 ✅ · `test_trench_angles` 20 ✅ · `test_trench_bot` 27 ✅ ·
+`test_trench_flow` 90 ✅ · `test_trench_headshot` 24 ✅ — **0 ❌**.
+Client : 12 sondes, **0 rouge, 0 erreur de script**.
+
+---
+
+## §8.153.2 — DEUX IMAGES DE PLUS, ET UNE MESURE QUI A CHANGÉ D'AVIS
+
+Consigne de Hakim : **abandonner ComfyUI, n'utiliser qu'OpenRouter**, choisir les modèles les plus
+adaptés, et finir. Livré : deux frames neuves (`aim_rise`, `fire`), la machine à frames qui les
+joue, une garde de largeur dans l'usine, des sacs de sable arrondis, et **une mesure de performance**.
+
+Sondes : `test_trench_ambient` — **94 contrôles, 11 sabotages sur 11**.
+Dépense OpenRouter : **0,34 $** sur 6 images (registre à 5,15 $ / plafond 10 $).
+
+### 🩸 L'OUTIL NE VOYAIT QUE 11 MODÈLES SUR 50
+
+`OpenRouterBackend.list_models()` interrogeait `/models` **sans paramètre**. Cet appel ne rend que
+les modèles de **chat-completion** : 11 entrées à sortie image. La question
+`?output_modalities=image` en rend **50** — toute la famille Images-API (Seedream, FLUX.2,
+Qwen-Image, MAI, Recraft…) était invisible depuis cet outil.
+⚠️ **Choisir « le meilleur modèle » dans une liste amputée des deux tiers est un choix qui a l'air
+informé et ne l'est pas.** Le modèle le mieux classé en ÉDITION d'image ne figurait pas dans les 11.
+
+### Le modèle retenu : `google/gemini-3.1-flash-image`, sur pièces
+
+| | Elo édition | prix/image |
+|---|---|---|
+| `gemini-3.1-flash-lite-image` (ancien défaut) | 1204 | 0,0336 $ |
+| **`gemini-3.1-flash-image`** (retenu) | **1251** | **0,0672 $** |
+| `gemini-3-pro-image` (ancien haut de gamme) | 1247 | 0,1344 $ |
+
+Le classement d'édition d'image (votes en aveugle, même image + même consigne) place **Nano Banana 2
+au-dessus de Nano Banana Pro, pour la moitié du prix**, avec une meilleure conservation d'identité
+en img2img — exactement l'axe qui compte ici. Résultat en pratique : les quatre poses sont
+**incontestablement le même homme**, même caméra, même lumière.
+⛔ **On garde l'édition APPEL PAR APPEL depuis la référence**, et non la génération d'une planche
+unique (que la littérature recommande pour la cohérence). La raison est propre à ce lot : les
+nouvelles frames doivent ressembler aux **six déjà déployées**, pas à elles-mêmes. La référence est
+le meilleur ancrage disponible.
+
+### ⛔ LA GARDE DE LARGEUR — elle a mordu à son premier usage réel
+
+Le §8.141.8 a posé `SILHOUETTE_HALF_WIDTH` sur la demi-largeur exacte de `enemy_aim.png`. ⚠️ **Ce
+que personne n'avait écrit : cette cote fait de chaque nouvelle frame un risque.** Une pose bras
+écartés, normalisée en HAUTEUR à 1,80 m comme toutes les autres, rendrait un soldat plus large que
+sa propre fenêtre de tir.
+L'usine mesure donc, et refuse le dépôt. Première version de `aim_rise` : **0,5142 m** contre 0,44
+— coude sorti, refusée. Consigne resserrée (l'arme monte *devant la poitrine*, coudes bas, plus une
+interdiction explicite en majuscules) : **0,4368 m**, déposée. `fire` : **0,4214 m**.
+
+### 🩸🩸 LA MESURE A DÉCOUVERT UN DÉFAUT, PUIS M'A FAIT CHANGER D'AVIS SUR LUI
+
+Appliquée aux **six frames déjà livrées**, la garde dit :
+
+> aim **0,4367** (la référence) · **idle 0,4939 (+12,3 %)** · throw 0,4988 (+13,4 %) · **hit 0,7004
+> (+59,2 %)**
+
+Lecture immédiate : le défaut du §8.141.7 (« impossible de toucher le soldat ») n'était corrigé que
+pour la pose de VISÉE, et hors visée le joueur voit un homme 12 % plus large que la fenêtre.
+J'ai donc généré trois variantes « bras rentrés » (0,21 $) — et **je ne les ai pas déposées** :
+
+| | original | resserré | fenêtre |
+|---|---|---|---|
+| idle | 0,4939 (écart **0,054**) | 0,3114 (écart **0,129**) | 0,4400 |
+
+⚠️ **La version resserrée est DEUX FOIS PLUS FAUSSE que l'originale**, dans l'autre sens : on
+toucherait 13 cm à côté de l'homme. Et en regardant les images, le débord de `idle` est **le FUSIL**
+tenu en diagonale, celui de `hit` **les bras projetés** — pas le torse. Qu'une extrémité sorte de la
+hitbox est la convention de tout FPS ; le §8.141.7, lui, était une erreur de **PROJECTION** (un
+billboard montrant sa largeur pleine sous tout angle), ce qui n'a rien à voir.
+⛔ **Les six frames restent.** Les 0,21 $ ont acheté une réponse, pas des images — et la réponse
+était « ne touche à rien ». Le contrôle PUBLIE désormais les six chiffres à chaque passage, sans
+juger : c'est l'usine qui refuse, parce que là le refus est ACTIONNABLE (on régénère).
+
+### 🩸 UN CÂBLAGE QUI AVAIT L'AIR JUSTE ET NE FAISAIT RIEN
+
+L'insertion de l'image de passage écrivait `_enemy_frame` puis appelait `_apply_enemy_frame()`. Or
+la fin de `_advance_enemy_frames` remet la frame à `wanted`, **capturé avant l'insertion** : la pose
+intermédiaire était écrasée à chaque image. Le soldat gardait exactement le comportement d'avant,
+**sans une seule erreur, sans une seule trace**.
+⚠️ Seul un contrôle FONCTIONNEL (« la frame vaut-elle `aim_rise` ? ») l'a vu — trois contrôles
+rouges d'un coup. Une relecture ne l'aurait pas trouvé : le code se lit juste.
+
+### Ce que la machine fait maintenant
+
+`idle → aim_rise → aim` et `aim → aim_rise → idle` : **la même image sert dans les deux sens**, parce
+qu'une pose à mi-chemin n'a pas de direction. Et le tir adverse joue enfin une image — jusqu'ici il
+ne produisait qu'une sphère de lueur pendant que le corps restait immobile.
+⚠️ La bascule est détectée sur le **CHANGEMENT**, pas sur l'état : réagir à « il vise » réinsérerait
+la pose à chaque image et le soldat resterait bloqué à mi-chemin. Un sabotage le garde.
+
+### 🩸 UNE SONDE QUI SUPPOSAIT UNE TOPOLOGIE
+
+Les sacs de sable lisaient comme un **bloc de béton chanfreiné** : 24 sommets par sac, aucun partage,
+donc une normale PAR FACE. En partageant les huit sommets, les normales se moyennent et le sac
+s'arrondit comme un coussin — même géométrie, même coût, seule la topologie change.
+Mais le contrôle de volume signé lisait les sommets **par triplets**, ce qui ne vaut que sur un
+maillage non indexé : il a rendu **−0,36 m³** sur une géométrie parfaitement saine. Corrigé pour
+passer par `ARRAY_INDEX` — et le volume redonne **5,4515 m³**, au dix-millième près celui d'avant,
+ce qui prouve que la géométrie n'a pas bougé.
+⚠️ **Une sonde qui suppose une topologie mesure autre chose que ce qu'elle croit dès que la
+topologie change — et elle rougit en accusant le code.**
+
+### ⚡ LA FLUIDITÉ, MESURÉE
+
+`perf_trench` : **greybox 0,909 ms/frame · monde texturé 0,962 ms · écart +0,054 ms** pour un budget
+de +2,000 ms. Sortie **PROPRE** (0 orphelin, 57 nœuds pour 57 de référence).
+⚠️ Les normales, les mipmaps et les 1 980 sommets de sacs coûtent **2,7 % du budget**. À ~1 ms par
+image, **le rendu n'est pas le facteur limitant** : ce qui manquait à la fluidité perçue n'était pas
+des millisecondes, c'était des IMAGES — deux états permanents et rien entre eux.
+
+### Régression
+
+Client : 14 sondes, **0 rouge, 0 erreur de script** · `probe_trench_hud` **247 PASS / 0 FAIL** ·
+`test_trench_ambient` **94 contrôles, 11 sabotages sur 11**.
+Backend : `sim` 153 ✅ · `angles` 20 ✅ · `bot` 27 ✅ · `flow` 90 ✅ · `headshot` 24 ✅ — **0 ❌**.
+Inventaire de recette : **20 fichiers sur 20**.

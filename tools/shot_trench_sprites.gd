@@ -23,7 +23,9 @@ const Sprites := preload("res://scripts/game/trench_sprites.gd")
 const Geo := preload("res://scripts/game/trench_geometry.gd")
 
 const WEAPONS := ["vipere", "frelon", "chacal", "condor"]
-const ENEMY_STATES := ["idle", "aim", "throw", "hit", "death_a", "death_b"]
+# §8.153 : `aim_rise` (l arme qui monte) et `fire` (le depart de feu) rejoignent l inventaire.
+# ⚠️ Le TOTAL attendu plus bas doit suivre, sinon la recette annoncerait « complet » a six.
+const ENEMY_STATES := ["idle", "aim", "aim_rise", "fire", "throw", "hit", "death_a", "death_b"]
 
 var _duel: Control = null
 var _out := ""
@@ -48,7 +50,7 @@ func _ready() -> void:
 			if not ok2:
 				missing += 1
 			print("  vm_%s_%-7s %s" % [w, s, "OK" if ok2 else "ABSENT"])
-	print("  -> %d fichier(s) manquant(s) sur 18" % missing)
+	print("  -> %d fichier(s) manquant(s) sur 20" % missing)
 
 	DuelScript.pending_room_id = "999"
 	_duel = DuelScene.instantiate()

@@ -172,10 +172,20 @@ func _tile(tex_name: String) -> Texture2D:
 # ║ une fréquence spatiale, la même sur les six faces et d'un volume à l'autre. La boue du no      ║
 # ║ man's land et celle du sol lointain se raccordent alors sans qu'on ait rien à aligner.         ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ⚠️ LA RUGOSITE N EST PLUS UNIFORME (§8.153). Elle valait 0,95 pour TOUT, ce qui revenait a dire
+# que la boue d une tranchee de la Grande Guerre est aussi seche que la toile d un sac. Une
+# tranchee est un endroit MOUILLE : la boue et les caillebotis renvoient une lueur diffuse, le
+# jute et la terre n en renvoient aucune. C est la seule difference de MATIERE que le rendu en
+# Compatibility sache exprimer — il n y a ni SSAO ni reflexion d ecran pour le dire autrement.
+# ⛔ La table est fermee sur les quatre textures existantes : une matiere inconnue retombe sur
+# 0,95, l ancienne valeur. L ajout ne peut donc rien changer a ce qu il ne connait pas.
+const RUGOSITE := {"mud": 0.80, "planks": 0.78, "jute": 0.95, "earth": 0.95}
+
+
 func _matter(tex_name: String, metres: float, fallback: Color,
 		tint := Color(1, 1, 1)) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
-	material.roughness = 0.95
+	material.roughness = float(RUGOSITE.get(tex_name, 0.95))
 	material.metallic = 0.0
 	var tex := _tile(tex_name)
 	if tex == null:
@@ -185,6 +195,22 @@ func _matter(tex_name: String, metres: float, fallback: Color,
 		return material
 	material.albedo_texture = tex
 	material.albedo_color = tint
+	# ⭐ LE RELIEF (§8.153). Le projet rend en **GL Compatibility** : SSAO, SSIL, SDFGI et le
+	# brouillard volumetrique y sont SILENCIEUSEMENT INERTES — les activer ne produirait rien du
+	# tout et couterait des heures de reglage d un effet qui n existe pas. La carte de NORMALES,
+	# elle, marche. Sur une tranchee faite de 34 boites a faces planes, c est le seul levier de
+	# relief disponible, et de tres loin le plus rentable.
+	# ⚠️ Le chargement est OPTIONNEL et silencieux : une matiere sans normale garde EXACTEMENT
+	# le rendu d avant. Et `force_greybox` n en charge aucune (c est `_tile` qui filtre), donc le
+	# banc de performance continue de comparer ce qu il croit comparer.
+	var normale := _tile(tex_name + "_normal")
+	if normale != null:
+		material.normal_enabled = true
+		material.normal_texture = normale
+		# ⛔ L amplitude est CUITE DANS LA CARTE (`tools/gen_trench_normals.py`, une force par
+		# matiere). La remultiplier ici creerait un second reglage pour la meme grandeur, et le
+		# jour ou l un des deux bougerait, plus personne ne saurait lequel regarder.
+		material.normal_scale = 1.0
 	material.uv1_triplanar = true
 	material.uv1_world_triplanar = true
 	# En triplanaire, `uv1_scale` est une FRÉQUENCE : 1/mètres par tuile.
@@ -237,6 +263,7 @@ func _build_terrain() -> void:
 		Vector3(0.0, (Geo.GROUND_Y + 0.4) * 0.5, -Geo.TRENCH_WIDTH - 0.2), earth)
 	_box(cover_root, "NearParapet", Vector3(front, Geo.PARAPET_Y, Geo.PARAPET_THICKNESS),
 		Vector3(0.0, Geo.PARAPET_Y * 0.5, Geo.PARAPET_THICKNESS * 0.5), jute)
+	_build_sacs(front, jute)
 
 	# La tranchée ADVERSE, en miroir : son parapet a son arête PROCHE à `far_parapet_near_edge_z`
 	# — c'est CETTE arête qui coupe le bas de la silhouette (cf. `occlusion_floor_at_target`).
@@ -252,6 +279,121 @@ func _build_terrain() -> void:
 # Le CADRE de sol lointain : quatre dalles autour de l'arène, jusqu'au pied de l'arc de ciel.
 # ⚠️ Leur face supérieure est EXACTEMENT à `GROUND_Y`, comme celle du no man's land : c'est cette
 # égalité qui fait que le terrain part d'un seul tenant vers l'horizon.
+# =================================================================================================
+# LES SACS DE SABLE (§8.153) — du relief sur MON parapet, et sur lui seul
+# =================================================================================================
+# ╔═ ⛔ TROIS INTERDITS, ET CHACUN COÛTERAIT UNE PARTIE ═══════════════════════════════════════════╗
+# ║ 1. AUCUN SAC AU-DESSUS DE `PARAPET_Y`. La hauteur du parapet ne décide pas de ce que JE vois   ║
+# ║    (mon œil est à 1,70, bien au-dessus) : elle décide de ce que l'ADVERSAIRE peut me toucher,  ║
+# ║    et le serveur la lit dans la table. Un sac qui dépasse me ferait croire couvert là où la    ║
+# ║    règle me dit exposé. Le sommet est donc borné, et une sonde le vérifie sur la géométrie     ║
+# ║    RENDUE, pas sur l'intention.                                                                ║
+# ║ 2. RIEN SUR LE PARAPET ADVERSE. C'est son arête PROCHE qui coupe le bas de la silhouette       ║
+# ║    (`occlusion_floor_at_target`). Le moindre sac qui déborde vers moi occulterait PLUS que la  ║
+# ║    règle, et on tirerait sur un torse que le serveur déclare visible. Le parapet d'en face ne  ║
+# ║    gagne donc que sa carte de normales — de l'ombre, jamais de la matière.                     ║
+# ║ 3. LA CRÊTE RESTE DROITE, et ce n'est pas un oubli. C'est la ligne qui « fait greybox » dans   ║
+# ║    les captures, et la casser demanderait de monter ou de descendre des sacs — les deux        ║
+# ║    mentent. On casse donc l'arête PROCHE (celle qu'on enjambe du regard) et la profondeur,     ║
+# ║    jamais la ligne d'horizon du parapet.                                                       ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+#
+# ⚠️ UN SEUL `ArrayMesh` POUR TOUTE LA RANGÉE. Un `MeshInstance3D` par sac aurait donné ~110 appels
+# de dessin de plus, sur un moteur en Compatibility où chaque appel compte — pour 12 triangles
+# pièce. La géométrie est gratuite, les appels ne le sont pas.
+const SAC_LARGEUR := 0.62       # largeur nominale d'un sac ⚙
+const SAC_HAUTEUR := 0.30       # hauteur d'un sac ⚙
+const SAC_CREUX_MAX := 0.06     # de combien un sac peut être ENFONCÉ sous la crête ⚙
+const SAC_DEBORD_AVANT := 0.07  # débord côté no man's land ⚙ (reste très sous la ligne de vue)
+# 🩸 0,11 → 0,05 m, SUR CAPTURE. Accroupi, l œil est a y = 0,90 et z = −0,5 : un sac qui déborde
+# de 11 cm vers la tranchée se retrouve a **39 cm du nez**, et une seule de ses faces couvre 60 %
+# de la largeur d écran. La vue accroupie est devenue un empilement de facettes géantes, dont la
+# moitié dans l ombre — franchement pire que le mur lisse d avant.
+# ⚠️ Le défaut ne se voyait PAS debout, la seule pose que je regardais. Une modification de décor
+# se juge sur TOUTES les poses du banc, pas sur la plus flatteuse.
+const SAC_DEBORD_ARRIERE := 0.05  # débord côté MA tranchée ⚙
+# ⛔ UNE SEULE RANGÉE, ET C EST LA MÊME LEÇON. La seconde s asseyait sur y ∈ [0,61 ; 0,95],
+# c est-à-dire EXACTEMENT à hauteur d œil accroupi. Les sacs n ont de sens que sur la CRÊTE —
+# celle qu on enjambe du regard ; plus bas, ils ne décorent rien, ils bouchent.
+const SAC_RANGEES := 1
+
+func _build_sacs(front: float, jute: StandardMaterial3D) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var compteur := 0
+	var n: int = int(front / SAC_LARGEUR)
+	var pas: float = front / float(maxi(1, n))
+	# Deux rangées : la crête, et un cours plus bas légèrement décalé (l'appareillage en quinconce
+	# d'un vrai mur de sacs — deux rangées alignées se liraient comme une grille).
+	for rangee in SAC_RANGEES:
+		var haut_base: float = Geo.PARAPET_Y - float(rangee) * SAC_HAUTEUR
+		var decalage: float = pas * 0.5 * float(rangee)
+		for i in range(n + 1):
+			var x: float = -front * 0.5 + pas * float(i) + decalage
+			if absf(x) > front * 0.5:
+				continue
+			# Bruit DÉTERMINISTE : la scène doit se rebâtir à l'identique, sinon deux captures du
+			# même banc diffèrent et toute mesure d'image devient inutilisable.
+			var g := sin(float(i) * 12.9898 + float(rangee) * 4.1414) * 43758.5453
+			var r0: float = g - floor(g)
+			var g2 := sin(float(i) * 78.233 + float(rangee) * 1.618) * 24634.6345
+			var r1: float = g2 - floor(g2)
+			# ⛔ LE SOMMET NE MONTE JAMAIS : `haut_base` est un PLAFOND, le creux ne fait que
+			# descendre. Une variation bilatérale aurait été plus jolie et aurait menti.
+			var sommet: float = haut_base - r0 * SAC_CREUX_MAX
+			var bas: float = sommet - SAC_HAUTEUR * (0.9 + r1 * 0.25)
+			var demi: float = SAC_LARGEUR * (0.42 + r1 * 0.12)
+			var z0: float = -SAC_DEBORD_ARRIERE * (0.4 + r0 * 0.6)
+			var z1: float = Geo.PARAPET_THICKNESS + SAC_DEBORD_AVANT * (0.3 + r1 * 0.7)
+			compteur = _sac(st, compteur, Vector3(x, (sommet + bas) * 0.5, (z0 + z1) * 0.5),
+				Vector3(demi, (sommet - bas) * 0.5, (z1 - z0) * 0.5),
+				deg_to_rad(-9.0 + 18.0 * r0))
+	st.generate_normals()
+	var instance := MeshInstance3D.new()
+	instance.name = "NearParapetSacs"
+	instance.mesh = st.commit()
+	instance.material_override = jute
+	cover_root.add_child(instance)
+
+
+# Un sac : une boîte dont le HAUT est rétréci (un sac posé s'affaisse et s'évase vers le bas), avec
+# un léger lacet. ⚠️ Le rétrécissement s'applique en X et en Z, jamais en Y : la cote qui compte
+# est la hauteur, et elle est déjà bornée par l'appelant.
+func _sac(st: SurfaceTool, base: int, centre: Vector3, demi: Vector3, lacet: float) -> int:
+	var rot := Basis(Vector3.UP, lacet)
+	var pincement := 0.82
+	var coins: Array[Vector3] = []
+	for sy in [-1.0, 1.0]:
+		var k: float = 1.0 if sy < 0.0 else pincement
+		for sx in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				coins.append(centre + rot * Vector3(demi.x * sx * k, demi.y * sy,
+					demi.z * sz * k))
+	# ⭐ HUIT SOMMETS PARTAGES, ET C EST TOUT LE SUJET DE CETTE FONCTION.
+	# Premiere version : 24 sommets, quatre par face, aucun partage. `generate_normals()` donnait
+	# alors une normale PAR FACE — un plat parfait, six aretes vives, et le resultat se lisait en
+	# capture comme un bloc de beton chanfreine, pas comme un sac. Avec des sommets PARTAGES, les
+	# normales des trois faces qui se rejoignent sont moyennees : le sac s arrondit comme un coussin,
+	# ce qu il est. Meme geometrie, meme cout, la seule difference est la topologie.
+	# ⚠️ Le sens de parcours reste `[0, 2, 1] / [0, 3, 2]` — il a ete etabli par le VOLUME SIGNE
+	# (mesure : −5,45 m3 sur la version derivee a la main), et l indexation ne le change pas.
+	for c: Vector3 in coins:
+		st.add_vertex(c)
+	var faces := [
+		[0, 1, 3, 2],  # bas   (y-)
+		[4, 6, 7, 5],  # haut  (y+)
+		[0, 2, 6, 4],  # z-
+		[1, 5, 7, 3],  # z+
+		[0, 4, 5, 1],  # x-
+		[2, 3, 7, 6],  # x+
+	]
+	for f: Array in faces:
+		for tri: Array in [[0, 2, 1], [0, 3, 2]]:
+			for k2 in tri:
+				st.add_index(base + int(f[int(k2)]))
+	return base + coins.size()
+
+
 func _build_far_ground(front: float, no_mans_land: float) -> void:
 	var far := _matter("mud", FAR_MUD_METRES, COL_GROUND, Color(0.66, 0.60, 0.53))
 	var reach := FAR_GROUND_EXTENT

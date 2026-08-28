@@ -269,6 +269,7 @@ var _enemy_frame := Sprites.ENEMY_IDLE
 var _enemy_frame_left := 0.0
 var _enemy_dying := false
 var _enemy_aiming := false
+var _enemy_aiming_prev := false   # §8.153 : pour VOIR la bascule, pas seulement l etat
 var _enemy_dead := false
 var _enemy_tint := COL_DANGER
 
@@ -291,6 +292,11 @@ var _enemy_muzzle: MeshInstance3D
 # Dernière position ENTIÈRE observée : c'est son changement qui définit « un pas », pas le glissé.
 var _enemy_step_pos := -1
 var _enemy_dip := 0.0          # affaissement vertical résiduel (m), décroissant
+# §8.153 — LA FOULÉE. Une horloge de pas, et une trainee de frame. Voir `_animer_foulee`.
+var _enemy_stride := 0.0       # temps ÉCOULÉ dans la foulée en cours (s) ; < 0 = aucune
+var _enemy_breath := 0.0       # phase de respiration, en secondes, jamais remise a zero
+var _enemy_fade: Sprite3D      # la frame SORTANTE, qui s efface — la trainee
+var _enemy_fade_left := 0.0
 var _enemy_muzzle_left := 0.0  # durée restante du départ de feu adverse (s)
 
 # Épaisseur du liseré ⚙, en fraction de la demi-largeur du sprite. 0,045 rend ~1,5 px au plus près
@@ -301,6 +307,31 @@ const ENEMY_RIM_GROW := 0.045
 const ENEMY_RIM_COLOR := Color(0.82, 0.76, 0.60)
 # Profondeur de l'affaissement au poser du pied ⚙ et sa constante de rappel. 4 cm sur une silhouette
 # de 1,80 m : invisible en photo, parfaitement lisible en mouvement — c'est le but.
+# ╔═ 🎞 §8.153 — « FLUIDIFIER LES FRAMES DE L ADVERSAIRE » ════════════════════════════════════╗
+# ║ Verdict de Hakim : le soldat adverse manque de mouvement. Il n a que SIX images peintes, et  ║
+# ║ deux seulement sont des etats permanents (`idle`, `aim`) : entre les deux, un CHANGEMENT SEC.║
+# ║ Pendant ce temps sa POSITION glisse en continu — c est ce desaccord qui se lit « il flotte ».║
+# ║                                                                                              ║
+# ║ ⛔ CE QU ON NE PEUT PAS FAIRE, ET POURQUOI. Toute animation LATERALE ou VERS LE HAUT de la   ║
+# ║ silhouette rendue est un MENSONGE sur la fenetre de tir : le serveur resout les touches sur  ║
+# ║ une boite fixe (`SILHOUETTE_HALF_WIDTH` vaut exactement la demi-largeur du sprite depuis le  ║
+# ║ §8.141.8). Un simple roulis de 3° elargirait la silhouette rendue de 2,9 cm au-dela de sa     ║
+# ║ fenetre — la meme famille de defaut que le billboard du §8.141.7, en plus petit.             ║
+# ║ ⭐ Le mouvement VERS LE BAS, lui, est honnete : il rend la cible PLUS PETITE que sa fenetre,  ║
+# ║ jamais plus grande. C est deja le principe de `_enemy_dip`, et c est le seul axe qu on       ║
+# ║ s autorise. Toute la fluidite se joue donc dans le TEMPS, pas dans l espace.                 ║
+# ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Duree d une foulee ⚙ — celle du `PAS_TOURNANT` de la bibliotheque de clips. Au-dela, une
+# foulee deborderait sur la suivante aux ~2,2 pas/s du bot et redeviendrait une marche continue,
+# c est-a-dire le glisse que le §8.141 a justement retire.
+const ENEMY_STRIDE_TIME := 0.42
+# Respiration : 4,2 s par cycle (14 respirations/min, un homme au repos mais tendu), amplitude
+# 8 mm. ⚠️ Vers le BAS uniquement, comme tout le reste.
+const ENEMY_BREATH_PERIOD := 4.2
+const ENEMY_BREATH_DIP := 0.008
+# Duree de la trainee entre deux frames ⚙. 0,10 s = 6 images a 60 Hz : assez pour que l oeil lise
+# un passage et non un clignement, assez court pour ne pas laisser un fantome lisible.
+const ENEMY_FADE_TIME := 0.10
 const ENEMY_STEP_DIP := 0.04
 const ENEMY_STEP_DIP_DECAY := 14.0
 # Durée du départ de feu adverse ⚙ — deux frames à 60 Hz. Plus long, ça devient une lampe.
@@ -550,6 +581,27 @@ func _build_enemy_perception() -> void:
 	_enemy_rim.scale = Vector3(1.0 + ENEMY_RIM_GROW, 1.0 + ENEMY_RIM_GROW, 1.0)
 	_enemy.add_child(_enemy_rim)
 
+	# --- LA TRAINEE (§8.153) : la frame SORTANTE, qui s efface sous la nouvelle ----------------
+	# ⚠️ La NOUVELLE frame est posee a pleine opacite tout de suite, et c est l ANCIENNE qui
+	# s efface par-dessous. Un vrai fondu croise (les deux a mi-alpha) additionnerait deux
+	# silhouettes differentes et donnerait un homme a deux tetes pendant 0,1 s. Ici la pose
+	# courante est toujours FRANCHE ; ce qui traine, c est celle qu on vient de quitter.
+	# ⛔ `render_priority` 0 contre 1 pour le sprite : deux quads coplanaires transparents ne sont
+	# pas departages par la profondeur, il faut le dire explicitement (meme piege que le lisere).
+	_enemy_fade = Sprite3D.new()
+	_enemy_fade.name = "PaintedSoldierFade"
+	_enemy_fade.billboard = _enemy_sprite.billboard
+	_enemy_fade.rotation_degrees = _enemy_sprite.rotation_degrees
+	_enemy_fade.alpha_cut = _enemy_sprite.alpha_cut
+	_enemy_fade.shaded = false
+	_enemy_fade.double_sided = true
+	_enemy_fade.texture_filter = _enemy_sprite.texture_filter
+	_enemy_fade.centered = true
+	_enemy_fade.render_priority = 0
+	_enemy_fade.visible = false
+	_enemy.add_child(_enemy_fade)
+	_enemy_sprite.render_priority = 1
+
 	# --- POUSSIÈRE AU PIED : 8 grains, 0,3 s, UN SEUL COUP par pas ------------------------------
 	# ⚠️ `one_shot` + `restart()` et non un émetteur permanent : un nuage continu ferait un soldat
 	# qui fume en permanence, et surtout il ne dirait plus RIEN — un signal qui ne s'éteint jamais
@@ -623,6 +675,15 @@ func _apply_enemy_frame() -> void:
 	var frame := Sprites.enemy_texture(_enemy_frame)
 	if frame == null:
 		return
+	# On garde la frame SORTANTE avec sa propre echelle et son propre ancrage : les six images
+	# n ont ni la meme hauteur en pixels ni le meme centre, et recopier seulement la texture
+	# ferait sauter la trainee d une pose a l autre.
+	if _enemy_fade != null and _enemy_sprite.texture != null \
+			and _enemy_sprite.texture != frame:
+		_enemy_fade.texture = _enemy_sprite.texture
+		_enemy_fade.pixel_size = _enemy_sprite.pixel_size
+		_enemy_fade.position = _enemy_sprite.position
+		_enemy_fade_left = ENEMY_FADE_TIME
 	var pixel_size: float = Sprites.pixel_size_for(_enemy_frame, frame.get_height())
 	_enemy_sprite.texture = frame
 	_enemy_sprite.pixel_size = pixel_size
@@ -1139,6 +1200,22 @@ func _advance_enemy_frames(delta: float) -> void:
 	else:
 		# Manche suivante : l'adversaire revient vivant, la chaîne de mort se réarme.
 		_enemy_dying = false
+		# ⭐ §8.153 — L IMAGE DE PASSAGE. La machine ne connaissait que DEUX etats permanents et
+		# basculait de l un a l autre d un seul coup, pendant que la position, elle, glissait en
+		# continu. On insere donc une pose a mi-chemin quand la visee CHANGE.
+		# ⚠️ On observe la BASCULE, pas l etat : reagir a `_enemy_aiming` seul reinsererait la
+		# frame a chaque image tant qu il vise, et le soldat resterait bloque a mi-chemin.
+		# 🩸 ON ECRIT DANS `wanted`, PAS DANS `_enemy_frame`. Premiere version : elle posait la frame
+		# directement et appelait `_apply_enemy_frame()` — et la fin de cette fonction la REMETTAIT
+		# aussitot a `wanted`, capture AVANT l insertion. L image de passage n etait donc jamais
+		# jouee : le soldat gardait exactement le comportement d avant, sans une seule erreur.
+		# ⚠️ Un cablage qui a l air juste et ne fait RIEN est le pire des defauts a relire : il ne
+		# laisse aucune trace. Seul un controle FONCTIONNEL (« la frame vaut-elle aim_rise ? ») l a vu.
+		if _enemy_aiming != _enemy_aiming_prev:
+			_enemy_aiming_prev = _enemy_aiming
+			if Sprites.has_frame(Sprites.ENEMY_AIM_RISE):
+				wanted = Sprites.ENEMY_AIM_RISE
+				_enemy_frame_left = Sprites.frame_duration(Sprites.ENEMY_AIM_RISE)
 		if _enemy_frame_left > 0.0:
 			_enemy_frame_left = maxf(0.0, _enemy_frame_left - delta)
 		if _enemy_frame_left <= 0.0:
@@ -1178,6 +1255,7 @@ func _process(delta: float) -> void:
 	_advance_local_tracers(delta)
 	# Rappel exponentiel de l'affaissement du pas, et extinction du départ de feu adverse.
 	_enemy_dip = maxf(0.0, _enemy_dip - _enemy_dip * ENEMY_STEP_DIP_DECAY * delta - 0.0005)
+	_animer_foulee(delta)
 	if _enemy_muzzle_left > 0.0:
 		_enemy_muzzle_left = maxf(0.0, _enemy_muzzle_left - delta)
 		if _enemy_muzzle_left <= 0.0 and _enemy_muzzle != null:
@@ -1293,7 +1371,7 @@ func _render_enemy(enemy: Dictionary) -> void:
 	# En s'effaçant, il s'enfonce derrière le parapet : la disparition RACONTE quelque chose.
 	var sink := (1.0 - _enemy_alpha) * 0.55
 	# … et il s'affaisse d'un rien au poser du pied (§8.141) : c'est ce qui donne un POIDS au pas.
-	_enemy.position = Vector3(x, -sink - _enemy_dip, Geo.far_soldier_z())
+	_enemy.position = Vector3(x, -sink - _enfoncement(), Geo.far_soldier_z())
 	var flash: float = clampf(float(enemy.get("hit", 0.0)), 0.0, 1.0)
 	if _enemy_painted:
 		# TEINTE DE FACTION + fondu de redaction + éclair de touche, en une seule couleur : sur un
@@ -1308,6 +1386,16 @@ func _render_enemy(enemy: Dictionary) -> void:
 		var rim := ENEMY_RIM_COLOR
 		rim.a = _enemy_alpha
 		_enemy_rim.modulate = rim
+		# LA TRAÎNÉE : la pose qu on vient de quitter, qui s efface sous la nouvelle.
+		# ⚠️ Elle porte la MÊME teinte que le sprite — sans quoi un soldat en train de changer de
+		# pose porterait deux couleurs de faction pendant un dixième de seconde.
+		if _enemy_fade != null:
+			var reste: float = 0.0 if _reduced_motion \
+				else clampf(_enemy_fade_left / ENEMY_FADE_TIME, 0.0, 1.0)
+			_enemy_fade.visible = reste > 0.001 and _enemy_fade.texture != null
+			var trace := tint
+			trace.a = _enemy_alpha * reste
+			_enemy_fade.modulate = trace
 		return
 	for mesh in [_enemy_mesh, _enemy_helmet]:
 		if mesh != null and mesh.material_override is StandardMaterial3D:
@@ -1355,6 +1443,43 @@ func _stepped_enemy_x() -> float:
 # ║ pas est justement là pour dire où est l'ennemi. Un saut de 2 crans ne fait donc RIEN, et         ║
 # ║ `-1` (jamais vu) ne fait rien non plus : on ne raconte que ce qu'on a vraiment observé.          ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ── LA FOULÉE, LA RESPIRATION ET LA TRAÎNÉE (§8.153) ─────────────────────────────────────────
+# ⛔ TOUT SE PASSE VERS LE BAS. Un mouvement latéral ou vers le haut élargirait la silhouette
+# rendue au-delà de la fenêtre que le serveur résout (cf. le pavé de `ENEMY_STRIDE_TIME`).
+# La foulée est donc une COURBE DE TEMPS sur un seul axe — et c est suffisant, parce que ce qui
+# manquait n était pas de l amplitude, c était de la CONTINUITÉ.
+#
+# ⚠️ Deux creux par foulée, pas un. Un pas humain enfonce DEUX fois : à la pose du talon, puis
+# au transfert du poids sur la jambe avant. Un seul creux se lit comme un sautillement ; deux
+# se lisent comme une marche. C est le détail qui fait tout le travail, et il ne coûte qu un
+# sinus de plus.
+func _animer_foulee(delta: float) -> void:
+	if _enemy_fade_left > 0.0:
+		_enemy_fade_left = maxf(0.0, _enemy_fade_left - delta)
+	# La respiration ne s arrête jamais : elle tourne même masqué, sinon l adversaire
+	# réapparaîtrait toujours au même instant de son cycle.
+	_enemy_breath = fmod(_enemy_breath + delta, ENEMY_BREATH_PERIOD)
+	if _enemy_stride >= 0.0:
+		_enemy_stride += delta
+		if _enemy_stride >= ENEMY_STRIDE_TIME:
+			_enemy_stride = -1.0
+
+
+# L enfoncement TOTAL du soldat, en mètres, toujours positif (donc toujours vers le bas).
+func _enfoncement() -> float:
+	if _reduced_motion:
+		return 0.0
+	var respire: float = ENEMY_BREATH_DIP * 0.5 * (1.0 - cos(
+		TAU * _enemy_breath / ENEMY_BREATH_PERIOD))
+	var foulee := 0.0
+	if _enemy_stride >= 0.0:
+		var t: float = clampf(_enemy_stride / ENEMY_STRIDE_TIME, 0.0, 1.0)
+		# Deux creux (`sin` sur deux demi-périodes), pondérés par une enveloppe qui s éteint : le
+		# second appui est plus léger que le premier, comme un pas réel.
+		foulee = ENEMY_STEP_DIP * absf(sin(TAU * t)) * (1.0 - t * 0.45)
+	return respire + foulee + _enemy_dip
+
+
 func _notice_step(whole: int) -> void:
 	var previous := _enemy_step_pos
 	_enemy_step_pos = whole
@@ -1363,6 +1488,7 @@ func _notice_step(whole: int) -> void:
 	# `reduced_motion` coupe le SPECTACLE (poussière, affaissement) et garde l'INFORMATION (le son).
 	# C'est la règle maison : on n'ampute jamais la lecture du jeu au titre du confort.
 	if not _reduced_motion:
+		_enemy_stride = 0.0
 		_enemy_dip = ENEMY_STEP_DIP
 		if _enemy_dust != null:
 			_enemy_dust.restart()
@@ -1393,6 +1519,11 @@ func notify_enemy_fire(from_pos: int) -> void:
 	_enemy_muzzle.position = _muzzle_origin(from_pos, false)
 	_enemy_muzzle.visible = true
 	_enemy_muzzle_left = ENEMY_MUZZLE_TIME
+	# §8.153 — ET LE CORPS TIRE, LUI AUSSI. Jusqu ici un tir adverse ne produisait qu une sphere
+	# de lueur : le soldat restait parfaitement immobile pendant qu une balle partait de lui.
+	# ⚠️ On passe par `set_enemy_action`, donc par la machine a frames et ses priorites (« hit »
+	# interrompt tout sauf la mort). Ecrire la frame directement contournerait cette regle-la.
+	set_enemy_action(Sprites.ENEMY_FIRE)
 
 
 # Origine d'un tir : l'œil du tireur, dans SA tranchée.

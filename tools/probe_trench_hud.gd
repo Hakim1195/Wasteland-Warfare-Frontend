@@ -96,7 +96,7 @@ var _ordinary: Dictionary = {}
 
 # Relevé le 2026-08-28 en headless, après la bascule du viewmodel 3D. À RELEVER À NOUVEAU
 # si une section est volontairement ajoutée ou retirée — jamais à baisser pour faire passer.
-const PASS_MINIMUM := 237
+const PASS_MINIMUM := 247
 
 
 func _ok(label: String, cond: bool, detail := "") -> void:
@@ -143,6 +143,7 @@ func _ready() -> void:
 	await _section_damage(duel)
 	await _section_damage_pixels(duel)
 	_section_hitmarker(duel)
+	_section_headshot(duel)
 	await _section_pixels(duel)
 
 	print("\n%d PASS / %d FAIL" % [_pass, _fails.size()])
@@ -2490,6 +2491,15 @@ func _hit_event(duel, damage: int, victim_hp: int) -> Dictionary:
 		"damage": damage, "hp": victim_hp}
 
 
+# 🎯 §8.153 — le MEME evenement, mais la balle a porte a la tete. ⚠️ Le champ est AJOUTE, pas
+# substitue : `_hit_event` reste sans `headshot`, et c est ce qui prouve que le drapeau absent
+# vaut bien « pas un head shot » sur les ~40 controles de la section 3 qui l ignorent.
+func _hit_event_head(duel, damage: int, victim_hp: int) -> Dictionary:
+	var e := _hit_event(duel, damage, victim_hp)
+	e["headshot"] = true
+	return e
+
+
 # ⚠️ ON VIDE PAR LE CHEMIN DE PRODUCTION (le temps passe, les chiffres expirent) et JAMAIS en
 # touchant `_damage_live` à la main : la sonde reproduirait alors l'invariant du pool de son côté,
 # et une future divergence entre les deux passerait inaperçue. Ici, si l'expiration oubliait de
@@ -2647,3 +2657,96 @@ func _push_phase(duel, weapon_id: String, ammo: int, phase: String) -> void:
 			_player_row(mine, 2, "up", weapon_id, ammo),
 			_player_row(3 - mine, 2, "up", _other_weapon(duel, weapon_id), 8)],
 		"projectiles": [], "events": []})
+
+
+# =================================================================================================
+# 4bis. LE HEAD SHOT (§8.153) — le drapeau vient du SERVEUR, et il ne remultiplie rien
+# =================================================================================================
+# ╔═ CE QUE CETTE SECTION DOIT INTERDIRE ═════════════════════════════════════════════════════════╗
+# ║ 1. qu une touche ORDINAIRE change d apparence — 95 % des tirs, et le §4 les tient deja ;      ║
+# ║ 2. que le head shot AJOUTE une cinquieme forme : `_decode_cross` compte les diagonales, et un ║
+# ║    marqueur a huit branches ferait passer quatre controles du §4 au rouge ;                   ║
+# ║ 3. que le client RE-MULTIPLIE : le serveur envoie deja le montant majore. Un client qui       ║
+# ║    referait le calcul afficherait 1,5x le chiffre reellement retire — un mensonge de HUD sur  ║
+# ║    un fait de regle, et le genre qu on ne remarque qu en comptant les PV a la main ;          ║
+# ║ 4. que la TETE prenne le pas sur la MORT. Un head shot fatal est d abord un mort.             ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _section_headshot(duel) -> void:
+	_section("4bis. HEAD SHOT — drapeau serveur, croix distincte, aucun recalcul")
+	_clear_damage(duel)
+
+	# --- la touche ORDINAIRE, pour reference : c est elle qui ne doit pas bouger ---
+	duel._on_duel_event(_hit_event(duel, 8, 70))
+	var plein := _decode_cross(duel)
+	var or_couleur: Color = duel._hitmarker_color()
+	_ok("sans le drapeau, RIEN ne change : 4 diagonales, or, largeur 2",
+		int(plein["marks"]) == 4 and not duel._hitmarker_head
+		and absf(float(plein["mark_width"]) - 2.0) < EXACT_TOL
+		and or_couleur.is_equal_approx(Color(duel.COL_GOLD.r, duel.COL_GOLD.g, duel.COL_GOLD.b,
+			or_couleur.a)),
+		"%d diagonale(s), largeur %.2f, %s" % [int(plein["marks"]),
+			float(plein["mark_width"]), str(or_couleur)])
+
+	# --- le HEAD SHOT ---
+	_clear_damage(duel)
+	duel._on_duel_event(_hit_event_head(duel, 18, 60))
+	var tete := _decode_cross(duel)
+	var couleur_tete: Color = duel._hitmarker_color()
+	_ok("head shot : le drapeau SERVEUR est lu, et la croix reste a QUATRE diagonales",
+		duel._hitmarker_head and int(tete["marks"]) == 4,
+		"_hitmarker_head = %s, %d diagonale(s)" % [str(duel._hitmarker_head),
+			int(tete["marks"])])
+	_ok("head shot : la croix est PLUS GRANDE et PLUS EPAISSE que la touche ordinaire",
+		float(tete["mark_far"]) > float(plein["mark_far"])
+		and float(tete["mark_width"]) > float(plein["mark_width"]),
+		"portee %.2f -> %.2f, largeur %.2f -> %.2f" % [float(plein["mark_far"]),
+			float(tete["mark_far"]), float(plein["mark_width"]), float(tete["mark_width"])])
+	_ok("head shot : la croix vire au BLANC de la charte, distinct de l or ET du rouge",
+		couleur_tete.is_equal_approx(Color(duel.COL_HEADSHOT.r, duel.COL_HEADSHOT.g,
+			duel.COL_HEADSHOT.b, couleur_tete.a))
+		and not couleur_tete.is_equal_approx(or_couleur),
+		"%s" % str(couleur_tete))
+
+	# --- LE CHIFFRE : distinct, et surtout NON RECALCULE ---
+	_ok("head shot : le chiffre affiche est EXACTEMENT celui de l evenement (aucun recalcul)",
+		not duel._damage_live.is_empty()
+		and str((duel._damage_live[-1]["node"] as Label).text) == "18",
+		"texte « %s » pour un evenement a 18" % (str((duel._damage_live[-1]["node"] as Label).text)
+			if not duel._damage_live.is_empty() else "aucun"))
+	var etiquette: Label = duel._damage_live[-1]["node"]
+	_ok("head shot : le chiffre est BLANC et plus grand qu une touche ordinaire",
+		etiquette.get_theme_color("font_color").is_equal_approx(duel.COL_HEADSHOT)
+		and etiquette.get_theme_font_size("font_size") > 22,
+		"%s, %d px" % [str(etiquette.get_theme_color("font_color")),
+			etiquette.get_theme_font_size("font_size")])
+
+	# --- LA PRIORITE : un head shot FATAL est d abord un MORT ---
+	_clear_damage(duel)
+	duel._on_duel_event(_hit_event_head(duel, 45, 0))
+	var fatal: Color = duel._hitmarker_color()
+	_ok("head shot FATAL : la croix reste ROUGE (mort > tete), et les deux drapeaux sont leves",
+		duel._hitmarker_kill and duel._hitmarker_head
+		and fatal.is_equal_approx(Color(duel.COL_DANGER.r, duel.COL_DANGER.g, duel.COL_DANGER.b,
+			fatal.a)),
+		"kill=%s tete=%s %s" % [str(duel._hitmarker_kill), str(duel._hitmarker_head), str(fatal)])
+	_ok("head shot FATAL : le chiffre reste ROUGE lui aussi",
+		not duel._damage_live.is_empty()
+		and (duel._damage_live[-1]["node"] as Label).get_theme_color("font_color")
+			.is_equal_approx(duel.COL_DANGER))
+
+	# --- LE RETOUR AU CORPS : le drapeau doit se BAISSER ---
+	# ⚠️ Un drapeau qui ne redescend pas est le defaut classique de ce genre d etat : la premiere
+	# touche a la tete rendrait TOUS les tirs suivants blancs, et rien ne le dirait.
+	_clear_damage(duel)
+	duel._on_duel_event(_hit_event(duel, 8, 52))
+	_ok("apres un head shot, une touche au CORPS rebaisse le drapeau",
+		not duel._hitmarker_head
+		and duel._hitmarker_color().is_equal_approx(Color(duel.COL_GOLD.r, duel.COL_GOLD.g,
+			duel.COL_GOLD.b, duel._hitmarker_color().a)))
+
+	# --- LE SON : deux cles DISTINCTES, et toutes deux servies ---
+	_ok("les deux sons de touche existent et sont DISTINCTS",
+		AudioManager.has_sfx("trench_hitmarker") and AudioManager.has_sfx("trench_headshot"),
+		"hitmarker=%s headshot=%s" % [str(AudioManager.has_sfx("trench_hitmarker")),
+			str(AudioManager.has_sfx("trench_headshot"))])
+	_clear_damage(duel)

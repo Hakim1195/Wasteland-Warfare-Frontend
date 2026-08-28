@@ -132,6 +132,20 @@ func _ready() -> void:
 	_duel._viewmodel.notify_fire()
 	await _shot("04_moment_de_duel")
 
+	# --- 4bis) VISÉE À L'ŒIL : le point rouge dans le verre (lot 3D-I) ---------------------------
+	# ⚠️ `_process` est COUPÉ sur ce banc (`set_process(false)` plus haut), donc la rampe de visée
+	# ne monterait jamais toute seule. On la pousse à la main — mais par la vraie DÉCISION
+	# (`_apply_ads`) et le vrai PAS (`_step_feel`), jamais en écrivant `_ads_hud` : une capture qui
+	# forcerait la variable montrerait un point que le jeu ne sait peut-être pas allumer.
+	_duel._hitmarker = 0.0
+	_duel._enemy_hit = 0.0
+	_state(2, 3, "up", true, [])
+	_duel._apply_ads(true)
+	await _wait(0.9)
+	await _shot("04b_visee_point_rouge")
+	_duel._apply_ads(false)
+	await _wait(0.6)
+
 	# --- 5) RECETTE DE CONFORT : les deux bornes d'échelle d'UI, puis mouvement réduit -----------
 	_state(2, 3, "up", true, [])
 	for value in [0.9, 1.3]:
@@ -220,7 +234,22 @@ func _state(my_pos: int, their_pos: int, stance: String, aiming: bool, projectil
 
 
 func _wait(seconds: float) -> void:
-	await get_tree().create_timer(seconds).timeout
+	# 🩸 DÉFAUT DE BANC TROUVÉ AU LOT 3D-I. Ce banc coupe `_process` du duel pour figer la scène,
+	# et c'est bien : les captures doivent être reproductibles. Mais depuis la bascule 3D, c'est
+	# `_process` qui pousse l'état au rig (`pousser_etat`). Sans ce poussage, la vue 3D tournait sur
+	# un état VIDE : elle rendait sa pose neutre quelle que soit la planche, et aucune capture ne
+	# montrait plus ce que le jeu montre. Le banc ne mentait pas sur le décor — il mentait sur l'ARME.
+	# ⚠️ On pousse l'état RÉEL (`_rig_state()`), on ne fabrique rien : une capture qui inventerait
+	# son état ne prouverait rien du jeu.
+	var reste := seconds
+	while reste > 0.0:
+		var dt: float = get_process_delta_time()
+		_duel._step_feel(dt)
+		if _duel._viewmodel != null and _duel._viewmodel.has_method("pousser_etat"):
+			_duel._viewmodel.pousser_etat(_duel._rig_state())
+		_duel._refresh_view(dt)
+		await get_tree().process_frame
+		reste -= dt
 
 
 func _shot(name_: String) -> void:

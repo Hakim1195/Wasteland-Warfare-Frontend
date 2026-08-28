@@ -290,6 +290,15 @@ func _ready() -> void:
 	# `trench_hitmarker` : MA touche confirmée par le serveur. Aigu, très court — c'est la
 	# récompense, et elle ne doit jamais couvrir la détonation qui la précède de 200 ms.
 	_register_sfx("trench_hitmarker", func(): return _make_blip(1900.0, 0.05, 0.16))
+	# 🎯 `trench_headshot` (§8.153) : la touche à la TÊTE. Il REMPLACE `trench_hitmarker`, il ne
+	# s'y ajoute pas — c'est la convention CoD (un seul « ding », plus haut et plus sec), et ça
+	# garde le budget de voix intact.
+	# ⚠️ Les trois chiffres ne sont pas décoratifs : la fréquence monte d'une QUINTE au-dessus du
+	# hitmarker (1900 → 2850 Hz, rapport 3/2), un intervalle que l'oreille sépare instantanément
+	# même dans le bruit d'une détonation. La durée RACCOURCIT (0,05 → 0,035 s) : plus court se
+	# lit comme plus net, et un son plus long à plus haute fréquence deviendrait strident. Le
+	# niveau ne monte QUE de 0,16 à 0,19 — un head shot doit se remarquer, pas dominer.
+	_register_sfx("trench_headshot", func(): return _make_blip(2850.0, 0.035, 0.19))
 	# `trench_grenade` : le départ du lancer. La DÉTONATION, elle, réutilise `explosion` — même
 	# événement physique que la flèche de guerre, aucune raison d'en synthétiser un second.
 	_register_sfx("trench_grenade", func(): return _make_blip(420.0, 0.09, 0.18))

@@ -251,6 +251,18 @@ func feel_probe() -> Dictionary:
 	return _rig.residus()
 
 
+# ⚠️ L'arme courante a-t-elle une OPTIQUE ? Lu du modèle, pas d'une liste d'identifiants :
+# le jour où une arme gagne ou perd son verre, le HUD suit sans qu'on rouvre ce fichier.
+# ⚠️ Le `vipere` n'en a AUCUNE — guidon et hausse, c'est son identité (§2.2quinquies). Le
+# point rouge n'apparaîtra donc que sur les trois armes qui ont du verre, et la
+# différenciation des armes se renforce toute seule.
+func has_optic() -> bool:
+	if _rig == null or _rig.active.is_empty():
+		return false
+	var n: Dictionary = (_rig.active["modele"] as Dictionary)["nodes"]
+	return n.has("opticGlass")
+
+
 func current_state() -> String:
 	if _rig.clip_playing():
 		return "clip"

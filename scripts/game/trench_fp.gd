@@ -125,9 +125,19 @@ const AIM_QUANTUM := 0.1
 
 const COL_ACCENT := Color(0.211765, 0.772549, 0.85098, 1)
 const COL_GOLD := Color(0.878431, 0.698039, 0.286275, 1)
+# 🎯 §8.153 — LA COULEUR DU HEAD SHOT. C est le BLANC FROID de la charte, et le choix est
+# contraint plus qu il n est libre : l or dit deja « touche », le rouge dit deja « mort », et
+# le rouge vif du point de visee (§8.152.12) occupe le meme centre d ecran. Il ne restait que
+# le blanc — qui a le merite de se lire comme « plus net », ce qu un head shot est.
+const COL_HEADSHOT := Color(0.933333, 0.952941, 0.968627, 1)
 const COL_TEXT := Color(0.933333, 0.952941, 0.968627, 1)
 const COL_MUTED := Color(0.541176, 0.592157, 0.647059, 1)
 const COL_DANGER := Color(0.839216, 0.270588, 0.247059, 1)
+# §8.152 (lot 3D-I) — LE POINT ROUGE. Un rouge NETTEMENT plus saturé et plus clair que
+# `COL_DANGER` : les deux doivent rester distinguables, puisqu'un refus de tir peint le
+# réticule entier en danger — y compris en visée. Un point d'émetteur qui aurait la même
+# couleur qu'un refus rendrait le refus illisible exactement quand il compte.
+const COL_RETICLE_DOT := Color(1.0, 0.165, 0.063, 1)
 const COL_PANEL := Color(0.058824, 0.07451, 0.094118, 0.92)
 
 # Salle à rejoindre, posée par l'écran Événements AVANT le changement de scène (patron
@@ -255,6 +265,21 @@ var _aiming_grenade := false
 # ║ alors d'une variable d'animation. C'est l'inversion que le §8.141.6 interdit.              ║
 # ╚════════════════════════════════════════════════════════════════════════════════════════════╝
 var _ads_active := false
+# ╔═ ⚠️ LA RAMPE DE VISÉE DU HUD — LOCALE, ET C'EST TOUT LE POINT ═══════════════════╗
+# ║ Le réticule ne peut pas basculer d'un coup : l'optique met `ads_time` (0,18 à 0,26 s)   ║
+# ║ à venir se poser sur l'axe. Un point qui apparaîtrait instantanément flotterait en      ║
+# ║ l'air pendant que le verre arrive encore.                                                ║
+# ║                                                                                          ║
+# ║ ⛔ ON NE LIT PAS LA PROGRESSION DU RIG. Elle existe (`_ads_t`) mais elle est PRIVÉE, et    ║
+# ║ c'est l'invariant §8.141.6 : chez la référence, la dispersion consomme exactement cette   ║
+# ║ variable-là. Lui ouvrir une porte pour le HUD, c'est ouvrir la même porte à la visée.    ║
+# ║ On lisse donc ICI, à partir de l'ENTRÉE qui nous appartient déjà.                        ║
+# ║ ⚠️ Et `_dispersion_degrees()` NE DOIT JAMAIS lire `_ads_hud` : la sonde l'audite.        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# 0,22 s de montée : la moyenne des `ads_time` des quatre armes. Le réticule n'a pas à suivre
+# l'arme au millimètre — il doit seulement ne pas la devancer.
+const ADS_HUD_RATE := 1.0 / 0.22
+var _ads_hud := 0.0
 var _ads_held_prev := false
 var _ads_toggle: bool = TuningScript.defaults()["ads_toggle"]
 
@@ -290,6 +315,11 @@ var _hitmarker := 0.0
 # lui seul — un tir refusé, une balle qui manque ou un dégât SUBI n'y écrivent jamais.
 var _hitmarker_kill := false
 var _hitmarker_scale := 1.0
+# 🎯 §8.153 — LE TIR PORTAIT-IL A LA TETE ? ⛔ LU DANS L EVENEMENT SERVEUR, jamais deduit : le
+# client n a ni la fenetre angulaire ni le site du projectile, et une seconde verite sur « ou la
+# balle a porte » est exactement ce que ce champ existe pour empecher. Un head shot devine serait
+# un mensonge d image sur un fait de REGLE.
+var _hitmarker_head := false
 var _hurt_flash := 0.0
 var _hurt_dir := 0.0
 var _enemy_hit := 0.0
@@ -881,12 +911,19 @@ func _on_duel_event(event: Dictionary) -> void:
 				#   `hp`     → 0 = le coup était FATAL, croix ROUGE.
 				var damage := int(event.get("damage", 0))
 				var victim_hp := int(event.get("hp", 1))
+				#   `headshot` → la balle a porte a la TETE (§8.153). Le montant arrive DEJA majore ;
+				#              ce drapeau ne sert qu a le DIRE, jamais a remultiplier quoi que ce soit.
 				_hitmarker_kill = victim_hp <= 0
+				_hitmarker_head = bool(event.get("headshot", false))
 				_hitmarker_scale = _damage_scale(damage)
 				_hitmarker = HITMARKER_TIME
 				_enemy_hit = 0.35
-				_spawn_damage_number(damage, _hitmarker_kill)
-				AudioManager.play_sfx("trench_hitmarker")
+				_spawn_damage_number(damage, _hitmarker_kill, _hitmarker_head)
+				# ⛔ Le son du head shot REMPLACE celui du hitmarker, il ne s y ajoute pas. C est la
+				# convention CoD — un seul « ding », plus sec — et c est aussi ce qui garde le budget
+				# de voix : le pave de `audio_manager.gd` le pose a 17 sur 20, et un son de plus
+				# volerait une voix a la detonation qui le precede de 200 ms.
+				AudioManager.play_sfx("trench_headshot" if _hitmarker_head else "trench_hitmarker")
 			if victim == _my_slot:
 				AudioManager.play_sfx("trench_hit")
 				_hurt_flash = 0.5
@@ -1609,6 +1646,10 @@ func _step_feel(delta: float) -> void:
 			for layer: Control in [_world, _ambient, _viewmodel]:
 				if layer != null:
 					layer.position = px
+	# ⚠️ La rampe avance AUSSI après la fin de match : un point rouge figé sur l'écran de
+	# résultat serait un défaut de capture, exactement comme le roulis du §8.151.
+	var cible_ads := 1.0 if _ads_active else 0.0
+	_ads_hud = move_toward(_ads_hud, cible_ads, ADS_HUD_RATE * delta)
 	if _viewmodel != null:
 		_viewmodel.set_aim(_aim_yaw, _aim_pitch)
 
@@ -2589,7 +2630,7 @@ func _damage_scale(damage: int) -> float:
 	return clampf(0.75 + float(maxi(0, damage)) / hp_max * 2.0, 0.75, 1.4)
 
 
-func _spawn_damage_number(damage: int, fatal: bool) -> void:
+func _spawn_damage_number(damage: int, fatal: bool, headshot := false) -> void:
 	if damage <= 0 or _damage_pool.is_empty():
 		return
 	# RECYCLAGE, jamais d'allocation : une étiquette LIBRE si le pool en a une, sinon on reprend le
@@ -2610,8 +2651,12 @@ func _spawn_damage_number(damage: int, fatal: bool) -> void:
 	}
 	_damage_live.append(entry)
 	node.text = str(damage)
-	node.add_theme_color_override("font_color", COL_DANGER if fatal else COL_GOLD)
-	node.add_theme_font_size_override("font_size", 30 if fatal else 22)
+	# ⚠️ `headshot` est un TROISIEME canal, pas une variante du fatal : un coup peut etre l un,
+	# l autre, ou les deux. La mort garde la priorite — c est l information qui compte le plus.
+	node.add_theme_color_override("font_color",
+		COL_DANGER if fatal else (COL_HEADSHOT if headshot else COL_GOLD))
+	node.add_theme_font_size_override("font_size",
+		30 if fatal else (27 if headshot else 22))
 	node.visible = true
 	# ⚠️ PLACÉ TOUT DE SUITE, ET C'EST UN CORRECTIF, PAS UNE COMMODITÉ. Un événement serveur arrive
 	# par le rappel réseau, à un instant quelconque du tour de boucle : rendre l'étiquette VISIBLE
@@ -2734,13 +2779,45 @@ func _reticle_paint_list() -> Array:
 	var precise := _reticle_is_precise()
 	var arm: float = (RETICLE_ARM_PX * 1.7) if precise else RETICLE_ARM_PX
 	var thickness: float = 1.0 if precise else 2.0
+	# ╔═ §8.152 (lot 3D-I) — LE POINT ROUGE EN VISÉE, ET POURQUOI IL NE MENT PAS ═════════╗
+	# ║ Le rig RÉSOUT la pose de visée : il calcule la translation qui pose le point de visée ║
+	# ║ de l'arme EXACTEMENT sur l'axe de la caméra (contrôle V3 : moins d'1 mm sur les quatre ║
+	# ║ armes). Et ce réticule est déjà placé là où part la balle (`project_aim`). Les deux    ║
+	# ║ tombent donc au MÊME PIXEL **par construction** : on obtient le point dans le verre    ║
+	# ║ sans qu'un seul pixel ne mente.                                                        ║
+	# ║                                                                                        ║
+	# ║ ⛔ C'est ce qui distingue cette solution du réticule collimaté de la référence, qui n'a  ║
+	# ║ PAS été porté (cf. `trench_viewmodel3d.gd`) : le leur est accroché au RIG et suivrait   ║
+	# ║ le balancement que le tir ne suit pas. Celui-ci est accroché à la VÉRITÉ SERVEUR.      ║
+	# ║                                                                                        ║
+	# ║ ⚠️ LA DISPERSION RESTE VISIBLE. Les quatre traits ne disparaissent pas : ils           ║
+	# ║ raccourcissent et pâlissent. Un point seul dirait « ça part exactement là », ce qui     ║
+	# ║ n'est vrai que pour une arme à cône nul — c'est la promesse du CONDOR, pas celle du    ║
+	# ║ FRELON à 2,1°. Le §1.9 interdit exactement ce mensonge-là.                              ║
+	# ╚══════════════════════════════════════════════════════════════════════════════════════╝
+	# Le verre : seules les armes qui en ont un montrent un point (le `vipere` n'en a pas).
+	var verre: bool = _viewmodel != null and _viewmodel.has_method("has_optic") \
+		and _viewmodel.has_optic()
+	var vise: float = _ads_hud if verre else 0.0
+	# Les traits s'effacent en visée sans disparaître : à pleine visée ils font 35 % de leur
+	# longueur et un tiers de leur opacité — présents pour qui les cherche, muets sinon.
+	arm *= lerpf(1.0, 0.35, vise)
+	var alpha_traits: float = lerpf(1.0, 0.34, vise)
+	var color_traits := Color(color.r, color.g, color.b, color.a * alpha_traits)
 	var list: Array = []
 	for axis: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
 		var start := center + axis * spread
 		list.append({PAINT_KIND: PAINT_LINE, PAINT_A: start, PAINT_B: start + axis * arm,
-			PAINT_COLOR: color, PAINT_WIDTH: thickness})
+			PAINT_COLOR: color_traits, PAINT_WIDTH: thickness})
+	# LE CŒUR. Il grossit et vire au rouge d'émetteur à mesure qu'on vient à l'œil.
+	# ⚠️ Le refus et le chargeur vide GARDENT la main sur la couleur : en visée comme à la
+	# hanche, un tir impossible se voit. C'est la règle du §8.141.9, et le point rouge ne la
+	# suspend pas.
+	var rayon_coeur: float = lerpf(1.0 if precise else 1.5, 2.6, vise)
+	var couleur_coeur := color if color == COL_DANGER \
+		else color.lerp(COL_RETICLE_DOT, vise)
 	list.append({PAINT_KIND: PAINT_DOT, PAINT_A: center,
-		PAINT_RADIUS: 1.0 if precise else 1.5, PAINT_COLOR: color})
+		PAINT_RADIUS: rayon_coeur, PAINT_COLOR: couleur_coeur})
 	# HITMARKER — quatre traits en croix d'André, uniquement sur touche CONFIRMÉE par le serveur.
 	# §8.151 (2ter, §4bis.2) : le KILL est ROUGE et plus long, et la longueur du trait suit les
 	# dégâts RÉELS du coup (`_hitmarker_scale`, posée par l'événement). Rien ici ne s'allume tout
@@ -2749,8 +2826,14 @@ func _reticle_paint_list() -> Array:
 	if _hitmarker > 0.0:
 		var marker := _hitmarker_color()
 		var near: float = 5.0 * _hitmarker_scale
-		var far: float = (16.0 if _hitmarker_kill else 12.0) * _hitmarker_scale
-		var width: float = 3.0 if _hitmarker_kill else 2.0
+		# ⛔ LE HEAD SHOT MODIFIE LES QUATRE MEMES DIAGONALES, il n en ajoute pas. Une cinquieme
+		# forme casserait `_decode_cross` de la sonde, qui classe toute ligne hors-axe en
+		# « marque » et en exige EXACTEMENT quatre. Et c est aussi la bonne lecture : un joueur
+		# ne compte pas des branches au milieu d un duel, il voit une croix plus grande et plus
+		# claire. Priorite MORT > TETE > TOUCHE : un head shot fatal se lit d abord comme un mort.
+		var far: float = (16.0 if _hitmarker_kill else (15.0 if _hitmarker_head else 12.0)) \
+			* _hitmarker_scale
+		var width: float = 3.0 if (_hitmarker_kill or _hitmarker_head) else 2.0
 		for diagonal: Vector2 in [Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]:
 			list.append({PAINT_KIND: PAINT_LINE, PAINT_A: center + diagonal * near,
 				PAINT_B: center + diagonal * far, PAINT_COLOR: marker, PAINT_WIDTH: width})
@@ -2777,7 +2860,8 @@ func _paint_command(target: CanvasItem, cmd: Dictionary) -> void:
 # c'est cette liste que la sonde lit : une garde qui recalculerait la couleur de son côté, ou qui
 # lirait une fonction que la peinture n'est pas tenue d'appeler, ne garderait rien.
 func _hitmarker_color() -> Color:
-	var base := COL_DANGER if _hitmarker_kill else COL_GOLD
+	var base := COL_DANGER if _hitmarker_kill \
+		else (COL_HEADSHOT if _hitmarker_head else COL_GOLD)
 	return Color(base.r, base.g, base.b, clampf(_hitmarker / HITMARKER_TIME, 0.0, 1.0))
 
 

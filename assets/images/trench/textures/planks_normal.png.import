@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cq2qy754maway"
-path="res://.godot/imported/planks.png-03dd8b427f913fe063ef0f85f3a7557b.ctex"
+uid="uid://dpto0uavbe8qu"
+path="res://.godot/imported/planks_normal.png-e5532d87c6138a01a437d6bf05b1a1dc.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/images/trench/textures/planks.png"
-dest_files=["res://.godot/imported/planks.png-03dd8b427f913fe063ef0f85f3a7557b.ctex"]
+source_file="res://assets/images/trench/textures/planks_normal.png"
+dest_files=["res://.godot/imported/planks_normal.png-e5532d87c6138a01a437d6bf05b1a1dc.ctex"]
 
 [params]
 
@@ -23,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""

@@ -109,13 +109,38 @@ const SILHOUETTE_HALF_WIDTH := 0.44
 # par `crouched_is_covered()` et par un test de sabotage côté backend).
 const SILHOUETTE_TOP_DOWN := 1.05
 
+# ╔═ 🎯 LA TÊTE (§8.153) — la seule sous-zone de la silhouette ═══════════════════════════════════╗
+# ║ `HEAD_HEIGHT` est la hauteur d'une tête humaine, du menton au sommet du crâne : **25 cm**.     ║
+# ║ Ce n'est PAS un curseur d'équilibrage, c'est une cote anatomique — et c'est délibéré. Un       ║
+# ║ chiffre choisi « parce que ça fait bien » aurait dérivé à chaque plainte de partie ; une cote  ║
+# ║ physique se défend toute seule et se corrige par la mesure, pas par le goût.                   ║
+# ║ La tête occupe donc `[1,55 ; 1,80]`, soit le HAUT de la silhouette.                            ║
+# ║                                                                                                ║
+# ║ ⚠️ ELLE PARAÎT ÉNORME, ET C'EST LA GÉOMÉTRIE QUI LE VEUT. La bande EXPOSÉE au-dessus du        ║
+# ║ parapet ne fait qu'environ 60 cm de haut : la tête en représente donc près de la moitié. C'est ║
+# ║ exact — un homme dans une tranchée ne montre que sa tête et ses épaules. Ce n'est pas un       ║
+# ║ cadeau au tireur, c'est ce qu'il voit. Le générateur PUBLIE la fraction réelle à chaque         ║
+# ║ passage pour que le chiffre reste sous les yeux au lieu de dormir dans un commentaire.         ║
+# ║                                                                                                ║
+# ║ ⛔ CE QUE ÇA NE CHANGE PAS : la fenêtre de tir. `pitch_head_min` est une SOUS-borne à           ║
+# ║ l'intérieur d'une fenêtre inchangée — aucun tir qui touchait ne rate, aucun tir qui ratait ne   ║
+# ║ touche. Seul le MONTANT des dégâts change. Un contrôle compare les quatre bornes de chaque     ║
+# ║ fenêtre à leurs valeurs d'avant, au byte près.                                                 ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+const HEAD_HEIGHT := 0.25
+
 # Quantum d'envoi de la visée au serveur (§2.4) : le client arrondit yaw/pitch à ce pas.
 const AIM_QUANTUM_DEG := 0.1
 # Version de la table : à INCRÉMENTER dès qu'une cote ci-dessus bouge (voyage dans le JSON).
 # v2 : `NO_MANS_LAND` 35 → 12 m (§8.140.1, verdict de partie réelle).
 # v3 : `NO_MANS_LAND` 12 → 9 m ET `POSITION_SPACING` 4,0 → 3,4 m (§8.141, second verdict).
 # v4 : `SILHOUETTE_HALF_WIDTH` 0,30 → 0,44 m (§8.141.8, verdict « la zone touchable est minuscule »).
-const TABLE_VERSION := 4
+# v5 : la table gagne `pitch_head_min` par fenêtre (§8.153, le head shot). ⚠️ Les QUATRE bornes de
+#      chaque fenêtre sont INCHANGÉES au byte près — c'est un champ EN PLUS, pas une cote qui bouge.
+#      La version est quand même incrémentée, et c'est volontaire : un serveur resté en v4 ne
+#      connaîtrait pas la tête, donc les deux camps ne verraient pas les mêmes dégâts. La bannière
+#      de désynchronisation doit s'allumer — c'est exactement ce à quoi elle sert.
+const TABLE_VERSION := 5
 
 
 # =================================================================================================
@@ -249,6 +274,11 @@ static func aim_window(eye: Vector3, target_pos_index: int, target_stance: Strin
 	var yaw_max := -INF
 	var pitch_min := INF
 	var pitch_max := -INF
+	# ⭐ LA LIGNE DU MENTON, dans la bande exposée. Si le parapet coupe déjà au-dessus du menton
+	# (cas géométriquement impossible aujourd'hui, mais qui ne doit pas produire une tête à
+	# l'envers), on la rabat sur le bas visible : la tête est alors TOUTE la bande exposée.
+	var y_chin: float = clampf(SILHOUETTE_TOP - HEAD_HEIGHT, y_lo, y_hi)
+	var pitch_head_min := INF
 	for x in [cx - SILHOUETTE_HALF_WIDTH, cx, cx + SILHOUETTE_HALF_WIDTH]:
 		for y in [y_lo, y_hi]:
 			var p := Vector3(x, y, cz)
@@ -258,8 +288,14 @@ static func aim_window(eye: Vector3, target_pos_index: int, target_stance: Strin
 			yaw_max = maxf(yaw_max, yaw)
 			pitch_min = minf(pitch_min, pitch)
 			pitch_max = maxf(pitch_max, pitch)
+		# ⚠️ MÊME ÉCHANTILLONNAGE que la fenêtre, sur la ligne du menton : le site d'un point
+		# dépend de sa distance horizontale, donc du `x` choisi. Prendre le seul centre sous-
+		# estimerait la tête sur les positions excentrées — de peu (0,012° mesuré au pire, un
+		# huitième de quantum), mais il n'y a aucune raison de payer un biais qu'on peut éviter.
+		pitch_head_min = minf(pitch_head_min, pitch_to(eye, Vector3(x, y_chin, cz)))
 	return {"yaw_min": yaw_min, "yaw_max": yaw_max,
-		"pitch_min": pitch_min, "pitch_max": pitch_max}
+		"pitch_min": pitch_min, "pitch_max": pitch_max,
+		"pitch_head_min": pitch_head_min}
 
 
 # Largeur apparente (en degrés) d'une silhouette debout vue de face au centre — la mesure de

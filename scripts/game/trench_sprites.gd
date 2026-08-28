@@ -31,6 +31,13 @@ const SPRITE_DIR := "res://assets/images/trench/sprites/"
 # (`enemy_available()`) — un jeu de sprites sans `enemy_idle.png` n'est pas un jeu de sprites.
 const ENEMY_IDLE := "idle"
 const ENEMY_AIM := "aim"
+# ── §8.153 : LES DEUX IMAGES DE PASSAGE ────────────────────────────────────────────────────────
+# `ENEMY_AIM_RISE` sert dans LES DEUX SENS (l arme qui monte, l arme qui redescend) : une pose a
+# mi-chemin n a pas de direction, donc une seule image suffit pour deux transitions.
+# `ENEMY_FIRE` est la seule image ou l on VOIT l adversaire tirer — jusqu ici son tir ne produisait
+# qu une sphere de lueur, et son corps ne bougeait pas d un pixel.
+const ENEMY_AIM_RISE := "aim_rise"
+const ENEMY_FIRE := "fire"
 
 # LE REGISTRE : état -> {durée en secondes, état suivant, DEBOUT ?}.
 #   • `duration = 0` = état STATIQUE : il dure tant que la condition qui l'a levé dure.
@@ -43,6 +50,13 @@ const ENEMY_FRAMES := {
 	"aim": {"duration": 0.0, "next": "", "standing": true},
 	"throw": {"duration": 0.45, "next": "idle", "standing": true},
 	"hit": {"duration": 0.25, "next": "idle", "standing": true},
+	# ⚠️ SANS SUITE (`next` vide) = « rends la main a l AMBIANT ». C est ce qui permet a `aim_rise`
+	# de servir dans les deux sens sans savoir ou il va : une chaine `aim_rise -> aim` forcerait la
+	# pose de visee meme quand le joueur vient de RELACHER sa visee.
+	# ⚙ 0,10 s pour la montee (six images a 60 Hz : un passage, pas un clignement) ; 0,14 s pour le
+	# tir, qui doit se voir sans retarder le retour a la visee.
+	"aim_rise": {"duration": 0.10, "next": "", "standing": true},
+	"fire": {"duration": 0.14, "next": "", "standing": true},
 	# La CHUTE et le CORPS AU SOL ne sont pas debout : leur cadre décrit une hauteur réelle plus
 	# petite, et c'est CETTE hauteur-là qu'il faut rendre.
 	"death_a": {"duration": 0.40, "next": "death_b", "standing": false},
@@ -50,7 +64,10 @@ const ENEMY_FRAMES := {
 }
 # Les états déclenchés par un ÉVÉNEMENT (et non par une lecture d'état) : ils s'imposent pendant
 # leur durée. `hit` interrompt tout sauf la mort ; `throw` ne coupe PAS un `hit` en cours.
-const ENEMY_TRANSIENT := ["throw", "hit"]
+# ⚠️ `aim_rise` n est PAS dans cette liste : il n est jamais pousse de l exterieur. Il est insere
+# par la machine a frames quand elle voit la visee BASCULER — c est un fait qu elle observe, pas
+# un acte que l hote lui annonce.
+const ENEMY_TRANSIENT := ["throw", "hit", "fire"]
 const ENEMY_DEATH_FIRST := "death_a"
 
 # ÉCHELLE — LE réglage critique du lot. 1024 px de haut <-> 1,80 m dans le monde du blockout.
@@ -144,6 +161,14 @@ static func enemy_texture(state: String) -> Texture2D:
 	if found == null and state != ENEMY_IDLE:
 		found = texture_at(enemy_path(ENEMY_IDLE))
 	return found
+
+
+# Cette frame-la est-elle DEPOSEE sur disque ? ⚠️ `enemy_texture()` replie silencieusement sur
+# `idle` quand un fichier manque — un repli juste pour le RENDU, et faux pour la MACHINE : elle
+# insererait alors une image de passage qui montre la pose de repos, c est-a-dire un clignotement.
+# On lui donne donc de quoi savoir AVANT de decider.
+static func has_frame(state: String) -> bool:
+	return texture_at(enemy_path(state)) != null
 
 
 static func enemy_available() -> bool:

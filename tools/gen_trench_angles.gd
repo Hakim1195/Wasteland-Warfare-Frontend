@@ -106,6 +106,7 @@ func _collect(blockout) -> Array:
 				"yaw_max": float(window["yaw_max"]),
 				"pitch_min": float(window["pitch_min"]),
 				"pitch_max": float(window["pitch_max"]),
+				"pitch_head_min": float(window["pitch_head_min"]),
 			})
 	return entries
 
@@ -148,8 +149,9 @@ func _serialize(entries: Array) -> String:
 		var e: Dictionary = entries[i]
 		lines.append("    {\"shooter_pos\": %d, \"target_pos\": %d, \"target_stance\": \"%s\", %s"
 			% [int(e["shooter_pos"]), int(e["target_pos"]), String(e["target_stance"]),
-			"\"yaw_min\": %s, \"yaw_max\": %s, \"pitch_min\": %s, \"pitch_max\": %s}%s" % [
+			"\"yaw_min\": %s, \"yaw_max\": %s, \"pitch_min\": %s, \"pitch_max\": %s, \"pitch_head_min\": %s}%s" % [
 				_f(e["yaw_min"]), _f(e["yaw_max"]), _f(e["pitch_min"]), _f(e["pitch_max"]),
+				_f(e["pitch_head_min"]),
 				"," if i < entries.size() - 1 else ""]])
 	lines.append("  ]")
 	lines.append("}")
