@@ -10221,3 +10221,478 @@ c'est le test qui ignorait une règle du jeu.
 Le head shot n'apparaît **pas en direct** dans le HUD — seulement en fin de duel. C'est délibéré :
 le retour immédiat existe déjà (croix blanche, son plus aigu, chiffre distinct), et un compteur qui
 défile en plein duel prendrait de la place sur un écran déjà chargé.
+
+---
+
+## §8.154 — LE DERNIER ROUGE DU PROJET : il était dans la SONDE, pas dans le jeu
+
+`probe_trench_grenade` sortait **ROUGE** depuis deux lots : le décalque de grenade mesuré à
+**961 px au centre et 1 650 px au bord** pour **519 px théoriques** (+85 % et +218 %). Traduit :
+« le cercle qui annonce la zone de souffle ment sur son rayon » — un mensonge d'image sur une
+règle serveur, donc le pire genre.
+
+**La géométrie était juste depuis le début.** Mesure directe de l'enveloppe monde du décalque, à
+rayon serveur poussé par le vrai chemin :
+
+> échelle `(2.5, 1.0, 2.5)` · anneau et colonne à demi-largeur locale **1.0000** ·
+> **enveloppe monde : demi-largeur x = 2,5000 m pour un rayon serveur de 2,5000.**
+
+### 🩸 DEUX POLLUTIONS, ET LA PLUS GROSSE ÉTAIT L'ARME DU JOUEUR
+
+Le masque de différence l'a montré d'un coup d'œil :
+
+1. **LE VIEWMODEL.** Cette sonde mesure par DIFFÉRENCE de deux captures : elle suppose donc, sans
+   jamais le dire, que **rien d'autre ne bouge entre les deux**. L'arme du joueur, elle, respire en
+   permanence — sa dérive lente (2,2 Hz, §8.152.10) ne s'arrête jamais. Ses pixels entraient dans la
+   boîte de différence et poussaient `x_max` jusqu'au **bord droit de l'écran**.
+   ⚠️ Contre-épreuve chiffrée : entre deux captures consécutives, **2 518 pixels changent** dans le
+   viewmodel. L'isoler n'était pas de la prudence, c'était une nécessité.
+2. **LA COLONNE.** Le §8.141 a ajouté un repère de profondeur : un cylindre au MÊME rayon, monté à
+   1,55 m. Plus haut = plus près de la hauteur d'œil = **moins raccourci** = plus large à l'écran
+   (+7 % mesurés). La comparer à une projection au SOL, c'est comparer deux choses différentes et
+   appeler l'écart un défaut. On mesure donc l'ANNEAU seul — c'est lui que le §C.1 gouverne.
+
+Après isolation : **535 px contre 519 théoriques, écart 3,1 %** (tolérance 5 %), et la position de
+bord passe de **1 650 à 534**. Le reliquat est l'épaisseur du tore, dont la théorie ne tient pas
+compte.
+
+### ⚠️ POURQUOI PERSONNE NE L'AVAIT VU — et ce qui reste vrai
+
+Cette sonde ne tourne qu'**en fenêtre** : sous `--headless` elle s'abstient (correctif du §8.151-2bis,
+et il est juste — sans rendu elle ne mesure rien). Or **la suite de régression tourne en headless**.
+Elle sortait donc du lot **par abstention, à chaque passage**, ni verte ni rouge.
+⛔ **Un « non applicable » systématique est un faux vert lent.** La contre-épreuve ajoutée ici ne
+corrige pas ça — c'est au lanceur de la passer en fenêtre — mais elle garantit qu'au moment où on
+la regarde, le vert veut dire quelque chose.
+
+### La contre-épreuve, qui manquait
+
+Deux sabotages, **2 sur 2** :
+- un décalque 1,5× trop grand serait vu (**838 px contre 534**) ;
+- le viewmodel laissé visible bouge entre deux captures — le défaut réel, rendu impossible à
+  réintroduire en silence.
+
+⛔ **Aucune ligne du JEU n'a été touchée.** Le correctif est entièrement dans la sonde.
+
+---
+
+## §8.155 — LE HUD : SEGMENTÉ, ORNÉ, ET IL DIT ENFIN D'OÙ VIENT LE COUP
+
+Demande de Hakim : s'inspirer de `hud_munitions.png` / `hud_sante.png`, améliorer la bannière de
+kill, et « des quarts de cercle autour du réticule pour comprendre d'où vient le tir ».
+
+Sonde : `probe_trench_hud` — **279 PASS / 0 FAIL** (+19), **7 sabotages sur 7**.
+
+### 🩸 LE HUD DE COMBAT N'AVAIT AUCUN ORNEMENT DE LA CHARTE
+
+Les encoches de coin (`WarzoneUI.add_corner_notches`) n'existaient que sur **deux panneaux** :
+l'abandon et le résultat. Les barres de vie, le bloc munitions, les pastilles d'objets — aucun
+panneau, aucun filet, aucune encoche. Des `Label` posés à des coordonnées absolues.
+⚠️ **C'était l'écart le plus visible avec la référence**, bien plus que le style des barres, et
+l'aide existait déjà : personne ne l'avait appelée ici.
+
+### La segmentation : un jugement devient un comptage
+
+Bungie a publié la seule justification que je connaisse, à propos de Destiny 2 : une barre segmentée
+« permet au joueur de comprendre plus facilement la quantité de dégâts infligés », parce qu'« il est
+plus simple de voir qu'il manque un tiers et un peu ». C'est exactement ce que montrent les deux
+références : **un trait par cartouche**, **cinq blocs de santé**.
+
+Et ça marche mieux chez nous que chez eux : nos chargeurs font **4 à 24** cartouches, donc un trait
+par cartouche reste comptable. Dans un jeu à 68 cartouches, c'est un ornement.
+
+⭐ **La rangée de traits est le SECOND CANAL du même fait, et c'est sa raison d'être.** Un nombre à
+deux chiffres dans un coin d'écran **n'est pas lisible du coin de l'œil** — la recherche sur la
+vision périphérique est nette : « lire plus d'un chiffre isolé est extrêmement difficile, voire
+impossible en pratique, hors de la zone regardée ». Le joueur devait faire une **saccade**, en plein
+duel, pour savoir s'il lui restait des cartouches. Une rangée de traits est une **longueur**, pas un
+texte : elle se lit sans être regardée.
+
+⚠️ **La rangée garde TOUJOURS la même largeur.** C'est le trait qui s'épaissit, jamais la barre qui
+s'allonge : une longueur variable dirait « cette arme a un gros chargeur », une comparaison entre
+ARMES là où on veut l'état de l'arme **en main**.
+
+### ⛔ LE SEUIL DE MUNITIONS BASSES EST UN NOMBRE, PAS UNE FRACTION
+
+Le seul système de seuils publié par un studio (TF2) alerte « sous la moitié du chargeur ».
+**Cette règle s'effondre ici** : la moitié du condor vaut **deux** cartouches, celle du frelon
+**douze**. Un seuil relatif préviendrait trop tard sur l'arme lente et trop tôt sur la rapide.
+Le contrôle l'interdit des deux côtés à la fois — ni 3/4 ni 12/24 ne doivent alerter, et seul un
+seuil absolu satisfait les deux.
+Au passage : il n'existait **aucun** avertissement avant ce lot. On passait de « tout va bien » à
+« clic ».
+
+### 🎖 LA BANNIÈRE D'ÉLIMINATION — le moment qui n'existait pas
+
+🩸 **Tuer quelqu'un ne produisait qu'une croix rouge de 0,35 s** — le même retour qu'une touche
+ordinaire, en rouge. La seule bannière existante annonce la fin de MANCHE, qui est un autre fait.
+
+⛔ **Nœud SÉPARÉ, et c'est nécessaire, pas cosmétique** : le serveur clôt la manche dans le **même
+tick** que la mort. Réutiliser la bannière de manche ferait écraser « ENNEMI ÉLIMINÉ » par « MANCHE
+GAGNÉE » à la frame suivante — le joueur ne verrait **jamais** son propre kill. Deux faits, deux
+canaux : la règle que Bungie a tirée de Halo 2 (« quand le bloc grossit, les messages cruciaux se
+perdent ») et re-tirée pour Destiny 2 dix-sept ans plus tard.
+
+⚙ **1 s de tenue, 1,5 s de fondu** — les deux seuls chiffres de première main publiés sur une
+bannière de jeu (Halo 3, 2007 ; il n'existe rien d'autre). Plus lents que la bannière de manche
+(0,9 / 0,5), et c'est voulu : **la retenue s'échelonne sur la fréquence**, et un kill arrive une
+fois par manche, pas cent fois par partie.
+
+⚠️ **Placée sous la bannière de manche et au-dessus du réticule.** Ni sur la ligne de visée (le
+reproche public fait à Warzone 2), ni reléguée dans un coin (le reproche fait à la bêta de
+Battlefield 2042, qui avait retiré le retour central). Le compromis livré par le genre est
+« proche du centre, décalé, bref, non occultant ».
+
+⛔ **Seul le SON monte en grade.** C'est la mécanique de retenue la moins chère du genre : Halo
+Infinite donne un visuel à toutes ses médailles et une **voix** aux seules rares. Le visuel informe,
+l'audio célèbre.
+
+### 🧭 LES REPÈRES DE MENACE — la recherche a corrigé DEUX de mes idées
+
+**1. Pas d'anneau à 360°, et c'est la géométrie qui tranche.** Le front fait 13,6 m pour 9 m de
+profondeur : **tout relèvement de menace possible tient dans un cône avant d'environ 110°, à cinq
+relèvements connus espacés de 18,8°**. Un anneau gaspillerait ~70 % de sa circonférence sur des
+directions **géométriquement impossibles**, et comprimerait tout le jeu dans l'arc où Halo atténue
+délibérément son indicateur. Une bande avant donne environ **trois fois** la résolution angulaire
+par pixel, gratuitement.
+
+**2. J'avais proposé de le CACHER quand la menace est de face. Halo 3 l'a essayé puis rejeté** :
+masquer l'indicateur vers l'avant « laissait seulement entendre que la menace avait disparu ». Ils
+l'**atténuent** à 40 %. C'est ce qu'on fait, et un contrôle l'exige — le repère doit rester visible,
+plus discret.
+
+⭐ **Il suit le MONDE, pas l'écran.** On retient le relèvement absolu du tireur, et le chevron se
+déplace quand on tourne — jusqu'à revenir au centre quand on lui fait face. Un repère figé à l'écran
+dirait « on t'a tiré dessus par la gauche » longtemps après qu'on s'est tourné.
+
+⛔ **Et on ne projette PAS à l'écran pour trouver la direction.** La projection écran **s'inverse
+derrière la caméra** : c'est le défaut classique de ces indicateurs, celui qui fait pointer vers
+l'avant un tir venu de l'arrière. On compare des relèvements, en degrés monde, et on les tire de
+l'**événement serveur** qui a appliqué les dégâts — la flèche et la perte de PV ne peuvent donc
+jamais se contredire sous latence.
+
+⚠️ **Un CHEVRON, pas un trait** : la consigne d'accessibilité est explicite — toute information
+portée par la couleur doit l'être **aussi** par une forme. Battlefield 2042 livre son « indicateur à
+forme variable » activé **par défaut**.
+
+### ⛔ CE QU'ON N'A PAS FAIT, ET POURQUOI
+
+Hakim demandait « quelque chose de plus digital ». On s'est arrêté à un **filet cyan** et aux
+encoches. La recherche est unanime : dans les jeux AAA la saveur tactique vit dans la **géométrie,
+le type, la retenue de palette** — toutes bon marché en contraste. Les marques d'amateur sont les
+effets de surface : lignes de balayage en travers des chiffres, boucles de glitch sur un affichage
+statique, aberration chromatique sur des bords d'interface, ombres portées, lueur sur les glyphes.
+**Chacune dépense le budget de contraste exactement sur ce qui doit rester lisible.**
+
+### 🩸 DEUX SABOTAGES SONT PASSÉS AU TRAVERS, ET LES DEUX ÉTAIENT DES TROUS DE MA SONDE
+
+1. **Je testais ma propre copie.** Le contrôle du nombre de blocs de santé **recalculait** la
+   formule de son côté : il est resté VERT quand on a câblé le dessin sur « 5 » en dur. Extrait en
+   accesseur (`_hp_segment_count()`), appelé par le dessin **et** par la sonde.
+   ⚠️ *Un contrôle qui reproduit le calcul qu'il surveille ne surveille rien.*
+2. **Je vérifiais l'allumage, jamais l'extinction.** Le filet de la bannière pouvait survivre au
+   texte — une ligne cyan flottante au milieu de l'écran — sans qu'un seul contrôle bronche. Il faut
+   laisser passer le **temps réel** : un `Tween` ne se simule pas.
+
+Score après correction : **7 sabotages sur 7**.
+
+### 🩸 UN DÉFAUT VU EN CAPTURE, PAS AU CODE
+
+Le chevron tombait à **quatre pixels** du filet de la bannière : deux ornements de tailles voisines,
+à la même hauteur, que l'œil lit comme un seul objet cassé. Rien dans le code ne le disait — les
+deux nœuds sont indépendants et chacun était juste. Séparés de 30 px.
+
+### Régression
+
+Client : 10 sondes headless + `probe_trench_grenade` en fenêtre, **0 rouge, 0 erreur de script**.
+`probe_trench_hud` **279 PASS / 0 FAIL** · `test_trench_ambient` **94 contrôles, 10 sabotages**.
+Backend : `sim` 153 ✅ · `angles` 20 ✅ · `headshot` 27 ✅ — **0 ❌**.
+
+---
+
+## §8.155.1 — LE PLANTAGE : `get(clé, défaut)` NE PROTÈGE PAS D'UNE CLÉ PRÉSENTE À `null`
+
+Hakim, en partie : « il y a un bug qui fait crasher le jeu ». Les journaux de Godot
+(`%APPDATA%/Godot/app_userdata/Wasteland Warfare/logs/godot.log`) donnent la ligne exacte :
+
+```
+SCRIPT ERROR: Invalid call. Nonexistent 'int' constructor.
+   at: _arm_threat (res://scripts/game/trench_fp.gd:3493)
+   [1] _on_duel_event (…:1030)   [2] _on_state (…:865)
+```
+
+### 🩸 LE DÉFAUT
+
+Mon code du §8.155 écrivait `int(eux.get("pos", 2))`. ⚠️ **`Dictionary.get(clé, défaut)` ne rend le
+défaut que si la clé est ABSENTE.** Ici elle est **présente avec la valeur `null`** : la vue rédigée
+du serveur écrit `entry["pos"] = None` quand l'adversaire n'est pas révélé
+(`backend/api/game/trench_sim.py:834`). Le défaut n'a donc **jamais** servi, et `int(null)` fait
+tomber le duel.
+
+⚠️ **CE N'EST PAS UN CAS LIMITE — C'EST LE CHEMIN NORMAL.** Un soldat n'est révélé que s'il agit
+**debout** ; une grenade vole près d'une seconde, donc son auteur est presque toujours redevenu
+invisible à l'impact. Le repère de menace s'arme précisément sur l'événement de dégâts. Autrement
+dit : la fonctionnalité livrée au §8.155 plantait sur son usage le plus courant, et **aucune de mes
+279 assertions ne l'a vu** — toutes construisaient un état de test où l'adversaire était visible.
+
+⛔ **Et le dépôt connaissait déjà le piège, à deux endroits.** `_refresh_view` écrit
+`int(p.get("pos", 2)) if p.get("pos") != null`, et la file de rafale adverse (`~l.1680`) se replie
+sur `_last_seen_enemy_pos`. Le bon geste était écrit deux fois dans le fichier que j'éditais.
+**Rien ne l'imposait**, donc rien n'a bronché quand je ne l'ai pas suivi.
+
+### Le correctif — deux gardes, pas une
+
+1. **Repli sur la DERNIÈRE POSITION VUE**, pas sur une position par défaut : c'est exactement là que
+   le sprite adverse est *dessiné*. Le repère et l'image disent ainsi la même chose ; un repli sur
+   « la position 2 » pointerait un endroit où le joueur ne voit personne.
+2. ⛔ **Une grenade n'arme plus aucun repère de direction.** Le souffle vient de son **point de
+   chute**, pas de la main qui l'a lancée : pointer vers le lanceur désignerait un endroit d'où rien
+   n'est parti. Le décalque au sol dit déjà d'où vient le souffle, et il le dit mieux. *(Cette
+   correction est de fond, pas un effet de bord du plantage : elle serait juste même sans lui.)*
+
+### La garde
+
+Section **4quinquies** de `probe_trench_hud` — un état où `pos` vaut réellement `null`, avec un
+premier contrôle qui vérifie que **l'état de test est bien rédigé** (sinon on ne teste rien).
+Sonde à **283 PASS / 0 FAIL**. Passe de sabotage à **9 sur 9** : remettre `int(eux.get("pos", 2))`
+rougit, et neutraliser la sortie « grenade » rougit aussi.
+
+### Régression
+
+`probe_trench_hud` **283/0** · `probe_trench_falseshot`, `probe_trench_fire_buffer`,
+`probe_trench_reddot` **TOUT VERT** · `test_trench_ambient` **94 contrôles, 0 rouge**.
+
+---
+
+## §8.156 — LE REPÈRE DEVIENT UN TRAQUEUR (et ce qu'un anti-cheat interdit de faire)
+
+Verdict de Hakim en partie : « le repère de menace fonctionne mal, **ne suit pas le soldat
+adversaire** ». Demande : « qu'il s'active et suive le joueur dès qu'il se cache pour plus de
+3 secondes, et qu'il dure 10 s ».
+
+Sonde : `probe_trench_hud` **294 PASS / 0 FAIL** (+11), **14 sabotages sur 14**.
+⛔ **Aucune règle serveur touchée** — `sim` 153 ✅ · `angles` 20 ✅ · `headshot` 27 ✅.
+
+### 🩸 IL AVAIT RAISON DEUX FOIS
+
+Le relèvement était **figé** à l'instant du tir (`_threat_bearing`, posé une fois par `_arm_threat`).
+Donc le repère ne suivait **ni** l'adversaire qui se déplace, **ni moi** quand je change de position.
+Deux façons de pointer à côté, et rien à l'écran ne disait que c'était faux.
+
+Correctif : `_threat_bearing` **n'existe plus en membre**. Le relèvement se *calcule*
+(`_threat_bearing_now()`), à chaque image, depuis `_last_seen_enemy_pos` — c'est-à-dire depuis la
+position où le sprite adverse est **dessiné**. ⭐ Le repère et l'image ne peuvent donc plus se
+contredire, et il n'y a plus qu'**un seul endroit** qui sait où viser.
+🩸 Effet de bord voulu : le plantage du §8.155.1 (`int(null)` sur une `pos` rédigée) devient
+**structurellement impossible** — plus aucune position de l'état ne transite par `_arm_threat`.
+
+### ⛔ CE QUI EST DEMANDÉ EST EN PARTIE IMPOSSIBLE, ET C'EST UNE DÉCISION D'ARCHITECTURE
+
+« Suivre le joueur pendant qu'il se cache » demande la position d'un adversaire **caché**. Or
+`redacted_view` ne la diffuse pas : *« le serveur GARDE la position ; le client ne peut pas afficher
+ce qu'il ne reçoit pas. C'est un anti-cheat STRUCTUREL »*. Un traqueur temps réel serait donc soit
+impossible (donnée absente), soit un **maphack**.
+
+⚠️ **Et la position peut réellement vieillir** : le déplacement n'est **pas** conditionné à la
+posture (`trench_sim.py:912`), donc un accroupi **peut ramper ailleurs sans être vu**. Le traqueur
+montre un **dernier contact**, pas une position vivante. C'est le prix de l'anti-cheat, et c'est le
+bon prix — mais il fallait le dire plutôt que de livrer un repère qui a l'air vivant et ment.
+
+### Le traqueur livré
+
+**3 s** de dissimulation pour s'allumer, **10 s** de vie, puis extinction. Les deux chiffres sont
+des exigences de Hakim : ils sont **mesurés**, pas réglés.
+⛔ **Un seul armement par disparition.** Sans verrou, la condition « caché depuis plus de 3 s » reste
+vraie à chaque image et recharge le compteur à 10 s indéfiniment : contre un joueur prudent, le
+repère ne s'éteindrait **jamais** de toute la manche. Un contrôle l'interdit.
+⚠️ Rien ne s'allume hors manche : un repère sur l'écran de fin désignerait une menace morte.
+
+### 🩸 DEUX TROUS DE MA SONDE, DÉMASQUÉS DANS L'ORDRE
+
+1. **Elle ne jouait que la moitié de la frame.** `_step_threat` arme, mais c'est `_decay` qui
+   décompte. Ma sonde n'appelait que le premier : elle a donc affirmé que le traqueur *ne s'éteignait
+   jamais*, alors que le décompte vivait simplement dans l'autre moitié de la boucle.
+   ⛔ *Une sonde qui ne joue qu'une moitié de la boucle mesure un jeu qui n'existe pas.* Extrait en
+   `_frame(duel, dt)`, écrit une fois, dans l'ordre exact de `_process`.
+2. **Un sabotage est passé au travers** : je pilotais `_enemy_visible` **à la main** dans toute la
+   section, donc la ligne qui le renseigne depuis l'état serveur n'était jamais jouée. Couper ce fil
+   laissait la sonde verte — alors qu'en partie le traqueur se serait allumé **en permanence**.
+   La sonde part maintenant d'un **vrai état rédigé** et vérifie que la rédaction arrive jusque-là,
+   **dans les deux sens**. C'est le même défaut qu'au §8.153 : un câblage qui a l'air juste et ne
+   fait rien.
+
+### ❓ EN ATTENTE D'ARBITRAGE — le seul moyen d'obtenir un suivi RÉEL
+
+Révéler le campeur **côté serveur** après 3 s accroupi-inactif (au lieu de le deviner côté client)
+donnerait un suivi temps réel exact, sans maphack. Mais c'est un **changement de règle** : il
+inverse en partie le dilemme du §1.4, où récompenser l'accroupi silencieux « est ce qui rend le
+choix intéressant ». Non fait — c'est une décision produit, pas une correction.
+
+### Le pilotage de la sonde a changé, et c'est mieux
+
+Elle injectait un **angle** ; elle part maintenant des **positions** et va jusqu'au pixel. L'ancienne
+version testait le dessin en sautant la chaîne qui le produit — c'est-à-dire exactement là où le
+défaut vu par Hakim se trouvait.
+
+---
+
+## §8.156.1 — LE TRAQUEUR PASSE À 5 s, ET SON RAPPEL DEVIENT PÉRIODIQUE
+
+Arbitrage de Hakim après essai : « 3 secondes c'est trop sévère, on met 5 secondes pour dynamiser le
+jeu » et « on fait réactiver ça après 5 s tant qu'il reste caché ». Intention annoncée : **ne pas
+laisser abuser de la cachette**.
+
+⚠️ **Un contrôle s'est INVERSÉ, et c'est assumé.** Au §8.156 il exigeait que le traqueur *décompte
+sans se recharger* ; il exige maintenant l'inverse. Ce n'est pas une garde qu'on affaiblit, c'est une
+règle qui change — et le commentaire du contrôle le dit, pour que personne ne « corrige » plus tard
+ce qui ressemble à une régression.
+
+⛔ **Conséquence assumée** : la période (5 s) étant plus courte que la vie du repère (10 s), le
+traqueur reste allumé **en continu** sur un joueur qui ne se montre jamais. Ce qui l'éteint, c'est de
+**se montrer** — et c'est devenu la seule extinction possible, donc le contrôle qui la vérifie est le
+plus important de la section.
+
+### 🩸 DEUX TROUS, DONT UN CRÉÉ PAR LE RÉGLAGE LUI-MÊME
+
+1. **Une boucle de sonde réglée PILE sur le seuil.** Elle tournait 50 × 0,1 s = 5,0 s pour un seuil
+   passé à 5,0 s : l'accumulation flottante restait *sous* le seuil, donc **même sans la garde de
+   phase, rien ne s'armait** — et le sabotage correspondant restait vert en ne prouvant rien.
+   ⚠️ *Une boucle de test doit dépasser franchement le seuil qu'elle interroge, jamais l'effleurer.*
+2. Le verrou booléen a disparu au profit d'une **soustraction de période** (`-= ARM_S`), et non d'une
+   remise à zéro : un `= 0.0` perdrait le temps déjà écoulé au-delà du seuil et ferait dériver la
+   cadence des rappels image après image.
+
+---
+
+## §8.157 — LES COMPTEURS ET LA BANNIÈRE : CE QUE LES RÉFÉRENCES ENSEIGNENT, ET CE QU'ELLES RATENT
+
+Demande de Hakim : s'inspirer des meilleurs FPS AAA pour la bannière de kill, et améliorer les
+compteurs « comme dans les images » — `hud_munitions.png`, `hud_sante.png`, `kill_banner.png` — « et
+faire mieux ».
+
+Sonde : `probe_trench_hud` **317 PASS / 0 FAIL** (+22), **19 sabotages sur 19**.
+
+### ⭐ CE QUE LES DEUX RÉFÉRENCES ENSEIGNENT : LE CONTRASTE DE TAILLE
+
+`hud_sante.png` et `hud_munitions.png` font la même chose et c'est leur seul trait commun : **valeur
+courante en grand, maximum en petit**. Le HUD affichait `« 06/15 »` d'un seul tenant, en une seule
+taille. Ce n'est pas un ornement : une fraction oblige l'œil à **lire deux nombres** là où il ne
+devrait en **saisir qu'un** — et le maximum, lui, ne change jamais.
+
+### 🩸 CE QUE LA RÉFÉRENCE RATE, ET QUE LE HUD RATAIT AUSSI
+
+Sur `kill_banner.png`, « ENEMY ELIMINATED » est en **blanc pur sur un mur clair** : à peine lisible.
+Ce n'est pas un accident de capture, c'est le défaut classique du texte de HUD — *« un compteur blanc
+qui se lit dans un couloir sombre disparaît dans la neige, le ciel ou un flash de bouche ; le remède
+fiable est un traitement qui survit à n'importe quel fond »*.
+
+⛔ **Contour, pas cartouche.** Au centre de l'écran, en plein duel, une boîte de fond masquerait la
+cible. Le contour ne coûte pas un pixel de surface.
+
+🩸 **Et je ne l'ai appliqué qu'à MOITIÉ.** J'ai traité les gros chiffres et oublié les petits. La
+capture a montré « SANTÉ », « /100 » et le nom de l'adversaire réduits à des **fantômes** sur un ciel
+clair — alors que le petit texte souffre *davantage* : il a moins de masse pour se défendre. Traités
+ensuite : les libellés, les maximums, le chronomètre, le score, la manche, les pastilles, l'arme.
+**Treize libellés**, c'est-à-dire tout le texte posé sur le monde ; ceux des panneaux gardent leur
+fond sombre maîtrisé et n'ont rien reçu.
+
+### ⛔ CE QU'ON N'A PAS COPIÉ : LA LIGNE SECONDAIRE
+
+La référence met « +100 XP » sous le titre. Chez nous cette ligne ne pourrait porter que **le nom de
+l'adversaire** — déjà affiché en haut à gauche, et qui est **le seul autre joueur de la partie**. Ce
+serait une tautologie occupant le centre de l'écran. On garde deux éléments et on investit ailleurs.
+
+### Le mouvement, et le head shot qui se VOIT
+
+⚙ **Le filet s'ouvre depuis le centre en 0,18 s.** C'est le seul mouvement, et il est court : la règle
+des HUD est *« on n'anime que l'apparition et les changements, jamais la position de repos »*. Un
+filet qui s'ouvre est une apparition ; une bannière qui glisserait en place serait une cible mouvante.
+⚠️ Le filet repart d'une **largeur nulle** à chaque élimination — sans cette remise à zéro, la
+deuxième bannière de la partie s'ouvrirait depuis un filet déjà déployé, donc sans mouvement.
+
+⛔ **Le head shot teinte le filet en OR** au lieu du cyan. Un seul bit de couleur, pris dans la charte,
+là où la distinction ne tenait qu'à trois mots de plus dans une ligne qui dure une seconde. Et on
+s'arrête là : Halo Infinite donne un visuel à **toutes** ses médailles et une **voix** aux seules
+rares — le visuel informe, l'audio célèbre, et le son du head shot fait déjà ce travail.
+
+### ❓ SIGNALÉ, PAS CORRIGÉ
+
+En italien, le HUD affiche « ROUND 2 » puis « ROUND: 1 — 0 » : deux lignes voisines qui commencent par
+le même mot pour deux faits différents. En français c'est « MANCHE 2 » / « MANCHES : 1 — 0 », qui se
+distinguent. C'est une faiblesse de **traduction**, pas de mise en page — on ne réécrit pas une copie
+italienne sans arbitrage.
+
+### Régression
+
+`probe_trench_hud` **317/0** · `falseshot`, `fire_buffer`, `reddot`, `aim`, `audio`, `feel_aim`,
+`springs` **TOUT VERT** · `test_trench_ambient` **94 contrôles** · `probe_trench_grenade` **TOUT VERT**
+(en fenêtre). Backend **non touché**.
+⚠️ `probe_trench_quad` et `probe_trench_soldier` ne sont **pas** des portes de régression : ce sont des
+outils de mesure qui impriment des relevés et dont « le verdict FINAL est la CAPTURE ».
+
+---
+
+## §8.158 — AUDIT DE COHÉRENCE DES DOCUMENTS (et une exigence restée lettre morte)
+
+Demande de Hakim : « il faut que toutes les docs soient cohérentes avec ce qu'on est en train de
+faire ». Méthode : **le code tranche**, jamais un document contre un autre.
+
+Sonde : `probe_trench_hud` **321 PASS / 0 FAIL** (+4), **22 sabotages sur 22**.
+
+### 🩸 CE QUE L'AUDIT A TROUVÉ DANS LE CODE, PAS DANS LES DOCS
+
+Le cahier §8.152 exigeait, pour le HUD : « santé segmentée **avec bascule rouge** — ⚠️ noter le code
+couleur : le nombre passe en ROUGE à l'état critique. **Reprendre ce basculement.** »
+⛔ **Jamais implémenté.** `_my_hp_label` était créé avec `COL_TEXT` et ne recevait **aucune** couleur
+ensuite : **à 12 PV le nombre était identique à 100 PV**. Le compteur de munitions avait trois
+paliers depuis le §8.155 ; la santé n'en avait aucun — le joueur n'avait donc **aucun signal
+d'urgence** sur sa propre survie, dans un jeu où l'on meurt en deux touches.
+
+⭐ **Le seuil est un BLOC DE SANTÉ, pas un chiffre rond.** `HP_PER_SEGMENT` est déjà l'unité dans
+laquelle le joueur compte ses PV depuis le §8.155 : « il me reste un bloc » et « je suis en danger »
+deviennent la **même phrase**. Un seuil à 25 % ou à 30 % dirait autre chose que ce que la barre montre.
+⚠️ **Deux états, pas trois.** Les munitions en ont trois parce qu'on peut **recharger** — il y a un
+palier « pense à recharger » avant « tu es à sec ». La santé n'a pas d'équivalent.
+⛔ **Seul le NOMBRE bascule, pas la barre** : la barre adverse est déjà rouge, et deux barres rouges
+à 50 px l'une de l'autre se confondraient à l'instant précis où il ne faut pas se tromper.
+
+### 🩸 UNE VRAIE DÉRIVE DE CONTRAT RÉSEAU
+
+`CONTRAT_RESEAU.md` **ne mentionnait nulle part le tir à la tête**, livré au §8.153. Il manquait :
+`trench_init.rules.headshot_multiplier`, le champ `headshot` sur l'événement `hit`, et surtout la
+**table angulaire v4 → v5**. Documenté, avec l'avertissement qui compte : sur une table v4 restée en
+place, le repli est **neutre**, la fenêtre de tête est **vide**, plus aucun head shot n'est reconnu —
+**et rien ne le dit**. Vérifié sur disque avant d'écrire : **v5, 25/25 fenêtres, deux copies au même
+checksum**.
+*(C'est la deuxième fois que ce fichier dérive : au 07/08 il documentait encore la règle d'or à
+10 Hz. Un contrat qu'on n'ouvre pas ment vite.)*
+
+### ⛔ UN VERROU PÉRIMÉ EST PIRE QU'AUCUN VERROU
+
+`VERROU_TRANCHEE.md`, daté du 27/08 09:15, annonçait que **§8.152 pouvait avancer, HUD compris** —
+alors que §8.152 **et les six chantiers suivants** étaient livrés. Il citait la sonde à **237**
+contrôles (elle en compte **321**) et attendait une « Porte 1 » franchie depuis. Ce fichier sert à
+dire *où une autre session peut écrire sans collision* : périmé, il **autorise à écrire là où
+quelqu'un travaille**. Réécrit.
+
+### ⛔ LE PIÈGE LE PLUS COÛTEUX : UN CAHIER QUI DÉCRIT UN LOT ABANDONNÉ
+
+`PROMPT_TRANCHEE_VUE3D.md` décrit toujours le lot **3D-G — soldat adverse en 3D** comme à construire.
+Il a été construit, sondé… puis **rejeté sur verdict de jeu de Hakim**. Une session future lisant ce
+tableau **rebâtirait exactement ce qui a été refusé**. Bandeau de statut en tête, qui nomme
+l'abandon avant le tableau.
+
+### Les autres corrections
+
+- **`CONTEXTE.md` n'indexait AUCUN document de LA TRANCHÉE** — ni les deux cahiers, ni le guide de
+  production, ni le verrou. Le fichier porte pourtant sa propre leçon : « un document stratégique non
+  listé est un document qu'on perd » (c'est ainsi que `RAPPORT_VISION_TOP100.md` avait disparu).
+  Six documents indexés, avec leur fraîcheur.
+- **`CONTEXTE.md`** décrivait `trench_sim.py` et `trench_angles.py` à l'état du §8.137. Mis à jour.
+- **`ETAT_TRANCHEE_2026-08-27.md`** : bandeau **PÉRIMÉ**. ⚠️ On ne réécrit pas un document horodaté —
+  on le marque et on renvoie vers ce qui fait foi.
+
+### ⚠️ CE QU'ON N'A PAS TOUCHÉ, ET POURQUOI
+
+Les « 237 contrôles » du **journal** §8.151 restent : ils étaient exacts à leur date. Un journal est
+un historique — le corriger après coup falsifierait le compte rendu au lieu de le mettre à jour.

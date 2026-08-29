@@ -3076,7 +3076,7 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
     state | null}` — le client n'a AUCUNE constante du mini-jeu en dur (patron
     `battle_royale.public_rules` §8.131). `rules` porte désormais aussi, par arme,
     `dispersion_deg`/`mag_size`/`reload_ticks` (et, depuis §8.151, `burst_gap_ticks`), le bloc
-    `bandage`, et le bloc `geometry` (cotes du blockout : `no_mans_land`, `positions`,
+    `bandage`, **`headshot_multiplier` (§8.153)**, et le bloc `geometry` (cotes du blockout : `no_mans_land`, `positions`,
     `position_spacing`, `parapet_y`, `eye_up`, `eye_down`, `aim_quantum_deg`).
     ⚠️ **`rules.grenade.radius_m` EST LE CONTRAT VISUEL DU §8.141**, et pas seulement une donnée
     d'équilibrage : c'est CETTE valeur — celle qui décide des dégâts — que le client utilise pour
@@ -3103,7 +3103,7 @@ défaut sûr, mais un client à jour face à un serveur ancien n'affiche AUCUNE 
     AUSSI leur visée réelle (`aim_yaw`/`aim_pitch` = visée du tireur + écart de dispersion figé au
     départ) : c'est ce qui permet de tracer la traçante dans la VRAIE direction, y compris quand
     elle rate.
-    Événements du tick : `round_start` · `fire {rounds, ammo}` · `impact` · `hit` ·
+    Événements du tick : `round_start` · `fire {rounds, ammo}` · `impact` · `hit {slot, by, kind, damage, hp, headshot}` ·
     `grenade_thrown` (marqueur visible par la cible DÈS le lancer) · `laser {fire_tick, from_pos,
     aim_yaw, aim_pitch}` (CONDOR : 5 ticks avant le TIR) · `laser_cancelled` · `reload_start` ·
     `reload_end` · `bandage_start` · `bandage_end` · `bandage_interrupted` · `escalation` ·
@@ -4107,3 +4107,32 @@ déjà cadencée ainsi. Suites trench relancées ENTIÈRES avant/après la ligne
 > côtés** : la règle de synchronisation était tenue, c'est le CONTENU qui était périmé — la même
 > signature qu'au §8.151.3 §8. Un ❌ « préexistant » se re-mesure avant d'être recopié : sinon on
 > lègue à la passe suivante une dette qui n'existe plus, et un vert réel passe pour un rouge admis.
+
+---
+
+## 🎯 §8.153 — LA TRANCHÉE : LE TIR À LA TÊTE (**ADDITIF STRICT §1.5**)
+
+Deux champs neufs, tous deux **additifs** : un vieux client les ignore et joue exactement comme avant.
+
+**1) `trench_init.rules.headshot_multiplier: float`** (1.5 ⚙, servi depuis `TRENCH_RULES`).
+⚠️ **SERVI POUR ÊTRE ÉCRIT, JAMAIS POUR ÊTRE APPLIQUÉ.** Le client s'en sert uniquement pour
+composer sa page d'aide. Les dégâts d'un tir à la tête arrivent **déjà majorés** dans l'événement
+`hit` : un client qui remultiplierait afficherait 1,5× le chiffre que le serveur a réellement retiré.
+
+**2) L'événement `hit` porte `headshot: bool`.** C'est le serveur qui tranche, jamais le client — il
+pilote la croix de touche, le son dédié et la teinte de la bannière d'élimination.
+
+⛔ **LE TIR À LA TÊTE EST UN RAFFINEMENT DE LA TOUCHE, PAS UNE SECONDE RÉSOLUTION.** `contains()`
+décide seul s'il y a touche (règle **inchangée** du §8.137) ; `is_headshot()` ne lit ensuite QUE
+*l'endroit*. L'ordre des deux tests est tout : `is_headshot()` interrogée seule répond vrai
+**jusqu'au zénith**, donc au-dessus de la cible.
+
+### 🚨 TABLE ANGULAIRE v4 → **v5** — REDÉPLOIEMENT DU BACKEND OBLIGATOIRE
+
+Chaque entrée de `trench_angles.json` gagne **`pitch_head_min`** (le site à partir duquel on est dans
+la tête). La table est **générée** (`frontend/tools/gen_trench_angles.tscn`) et écrite **en double** ;
+`test_trench_angles.py` compare les checksums.
+⚠️ Sur une table **v4** restée en place, `trench_angles.py` retombe sur un **repli neutre**
+(`pitch_head_min = pitch_max`) : la fenêtre de tête est alors **vide** et plus aucun tir à la tête
+n'est reconnu — le duel reste jouable et personne ne voit d'erreur. **C'est un échec SILENCIEUX :
+il faut redéployer.**

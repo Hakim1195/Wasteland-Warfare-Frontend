@@ -143,6 +143,18 @@ func _ready() -> void:
 	_duel._apply_ads(true)
 	await _wait(0.9)
 	await _shot("04b_visee_point_rouge")
+
+	# --- 4ter) LE RETOUR DE KILL (§8.155) : bannière, filet, repère de menace -------------------
+	# ⚠️ On pousse le VRAI événement serveur, pas les champs internes : une planche qui allumerait
+	# la bannière à la main montrerait un état que le jeu ne sait peut-être pas produire.
+	_duel._on_duel_event({"type": "hit", "slot": 3 - _duel._my_slot, "by": _duel._my_slot,
+		"kind": "condor", "damage": 45, "hp": 0, "headshot": true})
+	# §8.156 — le relèvement n est plus un champ : il se DÉDUIT de la position adverse. On pilote
+	# donc la planche par la CAUSE (où est l adversaire) et non par la valeur intermédiaire.
+	_duel._last_seen_enemy_pos = 4.0
+	_duel._threat_left = _duel.THREAT_HIDDEN_HOLD_S
+	await _wait(0.25)
+	await _shot("04c_kill_et_menace")
 	_duel._apply_ads(false)
 	await _wait(0.6)
 

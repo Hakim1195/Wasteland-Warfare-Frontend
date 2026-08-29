@@ -306,6 +306,32 @@ var _stance_toggle := false
 # --- FX éphémères --------------------------------------------------------------------------------
 # Durée de vie du hitmarker, en secondes — UNE seule constante pour la pose et pour le fondu (les
 # deux valaient 0,35 en dur à deux endroits, et un jour l'une des deux aurait bougé sans l'autre).
+# ╔═ 🎖 §8.155 — LE BLOC VITAUX/MUNITIONS, SEGMENTÉ ══════════════════════════════════════════════╗
+# ║ Bungie a écrit la seule justification publiée de la segmentation, à propos de Destiny 2 : une ║
+# ║ barre segmentée « permet au joueur de comprendre plus facilement la quantité de dégâts        ║
+# ║ infligés » — « il est plus simple de voir qu un boss est à peu près à la moitié s il lui      ║
+# ║ manque un tiers et un peu ». **La segmentation transforme un jugement analogique en un        ║
+# ║ comptage.** C est exactement ce que les deux références de Hakim montrent : un trait par       ║
+# ║ cartouche pour le chargeur, cinq blocs pour la santé.                                         ║
+# ║                                                                                                ║
+# ║ ⚠️ ET ÇA MARCHE MIEUX CHEZ NOUS QUE CHEZ EUX. Nos chargeurs font 4 à 24 cartouches : un trait  ║
+# ║ par cartouche reste comptable. Dans un jeu à 68 cartouches c est un ornement.                  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# La santé, en blocs de 20 PV → CINQ blocs à 100 PV, comme `hud_sante.png` de la référence.
+const HP_PER_SEGMENT := 20.0
+# ⛔ PLANCHER ABSOLU, PAS UNE FRACTION. La convention du genre (TF2, seul système de seuils
+# publié) alerte « sous la moitié du chargeur ». Cette règle S EFFONDRE ici : la moitié du condor
+# vaut DEUX cartouches, et celle du frelon douze. Un seuil relatif préviendrait trop tard sur
+# l arme lente et trop tôt sur la rapide. On alerte donc sur un NOMBRE de coups restants.
+const AMMO_LOW_ROUNDS := 2
+const AMMO_TICK_H := 10.0
+const AMMO_TICK_GAP := 2.0
+# Cotes des deux barres, NOMMÉES. 🩸 Elles étaient écrites DEUX FOIS chacune — à la construction
+# et au rafraîchissement (240/238 et 180/178) — et rien ne les liait : changer la largeur d une
+# barre sans toucher son remplissage donnait un jauge qui déborde de son cadre, en silence.
+const HP_BAR := Vector2(240, 18)
+const HP_BAR_THEIRS := Vector2(180, 9)
+
 const HITMARKER_TIME := 0.35
 var _hitmarker := 0.0
 # §8.151 (2ter, §4bis.2) — CE QUE LE HITMARKER DIT DE PLUS, et rien qu'à partir de l'événement.
@@ -315,6 +341,102 @@ var _hitmarker := 0.0
 # lui seul — un tir refusé, une balle qui manque ou un dégât SUBI n'y écrivent jamais.
 var _hitmarker_kill := false
 var _hitmarker_scale := 1.0
+# ╔═ 🎖 §8.155 — LA BANNIÈRE D ÉLIMINATION ═══════════════════════════════════════════════════════╗
+# ║ 🩸 IL N EXISTAIT AUCUN MOMENT « ENNEMI ÉLIMINÉ ». Tuer quelqu un ne produisait qu une croix   ║
+# ║ rouge de 0,35 s — le même retour qu une touche ordinaire, en rouge. La seule bannière         ║
+# ║ existante annonce la fin de MANCHE, ce qui est un autre fait.                                 ║
+# ║ ⛔ UN NŒUD SÉPARÉ, ET C EST NÉCESSAIRE, pas cosmétique : le serveur clôt la manche dans le    ║
+# ║ MÊME tick que la mort. Réutiliser la bannière de manche ferait écraser « ENNEMI ÉLIMINÉ » par ║
+# ║ « MANCHE GAGNÉE » à la frame suivante — le joueur ne verrait jamais son propre kill.          ║
+# ║ Deux faits, deux canaux : la règle que Bungie a tirée de Halo 2 (« quand le bloc grossit, les ║
+# ║ messages cruciaux se perdent ») et re-tirée pour Destiny 2 dix-sept ans plus tard.            ║
+# ║ ⚠️ PLACÉE SOUS la bannière de manche et AU-DESSUS du réticule : ni sur la ligne de visée (le  ║
+# ║ reproche public fait à Warzone 2), ni reléguée dans un coin (le reproche fait à la bêta de    ║
+# ║ Battlefield 2042, qui avait retiré le retour central).                                        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ⚙ Les deux seuls chiffres de première main publiés sur une bannière de jeu sont ceux de Halo 3 :
+# 1 s de tenue, 1,5 s de fondu. On les reprend — ils sont plus lents que la bannière de manche
+# (0,9 / 0,5), et c est voulu : un kill arrive UNE fois par manche, pas cent fois par partie. La
+# retenue s échelonne sur la FRÉQUENCE de l événement.
+# ╔═ 🧭 §8.155 — LES CRANS DE MENACE : d où le coup est parti ════════════════════════════════════╗
+# ║ ⛔ PAS UN ANNEAU À 360°, ET C EST LA DÉCISION DU LOT. La géométrie du jeu l interdit : le      ║
+# ║ front fait 13,6 m pour 9 m de profondeur, donc TOUT relèvement de menace possible tient dans  ║
+# ║ un cône avant d environ 110°, à CINQ relèvements connus espacés de 18,8°. Un anneau           ║
+# ║ gaspillerait ~70 % de sa circonférence sur des directions géométriquement impossibles et      ║
+# ║ comprimerait tout le jeu dans l arc où Halo atténue délibérément son indicateur à 40 %.       ║
+# ║ Une BANDE AVANT donne environ trois fois la résolution angulaire par pixel, gratuitement.     ║
+# ║                                                                                                ║
+# ║ ⚠️ ET ON NE LE CACHE PAS QUAND LA MENACE EST DE FACE. C était mon idée, et Halo 3 l a essayée ║
+# ║ puis rejetée : masquer l indicateur vers l avant « laissait seulement entendre que la menace  ║
+# ║ avait disparu ». Ils l ATTÉNUENT à 40 % — on lit toujours qu on est visé, sans encombrer la   ║
+# ║ ligne de visée. C est ce qu on fait.                                                          ║
+# ║                                                                                                ║
+# ║ ⭐ LE REPÈRE SUIT LE MONDE, PAS L ÉCRAN : on retient le relèvement ABSOLU du tireur, et le     ║
+# ║ cran se déplace quand on tourne — jusqu à venir au centre quand on lui fait face. Un repère   ║
+# ║ figé à l écran dirait « on t a tiré dessus par la gauche » longtemps après que tu t es tourné.║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ⚙ 1,0 s de tenue puis 0,5 s de fondu. Halo 3 (« environ une seconde par coup, puis un fondu sur
+# une demi-seconde ») et le moteur de Call of Duty (`cg_hudDamageDirectionalIconTime 1000`)
+# tombent sur le même chiffre indépendamment. Il se range au-dessus du hitmarker (0,35 s) et des
+# chiffres flottants (0,6 s) : troisième palier, le plus lent.
+const THREAT_HOLD_S := 1.0
+const THREAT_FADE_S := 0.5
+# ╔═ §8.156 — LE TRAQUEUR DE DISSIMULATION (verdict de Hakim en partie) ══════════════════════════╗
+# ║ « Le repère ne suit pas le soldat adverse. » Il avait raison DEUX fois : le relèvement était  ║
+# ║ FIGÉ à l instant du tir, donc il ne suivait ni l adversaire qui se déplace, ni MOI quand je   ║
+# ║ change de position — deux façons de pointer à côté sans que rien ne le dise.                  ║
+# ║                                                                                                ║
+# ║ ⛔ CE QU ON NE PEUT PAS FAIRE, ET CE N EST PAS UNE LIMITE TECHNIQUE : suivre un adversaire    ║
+# ║ CACHÉ. `redacted_view` ne diffuse pas la position d un accroupi inactif — « le maphack        ║
+# ║ n existe pas si la map n est pas envoyée ». Le traqueur montre donc la DERNIÈRE POSITION VUE, ║
+# ║ qui est exactement là où son sprite est dessiné : le repère et l image ne peuvent pas se      ║
+# ║ contredire. ⚠️ Le déplacement n étant PAS conditionné à la posture (`trench_sim.py:912`), un  ║
+# ║ accroupi PEUT ramper ailleurs : le repère vieillit alors en « dernier contact ». C est le     ║
+# ║ prix de l anti-cheat, et c est le bon prix.                                                    ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# ⚙ 5,0 s — arbitrage de Hakim : « 3 secondes c est trop severe, on met 5 secondes pour dynamiser
+# le jeu ». ⚠️ CE CHIFFRE SERT DEUX FOIS : c est le delai avant le premier rappel, ET la
+# PERIODE a laquelle le rappel se renouvelle tant que l adversaire reste cache.
+const THREAT_HIDDEN_ARM_S := 5.0
+const THREAT_HIDDEN_HOLD_S := 10.0
+# Demi-largeur de la bande, et l angle qu elle couvre. ⚠️ L angle vient de la GÉOMÉTRIE (le
+# débattement de visée réel), jamais d un chiffre rond : la bande doit couvrir exactement ce que
+# le joueur peut viser, sinon un cran collé au bord voudrait dire deux choses différentes.
+const THREAT_BAND_PX := 250.0
+# 🩸 −96 → −74, VU EN CAPTURE. Le chevron tombait à QUATRE pixels du filet de la bannière de kill :
+# deux ornements de tailles voisines, à la même hauteur, que l œil lit comme un seul objet cassé.
+# ⚠️ Et on ne descend pas plus bas : la bande doit rester au-dessus de la course des chiffres de
+# dégâts (46 px depuis la silhouette adverse) et hors de la bande de silhouette elle-même.
+const THREAT_Y := -74.0
+const THREAT_W := 16.0
+const THREAT_H := 9.0
+# L atténuation vers l avant, reprise de Halo 3 telle quelle.
+const THREAT_FORWARD_ALPHA := 0.40
+const THREAT_FORWARD_DEG := 6.0
+# ⛔ PAS de `_threat_bearing` en membre. Le relèvement se CALCULE (`_threat_bearing_now`) et ne se
+# stocke pas : une valeur figée quelque part serait une seconde source de vérité, et c est très
+# exactement le défaut que Hakim a vu à l écran.
+var _threat_left := 0.0
+var _enemy_visible := false     # dernier verdict de révélation reçu du serveur (§1.6)
+var _enemy_hidden_s := 0.0      # depuis combien de temps il n est plus révélé
+var _threat_marks: Control
+
+# ⚙ 0,18 s — LE FILET S OUVRE DEPUIS LE CENTRE. C est le seul mouvement de la bannière, et il est
+# volontairement court : la recherche sur les HUD est nette, « on n anime que l APPARITION et les
+# CHANGEMENTS, jamais la position de repos ». Un filet qui s ouvre est une apparition ; une bannière
+# qui glisserait en place serait une position de repos animée, donc une cible mouvante pour l œil.
+const KILL_SWEEP_S := 0.18
+const KILL_RULE_HALF := 90.0
+const KILL_HOLD_S := 1.0
+const KILL_FADE_S := 1.5
+var _kill_banner: Label
+var _kill_rule: ColorRect
+var _kill_tween: Tween
+var _ammo_ticks: Control          # §8.155 — un trait par cartouche
+var _hp_segments: Control         # §8.155 — les séparations de blocs, par-dessus le remplissage
+var _ammo_now := 0
+var _ammo_mag := 0
+var _ammo_reloading := false
 # 🎯 §8.153 — LE TIR PORTAIT-IL A LA TETE ? ⛔ LU DANS L EVENEMENT SERVEUR, jamais deduit : le
 # client n a ni la fenetre angulaire ni le site du projectile, et une seconde verite sur « ou la
 # balle a porte » est exactement ce que ce champ existe pour empecher. Un head shot devine serait
@@ -448,12 +570,14 @@ var _hud: Control
 var _reticle: Control
 var _my_hp_fill: ColorRect
 var _my_hp_label: Label
+var _my_hp_max: Label
 var _their_hp_fill: ColorRect
 var _their_name: Label
 var _timer_label: Label
 var _score_label: Label
 var _round_label: Label
 var _ammo_label: Label
+var _ammo_max: Label
 var _reload_label: Label
 var _weapon_label: Label
 var _progress_label: Label
@@ -924,10 +1048,16 @@ func _on_duel_event(event: Dictionary) -> void:
 				# de voix : le pave de `audio_manager.gd` le pose a 17 sur 20, et un son de plus
 				# volerait une voix a la detonation qui le precede de 200 ms.
 				AudioManager.play_sfx("trench_headshot" if _hitmarker_head else "trench_hitmarker")
+				# ⭐ LE MOMENT QUI MANQUAIT. ⚠️ On le lit dans l ÉVÉNEMENT (`hp <= 0`), jamais dans l état :
+				# l état arrive au tick suivant, et la bannière serait alors en retard d un pas sur le son.
+				if _hitmarker_kill:
+					_show_kill_banner(_hitmarker_head)
 			if victim == _my_slot:
 				AudioManager.play_sfx("trench_hit")
 				_hurt_flash = 0.5
 				_hurt_dir = _last_seen_enemy_pos - float(_pred_pos)
+				# §8.155 — le repère de menace, armé sur le MÊME événement que la perte de PV.
+				_arm_threat(int(event.get("by", 0)), str(event.get("kind", "")))
 				# §8.151 — le FLINCH : l'encaissement se sent dans les mains aussi (plongeon bref
 				# du viewmodel) ; le pouls rouge directionnel, lui, est lu par `_refresh_hud`
 				# depuis `_hurt_flash`/`_hurt_dir` (overlay dédié, shader `trench_flinch`).
@@ -1718,6 +1848,7 @@ func _gather_move_dir() -> int:
 func _process(delta: float) -> void:
 	_clock += delta
 	_decay(delta)
+	_step_threat(delta)
 	# §8.151 — le feel se pose AUSSI après la fin de match : un roulis qui resterait figé sur
 	# l'écran de résultat serait un défaut de capture ET une image penchée pour rien.
 	_step_feel(delta)
@@ -2125,6 +2256,10 @@ func _decay(delta: float) -> void:
 	_fire_refuse = maxf(0.0, _fire_refuse - delta)
 	_hitmarker = maxf(0.0, _hitmarker - delta)
 	_hurt_flash = maxf(0.0, _hurt_flash - delta)
+	if _threat_left > 0.0:
+		_threat_left = maxf(0.0, _threat_left - delta)
+		if _threat_marks != null:
+			_threat_marks.queue_redraw()
 	_enemy_hit = maxf(0.0, _enemy_hit - delta * 3.0)
 	# §8.151 : `_recoil` (décru linéairement ici même) a disparu — le recul vit dans les ressorts
 	# du viewmodel et de `_step_feel`, qui portent leur propre retour.
@@ -2197,6 +2332,9 @@ func _refresh_view(delta: float) -> void:
 	var they0 := _player_of(s0, their_slot)
 	var they1 := _player_of(s1, their_slot)
 	var visible := they1.get("pos") != null
+	# §8.156 — retenu pour `_step_threat` : c est LE signal de dissimulation, et il est déjà
+	# calculé ici. Le recalculer ailleurs serait une seconde lecture du même fait.
+	_enemy_visible = visible
 	if visible:
 		var to_pos := float(they1.get("pos"))
 		var from_pos: float = float(they0.get("pos")) if they0.get("pos") != null else to_pos
@@ -2360,6 +2498,20 @@ func _label(text: String, size: int, color: Color = COL_TEXT, tabular := false) 
 #      pas : la MÉTHODE `set_anchors_preset()` fait foi ;
 #   2. `position` est relatif au PARENT (elle RECALCULE les offsets) — pour placer relativement à
 #      l'ANCRE, ce sont `offset_left/offset_top` qu'il faut poser.
+# ╔═ LE TRAITEMENT DE LISIBILITÉ — la seule chose que la référence de Hakim rate ═════════════════╗
+# ║ Sur `kill_banner.png`, « ENEMY ELIMINATED » est en blanc pur sur un mur clair : à peine       ║
+# ║ lisible. Ce n est pas un accident de capture, c est le défaut classique du texte de HUD —     ║
+# ║ « un compteur blanc qui se lit dans un couloir sombre disparaît dans la neige, le ciel ou un  ║
+# ║ flash de bouche. Le remède fiable est un traitement qui survit à N IMPORTE QUEL fond ».       ║
+# ║ ⛔ On choisit le CONTOUR et pas un cartouche opaque : au centre de l écran, en plein duel, une ║
+# ║ boîte de fond masquerait la cible. Le contour ne coûte pas un pixel de surface.               ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _lisible(l: Label, epais := 4) -> Label:
+	l.add_theme_constant_override("outline_size", epais)
+	l.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.85))
+	return l
+
+
 func _anchored(node: Control, preset: int, off: Vector2, box := Vector2.ZERO) -> void:
 	node.set_anchors_preset(preset)
 	node.offset_left = off.x
@@ -2436,18 +2588,60 @@ func _build_vitals() -> void:
 	back.add_theme_stylebox_override("panel", sb)
 	back.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(back)
-	_anchored(back, Control.PRESET_TOP_LEFT, Vector2(26, 44), Vector2(240, 18))
+	_anchored(back, Control.PRESET_TOP_LEFT, Vector2(26, 44), HP_BAR)
+	# ⭐ LES ENCOCHES DE CHARTE (§8.155). Le HUD de combat n en portait AUCUNE : elles n existaient
+	# que sur les panneaux d abandon et de résultat. Tout le reste était des `Label` posés à des
+	# coordonnées absolues — c est-à-dire un HUD sans aucun des ornements que la charte de ce
+	# projet définit comme son ADN. C est l écart le plus visible avec la référence, et le moins
+	# cher à combler : l aide existait déjà, personne ne l avait appelée ici.
+	# ⚠️ L ornement vit sur le CADRE, jamais sur les chiffres. La recherche est unanime : dans les
+	# jeux AAA la saveur tactique tient à la géométrie, au type et à la retenue de palette — pas à
+	# des effets de surface (lignes de balayage, aberration chromatique, lueur sur les glyphes),
+	# qui dépensent le budget de contraste sur ce qui doit rester lisible.
+	WarzoneUI.add_corner_notches(back, 5.0, COL_ACCENT)
 	_my_hp_fill = ColorRect.new()
 	_my_hp_fill.color = COL_ACCENT
 	_my_hp_fill.position = Vector2(1, 1)
-	_my_hp_fill.size = Vector2(238, 16)
+	_my_hp_fill.size = Vector2(HP_BAR.x - 2.0, HP_BAR.y - 2.0)
 	back.add_child(_my_hp_fill)
-	_my_hp_label = _label("100", 15, COL_TEXT, true)
+	# ── LES BLOCS (§8.155) ─────────────────────────────────────────────────────────────────────
+	# ⭐ Bungie a publié la seule justification que je connaisse : une barre segmentée « permet de
+	# comprendre plus facilement la quantité de dégâts », parce qu « il est plus simple de voir
+	# qu il manque un tiers et un peu ». **La segmentation transforme un jugement en un comptage.**
+	# ⚠️ Elle se dessine PAR-DESSUS le remplissage, dans un enfant ajouté APRÈS lui : des
+	# séparations peintes dessous disparaîtraient sous la jauge, c est-à-dire exactement là où on
+	# a besoin de compter.
+	_hp_segments = Control.new()
+	_hp_segments.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hp_segments.position = Vector2(1, 1)
+	_hp_segments.size = Vector2(HP_BAR.x - 2.0, HP_BAR.y - 2.0)
+	back.add_child(_hp_segments)
+	_hp_segments.draw.connect(_draw_hp_segments)
+
+	# ── LE COMPTEUR DE SANTÉ (§8.157) — le CONTRASTE DE TAILLE des deux références ───────────────
+	# ⭐ C est le trait commun de `hud_sante.png` et `hud_munitions.png`, et il manquait ici : la
+	# valeur COURANTE est grande, le MAXIMUM est petit. Ce n est pas un ornement — c est ce qui rend
+	# le chiffre lisible du coin de l œil, parce que l œil n a plus qu UN nombre à saisir au lieu
+	# d une fraction à lire. Le maximum, lui, ne change jamais : il n a rien à faire en gros.
+	# 🩸 VU EN CAPTURE : sur un ciel clair, le texte SOURD sans contour disparaît purement et
+	# simplement. J avais traité les gros chiffres et oublié les petits — or c est le petit texte
+	# qui souffre le plus, il a moins de masse pour se défendre. Contour plus FIN (2 px) : à
+	# 11 px de corps, 4 px de contour mangeraient la lettre.
+	var oeil_hp := _lisible(_label(tr("TRENCH_HUD_HEALTH"), 11, COL_MUTED), 2)
+	_hud.add_child(oeil_hp)
+	_anchored(oeil_hp, Control.PRESET_TOP_LEFT, Vector2(275, 26), Vector2(120, 14))
+
+	_my_hp_label = _lisible(_label("100", 26, COL_TEXT, true), 3)
+	_my_hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_my_hp_label)
-	_anchored(_my_hp_label, Control.PRESET_TOP_LEFT, Vector2(274, 43), Vector2(60, 20))
+	_anchored(_my_hp_label, Control.PRESET_TOP_LEFT, Vector2(274, 38), Vector2(56, 30))
+
+	_my_hp_max = _lisible(_label("/100", 13, COL_MUTED, true), 2)
+	_hud.add_child(_my_hp_max)
+	_anchored(_my_hp_max, Control.PRESET_TOP_LEFT, Vector2(334, 52), Vector2(50, 16))
 
 	# L'adversaire : nom + une barre FINE (l'information compte, pas la place qu'elle prend).
-	_their_name = _label("", 14, COL_MUTED)
+	_their_name = _lisible(_label("", 14, COL_MUTED), 2)
 	_hud.add_child(_their_name)
 	_anchored(_their_name, Control.PRESET_TOP_LEFT, Vector2(26, 72), Vector2(360, 18))
 	var their_back := Panel.new()
@@ -2458,27 +2652,71 @@ func _build_vitals() -> void:
 	their_back.add_theme_stylebox_override("panel", sb2)
 	their_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(their_back)
-	_anchored(their_back, Control.PRESET_TOP_LEFT, Vector2(26, 94), Vector2(180, 9))
+	_anchored(their_back, Control.PRESET_TOP_LEFT, Vector2(26, 94), HP_BAR_THEIRS)
 	_their_hp_fill = ColorRect.new()
 	_their_hp_fill.color = COL_DANGER
 	_their_hp_fill.position = Vector2(1, 1)
-	_their_hp_fill.size = Vector2(178, 7)
+	_their_hp_fill.size = Vector2(HP_BAR_THEIRS.x - 2.0, HP_BAR_THEIRS.y - 2.0)
 	their_back.add_child(_their_hp_fill)
 
 
 # Manches / score + chrono haut-centre — §6.
+# Les séparations de blocs de santé. ⛔ Le NOMBRE de blocs vient du `hp_max` du REGISTRE, jamais
+# d une constante de mise en page : le jour où le serveur passe à 150 PV, la barre montre sept
+# blocs et demi sans qu on y touche. Une barre qui garderait cinq blocs mentirait sur ce que
+# vaut un bloc.
+# 🩸 EXTRAIT EN ACCESSEUR APRES UNE PASSE DE SABOTAGE. Le controle de la sonde recalculait le
+# nombre de blocs de son cote — il ne testait donc que SA PROPRE COPIE de la formule, et il est
+# reste VERT quand on a cable le dessin sur « 5 » en dur. ⚠️ Un controle qui reproduit le calcul
+# qu il surveille ne surveille rien ; il doit appeler la MEME fonction que le code de production.
+# LA COULEUR DU COMPTEUR DE SANTÉ — ⚠️ EXIGENCE DU CAHIER §8.152, JAMAIS IMPLÉMENTÉE : « le nombre
+# passe en ROUGE à l état critique — reprendre ce basculement ». Le compteur de munitions avait TROIS
+# paliers depuis le §8.155 ; la santé n en avait AUCUN. À 12 PV le nombre était identique à 100.
+#
+# ⛔ LE SEUIL EST UN BLOC DE SANTÉ, PAS UN CHIFFRE ROND. `HP_PER_SEGMENT` est déjà l unité dans
+# laquelle le joueur COMPTE ses PV depuis le §8.155 : « il me reste un bloc » et « je suis en danger »
+# deviennent la même phrase. Un seuil à 25 ou à 30 % dirait autre chose que ce que la barre montre.
+#
+# ⚠️ DEUX ÉTATS, PAS TROIS. Les munitions en ont trois parce qu on peut RECHARGER — il y a un palier
+# « pense à recharger » avant le palier « tu es à sec ». La santé n a pas d équivalent : soit le
+# prochain coup est survivable, soit il ne l est pas.
+func _hp_color(hp: float) -> Color:
+	return COL_DANGER if hp <= HP_PER_SEGMENT else COL_TEXT
+
+
+func _hp_segment_count() -> int:
+	var hp_max: float = maxf(1.0, float(_rules.get("hp_max", 100)))
+	return maxi(1, int(round(hp_max / HP_PER_SEGMENT)))
+
+
+func _draw_hp_segments() -> void:
+	if _hp_segments == null:
+		return
+	var blocs: int = _hp_segment_count()
+	if blocs <= 1:
+		return
+	var large: float = _hp_segments.size.x
+	var haut: float = _hp_segments.size.y
+	# Une séparation SOMBRE, pas claire : elle doit se lire aussi bien sur le remplissage cyan
+	# que sur le fond noir de la portion vidée.
+	var separation := Color(0.0, 0.0, 0.0, 0.55)
+	for i in range(1, blocs):
+		var x: float = large * float(i) / float(blocs)
+		_hp_segments.draw_rect(Rect2(Vector2(x - 1.0, 0.0), Vector2(2.0, haut)), separation)
+
+
 func _build_center() -> void:
-	_timer_label = _label("—", 30, COL_TEXT, true)
+	_timer_label = _lisible(_label("—", 30, COL_TEXT, true), 3)
 	_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud.add_child(_timer_label)
 	_anchored(_timer_label, Control.PRESET_CENTER_TOP, Vector2(-80, 16), Vector2(160, 34))
 
-	_round_label = _label("", 13, COL_MUTED)
+	_round_label = _lisible(_label("", 13, COL_MUTED), 2)
 	_round_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud.add_child(_round_label)
 	_anchored(_round_label, Control.PRESET_CENTER_TOP, Vector2(-110, 52), Vector2(220, 18))
 
-	_score_label = _label("", 17, COL_GOLD, true)
+	_score_label = _lisible(_label("", 17, COL_GOLD, true), 2)
 	_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud.add_child(_score_label)
 	_anchored(_score_label, Control.PRESET_CENTER_TOP, Vector2(-110, 72), Vector2(220, 22))
@@ -2488,6 +2726,35 @@ func _build_center() -> void:
 	_banner.modulate.a = 0.0
 	_hud.add_child(_banner)
 	_anchored(_banner, Control.PRESET_CENTER, Vector2(-260, -190), Vector2(520, 46))
+
+	# La bannière d élimination + son filet. ⚠️ Le FILET est tout l habillage « tactique » qu on
+	# s autorise, et c est délibéré : la saveur militaire des jeux AAA tient à la géométrie, au type
+	# et à la retenue de palette. Les lignes de balayage, les boucles de glitch et l aberration
+	# chromatique sur des glyphes sont les marques d amateur — chacune dépense du contraste sur ce
+	# qui doit rester lisible.
+	# La bande de menace. ⛔ Elle vit HORS du réticule : une sonde en fenêtre masque tous les enfants
+	# du HUD SAUF le réticule pour relire la croix seule — un ornement placé dedans polluerait cette
+	# lecture-là au lieu de rester mesurable.
+	_threat_marks = Control.new()
+	_threat_marks.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_child(_threat_marks)
+	_anchored(_threat_marks, Control.PRESET_TOP_LEFT, Vector2.ZERO,
+		Vector2(THREAT_BAND_PX * 2.0, THREAT_H))
+	_threat_marks.draw.connect(_draw_threat)
+
+	# ⚠️ CONTOUR OBLIGATOIRE : c est LE défaut de `kill_banner.png`, où le texte blanc se perd sur
+	# le mur clair. Au centre de l écran, le fond est par définition imprévisible.
+	_kill_banner = _lisible(_label("", 28, COL_GOLD))
+	_kill_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_kill_banner.modulate.a = 0.0
+	_hud.add_child(_kill_banner)
+	_anchored(_kill_banner, Control.PRESET_CENTER, Vector2(-300, -138), Vector2(600, 36))
+	_kill_rule = ColorRect.new()
+	_kill_rule.color = COL_ACCENT
+	_kill_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_kill_rule.modulate.a = 0.0
+	_hud.add_child(_kill_rule)
+	_anchored(_kill_rule, Control.PRESET_CENTER, Vector2(-90, -104), Vector2(180, 1))
 
 	_waiting_label = _label(tr("TRENCH_WAITING_OPPONENT"), 20, COL_MUTED)
 	_waiting_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2526,35 +2793,89 @@ func _build_center() -> void:
 
 # Munitions bas-droite (« 06/15 », chiffres tabulaires) + arme courante — §6.
 func _build_ammo() -> void:
-	_ammo_label = _label("", 40, COL_TEXT, true)
+	# ⚠️ LA VALEUR COURANTE SEULE, en grand — le « /max » vit dans son propre nœud (§8.157). Une
+	# fraction « 06/15 » d un seul tenant oblige à LIRE ; deux tailles donnent un chiffre à SAISIR.
+	_ammo_label = _lisible(_label("", 46, COL_TEXT, true))
 	_ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_ammo_label)
-	_anchored(_ammo_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -84), Vector2(230, 46))
+	_anchored(_ammo_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -112), Vector2(155, 50))
 
-	_reload_label = _label("", 14, COL_GOLD)
+	# ⛔ Le maximum est posé BAS, aligné sur le pied du grand chiffre — c est la disposition des deux
+	# références. Aligné en haut il se lirait comme un exposant, donc comme une AUTRE grandeur.
+	_ammo_max = _lisible(_label("", 18, COL_MUTED, true), 2)
+	_hud.add_child(_ammo_max)
+	_anchored(_ammo_max, Control.PRESET_BOTTOM_RIGHT, Vector2(-100, -86), Vector2(70, 22))
+
+	# ── LA BARRE DE TRAITS (§8.155) — un trait par cartouche ───────────────────────────────────
+	# ⭐ C est le SECOND CANAL du meme fait, et c est la raison d etre du lot. Un nombre a deux
+	# chiffres dans un coin d ecran n est PAS lisible du coin de l oeil : la recherche sur la vision
+	# peripherique est nette — « lire plus d un chiffre isole est extremement difficile, voire
+	# impossible en pratique, hors de la zone regardee ». Le joueur devait donc faire une SACCADE,
+	# en plein duel, pour savoir s il lui restait des cartouches.
+	# Une rangee de traits se lit SANS etre regardee : c est une longueur, pas un texte.
+	_ammo_ticks = Control.new()
+	_ammo_ticks.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_child(_ammo_ticks)
+	_anchored(_ammo_ticks, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -62),
+		Vector2(230, AMMO_TICK_H))
+	_ammo_ticks.draw.connect(_draw_ammo_ticks)
+
+	_reload_label = _lisible(_label("", 14, COL_GOLD), 2)
 	_reload_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_reload_label)
-	_anchored(_reload_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -38), Vector2(230, 20))
+	_anchored(_reload_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -44), Vector2(230, 20))
 
-	_weapon_label = _label("", 19, COL_TEXT)
+	_weapon_label = _lisible(_label("", 19, COL_TEXT), 2)
 	_weapon_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_weapon_label)
-	_anchored(_weapon_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -112), Vector2(230, 24))
+	_anchored(_weapon_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -138), Vector2(230, 24))
 
-	_progress_label = _label("", 12, COL_MUTED)
+	_progress_label = _lisible(_label("", 12, COL_MUTED), 2)
 	_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_progress_label)
-	_anchored(_progress_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -134), Vector2(230, 18))
+	_anchored(_progress_label, Control.PRESET_BOTTOM_RIGHT, Vector2(-260, -160), Vector2(230, 18))
+
+
+# Un trait par cartouche du CHARGEUR : pleins a droite pour ce qui reste, eteints pour ce qui est
+# parti. ⛔ La rangee occupe TOUJOURS la meme largeur quel que soit le chargeur — c est le trait qui
+# s epaissit, pas la barre qui s allonge. Une rangee de longueur variable dirait « cette arme a un
+# gros chargeur », une comparaison entre ARMES, la ou on veut l etat de l arme EN MAIN.
+func _draw_ammo_ticks() -> void:
+	if _ammo_ticks == null or _ammo_mag <= 0:
+		return
+	var large: float = _ammo_ticks.size.x
+	var pas: float = large / float(_ammo_mag)
+	var epaisseur: float = maxf(1.0, pas - AMMO_TICK_GAP)
+	var plein := _ammo_color()
+	# ⚠️ Les traits ETEINTS restent dessines, tres sombres. Les effacer ferait varier la LONGUEUR de
+	# la rangee avec les munitions : le joueur lirait deux informations la ou il n y en a qu une, et
+	# un chargeur vide deviendrait indistinguable d une barre absente.
+	var vide := Color(COL_MUTED.r, COL_MUTED.g, COL_MUTED.b, 0.22)
+	for i in _ammo_mag:
+		var x: float = large - float(i + 1) * pas
+		_ammo_ticks.draw_rect(Rect2(Vector2(x, 0.0), Vector2(epaisseur, AMMO_TICK_H)),
+			plein if i < _ammo_now else vide)
+
+
+# La couleur du bloc munitions, en TROIS paliers la ou il n y en avait que deux.
+# 🩸 Avant ce lot : blanc, ou rouge quand le chargeur est VIDE. Il n existait AUCUN avertissement —
+# on passait de « tout va bien » a « clic » sans rien entre les deux.
+func _ammo_color() -> Color:
+	if _ammo_now <= 0 or _ammo_reloading:
+		return COL_DANGER
+	if _ammo_now <= AMMO_LOW_ROUNDS:
+		return COL_GOLD
+	return COL_TEXT
 
 
 # Cases d'objets bas-centre : 1 GRENADE (stock) · 2 BANDAGE (état) — §6.
 func _build_item_slots() -> void:
-	_slot_grenade = _label("", 15, COL_GOLD)
+	_slot_grenade = _lisible(_label("", 15, COL_GOLD), 2)
 	_slot_grenade.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud.add_child(_slot_grenade)
 	_anchored(_slot_grenade, Control.PRESET_CENTER_BOTTOM, Vector2(-190, -52), Vector2(180, 22))
 
-	_slot_bandage = _label("", 15, COL_MUTED)
+	_slot_bandage = _lisible(_label("", 15, COL_MUTED), 2)
 	_slot_bandage.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud.add_child(_slot_bandage)
 	_anchored(_slot_bandage, Control.PRESET_CENTER_BOTTOM, Vector2(10, -52), Vector2(180, 22))
@@ -2593,6 +2914,12 @@ func _place_reticle() -> void:
 	var aim_screen: Vector2 = _world.project_aim(_aim_yaw, _aim_pitch)
 	_reticle.position = aim_screen - _reticle.size * 0.5 + _shake_px
 	_reticle.queue_redraw()
+	if _threat_marks != null:
+		# Ancrée sur le RÉTICULE, pas sur l écran : c est la convention du genre — « placer
+		# l information juste autour du centre, là où le joueur regarde déjà en permanence ».
+		var coin := Vector2(THREAT_BAND_PX, -THREAT_Y + THREAT_H)
+		_threat_marks.position = aim_screen + _shake_px - coin
+		_threat_marks.queue_redraw()
 
 
 # =================================================================================================
@@ -3054,16 +3381,34 @@ func _refresh_hud(latest: Dictionary, me: Dictionary, they: Dictionary,
 	var hp_max := float(_rules.get("hp_max", 100))
 	var my_hp := float(me.get("hp", 0))
 	var their_hp := float(they.get("hp", 0))
-	_my_hp_fill.size.x = 238.0 * clampf(my_hp / hp_max, 0.0, 1.0)
-	_their_hp_fill.size.x = 178.0 * clampf(their_hp / hp_max, 0.0, 1.0)
+	# Les largeurs viennent des CONSTANTES de cadre, moins le liseré d un pixel de chaque côté.
+	_my_hp_fill.size.x = (HP_BAR.x - 2.0) * clampf(my_hp / hp_max, 0.0, 1.0)
+	_their_hp_fill.size.x = (HP_BAR_THEIRS.x - 2.0) * clampf(their_hp / hp_max, 0.0, 1.0)
+	if _hp_segments != null:
+		_hp_segments.queue_redraw()
 	_my_hp_label.text = str(int(my_hp))
+	# ⛔ Le NOMBRE bascule, la barre NON : la barre adverse est déjà rouge, et deux barres rouges
+	# à 50 px l une de l autre se confondraient à l instant précis où il ne faut pas se tromper.
+	_my_hp_label.add_theme_color_override("font_color", _hp_color(my_hp))
+	_my_hp_max.text = "/%d" % int(hp_max)
 
 	# --- Munitions « 06/15 » ---
 	var mag := _mag_size(str(me.get("weapon", "vipere")))
-	_ammo_label.text = "%02d/%02d" % [int(me.get("ammo", 0)), mag]
+	_ammo_label.text = "%02d" % int(me.get("ammo", 0))
+	_ammo_max.text = "/%02d" % mag
 	var reloading := int(me.get("reload_until_tick", 0)) > int(render_tick)
-	_ammo_label.add_theme_color_override("font_color",
-		COL_DANGER if (int(me.get("ammo", 0)) <= 0 or reloading) else COL_TEXT)
+	# ⚠️ UNE SEULE SOURCE POUR LA COULEUR : le compteur, les traits et (plus bas) le réticule la
+	# lisent tous dans `_ammo_color()`. Recalculer le palier à chaque site, c est se garantir que
+	# deux d entre eux finiront par ne plus dire la même chose.
+	_ammo_now = int(me.get("ammo", 0))
+	_ammo_mag = mag
+	_ammo_reloading = reloading
+	_ammo_label.add_theme_color_override("font_color", _ammo_color())
+	# ⚠️ Le « /max » suit la MÊME alerte, en plus sourd : deux couleurs qui divergeraient sur
+	# le même fait donneraient deux messages contradictoires au même endroit.
+	_ammo_max.add_theme_color_override("font_color", _ammo_color() * Color(1, 1, 1, 0.55))
+	if _ammo_ticks != null:
+		_ammo_ticks.queue_redraw()
 	_reload_label.text = tr("TRENCH_RELOADING") if reloading else ""
 	# Le VIEWMODEL PEINT (§8.138) est une VUE : il ne relit pas l'état, on le lui pousse.
 	# (§8.151 : plus de valeur de recul à pousser — le kick vit dans ses ressorts, `notify_fire`.)
@@ -3227,6 +3572,153 @@ func _escalation_text(hits: int) -> String:
 	if hits < choice:
 		return tr("TRENCH_NEXT_WEAPON") % [hits, choice]
 	return tr("TRENCH_ARSENAL_MAX")
+
+
+# ⛔ LE SON EST LE SEUL CANAL QUI MONTE EN GRADE. C est la mécanique de retenue la moins chère du
+# genre, et la plus éprouvée : Halo Infinite donne un VISUEL à toutes ses médailles et une VOIX
+# aux seules rares ; Valorant fait varier le son au nombre de kills et non la bannière. Le visuel
+# informe, l audio célèbre — et seul l audio a le droit d escalader.
+# ARMER LE REPÈRE. ⛔ Le relèvement est calculé depuis l ÉVÉNEMENT SERVEUR qui a appliqué les
+# dégâts — jamais depuis une supposition du client sur qui a tiré. C est la règle qui empêche la
+# flèche et la perte de PV de se contredire sous latence : les deux viennent du même fait.
+# ⚠️ ET ON NE PROJETTE PAS À L ÉCRAN pour trouver la direction. La projection écran S INVERSE
+# derrière la caméra — c est le défaut classique de ces indicateurs, celui qui fait pointer vers
+# l avant un tir venu de l arrière. On compare des RELÈVEMENTS, en degrés monde.
+func _arm_threat(shooter_slot: int, kind: String) -> void:
+	# ⛔ UNE GRENADE N ARME RIEN. Le souffle vient de son POINT DE CHUTE, pas de la main qui l a
+	# lancée : pointer vers le lanceur désignerait un endroit d où rien n est parti. Le décalque au
+	# sol dit déjà d où vient le souffle, et il le dit mieux.
+	if kind == "grenade":
+		return
+	if _player_of(_latest(), shooter_slot).is_empty():
+		return
+	# ⚠️ ON N ENREGISTRE PLUS DE RELÈVEMENT ICI — seulement la durée. Le §8.155 figeait l angle à cet
+	# instant, et c est ce qui a produit le défaut vu par Hakim. Le dessin interroge
+	# `_threat_bearing_now()` à chaque image ; il n y a plus qu un seul endroit qui sait où viser.
+	# 🩸 Effet de bord voulu : le plantage du §8.155.1 (`int(null)` sur une `pos` rédigée) devient
+	# STRUCTURELLEMENT impossible — plus aucune position de l état ne transite par ici.
+	_threat_left = maxf(_threat_left, THREAT_HOLD_S + THREAT_FADE_S)
+
+
+# Un CHEVRON, pas un trait : la consigne d accessibilité est explicite — toute information de jeu
+# portée par la couleur doit l être AUSSI par au moins un autre signifiant (forme, motif, icône).
+# Battlefield 2042 livre d ailleurs son « indicateur à forme variable » activé PAR DÉFAUT.
+# ⛔ LA POSE DU REPÈRE EST RENDUE, PAS DESSINÉE DIRECTEMENT — même discipline que la liste de
+# peinture du réticule. Une sonde qui recalculerait le placement de son côté ne testerait que sa
+# propre copie de la formule ; ici elle lit EXACTEMENT ce que le pinceau lit.
+# Rend `{}` quand il n y a rien à montrer.
+# LE RELÈVEMENT, RECALCULÉ À CHAQUE IMAGE — source UNIQUE, lue par le dessin ET par la sonde.
+# ⚠️ Il se déduit de `_last_seen_enemy_pos`, c est-à-dire de la position où le sprite adverse est
+# DESSINÉ : le repère ne peut donc jamais désigner un endroit où le joueur ne voit personne.
+func _threat_bearing_now() -> float:
+	var oeil: Vector3 = Geo.eye_position(_pred_pos, _pred_stance)
+	return Geo.yaw_to(oeil, Vector3(_enemy_world_x(), Geo.EYE_UP, Geo.far_soldier_z()))
+
+
+# X monde de l adversaire, en position FRACTIONNAIRE : `Geo.position_x` n accepte qu un entier, et
+# arrondir ferait sauter le repère d un cran à l autre pendant que la silhouette, elle, glisse.
+func _enemy_world_x() -> float:
+	var lane: float = clampf(_last_seen_enemy_pos, 0.0, float(Geo.POSITIONS - 1))
+	var bas := int(floor(lane))
+	var haut := mini(bas + 1, Geo.POSITIONS - 1)
+	return lerpf(Geo.position_x(bas), Geo.position_x(haut), lane - float(bas))
+
+
+# LE TRAQUEUR : trois secondes sans le voir, et on rappelle où il était — dix secondes durant.
+func _step_threat(delta: float) -> void:
+	# ⚠️ Hors de la manche en cours, il n y a rien à traquer : un repère qui s allumerait sur l écran
+	# de fin désignerait une menace qui n existe plus.
+	if str(_latest().get("phase", "")) != "playing":
+		_enemy_hidden_s = 0.0
+		return
+	if _enemy_visible:
+		# Il se montre : le compteur repart de zéro, donc PLUS AUCUN rappel n est émis — c est la
+		# seule chose qui éteint le traqueur, et il finit alors sa vie normalement.
+		_enemy_hidden_s = 0.0
+		return
+	_enemy_hidden_s += delta
+	# ╔═ LE RAPPEL EST PÉRIODIQUE, ET C EST UN CHOIX DE JEU ══════════════════════════════════════════╗
+	# ║ Arbitrage de Hakim : « on fait réactiver ça après 5 s tant qu il reste caché ». Le but annoncé ║
+	# ║ est de NE PAS LAISSER ABUSER DE LA CACHETTE — un campeur reste donc désigné tant qu il campe.  ║
+	# ║ ⚠️ CONSÉQUENCE ASSUMÉE : la période (5 s) étant plus courte que la vie du repère (10 s), le    ║
+	# ║ traqueur reste allumé EN CONTINU sur un joueur qui ne se montre jamais. Ce n est PAS la panne  ║
+	# ║ « il ne s éteint plus » — c est la mécanique demandée. Ce qui l éteint, c est de SE MONTRER :  ║
+	# ║ dès qu il se révèle, plus aucun rappel n est émis et le repère finit sa vie.                   ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	if _enemy_hidden_s >= THREAT_HIDDEN_ARM_S:
+		# ⛔ On RETRANCHE la période au lieu de remettre à zéro : un `= 0.0` perdrait le temps déjà
+		# écoulé au-delà du seuil et ferait dériver la cadence des rappels image après image.
+		_enemy_hidden_s -= THREAT_HIDDEN_ARM_S
+		_threat_left = maxf(_threat_left, THREAT_HIDDEN_HOLD_S)
+
+
+func _threat_paint() -> Dictionary:
+	if _threat_left <= 0.0 or _reduced_motion:
+		return {}
+	# L écart de relèvement, RECALCULÉ à chaque image : c est ce qui fait suivre le repère quand on
+	# tourne la tête, jusqu à l amener au centre quand on fait face au tireur.
+	var ecart: float = _threat_bearing_now() - _aim_yaw
+	var portee: float = maxf(1.0, Geo.aim_yaw_limit_deg())
+	var t: float = clampf(ecart / portee, -1.0, 1.0)
+	# ⚠️ `SCREEN_TO_WORLD_X` : le +X du registre sort à GAUCHE de l écran. Sans ce signe, le repère
+	# pointerait exactement du mauvais côté — et rien dans l image ne dirait que c est faux.
+	var x: float = THREAT_BAND_PX + t * SCREEN_TO_WORLD_X * THREAT_BAND_PX
+	var reste: float = clampf(_threat_left / THREAT_FADE_S, 0.0, 1.0)
+	# L atténuation vers l avant (Halo 3) : de face, le repère reste VISIBLE mais discret. Le masquer
+	# « laisserait seulement entendre que la menace a disparu » — ils l ont essayé, puis rejeté.
+	var avant: float = 1.0 if absf(ecart) > THREAT_FORWARD_DEG else THREAT_FORWARD_ALPHA
+	return {"x": x, "alpha": reste * avant, "ecart": ecart}
+
+
+# Un CHEVRON, pas un trait : la consigne d accessibilité est explicite — toute information de jeu
+# portée par la couleur doit l être AUSSI par au moins un autre signifiant (forme, motif, icône).
+# Battlefield 2042 livre d ailleurs son « indicateur à forme variable » activé PAR DÉFAUT.
+func _draw_threat() -> void:
+	if _threat_marks == null:
+		return
+	var pose := _threat_paint()
+	if pose.is_empty():
+		return
+	var c := Color(COL_DANGER.r, COL_DANGER.g, COL_DANGER.b, float(pose["alpha"]))
+	var pointe := Vector2(float(pose["x"]), THREAT_H)
+	_threat_marks.draw_colored_polygon(PackedVector2Array([
+		pointe, pointe + Vector2(-THREAT_W * 0.5, -THREAT_H),
+		pointe + Vector2(THREAT_W * 0.5, -THREAT_H)]), c)
+
+
+func _show_kill_banner(headshot: bool) -> void:
+	if _kill_banner == null:
+		return
+	_kill_banner.text = tr("TRENCH_ELIMINATED_HEAD") if headshot else tr("TRENCH_ELIMINATED")
+	# ╔═ LE HEAD SHOT SE VOIT, PAS SEULEMENT SE LIT ══════════════════════════════════════════════════╗
+	# ║ Le texte disait déjà « · TIR À LA TÊTE », mais un mot de plus dans une ligne qui dure 1 s se  ║
+	# ║ lit mal. Le filet passe donc à l OR : un seul bit de couleur, pris dans la charte, qui dit    ║
+	# ║ « celle-là était spéciale » sans rien ajouter à lire.                                          ║
+	# ║ ⛔ Et on s arrête là. Halo Infinite donne un visuel à TOUTES ses médailles et une VOIX aux     ║
+	# ║ seules rares : le visuel informe, l audio célèbre. Le son du head shot fait déjà ce travail.  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	_kill_rule.color = COL_GOLD if headshot else COL_ACCENT
+	if _kill_tween != null and _kill_tween.is_valid():
+		_kill_tween.kill()
+	_kill_banner.modulate.a = 1.0
+	_kill_rule.modulate.a = 1.0
+	# Le filet repart d une LARGEUR NULLE à chaque élimination : sans cette remise à zéro, la
+	# deuxième bannière de la partie s ouvrirait depuis un filet déjà déployé — donc sans mouvement.
+	_kill_rule.offset_left = 0.0
+	_kill_rule.offset_right = 0.0
+	_kill_tween = create_tween()
+	_kill_tween.tween_property(_kill_rule, "offset_left", -KILL_RULE_HALF,
+		KILL_SWEEP_S).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_kill_tween.set_parallel(true)
+	_kill_tween.tween_property(_kill_rule, "offset_right", KILL_RULE_HALF,
+		KILL_SWEEP_S).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_kill_tween.set_parallel(false)
+	_kill_tween.tween_interval(KILL_HOLD_S)
+	# ⚠️ Le filet suit EXACTEMENT le texte. Un ornement qui survivrait au texte dessinerait une
+	# ligne cyan flottante au milieu de l écran — le genre de résidu qu on ne voit qu en capture.
+	_kill_tween.set_parallel(true)
+	_kill_tween.tween_property(_kill_banner, "modulate:a", 0.0, KILL_FADE_S)
+	_kill_tween.tween_property(_kill_rule, "modulate:a", 0.0, KILL_FADE_S)
 
 
 func _show_banner(text: String, color: Color) -> void:

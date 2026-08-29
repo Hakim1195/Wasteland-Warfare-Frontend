@@ -45,6 +45,7 @@ const TOLERANCE := 0.05
 var _duel: Control = null
 var _out := ""
 var _fails: Array = []
+var _dernier_mesure := 0.0   # retenu pour la contre-epreuve
 
 
 # LE RENDU EST-IL DISPONIBLE ? On interroge l'AFFICHAGE, jamais le résultat d'un `get_image()`.
@@ -74,6 +75,16 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_duel.set_process(false)
 	_duel._hud.visible = false
+	# 🩸 LE VIEWMODEL POLLUAIT LA MESURE, ET C EST LUI QUI FAISAIT LE ROUGE.
+	# Cette sonde mesure par DIFFERENCE de deux captures : elle suppose donc, sans le dire, que
+	# RIEN d autre ne bouge entre les deux. L arme du joueur, elle, respire en permanence — sa
+	# derive lente (2,2 Hz) ne s arrete jamais. Ses pixels entraient dans la boite de difference
+	# et poussaient `x_max` jusqu au bord droit de l ecran : le decalque etait mesure a 961 px
+	# pour 519 theoriques, et a 1650 px depuis la position de bord.
+	# ⚠️ La geometrie, elle, etait JUSTE : enveloppe monde mesuree a 2,5000 m pour un rayon
+	# serveur de 2,5. On accusait le jeu d un defaut qui etait dans la sonde.
+	_duel._viewmodel.visible = false
+	_duel._grade.visible = false
 	_duel._ambient.set_reduced_motion(true)
 	_duel._world.set_reduced_motion(true)
 	_duel._world.set_pose(2, "up", true)
@@ -85,6 +96,8 @@ func _ready() -> void:
 	await _measure_decal(0.0, "decalque_centre")
 	await _measure_decal(Geo.position_x(4), "decalque_bord")
 	await _shoot_explosion()
+
+	await _contre_epreuve()
 
 	print("\n%s" % ("TOUT VERT" if _fails.is_empty() else "ECHEC : " + ", ".join(_fails)))
 	print("[SONDE] %s" % _out)
@@ -109,6 +122,15 @@ func _capture() -> Image:
 # LA MESURE : largeur RENDUE du cercle, en pixels, contre sa largeur PROJETÉE théorique.
 func _measure_decal(at_x: float, tag: String) -> void:
 	var world = _duel._world
+	# ⛔ ON MESURE L ANNEAU, PAS LA COLONNE. Le §C.1 porte sur le CERCLE : « ce qui est dans le
+	# cercle prend des degats ». La colonne (§8.141) est un repere de PROFONDEUR au meme rayon,
+	# mais elle monte a 1,55 m — donc plus pres de la hauteur d oeil, donc MOINS raccourcie, donc
+	# plus large a l ecran (+7 % mesures). La comparer a une projection au SOL serait comparer
+	# deux choses differentes et appeler l ecart un defaut.
+	var colonne := world._aim_decal.get_node_or_null("Column") as MeshInstance3D
+	var colonne_visible: bool = colonne != null and colonne.visible
+	if colonne != null:
+		colonne.visible = false
 	world.show_grenade_aim(true, at_x, Geo.far_soldier_z(), true)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -123,11 +145,14 @@ func _measure_decal(at_x: float, tag: String) -> void:
 		return
 	with_decal.save_png("%s/%s.png" % [_out, tag])
 
+	if colonne != null:
+		colonne.visible = colonne_visible
 	var box := _diff_box(with_decal, without)
 	if int(box["count"]) == 0:
 		_ok("%s : le cercle est RENDU" % tag, false, "aucun pixel ne change")
 		return
 	var measured: float = float(int(box["x_max"]) - int(box["x_min"]) + 1)
+	_dernier_mesure = measured
 
 	# LA THÉORIE : les deux bords du cercle, projetés par la caméra RÉELLE (elle porte le FOV,
 	# l'aspect et le suivi de visée — les recopier ici recréerait la divergence qu'on traque).
@@ -219,3 +244,63 @@ func _diff_box(a: Image, b: Image) -> Dictionary:
 			y_min = mini(y_min, y); y_max = maxi(y_max, y)
 			count += 1
 	return {"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max, "count": count}
+
+# =================================================================================================
+# CONTRE-ÉPREUVE — un test vert ne vaut que s il sait devenir ROUGE
+# =================================================================================================
+# 🩸 CETTE SONDE N EN AVAIT AUCUNE, et elle a passé deux lots au ROUGE sans que personne le voie :
+# elle ne tourne qu en FENÊTRE (sous `--headless` elle s abstient, à raison), et la suite de
+# régression tourne en headless. Elle sortait donc du lot par abstention, à chaque passage.
+# ⚠️ Un « non applicable » systématique est un faux vert lent. La contre-épreuve ne corrige pas ça
+# — c est au lanceur de la passer en fenêtre — mais elle garantit qu au moment où on la regarde,
+# le vert veut dire quelque chose.
+func _contre_epreuve() -> void:
+	print("\n  --- contre-epreuve (chaque ligne doit dire OUI) ---")
+	var world = _duel._world
+	var attrape := 0
+	var attendu := 2
+
+	# SABOTAGE 1 : le décalque grossit de moitié sans que le rayon serveur ne bouge.
+	var colonne := world._aim_decal.get_node_or_null("Column") as MeshInstance3D
+	if colonne != null:
+		colonne.visible = false
+	world.set_grenade_radius(SERVER_RADIUS * 1.5)
+	world.show_grenade_aim(true, 0.0, Geo.far_soldier_z(), true)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var gros := _capture()
+	world.show_grenade_aim(false)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var rien := _capture()
+	world.set_grenade_radius(SERVER_RADIUS)
+	if colonne != null:
+		colonne.visible = true
+	if gros != null and rien != null:
+		var b := _diff_box(gros, rien)
+		var large: float = float(int(b["x_max"]) - int(b["x_min"]) + 1)
+		if large > _dernier_mesure * (1.0 + TOLERANCE):
+			attrape += 1
+			print("  OUI  un cercle 1,5x trop grand serait vu (%.0f px contre %.0f)"
+				% [large, _dernier_mesure])
+
+	# SABOTAGE 2 : le viewmodel redevient visible — la pollution qui a fait le rouge de deux lots.
+	# ⚠️ Celui-ci ne casse pas le JEU, il casse la MESURE. Il est là parce que le défaut réel était
+	# exactement celui-là, et qu il doit rester impossible d y revenir sans le voir.
+	_duel._viewmodel.visible = true
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var a1 := _capture()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var a2 := _capture()
+	_duel._viewmodel.visible = false
+	if a1 != null and a2 != null:
+		var bb := _diff_box(a1, a2)
+		if int(bb["count"]) > 0:
+			attrape += 1
+			print("  OUI  le viewmodel BOUGE entre deux captures (%d pixels) : l isoler etait "
+				% int(bb["count"]) + "necessaire, pas prudent")
+
+	_ok("la contre-epreuve voit les %d sabotages" % attendu, attrape == attendu,
+		"%d / %d" % [attrape, attendu])

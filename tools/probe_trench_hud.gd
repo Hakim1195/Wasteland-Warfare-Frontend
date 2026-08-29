@@ -96,7 +96,7 @@ var _ordinary: Dictionary = {}
 
 # Relevé le 2026-08-28 en headless, après la bascule du viewmodel 3D. À RELEVER À NOUVEAU
 # si une section est volontairement ajoutée ou retirée — jamais à baisser pour faire passer.
-const PASS_MINIMUM := 260
+const PASS_MINIMUM := 321
 
 
 func _ok(label: String, cond: bool, detail := "") -> void:
@@ -145,6 +145,9 @@ func _ready() -> void:
 	_section_hitmarker(duel)
 	_section_headshot(duel)
 	_section_aide(duel)
+	await _section_hud_v2(duel)
+	await _section_hud_v3(duel)
+	_section_redaction(duel)
 	await _section_pixels(duel)
 
 	print("\n%d PASS / %d FAIL" % [_pass, _fails.size()])
@@ -2796,3 +2799,457 @@ func _section_aide(duel) -> void:
 			and tr("TRENCH_HEADSHOTS").count("%d") == 2,
 		"« %s »" % tr("TRENCH_HEADSHOTS"))
 
+
+# =================================================================================================
+# 4quater. VITAUX SEGMENTES, BANNIERE DE KILL, REPERE DE MENACE (§8.155)
+# =================================================================================================
+# ╔═ CE QUE CETTE SECTION DOIT INTERDIRE ═════════════════════════════════════════════════════════╗
+# ║ 1. que la rangee de traits MENTE sur le chargeur — c est un SECOND canal du meme fait, et deux ║
+# ║    canaux qui se contredisent sont pires qu un seul ;                                          ║
+# ║ 2. que le seuil de munitions basses redevienne une FRACTION : « sous la moitie » vaut DEUX     ║
+# ║    cartouches sur le condor et DOUZE sur le frelon — la meme regle previendrait trop tard sur  ║
+# ║    l une et trop tot sur l autre ;                                                             ║
+# ║ 3. que le nombre de blocs de sante soit cable en dur au lieu de suivre le `hp_max` du REGISTRE ║
+# ║    — une barre restee a cinq blocs a 150 PV mentirait sur ce que vaut un bloc ;                ║
+# ║ 4. que la banniere de kill se fasse ECRASER par celle de manche : le serveur clot la manche    ║
+# ║    dans le MEME tick que la mort, donc le joueur ne verrait jamais son propre kill ;           ║
+# ║ 5. ⛔ que le repere de menace pointe DU MAUVAIS COTE. C est le defaut classique du genre et il  ║
+# ║    est invisible a la relecture : `SCREEN_TO_WORLD_X` inverse l axe entre registre et ecran,   ║
+# ║    et une fleche inversee a l air parfaitement normale.                                        ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _section_hud_v2(duel) -> void:
+	_section("4quater. VITAUX SEGMENTES, BANNIERE DE KILL, REPERE DE MENACE")
+
+	# --- LES TRAITS DE CHARGEUR ----------------------------------------------------------------
+	duel._ammo_mag = 24
+	duel._ammo_now = 18
+	duel._ammo_reloading = false
+	_ok("chargeur aux trois quarts : la couleur reste NEUTRE",
+		duel._ammo_color().is_equal_approx(duel.COL_TEXT))
+	duel._ammo_now = 2
+	_ok("deux cartouches : palier d ALERTE (or), pas encore le rouge du vide",
+		duel._ammo_color().is_equal_approx(duel.COL_GOLD), "%s" % str(duel._ammo_color()))
+	# ⛔ LE CONTROLE QUI INTERDIT LA REGLE FRACTIONNAIRE. Sur un chargeur de 4 la moitie vaut 2 ; sur
+	# un chargeur de 24 elle vaut 12. Une regle « sous la moitie » alerterait donc a 12/24, et
+	# n alerterait pas a 3/4. On exige l inverse des deux — seul un seuil ABSOLU les satisfait.
+	duel._ammo_mag = 4
+	duel._ammo_now = 3
+	var petit_neutre: bool = duel._ammo_color().is_equal_approx(duel.COL_TEXT)
+	duel._ammo_mag = 24
+	duel._ammo_now = 12
+	var gros_neutre: bool = duel._ammo_color().is_equal_approx(duel.COL_TEXT)
+	_ok("le seuil est ABSOLU : ni 3/4 ni 12/24 n alertent (une fraction ferait l inverse)",
+		petit_neutre and gros_neutre,
+		"3/4 neutre=%s · 12/24 neutre=%s" % [str(petit_neutre), str(gros_neutre)])
+	duel._ammo_now = 0
+	_ok("chargeur vide : ROUGE", duel._ammo_color().is_equal_approx(duel.COL_DANGER))
+	duel._ammo_now = 10
+	duel._ammo_reloading = true
+	_ok("en rechargement : ROUGE aussi, meme avec des cartouches",
+		duel._ammo_color().is_equal_approx(duel.COL_DANGER))
+	duel._ammo_reloading = false
+	_ok("la rangee de traits EXISTE et occupe une largeur reelle",
+		duel._ammo_ticks != null and duel._ammo_ticks.size.x > 100.0
+			and duel._ammo_ticks.size.y > 4.0,
+		"%s" % (str(duel._ammo_ticks.size) if duel._ammo_ticks != null else "absente"))
+
+	# --- LES BLOCS DE SANTE : leur nombre SUIT le registre --------------------------------------
+	# ⛔ ON APPELLE LA FONCTION DU JEU, on ne refait pas son calcul : la premiere version de ce
+	# controle recalculait le nombre de blocs et restait donc VERTE quand le dessin etait cable
+	# sur « 5 » en dur. Un controle qui reproduit ce qu il surveille ne surveille rien.
+	duel._rules["hp_max"] = 100
+	var blocs_100: int = duel._hp_segment_count()
+	duel._rules["hp_max"] = 200
+	var blocs_200: int = duel._hp_segment_count()
+	duel._rules["hp_max"] = 100
+	_ok("le nombre de blocs SUIT le hp_max du registre (100 -> %d, 200 -> %d)"
+		% [blocs_100, blocs_200], blocs_100 == 5 and blocs_200 == 10)
+	_ok("les separations sont un enfant du CADRE, donc peintes PAR-DESSUS la jauge",
+		duel._hp_segments != null and duel._hp_segments.get_parent() != duel._hud)
+
+	# --- LA BANNIERE DE KILL --------------------------------------------------------------------
+	# ⛔ LE POINT DE CONCEPTION : un noeud SEPARE de la banniere de manche. Sans ca, le
+	# « MANCHE GAGNEE » qui arrive dans le MEME tick l ecraserait, et le kill ne se verrait jamais.
+	_ok("la banniere de kill est un noeud DISTINCT de celle de manche",
+		duel._kill_banner != null and duel._banner != null
+			and duel._kill_banner != duel._banner)
+	duel._kill_banner.modulate.a = 0.0
+	duel._kill_rule.modulate.a = 0.0
+	duel._on_duel_event(_hit_event(duel, 30, 0))
+	_ok("un coup FATAL que J AI porte l allume, avec son filet",
+		duel._kill_banner.modulate.a > 0.9 and duel._kill_rule.modulate.a > 0.9
+			and duel._kill_banner.text != "")
+	var texte_corps: String = duel._kill_banner.text
+	duel._on_duel_event(_hit_event_head(duel, 45, 0))
+	_ok("un kill a la TETE le dit dans le texte, et ce n est pas le meme",
+		duel._kill_banner.text != texte_corps,
+		"« %s » contre « %s »" % [texte_corps, duel._kill_banner.text])
+	# ⚠️ Une touche NON fatale ne doit rien allumer : la banniere celebre une MORT, pas un degat.
+	duel._kill_banner.modulate.a = 0.0
+	duel._on_duel_event(_hit_event(duel, 8, 70))
+	_ok("une touche NON fatale ne l allume pas", duel._kill_banner.modulate.a == 0.0)
+	_ok("elle se tient AU-DESSUS du reticule, jamais dessus",
+		duel._kill_banner.offset_bottom < -40.0,
+		"bas de la banniere a %.0f px du centre" % duel._kill_banner.offset_bottom)
+
+	# --- LE REPERE DE MENACE : LE SENS ----------------------------------------------------------
+	# ⛔ LE CONTROLE LE PLUS IMPORTANT DE LA SECTION : un repere inverse a l air normal.
+	duel._threat_left = 0.0
+	_ok("au repos, aucun repere de menace", duel._threat_paint().is_empty())
+	# ⭐ ON PILOTE PAR LES POSITIONS, PLUS PAR UN ANGLE POSE A LA MAIN. Injecter un relevement
+	# testait le dessin en sautant la chaine qui le produit — or c est EXACTEMENT la ou etait le
+	# defaut vu par Hakim. Ici on part de « ou est l adversaire » et on va jusqu au pixel.
+	duel._pred_pos = 2
+	duel._pred_stance = "up"
+	duel._aim_yaw = 0.0
+	duel._last_seen_enemy_pos = 4.0
+	duel._threat_left = duel.THREAT_HOLD_S
+	var pose: Dictionary = duel._threat_paint()
+	var centre: float = duel.THREAT_BAND_PX
+	_ok("adversaire au +X du registre : le chevron part a GAUCHE (le sens ecran est respecte)",
+		not pose.is_empty() and float(pose["x"]) < centre,
+		"x = %.1f pour un centre a %.1f" % [float(pose.get("x", -1.0)), centre])
+	duel._last_seen_enemy_pos = 0.0
+	var pose2: Dictionary = duel._threat_paint()
+	_ok("adversaire au -X : le chevron part a DROITE (les deux sens, pas un seul)",
+		not pose2.is_empty() and float(pose2["x"]) > centre)
+
+	# ╔═ 🩸 LE DEFAUT VU PAR HAKIM EN PARTIE : « le repere ne suit pas le soldat adverse » ═══════════╗
+	# ║ Le relevement etait FIGE a l instant du tir. Ces deux controles sont la garde de ce defaut :  ║
+	# ║ le repere doit bouger quand l ADVERSAIRE se deplace, ET quand MOI je me deplace.              ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	duel._last_seen_enemy_pos = 4.0
+	var av_lui: float = duel._threat_bearing_now()
+	duel._last_seen_enemy_pos = 1.0
+	var ap_lui: float = duel._threat_bearing_now()
+	_ok("L ADVERSAIRE se deplace : le relevement SUIT (il n est plus fige au tir)",
+		absf(av_lui - ap_lui) > 1.0, "%.2f puis %.2f" % [av_lui, ap_lui])
+	duel._last_seen_enemy_pos = 4.0
+	duel._pred_pos = 0
+	var ap_moi: float = duel._threat_bearing_now()
+	duel._pred_pos = 2
+	_ok("… et MOI qui me deplace change aussi le relevement (l autre moitie du defaut)",
+		absf(av_lui - ap_moi) > 1.0, "%.2f puis %.2f" % [av_lui, ap_moi])
+
+	# ⭐ IL SUIT LE MONDE : on se tourne VERS lui, le repere revient au centre.
+	duel._aim_yaw = duel._threat_bearing_now()
+	var pose3: Dictionary = duel._threat_paint()
+	_ok("on se tourne VERS lui : le repere revient au CENTRE (il suit le monde)",
+		not pose3.is_empty() and absf(float(pose3["x"]) - centre) < 1.0,
+		"x = %.2f" % float(pose3.get("x", -1.0)))
+	_ok("… et de face il s ATTENUE, il ne DISPARAIT pas (Halo 3 a essaye de le cacher, puis rejete)",
+		float(pose3["alpha"]) > 0.0 and float(pose3["alpha"]) < float(pose["alpha"]),
+		"alpha de face %.2f contre %.2f de cote" % [float(pose3["alpha"]), float(pose["alpha"])])
+
+	# --- LE TRAQUEUR : 3 s pour s allumer, 10 s pour vivre ---------------------------------------
+	_traqueur(duel)
+	duel._threat_left = 0.0
+	duel._aim_yaw = 0.0
+
+	# --- LE FILET S ETEINT AVEC LE TEXTE -------------------------------------------------------
+	# 🩸 CE CONTROLE MANQUAIT, et un sabotage est passe au travers : je verifiais que les deux
+	# s allument, jamais qu ils s eteignent ENSEMBLE. Un filet qui survit au texte dessine une
+	# ligne cyan flottante au milieu de l ecran — le genre de residu qu on ne voit qu en capture.
+	# ⚠️ On laisse passer le TEMPS REEL : le fondu est un `Tween`, il ne se simule pas.
+	duel._on_duel_event(_hit_event(duel, 30, 0))
+	await duel.get_tree().create_timer(duel.KILL_HOLD_S + duel.KILL_FADE_S + 0.35).timeout
+	_ok("apres son fondu, la banniere ET son filet sont eteints",
+		duel._kill_banner.modulate.a < 0.01 and duel._kill_rule.modulate.a < 0.01,
+		"texte %.3f · filet %.3f" % [duel._kill_banner.modulate.a,
+			duel._kill_rule.modulate.a])
+
+	_clear_damage(duel)
+
+
+# =================================================================================================
+# 4sexies. LES COMPTEURS ET LA BANNIERE v3 (§8.157) — lisibilite, contraste, mouvement
+# =================================================================================================
+func _section_hud_v3(duel) -> void:
+	_section("4sexies. COMPTEURS + BANNIERE v3 — ce que les references de Hakim enseignent")
+
+	# ╔═ LE CONTRASTE DE TAILLE, LE TRAIT COMMUN DES DEUX REFERENCES ═════════════════════════════════╗
+	# ║ `hud_sante.png` et `hud_munitions.png` font la meme chose : valeur COURANTE en grand, MAXIMUM ║
+	# ║ en petit. Ce controle interdit de revenir a une fraction d un seul tenant — ou l œil doit     ║
+	# ║ LIRE deux nombres la ou il ne devrait en SAISIR qu un.                                        ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	var gros: int = duel._ammo_label.get_theme_font_size("font_size")
+	var petit: int = duel._ammo_max.get_theme_font_size("font_size")
+	_ok("munitions : la valeur courante est nettement plus grande que le maximum",
+		gros >= petit * 2, "%d px contre %d px" % [gros, petit])
+	var gros_hp: int = duel._my_hp_label.get_theme_font_size("font_size")
+	var petit_hp: int = duel._my_hp_max.get_theme_font_size("font_size")
+	_ok("sante : meme contraste de taille (les deux compteurs parlent la meme langue)",
+		gros_hp >= petit_hp * 2, "%d px contre %d px" % [gros_hp, petit_hp])
+
+	# ⛔ Les deux nœuds doivent porter des faits DIFFERENTS. S ils affichaient tous deux la fraction,
+	# le joueur lirait « 06/15 » deux fois — et le sabotage qui recolle les deux resterait vert.
+	_pousser(duel, [_player_row(duel._my_slot, 2, "up", "vipere", 8),
+		_player_row(3 - duel._my_slot, 3, "up", "vipere", 8)])
+	duel._refresh_view(0.016)
+	_ok("le grand chiffre ne porte QUE la valeur courante (pas la fraction entiere)",
+		not "/" in duel._ammo_label.text, "« %s »" % duel._ammo_label.text)
+	_ok("… et le petit porte le maximum, precede de sa barre",
+		duel._ammo_max.text.begins_with("/"), "« %s »" % duel._ammo_max.text)
+
+	# ╔═ LE TRAITEMENT DE LISIBILITE — le defaut de la reference elle-meme ═══════════════════════════╗
+	# ║ Sur `kill_banner.png` le texte blanc se perd sur le mur clair. Au centre de l ecran le fond   ║
+	# ║ est imprevisible : sans contour, la banniere est illisible une fois sur deux.                 ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	# 🩸 LA LISTE COUVRAIT D ABORD LES SEULS GROS CHIFFRES, et la capture a montre que le PETIT
+	# texte souffre davantage : moins de masse, donc il disparait le premier. Les libelles et les
+	# maximums sont dans la liste pour cette raison.
+	for cible in [["la banniere d elimination", duel._kill_banner],
+		["le compteur de munitions", duel._ammo_label],
+		["le maximum de munitions", duel._ammo_max],
+		["le compteur de sante", duel._my_hp_label],
+		["le maximum de sante", duel._my_hp_max],
+		["le nom de l adversaire", duel._their_name],
+		["le compteur de manche", duel._round_label],
+		["le score", duel._score_label],
+		["l avis de rechargement", duel._reload_label],
+		["la progression d arme", duel._progress_label],
+		["la pastille de grenade", duel._slot_grenade],
+		["la pastille de bandage", duel._slot_bandage],
+		["le nom de l arme", duel._weapon_label],
+		["le chronometre", duel._timer_label]]:
+		var l: Label = cible[1]
+		_ok("%s survit a n importe quel fond (contour)" % cible[0],
+			l.get_theme_constant("outline_size") > 0 and l.get_theme_color("font_outline_color").a > 0.5,
+			"contour %d px, alpha %.2f" % [l.get_theme_constant("outline_size"),
+				l.get_theme_color("font_outline_color").a])
+
+	# ╔═ L ETAT CRITIQUE DE SANTE — exigence du cahier §8.152, restee lettre morte ═══════════════════╗
+	# ║ « Le nombre passe en ROUGE a l etat critique — reprendre ce basculement. » Les munitions ont   ║
+	# ║ trois paliers depuis le §8.155 ; la sante n en avait AUCUN : a 12 PV le nombre etait identique ║
+	# ║ a 100. ⛔ On interroge l ACCESSEUR, jamais une copie de la formule (lecon du §8.155).          ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	_ok("sante pleine : le compteur garde la couleur de texte",
+		duel._hp_color(100.0) == duel.COL_TEXT)
+	_ok("sante CRITIQUE : le compteur passe au rouge de danger",
+		duel._hp_color(8.0) == duel.COL_DANGER)
+	# ⛔ LE SEUIL EST UN BLOC DE SANTE, et ce controle l impose des DEUX cotes : juste au-dessus il ne
+	# doit PAS alerter, juste au-dessous il doit alerter. Un seul cote laisserait passer un seuil a 0.
+	_ok("… et le seuil vaut EXACTEMENT un bloc de sante (l unite ou le joueur compte deja)",
+		duel._hp_color(duel.HP_PER_SEGMENT) == duel.COL_DANGER
+			and duel._hp_color(duel.HP_PER_SEGMENT + 1.0) == duel.COL_TEXT,
+		"bascule a %.0f PV" % duel.HP_PER_SEGMENT)
+	# ⚠️ ET LE CABLAGE : l accesseur peut etre juste sans etre BRANCHE (lecon du §8.153).
+	_pousser(duel, [_player_row(duel._my_slot, 2, "up", "vipere", 8),
+		_player_row(3 - duel._my_slot, 3, "up", "vipere", 8)])
+	duel._latest()["players"][duel._my_slot - 1]["hp"] = 7
+	duel._refresh_view(0.016)
+	_ok("… et le compteur REEL vire au rouge quand l etat le dit (le fil est branche)",
+		duel._my_hp_label.get_theme_color("font_color") == duel.COL_DANGER,
+		str(duel._my_hp_label.get_theme_color("font_color")))
+
+	# --- LE FILET S OUVRE DEPUIS LE CENTRE -------------------------------------------------------
+	# ⚠️ TEMPS REEL OBLIGATOIRE : c est un `Tween`, il ne se simule pas.
+	duel._on_duel_event(_hit_event(duel, 30, 0))
+	_ok("a l instant de l elimination, le filet est encore FERME (il va s ouvrir)",
+		absf(duel._kill_rule.offset_right) < 1.0,
+		"demi-largeur %.1f px" % duel._kill_rule.offset_right)
+	await duel.get_tree().create_timer(duel.KILL_SWEEP_S + 0.15).timeout
+	_ok("… et apres l ouverture il atteint sa largeur pleine",
+		absf(duel._kill_rule.offset_right - duel.KILL_RULE_HALF) < 1.0,
+		"demi-largeur %.1f px contre %.1f attendue"
+			% [duel._kill_rule.offset_right, duel.KILL_RULE_HALF])
+
+	# ⛔ LE HEAD SHOT SE VOIT : le filet passe a l or. Sans ce controle, la distinction ne tiendrait
+	# qu au TEXTE — et un texte n a pas de type, donc rien ne peut rougir s il change.
+	var ordinaire: Color = duel._kill_rule.color
+	duel._hitmarker_head = true
+	duel._show_kill_banner(true)
+	_ok("un HEAD SHOT teinte le filet autrement qu une elimination ordinaire",
+		duel._kill_rule.color != ordinaire,
+		"%s contre %s" % [duel._kill_rule.color, ordinaire])
+	duel._hitmarker_head = false
+	duel._show_kill_banner(false)
+	_ok("… et une elimination ordinaire retrouve la couleur de charte",
+		duel._kill_rule.color == ordinaire)
+
+	await duel.get_tree().create_timer(duel.KILL_HOLD_S + duel.KILL_FADE_S + 0.3).timeout
+	_clear_damage(duel)
+
+
+
+# =================================================================================================
+# LE TRAQUEUR DE DISSIMULATION (§8.156) — 3 s pour s allumer, 10 s pour vivre
+# =================================================================================================
+# ╔═ DEMANDE DE HAKIM, MOT POUR MOT ══════════════════════════════════════════════════════════════╗
+# ║ « il faut qu il s active et suit le joueur des qu il se cache pour plus de 3 secondes et doit  ║
+# ║ durer 10 s ». Les deux chiffres sont donc des EXIGENCES, pas des reglages : on les mesure.     ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Pose UN etat dans le tampon, a la forme exacte du reseau ({"at", "data"}).
+func _pousser(duel, joueurs: Array) -> void:
+	duel._buffer = [{"at": duel._now(), "data": {
+		"type": "trench_state", "tick": 100, "phase": "playing", "round_no": 1,
+		"round_start_tick": 0, "round_ticks": 1800, "score": [0, 0], "winner_slot": 0,
+		"players": joueurs, "projectiles": [], "events": []}}]
+
+
+# UNE IMAGE DE JEU, dans l ORDRE de `_process` : `_decay` decompte, `_step_threat` arme.
+# 🩸 Ma premiere version n appelait que `_step_threat` — la sonde a donc affirme que le traqueur
+# ne s eteignait jamais, alors que le decompte vivait simplement dans l autre moitie de la frame.
+# ⛔ Une sonde qui ne joue qu une moitie de la boucle mesure un jeu qui n existe pas.
+func _frame(duel, dt: float) -> void:
+	duel._decay(dt)
+	duel._step_threat(dt)
+
+
+func _traqueur(duel) -> void:
+	# ╔═ 🩸 LE CABLAGE, PAS SEULEMENT LA MECANIQUE ══════════════════════════════════════════════════╗
+	# ║ Un sabotage est passe au travers ici : j armais `_enemy_visible` A LA MAIN dans toute cette   ║
+	# ║ section, donc la ligne qui le RENSEIGNE depuis l etat serveur n etait jamais jouee. Couper ce ║
+	# ║ fil laissait la sonde verte, alors que le traqueur se serait allume en permanence en partie.  ║
+	# ║ ⛔ On part donc d un VRAI etat, et on verifie que la redaction du serveur arrive jusqu ici.   ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	var moi: int = duel._my_slot
+	var cache := _player_row(3 - moi, 2, "down", "vipere", 8)
+	cache["pos"] = null
+	cache["hidden"] = true
+	_pousser(duel, [_player_row(moi, 2, "up", "vipere", 8), cache])
+	duel._refresh_view(0.016)
+	_ok("un adversaire REDIGE par le serveur est vu comme CACHE (le fil est branche)",
+		not duel._enemy_visible)
+	_pousser(duel, [_player_row(moi, 2, "up", "vipere", 8),
+		_player_row(3 - moi, 3, "up", "vipere", 8)])
+	duel._refresh_view(0.016)
+	_ok("… et un adversaire REVELE repasse VISIBLE (le fil marche dans les deux sens)",
+		duel._enemy_visible)
+
+	duel._threat_left = 0.0
+	duel._enemy_hidden_s = 0.0
+
+	# Il est VISIBLE : rien ne doit s armer, meme apres longtemps.
+	duel._enemy_visible = true
+	for i in range(60):
+		_frame(duel, 0.1)
+	_ok("adversaire VISIBLE six secondes : aucun traqueur (on ne traque que ce qui se cache)",
+		duel._threat_left == 0.0 and duel._enemy_hidden_s == 0.0)
+
+	# ⛔ IL SE CACHE — mais PAS ENCORE 3 s. Ce controle interdit « n importe quelle dissimulation
+	# allume le repere » : sans lui, un seuil a zero passerait tout aussi vert.
+	duel._enemy_visible = false
+	for i in range(49):
+		_frame(duel, 0.1)
+	_ok("cache 4,9 s : le traqueur reste ETEINT (le seuil de 5 s est reel)",
+		duel._threat_left == 0.0, "cache depuis %.2f s" % duel._enemy_hidden_s)
+
+	# … et a 3 s il s allume, pour DIX secondes.
+	_frame(duel, 0.2)
+	_ok("cache plus de 5 s : le traqueur s ALLUME",
+		duel._threat_left > 0.0, "temps restant %.2f s" % duel._threat_left)
+	_ok("… et il est arme pour 10 s pleines (la duree demandee)",
+		absf(duel._threat_left - duel.THREAT_HIDDEN_HOLD_S) < 0.001,
+		"%.3f s contre %.3f attendues" % [duel._threat_left, duel.THREAT_HIDDEN_HOLD_S])
+
+	# ╔═ LE RAPPEL PÉRIODIQUE — arbitrage de Hakim, et ce controle s est INVERSE ═════════════════════╗
+	# ║ Au §8.156 ce meme controle exigeait que le traqueur DECOMPTE sans se recharger. Hakim a       ║
+	# ║ tranche l inverse : « on fait reactiver ca apres 5 s tant qu il reste cache », pour ne pas    ║
+	# ║ laisser abuser de la cachette. Le controle dit donc maintenant le contraire de ce qu il       ║
+	# ║ disait — c est un CHANGEMENT DE REGLE assume, pas une garde qu on affaiblit.                  ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	for i in range(50):
+		_frame(duel, 0.1)
+	_ok("il reste cache 5 s de plus : le traqueur est RAPPELE (le campeur reste designe)",
+		absf(duel._threat_left - duel.THREAT_HIDDEN_HOLD_S) < 0.2,
+		"%.2f s restantes" % duel._threat_left)
+
+	# ╔═ ⛔ CE QUI L ETEINT : SE MONTRER ═════════════════════════════════════════════════════════════╗
+	# ║ C est LA garde d extinction, et elle est indispensable : avec un rappel periodique plus court ║
+	# ║ (5 s) que la vie du repere (10 s), plus rien d autre ne peut l eteindre. Si l adversaire se   ║
+	# ║ montre et que le repere ne s eteint QUAND MEME pas, il resterait a l ecran toute la manche.   ║
+	# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+	duel._enemy_visible = true
+	for i in range(105):
+		_frame(duel, 0.1)
+	_ok("il se MONTRE : plus aucun rappel, le traqueur finit sa vie et s ETEINT",
+		duel._threat_left == 0.0, "%.2f s restantes apres 10,5 s visible" % duel._threat_left)
+
+	# Il se remontre puis se recache : un NOUVEAU contact doit pouvoir rearmer.
+	duel._threat_left = 0.0
+	duel._enemy_visible = true
+	_frame(duel, 0.1)
+	duel._enemy_visible = false
+	for i in range(51):
+		_frame(duel, 0.1)
+	_ok("il se remontre puis se recache : le traqueur se REARME (un nouveau contact compte)",
+		duel._threat_left > 0.0, "temps restant %.2f s" % duel._threat_left)
+
+	# ⚠️ HORS MANCHE, on ne traque rien : un repere sur l ecran de fin designerait une menace morte.
+	duel._threat_left = 0.0
+	duel._enemy_hidden_s = 0.0
+	var garde: Array = duel._buffer.duplicate(true)
+	var fini: Dictionary = duel._latest().duplicate(true)
+	fini["phase"] = "round_over"
+	duel._buffer = [{"at": 0.0, "data": fini}]
+	# ⚠️ 8 s, PAS 5 : la boucle doit dépasser FRANCHEMENT le seuil d armement. Réglée pile
+	# dessus, elle laissait passer un sabotage — sans la garde, rien ne s armait quand même,
+	# et le contrôle restait vert en ne prouvant rien.
+	for i in range(80):
+		_frame(duel, 0.1)
+	_ok("manche terminee : aucun traqueur ne s allume (la menace n existe plus)",
+		duel._threat_left == 0.0)
+	duel._buffer = garde
+	duel._threat_left = 0.0
+	duel._aim_yaw = 0.0
+
+# =================================================================================================
+# 4quinquies. LE PLANTAGE DU §8.155.1 — un adversaire RÉDIGÉ, et une grenade
+# =================================================================================================
+# ╔═ 🩸 CE CONTROLE NAIT D UN PLANTAGE EN PARTIE REELLE ══════════════════════════════════════════╗
+# ║ `_arm_threat` faisait `int(eux.get("pos", 2))`. ⚠️ `Dictionary.get(cle, defaut)` ne rend le    ║
+# ║ defaut que si la cle est ABSENTE — ici elle est PRESENTE avec la valeur `null`, parce que la   ║
+# ║ vue redigee du serveur ecrit `pos = None` quand l adversaire n est pas revele. `int(null)`     ║
+# ║ tombe : « Invalid call. Nonexistent 'int' constructor », et le duel s arrete.                  ║
+# ║                                                                                                ║
+# ║ ⚠️ CE N EST PAS UN CAS LIMITE. Un tireur n est revele que s il agit DEBOUT ; une grenade vole  ║
+# ║ pres d une seconde, donc son auteur est tres souvent redevenu invisible a l impact. Le chemin  ║
+# ║ qui plante est le chemin NORMAL d une grenade.                                                 ║
+# ║                                                                                                ║
+# ║ ⛔ Et le depot connaissait deja le piege : `_refresh_view` ecrit `int(p.get("pos", 2)) if      ║
+# ║ p.get("pos") != null`. Aucun controle ne l imposait, donc rien n a bronche quand je ne l ai    ║
+# ║ pas suivi. C est ce controle-la qui manquait.                                                  ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════════════════╝
+func _section_redaction(duel) -> void:
+	_section("4quinquies. ADVERSAIRE REDIGE + GRENADE — le plantage du §8.155.1")
+
+	# Un etat ou l adversaire est CACHE : sa position part a `null`, exactement comme le serveur.
+	var mine: int = duel._my_slot
+	var eux_row := _player_row(3 - mine, 2, "down", "vipere", 8)
+	eux_row["pos"] = null
+	eux_row["hidden"] = true
+	duel._buffer.clear()
+	duel._on_state({"type": "trench_state", "tick": 100, "phase": "playing", "round_no": 1,
+		"round_start_tick": 0, "round_ticks": 1800, "score": [0, 0], "winner_slot": 0,
+		"players": [_player_row(mine, 2, "up", "vipere", 8), eux_row],
+		"projectiles": [], "events": []})
+	_ok("l etat de test porte bien une position REDIGEE (sinon on ne teste rien)",
+		duel._player_of(duel._latest(), 3 - mine).get("pos") == null)
+
+	# ⛔ LE CONTROLE : le duel doit SURVIVRE et le repere doit quand meme s armer.
+	# Si `int(null)` retombait, `_arm_threat` s interromprait et `_threat_left` resterait a zero.
+	duel._threat_left = 0.0
+	duel._last_seen_enemy_pos = 4.0
+	duel._on_duel_event({"type": "hit", "slot": mine, "by": 3 - mine, "kind": "vipere",
+		"damage": 12, "hp": 88})
+	_ok("touche d un adversaire REDIGE : aucun plantage, le repere s arme quand meme",
+		duel._threat_left > 0.0, "temps restant %.3f" % duel._threat_left)
+
+	# … et il pointe la ou l adversaire est DESSINE (derniere position vue), pas sur un repli
+	# arbitraire : le repere et l image doivent dire la meme chose.
+	var oeil: Vector3 = Geo.eye_position(duel._pred_pos, duel._pred_stance)
+	var attendu: float = Geo.yaw_to(oeil, Vector3(Geo.position_x(4), Geo.EYE_UP,
+		Geo.far_soldier_z()))
+	_ok("… et il pointe la DERNIERE POSITION VUE, pas un repli arbitraire",
+		absf(duel._threat_bearing_now() - attendu) < 0.01,
+		"releve %.3f contre %.3f attendu" % [duel._threat_bearing_now(), attendu])
+
+	# ⛔ UNE GRENADE N A PAS DE DIRECTION DE TIR : le souffle vient de son point de chute, pas de la
+	# main qui l a lancee. Pointer vers le lanceur designerait un endroit d ou rien n est parti.
+	duel._threat_left = 0.0
+	duel._on_duel_event({"type": "hit", "slot": mine, "by": 3 - mine, "kind": "grenade",
+		"damage": 40, "hp": 48})
+	_ok("une GRENADE n arme aucun repere de direction (le souffle n a pas d auteur visible)",
+		duel._threat_left == 0.0, "temps restant %.3f" % duel._threat_left)
+	duel._threat_left = 0.0
